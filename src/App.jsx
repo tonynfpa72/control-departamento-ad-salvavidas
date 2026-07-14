@@ -7,7 +7,7 @@ import * as XLSX from "xlsx";
 import {
   LogOut, Plus, Download, Check, X, Clock, ClipboardList,
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
-  ChevronLeft, ChevronRight, AlertCircle, Upload
+  ChevronLeft, ChevronRight, AlertCircle, Upload, Flame, Siren
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -347,15 +347,21 @@ function Login({ onLogin }) {
     <div style={{
       minHeight: "100%", display: "flex", alignItems: "center", justifyContent: "center",
       background: `linear-gradient(160deg, ${T.steel} 0%, #0E1B2E 100%)`, padding: 20,
+      position: "relative", overflow: "hidden",
     }}>
-      <div style={{ width: 360, background: T.panel, borderRadius: 16, padding: 32, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
+      <Flame size={380} color="#fff" style={{ position: "absolute", opacity: 0.09, right: "5%", top: "48%", transform: "translateY(-50%)", pointerEvents: "none" }} />
+      <Siren size={160} color="#fff" style={{ position: "absolute", opacity: 0.09, left: "6%", bottom: "8%", pointerEvents: "none" }} />
+      <div style={{ width: 360, background: T.panel, borderRadius: 16, padding: 32, boxShadow: "0 20px 60px rgba(0,0,0,.3)", position: "relative" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-          <div style={{ width: 34, height: 34, borderRadius: 9, background: logo ? "transparent" : T.accent, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
-            {logo ? <img src={logo} alt="Logo" style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <Building2 size={18} color="#fff" />}
+          <div style={{ width: 40, height: 40, borderRadius: 10, background: logo ? "transparent" : `linear-gradient(135deg, ${T.accent}, #C2410C)`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>
+            {logo ? <img src={logo} alt="Logo" style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <Flame size={22} color="#fff" />}
           </div>
-          <div style={{ fontWeight: 800, fontSize: 17, color: T.ink, letterSpacing: -0.3 }}>Departamento A&D Salvavidas</div>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 17, color: T.ink, letterSpacing: -0.3, lineHeight: 1.15 }}>Departamento A&D Salvavidas</div>
+            <div style={{ fontSize: 11, color: T.accent, fontWeight: 700, letterSpacing: 0.3 }}>SISTEMAS DE ALARMA Y DETECCIÓN DE INCENDIOS</div>
+          </div>
         </div>
-        <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 24 }}>Inspecciones · Proyectos · Cotizaciones · EHS</div>
+        <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 24, marginTop: 6 }}>Inspecciones · Proyectos · Cotizaciones · EHS</div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Field label="Correo electrónico">
@@ -367,10 +373,6 @@ function Login({ onLogin }) {
           </Field>
           {error && <div style={{ color: T.red, fontSize: 12.5, display: "flex", gap: 6, alignItems: "center" }}><AlertCircle size={14} />{error}</div>}
           <Btn onClick={submit} variant="accent" disabled={loading} style={{ justifyContent: "center", marginTop: 6 }}>{loading ? "Ingresando..." : "Ingresar"}</Btn>
-        </div>
-
-        <div style={{ marginTop: 22, paddingTop: 16, borderTop: `1px dashed ${T.line}`, fontSize: 11.5, color: T.gray, lineHeight: 1.6 }}>
-          Demo — prueba con: <b>admin@empresa.com / 1234</b> (Administrativo) o <b>inspecciones@empresa.com / 1111</b>.
         </div>
       </div>
     </div>
@@ -1513,7 +1515,7 @@ function AppInner() {
       <div style={{ width: 220, background: T.steel, color: "#fff", display: "flex", flexDirection: "column", padding: "20px 14px", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 8px", marginBottom: 14 }}>
           <div style={{ width: 30, height: 30, borderRadius: 8, background: logo ? "transparent" : T.accent, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, overflow: "hidden" }}>
-            {logo ? <img src={logo} alt="Logo" style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <Building2 size={16} color="#fff" />}
+            {logo ? <img src={logo} alt="Logo" style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <Flame size={16} color="#fff" />}
           </div>
           <div style={{ fontSize: 14, fontWeight: 800, lineHeight: 1.2 }}>Departamento<br />A&D Salvavidas</div>
         </div>

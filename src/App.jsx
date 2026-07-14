@@ -128,6 +128,9 @@ const AREAS = [
   { id: "proyectos", label: "Proyectos", icon: HardHat, color: T.green },
   { id: "cotizaciones", label: "Cotizaciones", icon: FileText, color: T.amber },
   { id: "salud", label: "Salud Ocupacional", icon: CalendarDays, color: T.red },
+  { id: "apertura", label: "Apertura de OD", icon: Building2, color: T.blue },
+  { id: "calendario_global", label: "Calendario General", icon: CalendarDays, color: T.accent },
+  { id: "facturacion_publica", label: "Facturación", icon: LayoutDashboard, color: T.green },
   { id: "admin", label: "Administrativo", icon: LayoutDashboard, color: T.steelSoft },
 ];
 
@@ -431,7 +434,7 @@ function HorasExtras({ area, color }) {
   const confirmar = useContext(ConfirmContext);
   const [disponible, setDisponibleState] = useState(150);
   const [rows, setRows] = useState([]);
-  const [form, setForm] = useState({ od: "", personal: "", horas: "" });
+  const [form, setForm] = useState({ od: "", personal: "", horas: "", fechaEjecucion: "" });
   const used = rows.reduce((s, r) => s + (r.estado !== "Rechazada" ? Number(r.horas) : 0), 0);
   const saldo = disponible - used;
 
@@ -451,8 +454,8 @@ function HorasExtras({ area, color }) {
 
   const add = async () => {
     if (!form.od || !form.horas) return;
-    const payload = { area, fecha: todayISO(), od: form.od, personal: form.personal, horas: Number(form.horas), estado: "Pendiente" };
-    setForm({ od: "", personal: "", horas: "" });
+    const payload = { area, fecha: todayISO(), fecha_ejecucion: form.fechaEjecucion || null, od: form.od, personal: form.personal, horas: Number(form.horas), estado: "Pendiente" };
+    setForm({ od: "", personal: "", horas: "", fechaEjecucion: "" });
     const { data, error } = await supabase.from("horas_extras").insert(payload).select().single();
     if (!error && data) setRows((prev) => [data, ...prev]);
   };
@@ -463,6 +466,10 @@ function HorasExtras({ area, color }) {
   const setPersonal = (id, personal) => {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, personal } : r)));
     supabase.from("horas_extras").update({ personal }).eq("id", id).then();
+  };
+  const setFechaEjecucion = (id, fecha_ejecucion) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, fecha_ejecucion } : r)));
+    supabase.from("horas_extras").update({ fecha_ejecucion: fecha_ejecucion || null }).eq("id", id).then();
   };
   const del = async (id) => {
     if (!(await confirmar("¿Está seguro que desea eliminar esta solicitud de horas extra? Esta acción no se puede deshacer."))) return;
@@ -492,22 +499,28 @@ function HorasExtras({ area, color }) {
             <Field label="OD del proyecto"><input style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })} placeholder="OD-1004" /></Field>
             <Field label="Personal asistente"><input style={inputStyle} value={form.personal} onChange={(e) => setForm({ ...form, personal: e.target.value })} placeholder="Nombres" /></Field>
             <Field label="Horas"><input style={inputStyle} type="number" value={form.horas} onChange={(e) => setForm({ ...form, horas: e.target.value })} /></Field>
+            <Field label="Fecha en que se ejecutarán"><input style={inputStyle} type="date" value={form.fechaEjecucion} onChange={(e) => setForm({ ...form, fechaEjecucion: e.target.value })} /></Field>
             <Btn onClick={add} variant="accent" style={{ justifyContent: "center" }}><Plus size={14} /> Solicitar</Btn>
           </div>
         </Card>
       </div>
 
-      <Card title="Solicitudes" action={<Btn small variant="ghost" onClick={() => exportExcel(rows.map(({ fecha, od, personal, horas, estado }) => ({ Fecha: fecha, OD: od, Personal: personal, Horas: horas, Estado: estado })), `horas_${area}.xlsx`)}><Download size={13} /> Excel</Btn>}>
+      <Card title="Solicitudes" action={<Btn small variant="ghost" onClick={() => exportExcel(rows.map(({ fecha, fecha_ejecucion, od, personal, horas, estado }) => ({ Fecha: fecha, "Fecha Ejecución": fecha_ejecucion, OD: od, Personal: personal, Horas: horas, Estado: estado })), `horas_${area}.xlsx`)}><Download size={13} /> Excel</Btn>}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
-              <th style={{ padding: "6px 8px" }}>Fecha</th><th>OD</th><th>Personal</th><th>Horas</th><th>Estado</th><th></th>
+              <th style={{ padding: "6px 8px" }}>Fecha</th><th>Fecha ejecución</th><th>OD</th><th>Personal</th><th>Horas</th><th>Estado</th><th></th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
                 <td style={{ padding: "9px 8px" }}>{r.fecha}</td>
+                <td>
+                  {isAdmin ? (
+                    <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 130 }} value={r.fecha_ejecucion || ""} onChange={(e) => setFechaEjecucion(r.id, e.target.value)} />
+                  ) : (r.fecha_ejecucion || "—")}
+                </td>
                 <td>{r.od}</td>
                 <td>
                   {isAdmin ? (
@@ -561,6 +574,8 @@ function OrdenesTrabajo({ area, color }) {
   const tecnicoLabel = isProyectos ? "Encargado" : "Técnico";
   const [rows, setRows] = useClientesArea(area);
   const [form, setForm] = useState({ od: "", cliente: "", tecnico: "" });
+  const [filtroTexto, setFiltroTexto] = useState("");
+  const [filtroEstado, setFiltroEstado] = useState("Todos");
   const fileInputRef = React.useRef(null);
 
   const add = async () => {
@@ -655,6 +670,17 @@ function OrdenesTrabajo({ area, color }) {
     ? [{ name: "Activos", value: activos, fill: T.green }, { name: "No Activos", value: noActivos, fill: T.red }, { name: "Entregados", value: entregados, fill: T.blue }]
     : [{ name: "Activos", value: activos, fill: T.green }, { name: "No Activos", value: noActivos, fill: T.red }];
 
+  const filteredRows = rows.filter((r) => {
+    const texto = filtroTexto.trim().toLowerCase();
+    const matchTexto = !texto
+      || (r.od || "").toLowerCase().includes(texto)
+      || (r.cliente || "").toLowerCase().includes(texto)
+      || (r.tecnico || "").toLowerCase().includes(texto);
+    const matchEstado = filtroEstado === "Todos" || r.estado === filtroEstado;
+    return matchTexto && matchEstado;
+  });
+  const estadoOpciones = isProyectos ? ["Todos", "Activo", "No Activo", "Entregado"] : ["Todos", "Activo", "No Activo"];
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -670,6 +696,17 @@ function OrdenesTrabajo({ area, color }) {
             })), `od_${area}.xlsx`)}><Download size={13} /> Excel</Btn>
           </div>
         }>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <input
+              style={{ ...inputStyle, flex: 1 }}
+              placeholder={`Buscar por OD, cliente o ${tecnicoLabel.toLowerCase()}...`}
+              value={filtroTexto}
+              onChange={(e) => setFiltroTexto(e.target.value)}
+            />
+            <select style={{ ...inputStyle, width: 150 }} value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value)}>
+              {estadoOpciones.map((op) => <option key={op} value={op}>{op}</option>)}
+            </select>
+          </div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
@@ -682,7 +719,7 @@ function OrdenesTrabajo({ area, color }) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
+              {filteredRows.map((r) => (
                 <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
                   <td style={{ padding: "9px 8px", fontWeight: 600 }}>{r.od}</td>
                   <td>{r.cliente}</td>
@@ -1100,11 +1137,13 @@ function Cotizaciones() {
     })();
   }, []);
 
-  const nextConsecutivo = String(rows.length + 1).padStart(5, "0");
+  const maxNumero = rows.reduce((m, r) => Math.max(m, Number(r.consecutivo) || 0), 0);
+  const nextConsecutivo = String(maxNumero + 1).padStart(5, "0");
 
   const submit = async () => {
     if (!form.solicitante || !form.cliente) return;
     const payload = {
+      numero: maxNumero + 1,
       solicitante: form.solicitante, cliente: form.cliente, contacto: form.contacto, email: form.email,
       telefono: form.telefono, provincia: form.provincia, dias: form.dias || null, personal: form.personal,
       descripcion: form.descripcion, equipos: form.equipos, dispositivos: form.dispositivos,
@@ -1333,16 +1372,50 @@ function SaludOcupacional() {
 /* ---------------------------------------------------------
    AREA: INSPECCIONES / PROYECTOS (tabs internas)
    --------------------------------------------------------- */
+function ClientesPorPersona({ area, color }) {
+  const [rows] = useClientesArea(area);
+  const isProyectos = area === "proyectos";
+  const label = isProyectos ? "Encargado" : "Técnico";
+  const counts = {};
+  rows.forEach((r) => {
+    const key = r.tecnico?.trim() || "Sin asignar";
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  const data = Object.entries(counts).map(([nombre, cantidad]) => ({ nombre, cantidad })).sort((a, b) => b.cantidad - a.cantidad);
+
+  return (
+    <Card title={`Cantidad de clientes por ${label.toLowerCase()}`}>
+      {data.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay clientes cargados en esta área.</div>
+      ) : (
+        <ResponsiveContainer width="100%" height={340}>
+          <BarChart data={data} margin={{ top: 24, right: 20, left: 0, bottom: 10 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
+            <XAxis dataKey="nombre" tick={{ fontSize: 12 }} interval={0} angle={-15} textAnchor="end" height={60} />
+            <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+            <Tooltip />
+            <Bar dataKey="cantidad" fill={color} radius={[4, 4, 0, 0]}>
+              <LabelList dataKey="cantidad" position="top" style={{ fontSize: 12, fontWeight: 700, fill: T.ink }} />
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+    </Card>
+  );
+}
+
 function AreaOperativa({ area, color }) {
   const [tab, setTab] = useState("horas");
+  const tecnicoLabel = area === "proyectos" ? "Encargado" : "Técnico";
   const tabs = [
     { id: "horas", label: "Horas extras", icon: Clock },
     { id: "od", label: "OD", icon: ClipboardList },
     { id: "calendario", label: "Calendario", icon: CalendarDays },
+    { id: "porpersona", label: `Por ${tecnicoLabel}`, icon: LayoutDashboard },
   ];
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         {tabs.map((t) => (
           <Btn key={t.id} variant={tab === t.id ? "accent" : "ghost"} small onClick={() => setTab(t.id)}>
             <t.icon size={13} /> {t.label}
@@ -1352,6 +1425,7 @@ function AreaOperativa({ area, color }) {
       {tab === "horas" && <HorasExtras area={area} color={color} />}
       {tab === "od" && <OrdenesTrabajo area={area} color={color} />}
       {tab === "calendario" && <Calendario area={area} color={color} />}
+      {tab === "porpersona" && <ClientesPorPersona area={area} color={color} />}
     </div>
   );
 }
@@ -1645,6 +1719,166 @@ function Administrativo() {
 /* ---------------------------------------------------------
    APP SHELL
    --------------------------------------------------------- */
+/* ---------------------------------------------------------
+   CALENDARIO GENERAL (todas las áreas, vista ampliada)
+   --------------------------------------------------------- */
+function CalendarioGlobal() {
+  const [eventos, setEventos] = useState([]);
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("calendario_eventos").select("*").order("fecha", { ascending: true });
+      if (data) setEventos(data);
+    })();
+  }, []);
+
+  const grupos = {};
+  eventos.forEach((e) => {
+    if (!e.fecha) return;
+    (grupos[e.fecha] = grupos[e.fecha] || []).push(e);
+  });
+  const fechas = Object.keys(grupos).sort();
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {fechas.length === 0 && (
+        <Card><div style={{ color: T.gray, fontSize: 13 }}>No hay eventos agendados todavía en ninguna área.</div></Card>
+      )}
+      {fechas.map((fecha) => (
+        <Card key={fecha} title={new Date(fecha + "T00:00:00").toLocaleDateString("es-CR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {grupos[fecha]
+              .sort((a, b) => (a.hora || "").localeCompare(b.hora || ""))
+              .map((e) => (
+                <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: T.graySoft, borderRadius: 8, flexWrap: "wrap" }}>
+                  <Badge color={e.area === "proyectos" ? T.green : T.steel} soft={e.area === "proyectos" ? T.greenSoft : T.steelSoft}>
+                    {e.area === "proyectos" ? "Proyectos" : "Inspecciones"}
+                  </Badge>
+                  <div style={{ fontWeight: 800, fontSize: 13, minWidth: 50 }}>{e.hora}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{e.tipo} — {e.od}</div>
+                  <div style={{ fontSize: 12.5, color: T.inkSoft }}>{e.personas}</div>
+                </div>
+              ))}
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   APERTURA DE OD
+   --------------------------------------------------------- */
+function AperturaOD() {
+  const currentUser = useContext(CurrentUserContext);
+  const isAdmin = currentUser?.categoria === "admin";
+  const confirmar = useContext(ConfirmContext);
+  const [rows, setRows] = useState([]);
+  const [form, setForm] = useState({ solicitante: "", od: "", cliente: "", fecha: todayISO() });
+  const ESTADOS = ["Pendiente", "Solicitado", "Cancelado"];
+  const ESTADO_COLOR = { Pendiente: [T.amber, T.amberSoft], Solicitado: [T.green, T.greenSoft], Cancelado: [T.red, T.redSoft] };
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("apertura_od").select("*").order("created_at", { ascending: false });
+      if (data) setRows(data);
+    })();
+  }, []);
+
+  const add = async () => {
+    if (!form.solicitante || !form.od) return;
+    const payload = { ...form, estado: "Pendiente" };
+    setForm({ solicitante: "", od: "", cliente: "", fecha: todayISO() });
+    const { data, error } = await supabase.from("apertura_od").insert(payload).select().single();
+    if (!error && data) setRows((prev) => [data, ...prev]);
+  };
+  const setEstado = (id, estado) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado } : r));
+    supabase.from("apertura_od").update({ estado }).eq("id", id).then();
+  };
+  const del = async (id) => {
+    if (!(await confirmar("¿Está seguro que desea eliminar esta solicitud de apertura? Esta acción no se puede deshacer."))) return;
+    setRows((prev) => prev.filter((r) => r.id !== id));
+    supabase.from("apertura_od").delete().eq("id", id).then();
+  };
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
+      <Card title="Solicitudes de apertura de OD">
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
+              <th style={{ padding: "6px 8px" }}>Solicitante</th><th>OD</th><th>Cliente</th><th>Fecha</th><th>Estado</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
+                <td style={{ padding: "9px 8px" }}>{r.solicitante}</td>
+                <td style={{ fontWeight: 700 }}>{r.od}</td>
+                <td>{r.cliente}</td>
+                <td>{r.fecha}</td>
+                <td>
+                  {isAdmin ? (
+                    <select value={r.estado} onChange={(e) => setEstado(r.id, e.target.value)} style={{ border: "none", background: ESTADO_COLOR[r.estado][1], color: ESTADO_COLOR[r.estado][0], borderRadius: 999, fontSize: 12, fontWeight: 600, padding: "4px 10px" }}>
+                      {ESTADOS.map((s) => <option key={s}>{s}</option>)}
+                    </select>
+                  ) : (
+                    <Badge color={ESTADO_COLOR[r.estado][0]} soft={ESTADO_COLOR[r.estado][1]}>{r.estado}</Badge>
+                  )}
+                </td>
+                <td>{isAdmin && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+      <Card title="Nueva solicitud de apertura">
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <Field label="Quién solicita"><input style={inputStyle} value={form.solicitante} onChange={(e) => setForm({ ...form, solicitante: e.target.value })} /></Field>
+          <Field label="Número de OD"><input style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })} placeholder="OD-1005" /></Field>
+          <Field label="Cliente"><input style={inputStyle} value={form.cliente} onChange={(e) => setForm({ ...form, cliente: e.target.value })} /></Field>
+          <Field label="Fecha"><input style={inputStyle} type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} /></Field>
+          <Btn variant="accent" onClick={add} style={{ justifyContent: "center" }}><Plus size={14} /> Solicitar apertura</Btn>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   FACTURACIÓN (vista pública, solo lectura, para todos)
+   --------------------------------------------------------- */
+function FacturacionPublica() {
+  const [facturas, setFacturas] = useState([]);
+  const PUNTO_EQUILIBRIO = 120000;
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("facturacion").select("*").order("created_at", { ascending: true });
+      if (data) setFacturas(data);
+    })();
+  }, []);
+  return (
+    <Card title="Facturación mensual vs. punto de equilibrio ($120,000)">
+      {facturas.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay datos de facturación cargados.</div>
+      ) : (
+        <ResponsiveContainer width="100%" height={320}>
+          <LineChart data={facturas} margin={{ top: 26, right: 20, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
+            <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
+            <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${v / 1000}k`} />
+            <Tooltip formatter={(v) => fmtMoney(v)} />
+            <ReferenceLine y={PUNTO_EQUILIBRIO} stroke={T.accent} strokeDasharray="6 4" label={{ value: "Punto de equilibrio", fill: T.accent, fontSize: 11, position: "insideTopRight" }} />
+            <Line type="monotone" dataKey="monto" stroke={T.steel} strokeWidth={3} dot={{ r: 4 }}>
+              <LabelList dataKey="monto" position="top" offset={12} formatter={(v) => fmtMoney(v)} style={{ fontSize: 11.5, fontWeight: 700, fill: T.ink }} />
+            </Line>
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+    </Card>
+  );
+}
+
 function AppInner() {
   const [user, setUser] = useState(null);
   const [tab, setTab] = useState(null);
@@ -1725,6 +1959,9 @@ function AppInner() {
         {tab === "proyectos" && <AreaOperativa area="proyectos" color={T.green} />}
         {tab === "cotizaciones" && <Cotizaciones />}
         {tab === "salud" && <SaludOcupacional />}
+        {tab === "apertura" && <AperturaOD />}
+        {tab === "calendario_global" && <CalendarioGlobal />}
+        {tab === "facturacion_publica" && <FacturacionPublica />}
         {tab === "admin" && <Administrativo />}
       </div>
     </div>
@@ -1733,7 +1970,11 @@ function AppInner() {
 }
 
 export default function App() {
-  const [logo, setLogo] = useState(null);
+  const [logo, setLogoState] = useState(null);
+  const setLogo = (value) => {
+    setLogoState(value);
+    supabase.from("app_config").upsert({ key: "logo", value }).then();
+  };
   const [users, setUsers] = useState([]);
   const [clientes, setClientes] = useState({ inspecciones: [], proyectos: [] });
 
@@ -1755,9 +1996,15 @@ export default function App() {
     }
   };
 
+  const refetchLogo = async () => {
+    const { data } = await supabase.from("app_config").select("value").eq("key", "logo").maybeSingle();
+    if (data?.value) setLogoState(data.value);
+  };
+
   useEffect(() => {
     refetchUsers();
     refetchClientes();
+    refetchLogo();
   }, []);
 
   return (

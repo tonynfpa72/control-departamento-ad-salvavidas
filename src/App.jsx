@@ -55,15 +55,19 @@ const CurrentUserContext = createContext(null);
 const ConfirmContext = createContext(() => Promise.resolve(true));
 
 function ConfirmProvider({ children }) {
-  const [pending, setPending] = useState(null); // { mensaje, resolve }
+  const [pending, setPending] = useState(null); // { mensaje, resolve, confirmLabel, variant }
 
-  const confirmar = (mensaje = "¿Está seguro que desea eliminar este registro? Esta acción no se puede deshacer.") =>
-    new Promise((resolve) => setPending({ mensaje, resolve }));
+  const confirmar = (
+    mensaje = "¿Está seguro que desea eliminar este registro? Esta acción no se puede deshacer.",
+    opciones = {}
+  ) => new Promise((resolve) => setPending({ mensaje, resolve, ...opciones }));
 
   const responder = (ok) => {
     pending?.resolve(ok);
     setPending(null);
   };
+
+  const esDestructivo = (pending?.variant || "danger") === "danger";
 
   return (
     <ConfirmContext.Provider value={confirmar}>
@@ -75,12 +79,16 @@ function ConfirmProvider({ children }) {
         }}>
           <div style={{ background: "#fff", borderRadius: 14, width: 380, padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,.35)" }}>
             <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 18 }}>
-              <AlertCircle size={20} color={T.red} style={{ flexShrink: 0, marginTop: 1 }} />
+              {esDestructivo
+                ? <AlertCircle size={20} color={T.red} style={{ flexShrink: 0, marginTop: 1 }} />
+                : <CalendarDays size={20} color={T.steel} style={{ flexShrink: 0, marginTop: 1 }} />}
               <div style={{ fontSize: 14, color: T.ink, lineHeight: 1.5 }}>{pending.mensaje}</div>
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
               <Btn variant="ghost" onClick={() => responder(false)}>Cancelar</Btn>
-              <Btn variant="danger" onClick={() => responder(true)}>Sí, eliminar</Btn>
+              <Btn variant={esDestructivo ? "danger" : "accent"} onClick={() => responder(true)}>
+                {pending.confirmLabel || (esDestructivo ? "Sí, eliminar" : "Sí, continuar")}
+              </Btn>
             </div>
           </div>
         </div>
@@ -924,7 +932,10 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
       }
     }
     if (fechas.length === 0) return;
-    if (!(await confirmar(`Se generarán ${fechas.length} visitas entre ${formRango.fechaInicio} y ${formRango.fechaFin} (frecuencia: ${formRango.frecuencia}). ¿Continuar?`))) return;
+    if (!(await confirmar(
+      `Se generarán ${fechas.length} visitas entre ${formRango.fechaInicio} y ${formRango.fechaFin} (frecuencia: ${formRango.frecuencia}). ¿Continuar?`,
+      { confirmLabel: "Sí, generar", variant: "accent" }
+    ))) return;
     const payloads = fechas.map((fecha) => ({ area, tipo: formRango.tipo, od: formRango.od, personas: formRango.personas, fecha, hora: formRango.hora }));
     const { data: inserted, error } = await supabase.from("calendario_eventos").insert(payloads).select();
     if (!error && inserted) setEventos((prev) => [...prev, ...inserted]);

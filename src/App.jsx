@@ -626,6 +626,13 @@ function OrdenesTrabajo({ area, color }) {
     setRows((prev) => prev.filter((r) => r.id !== id));
     supabase.from("ordenes_trabajo").delete().eq("id", id).then();
   };
+  const eliminarTodos = async () => {
+    if (rows.length === 0) return;
+    if (!(await confirmar(`¿Está seguro que desea eliminar TODAS las ${rows.length} OD de esta área? Esta acción no se puede deshacer.`))) return;
+    const idsAEliminar = rows.map((r) => r.id);
+    setRows([]);
+    idsAEliminar.forEach((id) => supabase.from("ordenes_trabajo").delete().eq("id", id).then());
+  };
 
   // Importar Excel manteniendo el mismo formato usado en la exportación
   const handleImport = (e) => {
@@ -694,6 +701,7 @@ function OrdenesTrabajo({ area, color }) {
               ...(isProyectos ? { "Fecha de Inicio": fechaInicio, "Fecha de Entrega": fechaEntrega } : {}),
               Acción: accion,
             })), `od_${area}.xlsx`)}><Download size={13} /> Excel</Btn>
+            {isAdmin && <Btn small variant="danger" onClick={eliminarTodos}><X size={13} /> Eliminar todo</Btn>}
           </div>
         }>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -861,6 +869,11 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
   const [cursor, setCursor] = useState(new Date());
   const [eventos, setEventos] = useState([]);
   const [form, setForm] = useState({ tipo: tipoLabel[0], od: "", personas: "", fecha: todayISO(), hora: "08:00" });
+  const [modoRango, setModoRango] = useState(false);
+  const [formRango, setFormRango] = useState({
+    tipo: tipoLabel[0], od: "", personas: "", hora: "08:00",
+    fechaInicio: todayISO(), fechaFin: todayISO(), frecuencia: "Semanal",
+  });
 
   useEffect(() => {
     (async () => {
@@ -891,6 +904,31 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
     setForm({ ...form, od: "", personas: "" });
     const { data, error } = await supabase.from("calendario_eventos").insert(payload).select().single();
     if (!error && data) setEventos((prev) => [...prev, data]);
+  };
+
+  const FRECUENCIA_DIAS = { Diaria: 1, Semanal: 7, Quincenal: 14, Mensual: null };
+
+  const generarRango = async () => {
+    if (!formRango.od || !formRango.fechaInicio || !formRango.fechaFin) return;
+    const inicio = new Date(formRango.fechaInicio + "T00:00:00");
+    const fin = new Date(formRango.fechaFin + "T00:00:00");
+    if (fin < inicio) return;
+    const fechas = [];
+    let cursorFecha = new Date(inicio);
+    while (cursorFecha <= fin) {
+      fechas.push(isoDate(cursorFecha));
+      if (formRango.frecuencia === "Mensual") {
+        cursorFecha.setMonth(cursorFecha.getMonth() + 1);
+      } else {
+        cursorFecha.setDate(cursorFecha.getDate() + FRECUENCIA_DIAS[formRango.frecuencia]);
+      }
+    }
+    if (fechas.length === 0) return;
+    if (!(await confirmar(`Se generarán ${fechas.length} visitas entre ${formRango.fechaInicio} y ${formRango.fechaFin} (frecuencia: ${formRango.frecuencia}). ¿Continuar?`))) return;
+    const payloads = fechas.map((fecha) => ({ area, tipo: formRango.tipo, od: formRango.od, personas: formRango.personas, fecha, hora: formRango.hora }));
+    const { data: inserted, error } = await supabase.from("calendario_eventos").insert(payloads).select();
+    if (!error && inserted) setEventos((prev) => [...prev, ...inserted]);
+    setFormRango((f) => ({ ...f, od: "", personas: "" }));
   };
 
   const eventosDelDia = (d) => eventos.filter((e) => e.fecha === isoDate(d));
@@ -1026,19 +1064,45 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
           )}
         </Card>
 
-        <Card title="Agendar visita">
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <Field label="Tipo">
-              <select style={inputStyle} value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
-                {tipoLabel.map((t) => <option key={t}>{t}</option>)}
-              </select>
-            </Field>
-            <Field label="OD"><input style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })} placeholder="OD-1005" /></Field>
-            <Field label="Personas asignadas"><input style={inputStyle} value={form.personas} onChange={(e) => setForm({ ...form, personas: e.target.value })} placeholder="Nombres" /></Field>
-            <Field label="Fecha"><input style={inputStyle} type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} /></Field>
-            <Field label="Hora"><input style={inputStyle} type="time" value={form.hora} onChange={(e) => setForm({ ...form, hora: e.target.value })} /></Field>
-            <Btn variant="accent" onClick={addEvento} style={{ justifyContent: "center" }}><Plus size={14} /> Agendar</Btn>
-          </div>
+        <Card title="Agendar visita" action={
+          <Btn small variant="ghost" onClick={() => setModoRango(!modoRango)}>
+            {modoRango ? "Visita única" : "Rango extendido"}
+          </Btn>
+        }>
+          {!modoRango ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <Field label="Tipo">
+                <select style={inputStyle} value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
+                  {tipoLabel.map((t) => <option key={t}>{t}</option>)}
+                </select>
+              </Field>
+              <Field label="OD"><input style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })} placeholder="OD-1005" /></Field>
+              <Field label="Personas asignadas"><input style={inputStyle} value={form.personas} onChange={(e) => setForm({ ...form, personas: e.target.value })} placeholder="Nombres" /></Field>
+              <Field label="Fecha"><input style={inputStyle} type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} /></Field>
+              <Field label="Hora"><input style={inputStyle} type="time" value={form.hora} onChange={(e) => setForm({ ...form, hora: e.target.value })} /></Field>
+              <Btn variant="accent" onClick={addEvento} style={{ justifyContent: "center" }}><Plus size={14} /> Agendar</Btn>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ fontSize: 11.5, color: T.gray }}>Genera varias visitas repetidas entre dos fechas, según la frecuencia elegida.</div>
+              <Field label="Tipo">
+                <select style={inputStyle} value={formRango.tipo} onChange={(e) => setFormRango({ ...formRango, tipo: e.target.value })}>
+                  {tipoLabel.map((t) => <option key={t}>{t}</option>)}
+                </select>
+              </Field>
+              <Field label="OD"><input style={inputStyle} value={formRango.od} onChange={(e) => setFormRango({ ...formRango, od: e.target.value })} placeholder="OD-1005" /></Field>
+              <Field label="Personas asignadas"><input style={inputStyle} value={formRango.personas} onChange={(e) => setFormRango({ ...formRango, personas: e.target.value })} placeholder="Nombres" /></Field>
+              <Field label="Hora"><input style={inputStyle} type="time" value={formRango.hora} onChange={(e) => setFormRango({ ...formRango, hora: e.target.value })} /></Field>
+              <Field label="Frecuencia">
+                <select style={inputStyle} value={formRango.frecuencia} onChange={(e) => setFormRango({ ...formRango, frecuencia: e.target.value })}>
+                  {["Diaria", "Semanal", "Quincenal", "Mensual"].map((f) => <option key={f}>{f}</option>)}
+                </select>
+              </Field>
+              <Field label="Desde"><input style={inputStyle} type="date" value={formRango.fechaInicio} onChange={(e) => setFormRango({ ...formRango, fechaInicio: e.target.value })} /></Field>
+              <Field label="Hasta"><input style={inputStyle} type="date" value={formRango.fechaFin} onChange={(e) => setFormRango({ ...formRango, fechaFin: e.target.value })} /></Field>
+              <Btn variant="accent" onClick={generarRango} style={{ justifyContent: "center" }}><Plus size={14} /> Generar visitas</Btn>
+            </div>
+          )}
         </Card>
       </div>
     </div>
@@ -1486,12 +1550,17 @@ function ResumenEjecutivo() {
   ];
   const totalActivos = insp.activos + proj.activos;
 
-  const avgFactura = facturas.reduce((s, f) => s + f.monto, 0) / (facturas.length || 1);
+  const totalFacturado = facturas.reduce((s, f) => s + f.monto, 0);
+  const avgFactura = totalFacturado / (facturas.length || 1);
   const mesesSobre = facturas.filter((f) => f.monto >= PUNTO_EQUILIBRIO).length;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 14 }}>
+        <Card style={{ padding: 16 }}>
+          <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase" }}>Total facturado</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: T.steel }}>{fmtMoney(totalFacturado)}</div>
+        </Card>
         <Card style={{ padding: 16 }}>
           <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase" }}>Promedio mensual</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: T.steel }}>{fmtMoney(avgFactura)}</div>

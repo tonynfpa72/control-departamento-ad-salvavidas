@@ -409,22 +409,45 @@ function HorasExtras({ area, color }) {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
   const confirmar = useContext(ConfirmContext);
-  const [disponible, setDisponible] = useState(150);
-  const [rows, setRows] = useState(seedHoras(area));
+  const [disponible, setDisponibleState] = useState(150);
+  const [rows, setRows] = useState([]);
   const [form, setForm] = useState({ od: "", personal: "", horas: "" });
   const used = rows.reduce((s, r) => s + (r.estado !== "Rechazada" ? Number(r.horas) : 0), 0);
   const saldo = disponible - used;
 
-  const add = () => {
-    if (!form.od || !form.horas) return;
-    setRows([{ id: uid(), fecha: todayISO(), od: form.od, personal: form.personal, horas: Number(form.horas), estado: "Pendiente", area }, ...rows]);
-    setForm({ od: "", personal: "", horas: "" });
+  useEffect(() => {
+    (async () => {
+      const { data: filas } = await supabase.from("horas_extras").select("*").eq("area", area).order("created_at", { ascending: false });
+      if (filas) setRows(filas);
+      const { data: config } = await supabase.from("horas_disponible").select("*").eq("area", area).single();
+      if (config) setDisponibleState(Number(config.disponible));
+    })();
+  }, [area]);
+
+  const setDisponible = (valor) => {
+    setDisponibleState(valor);
+    supabase.from("horas_disponible").upsert({ area, disponible: valor }).then();
   };
-  const setEstado = (id, estado) => setRows(rows.map((r) => (r.id === id ? { ...r, estado } : r)));
-  const setPersonal = (id, personal) => setRows(rows.map((r) => (r.id === id ? { ...r, personal } : r)));
+
+  const add = async () => {
+    if (!form.od || !form.horas) return;
+    const payload = { area, fecha: todayISO(), od: form.od, personal: form.personal, horas: Number(form.horas), estado: "Pendiente" };
+    setForm({ od: "", personal: "", horas: "" });
+    const { data, error } = await supabase.from("horas_extras").insert(payload).select().single();
+    if (!error && data) setRows((prev) => [data, ...prev]);
+  };
+  const setEstado = (id, estado) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, estado } : r)));
+    supabase.from("horas_extras").update({ estado }).eq("id", id).then();
+  };
+  const setPersonal = (id, personal) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, personal } : r)));
+    supabase.from("horas_extras").update({ personal }).eq("id", id).then();
+  };
   const del = async (id) => {
     if (!(await confirmar("¿Está seguro que desea eliminar esta solicitud de horas extra? Esta acción no se puede deshacer."))) return;
-    setRows(rows.filter((r) => r.id !== id));
+    setRows((prev) => prev.filter((r) => r.id !== id));
+    supabase.from("horas_extras").delete().eq("id", id).then();
   };
 
   return (

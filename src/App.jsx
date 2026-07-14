@@ -1203,19 +1203,35 @@ function CursosEHS() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
   const confirmar = useContext(ConfirmContext);
-  const [rows, setRows] = useState(seedCursos);
+  const [rows, setRows] = useState([]);
   const [form, setForm] = useState({ solicitante: "", personal: "", lugar: "", tipo: CURSO_TIPOS[0], fecha: "" });
 
-  const add = () => {
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("cursos_ehs").select("*").order("created_at", { ascending: false });
+      if (data) setRows(data.map((r) => ({ ...r, fecha: r.fecha || "" })));
+    })();
+  }, []);
+
+  const add = async () => {
     if (!form.solicitante || !form.personal) return;
-    setRows([{ id: uid(), ...form, estado: "Pendiente" }, ...rows]);
+    const payload = { ...form, fecha: form.fecha || null, estado: "Pendiente" };
     setForm({ solicitante: "", personal: "", lugar: "", tipo: CURSO_TIPOS[0], fecha: "" });
+    const { data, error } = await supabase.from("cursos_ehs").insert(payload).select().single();
+    if (!error && data) setRows((prev) => [{ ...data, fecha: data.fecha || "" }, ...prev]);
   };
-  const setEstado = (id, estado) => setRows(rows.map((r) => r.id === id ? { ...r, estado } : r));
-  const setFecha = (id, fecha) => setRows(rows.map((r) => r.id === id ? { ...r, fecha } : r));
+  const setEstado = (id, estado) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado } : r));
+    supabase.from("cursos_ehs").update({ estado }).eq("id", id).then();
+  };
+  const setFecha = (id, fecha) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, fecha } : r));
+    supabase.from("cursos_ehs").update({ fecha: fecha || null }).eq("id", id).then();
+  };
   const del = async (id) => {
     if (!(await confirmar("¿Está seguro que desea eliminar este curso? Esta acción no se puede deshacer."))) return;
-    setRows(rows.filter((r) => r.id !== id));
+    setRows((prev) => prev.filter((r) => r.id !== id));
+    supabase.from("cursos_ehs").delete().eq("id", id).then();
   };
 
   return (

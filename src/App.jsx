@@ -878,6 +878,7 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
   const [eventos, setEventos] = useState([]);
   const [form, setForm] = useState({ tipo: tipoLabel[0], od: "", personas: "", fecha: todayISO(), hora: "08:00" });
   const [modoRango, setModoRango] = useState(false);
+  const [ultimoRango, setUltimoRango] = useState(null);
   const [formRango, setFormRango] = useState({
     tipo: tipoLabel[0], od: "", personas: "", hora: "08:00",
     fechaInicio: todayISO(), fechaFin: todayISO(), frecuencia: "Semanal",
@@ -938,7 +939,10 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
     ))) return;
     const payloads = fechas.map((fecha) => ({ area, tipo: formRango.tipo, od: formRango.od, personas: formRango.personas, fecha, hora: formRango.hora }));
     const { data: inserted, error } = await supabase.from("calendario_eventos").insert(payloads).select();
-    if (!error && inserted) setEventos((prev) => [...prev, ...inserted]);
+    if (!error && inserted) {
+      setEventos((prev) => [...prev, ...inserted]);
+      setUltimoRango({ od: formRango.od, min: formRango.fechaInicio, max: formRango.fechaFin, color: hashColor(formRango.od) });
+    }
     setFormRango((f) => ({ ...f, od: "", personas: "" }));
   };
 
@@ -966,7 +970,14 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
       .filter(([, r]) => r.min !== r.max)
       .map(([od, r]) => ({ od, ...r, color: hashColor(od) }));
   }, [eventos]);
-  const rangosDelDia = (d) => rangosPorOD.filter((r) => isoDate(d) >= r.min && isoDate(d) <= r.max);
+  const rangosDelDia = (d) => {
+    const iso = isoDate(d);
+    const lista = rangosPorOD.filter((r) => iso >= r.min && iso <= r.max);
+    if (ultimoRango && iso >= ultimoRango.min && iso <= ultimoRango.max && !lista.some((r) => r.od === ultimoRango.od)) {
+      lista.push(ultimoRango);
+    }
+    return lista;
+  };
 
   const topFor = (hora) => {
     const [h, m] = (hora || "08:00").split(":").map(Number);
@@ -1843,6 +1854,7 @@ function Administrativo() {
    --------------------------------------------------------- */
 function CalendarioGlobal() {
   const [eventos, setEventos] = useState([]);
+  const [filtroArea, setFiltroArea] = useState("Todos");
   useEffect(() => {
     (async () => {
       const { data } = await supabase.from("calendario_eventos").select("*").order("fecha", { ascending: true });
@@ -1850,8 +1862,20 @@ function CalendarioGlobal() {
     })();
   }, []);
 
+  const AREA_INFO = {
+    inspecciones: { label: "Inspecciones", color: T.steel, soft: T.steelSoft },
+    proyectos: { label: "Proyectos", color: T.green, soft: T.greenSoft },
+    salud: { label: "Salud Ocupacional", color: T.red, soft: T.redSoft },
+  };
+  const FILTRO_OPCIONES = ["Todos", "Inspecciones", "Proyectos", "Salud Ocupacional"];
+
+  const eventosFiltrados = eventos.filter((e) => {
+    if (filtroArea === "Todos") return true;
+    return (AREA_INFO[e.area]?.label || e.area) === filtroArea;
+  });
+
   const grupos = {};
-  eventos.forEach((e) => {
+  eventosFiltrados.forEach((e) => {
     if (!e.fecha) return;
     (grupos[e.fecha] = grupos[e.fecha] || []).push(e);
   });
@@ -1859,24 +1883,33 @@ function CalendarioGlobal() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <Card>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Filtrar por área</span>
+          <select style={{ ...inputStyle, width: 200 }} value={filtroArea} onChange={(e) => setFiltroArea(e.target.value)}>
+            {FILTRO_OPCIONES.map((op) => <option key={op} value={op}>{op}</option>)}
+          </select>
+        </div>
+      </Card>
       {fechas.length === 0 && (
-        <Card><div style={{ color: T.gray, fontSize: 13 }}>No hay eventos agendados todavía en ninguna área.</div></Card>
+        <Card><div style={{ color: T.gray, fontSize: 13 }}>No hay eventos agendados todavía en esta selección.</div></Card>
       )}
       {fechas.map((fecha) => (
         <Card key={fecha} title={new Date(fecha + "T00:00:00").toLocaleDateString("es-CR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {grupos[fecha]
               .sort((a, b) => (a.hora || "").localeCompare(b.hora || ""))
-              .map((e) => (
-                <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: T.graySoft, borderRadius: 8, flexWrap: "wrap" }}>
-                  <Badge color={e.area === "proyectos" ? T.green : T.steel} soft={e.area === "proyectos" ? T.greenSoft : T.steelSoft}>
-                    {e.area === "proyectos" ? "Proyectos" : "Inspecciones"}
-                  </Badge>
-                  <div style={{ fontWeight: 800, fontSize: 13, minWidth: 50 }}>{e.hora}</div>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{e.tipo} — {e.od}</div>
-                  <div style={{ fontSize: 12.5, color: T.inkSoft }}>{e.personas}</div>
-                </div>
-              ))}
+              .map((e) => {
+                const info = AREA_INFO[e.area] || { label: e.area, color: T.gray, soft: T.graySoft };
+                return (
+                  <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: T.graySoft, borderRadius: 8, flexWrap: "wrap" }}>
+                    <Badge color={info.color} soft={info.soft}>{info.label}</Badge>
+                    <div style={{ fontWeight: 800, fontSize: 13, minWidth: 50 }}>{e.hora}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{e.tipo} — {e.od}</div>
+                    <div style={{ fontSize: 12.5, color: T.inkSoft }}>{e.personas}</div>
+                  </div>
+                );
+              })}
           </div>
         </Card>
       ))}

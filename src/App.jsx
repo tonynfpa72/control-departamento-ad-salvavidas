@@ -822,11 +822,20 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
   const isAdmin = currentUser?.categoria === "admin";
   const confirmar = useContext(ConfirmContext);
   const [cursor, setCursor] = useState(new Date());
-  const [eventos, setEventos] = useState(seedEventos(area).map((e) => ({ hora: "08:00", ...e })));
+  const [eventos, setEventos] = useState([]);
   const [form, setForm] = useState({ tipo: tipoLabel[0], od: "", personas: "", fecha: todayISO(), hora: "08:00" });
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("calendario_eventos").select("*").eq("area", area);
+      if (data) setEventos(data);
+    })();
+  }, [area]);
+
   const delEvento = async (id) => {
     if (!(await confirmar("¿Está seguro que desea eliminar esta visita agendada?"))) return;
     setEventos((prev) => prev.filter((e) => e.id !== id));
+    supabase.from("calendario_eventos").delete().eq("id", id).then();
   };
 
   const weekStart = startOfWeek(cursor);
@@ -839,10 +848,12 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
 
   const rangeLabel = `${days[0].toLocaleDateString("es-CR", { day: "numeric", month: "short" })} – ${days[6].toLocaleDateString("es-CR", { day: "numeric", month: "short", year: "numeric" })}`;
 
-  const addEvento = () => {
+  const addEvento = async () => {
     if (!form.od || !form.fecha) return;
-    setEventos([...eventos, { id: uid(), ...form, area }]);
+    const payload = { area, tipo: form.tipo, od: form.od, personas: form.personas, fecha: form.fecha, hora: form.hora };
     setForm({ ...form, od: "", personas: "" });
+    const { data, error } = await supabase.from("calendario_eventos").insert(payload).select().single();
+    if (!error && data) setEventos((prev) => [...prev, data]);
   };
 
   const eventosDelDia = (d) => eventos.filter((e) => e.fecha === isoDate(d));

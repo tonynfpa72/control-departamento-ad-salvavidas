@@ -872,7 +872,7 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
   const [modoRango, setModoRango] = useState(false);
   const [formRango, setFormRango] = useState({
     tipo: tipoLabel[0], od: "", personas: "", hora: "08:00",
-    fechaInicio: todayISO(), fechaFin: todayISO(), frecuencia: "Semanal",
+    fechaInicio: todayISO(), frecuencia: "Semanal", repeticiones: 4,
   });
 
   useEffect(() => {
@@ -909,13 +909,11 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
   const FRECUENCIA_DIAS = { Diaria: 1, Semanal: 7, Quincenal: 14, Mensual: null };
 
   const generarRango = async () => {
-    if (!formRango.od || !formRango.fechaInicio || !formRango.fechaFin) return;
-    const inicio = new Date(formRango.fechaInicio + "T00:00:00");
-    const fin = new Date(formRango.fechaFin + "T00:00:00");
-    if (fin < inicio) return;
+    const repes = Number(formRango.repeticiones);
+    if (!formRango.od || !formRango.fechaInicio || !repes || repes < 1) return;
     const fechas = [];
-    let cursorFecha = new Date(inicio);
-    while (cursorFecha <= fin) {
+    let cursorFecha = new Date(formRango.fechaInicio + "T00:00:00");
+    for (let i = 0; i < repes; i++) {
       fechas.push(isoDate(cursorFecha));
       if (formRango.frecuencia === "Mensual") {
         cursorFecha.setMonth(cursorFecha.getMonth() + 1);
@@ -923,8 +921,8 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
         cursorFecha.setDate(cursorFecha.getDate() + FRECUENCIA_DIAS[formRango.frecuencia]);
       }
     }
-    if (fechas.length === 0) return;
-    if (!(await confirmar(`Se generarán ${fechas.length} visitas entre ${formRango.fechaInicio} y ${formRango.fechaFin} (frecuencia: ${formRango.frecuencia}). ¿Continuar?`))) return;
+    const etiquetaFrecuencia = { Diaria: "día", Semanal: "semana", Quincenal: "quincena", Mensual: "mes" }[formRango.frecuencia];
+    if (!(await confirmar(`Se generarán ${fechas.length} visitas a partir del ${formRango.fechaInicio}, una cada ${etiquetaFrecuencia}. ¿Continuar?`))) return;
     const payloads = fechas.map((fecha) => ({ area, tipo: formRango.tipo, od: formRango.od, personas: formRango.personas, fecha, hora: formRango.hora }));
     const { data: inserted, error } = await supabase.from("calendario_eventos").insert(payloads).select();
     if (!error && inserted) setEventos((prev) => [...prev, ...inserted]);
@@ -1099,7 +1097,9 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
                 </select>
               </Field>
               <Field label="Desde"><input style={inputStyle} type="date" value={formRango.fechaInicio} onChange={(e) => setFormRango({ ...formRango, fechaInicio: e.target.value })} /></Field>
-              <Field label="Hasta"><input style={inputStyle} type="date" value={formRango.fechaFin} onChange={(e) => setFormRango({ ...formRango, fechaFin: e.target.value })} /></Field>
+              <Field label={`Repetir cuántas veces (cada ${{ Diaria: "día", Semanal: "semana", Quincenal: "quincena", Mensual: "mes" }[formRango.frecuencia]})`}>
+                <input style={inputStyle} type="number" min="1" value={formRango.repeticiones} onChange={(e) => setFormRango({ ...formRango, repeticiones: e.target.value })} />
+              </Field>
               <Btn variant="accent" onClick={generarRango} style={{ justifyContent: "center" }}><Plus size={14} /> Generar visitas</Btn>
             </div>
           )}

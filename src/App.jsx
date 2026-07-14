@@ -1361,20 +1361,34 @@ function AreaOperativa({ area, color }) {
    --------------------------------------------------------- */
 function ResumenEjecutivo() {
   const confirmar = useContext(ConfirmContext);
-  const [facturas, setFacturas] = useState(seedFacturacion);
+  const [facturas, setFacturas] = useState([]);
   const [nuevoMes, setNuevoMes] = useState({ mes: "", monto: "" });
   const { clientes } = useContext(ClientesContext);
   const PUNTO_EQUILIBRIO = 120000;
 
-  const addFactura = () => {
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("facturacion").select("*").order("created_at", { ascending: true });
+      if (data) setFacturas(data);
+    })();
+  }, []);
+
+  const addFactura = async () => {
     if (!nuevoMes.mes || !nuevoMes.monto) return;
-    setFacturas([...facturas, { mes: nuevoMes.mes, monto: Number(nuevoMes.monto) }]);
+    const payload = { mes: nuevoMes.mes, monto: Number(nuevoMes.monto) };
     setNuevoMes({ mes: "", monto: "" });
+    const { data, error } = await supabase.from("facturacion").insert(payload).select().single();
+    if (!error && data) setFacturas((prev) => [...prev, data]);
   };
-  const editarMonto = (i, monto) => setFacturas(facturas.map((f, idx) => idx === i ? { ...f, monto: Number(monto) || 0 } : f));
-  const eliminarMes = async (i) => {
+  const editarMonto = (id, monto) => {
+    const valor = Number(monto) || 0;
+    setFacturas((prev) => prev.map((f) => f.id === id ? { ...f, monto: valor } : f));
+    supabase.from("facturacion").update({ monto: valor }).eq("id", id).then();
+  };
+  const eliminarMes = async (id) => {
     if (!(await confirmar("¿Está seguro que desea eliminar este mes de facturación?"))) return;
-    setFacturas(facturas.filter((_, idx) => idx !== i));
+    setFacturas((prev) => prev.filter((f) => f.id !== id));
+    supabase.from("facturacion").delete().eq("id", id).then();
   };
 
   const inspRows = clientes.inspecciones || [];
@@ -1444,16 +1458,16 @@ function ResumenEjecutivo() {
 
         <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, margin: "16px 0 8px" }}>Editar monto por mes</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
-          {facturas.map((f, i) => (
-            <div key={f.mes + i} style={{ display: "flex", flexDirection: "column", gap: 3, background: T.graySoft, borderRadius: 8, padding: "6px 10px" }}>
+          {facturas.map((f) => (
+            <div key={f.id} style={{ display: "flex", flexDirection: "column", gap: 3, background: T.graySoft, borderRadius: 8, padding: "6px 10px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                 <span style={{ fontSize: 10.5, color: T.inkSoft, fontWeight: 700 }}>{f.mes}</span>
-                <button onClick={() => eliminarMes(i)} title="Borrar mes" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}>×</button>
+                <button onClick={() => eliminarMes(f.id)} title="Borrar mes" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}>×</button>
               </div>
               <input
                 type="number"
                 value={f.monto}
-                onChange={(e) => editarMonto(i, e.target.value)}
+                onChange={(e) => editarMonto(f.id, e.target.value)}
                 style={{ ...inputStyle, width: 100, padding: "4px 6px", fontSize: 12.5, border: `1px solid ${T.line}` }}
               />
             </div>

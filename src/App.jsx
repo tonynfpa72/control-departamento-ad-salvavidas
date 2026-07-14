@@ -7,7 +7,7 @@ import * as XLSX from "xlsx";
 import {
   LogOut, Plus, Download, Check, X, Clock, ClipboardList,
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
-  ChevronLeft, ChevronRight, AlertCircle, Upload, Flame, Siren
+  ChevronLeft, ChevronRight, AlertCircle, Upload, Flame
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -350,7 +350,6 @@ function Login({ onLogin }) {
       position: "relative", overflow: "hidden",
     }}>
       <Flame size={380} color="#fff" style={{ position: "absolute", opacity: 0.09, right: "5%", top: "48%", transform: "translateY(-50%)", pointerEvents: "none" }} />
-      <Siren size={160} color="#fff" style={{ position: "absolute", opacity: 0.09, left: "6%", bottom: "8%", pointerEvents: "none" }} />
       <div style={{ width: 360, background: T.panel, borderRadius: 16, padding: 32, boxShadow: "0 20px 60px rgba(0,0,0,.3)", position: "relative" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
           <div style={{ width: 40, height: 40, borderRadius: 10, background: logo ? "transparent" : `linear-gradient(135deg, ${T.accent}, #C2410C)`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>

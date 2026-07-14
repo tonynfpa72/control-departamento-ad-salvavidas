@@ -1011,10 +1011,10 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
               <div key={d.toISOString()} style={{
                 position: "relative",
                 borderLeft: `1px solid ${T.line}`,
-                background: isToday ? `${color}0A` : (di === 0 || di === 6) ? "#FAFAF7" : "transparent",
+                background: isToday ? `${color}0F` : "#FBFBF8",
               }}>
                 {hours.map((h) => (
-                  <div key={h} style={{ height: HOUR_PX, borderBottom: `1px dashed ${T.line}` }} />
+                  <div key={h} style={{ height: HOUR_PX, borderBottom: `1px dashed rgba(16,24,38,0.16)` }} />
                 ))}
                 {isToday && showNowLine && (
                   <div style={{

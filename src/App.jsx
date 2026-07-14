@@ -319,6 +319,30 @@ function excelValueToISODate(value) {
   return "";
 }
 
+// Convierte una fila de la tabla "ordenes_trabajo" de Supabase (snake_case)
+// al formato que usa la app (camelCase), y viceversa.
+function odRowFromDb(r) {
+  return {
+    id: r.id,
+    od: r.od || "",
+    cliente: r.cliente || "",
+    estado: r.estado || "Activo",
+    tecnico: r.tecnico || "",
+    vencimiento: r.vencimiento || "",
+    frecuencia: r.frecuencia || "",
+    fechaInicio: r.fecha_inicio || "",
+    fechaEntrega: r.fecha_entrega || "",
+    accion: r.accion || "",
+    area: r.area,
+  };
+}
+const ODFIELD_TO_DB = { fechaInicio: "fecha_inicio", fechaEntrega: "fecha_entrega" };
+function odPatchToDb(patch) {
+  const out = {};
+  for (const k in patch) out[ODFIELD_TO_DB[k] || k] = patch[k] === "" ? null : patch[k];
+  return out;
+}
+
 /* ---------------------------------------------------------
    LOGIN
    --------------------------------------------------------- */
@@ -496,23 +520,53 @@ function OrdenesTrabajo({ area, color }) {
   const [form, setForm] = useState({ od: "", cliente: "", tecnico: "" });
   const fileInputRef = React.useRef(null);
 
-  const add = () => {
+  const add = async () => {
     if (!form.od || !form.cliente) return;
-    setRows((prev) => [{ id: uid(), od: form.od, cliente: form.cliente, estado: "Activo", tecnico: form.tecnico, vencimiento: "", frecuencia: "", fechaInicio: "", fechaEntrega: "", accion: "", area }, ...prev]);
+    const payload = { area, od: form.od, cliente: form.cliente, estado: "Activo", tecnico: form.tecnico, accion: "" };
     setForm({ od: "", cliente: "", tecnico: "" });
+    const { data, error } = await supabase.from("ordenes_trabajo").insert(payload).select().single();
+    if (!error && data) setRows((prev) => [odRowFromDb(data), ...prev]);
   };
-  const toggle = (id) => { if (!isAdmin) return; setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado: r.estado === "Activo" ? "No Activo" : "Activo" } : r)); };
+  const toggle = (id) => {
+    if (!isAdmin) return;
+    const actual = rows.find((r) => r.id === id);
+    const estado = actual?.estado === "Activo" ? "No Activo" : "Activo";
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado } : r));
+    supabase.from("ordenes_trabajo").update({ estado }).eq("id", id).then();
+  };
   const ESTADO_OD_COLOR = { "Activo": [T.green, T.greenSoft], "No Activo": [T.red, T.redSoft], "Entregado": [T.blue, T.blueSoft] };
-  const setEstadoOD = (id, estado) => setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado } : r));
-  const setAccion = (id, accion) => setRows((prev) => prev.map((r) => r.id === id ? { ...r, accion } : r));
-  const setTecnico = (id, tecnico) => setRows((prev) => prev.map((r) => r.id === id ? { ...r, tecnico } : r));
-  const setVencimiento = (id, vencimiento) => setRows((prev) => prev.map((r) => r.id === id ? { ...r, vencimiento } : r));
-  const setFrecuencia = (id, frecuencia) => setRows((prev) => prev.map((r) => r.id === id ? { ...r, frecuencia } : r));
-  const setFechaInicio = (id, fechaInicio) => setRows((prev) => prev.map((r) => r.id === id ? { ...r, fechaInicio } : r));
-  const setFechaEntrega = (id, fechaEntrega) => setRows((prev) => prev.map((r) => r.id === id ? { ...r, fechaEntrega } : r));
+  const setEstadoOD = (id, estado) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado } : r));
+    supabase.from("ordenes_trabajo").update({ estado }).eq("id", id).then();
+  };
+  const setAccion = (id, accion) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, accion } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ accion })).eq("id", id).then();
+  };
+  const setTecnico = (id, tecnico) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, tecnico } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ tecnico })).eq("id", id).then();
+  };
+  const setVencimiento = (id, vencimiento) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, vencimiento } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ vencimiento })).eq("id", id).then();
+  };
+  const setFrecuencia = (id, frecuencia) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, frecuencia } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ frecuencia })).eq("id", id).then();
+  };
+  const setFechaInicio = (id, fechaInicio) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, fechaInicio } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ fechaInicio })).eq("id", id).then();
+  };
+  const setFechaEntrega = (id, fechaEntrega) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, fechaEntrega } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ fechaEntrega })).eq("id", id).then();
+  };
   const del = async (id) => {
     if (!(await confirmar("¿Está seguro que desea eliminar esta OD? Esta acción no se puede deshacer."))) return;
     setRows((prev) => prev.filter((r) => r.id !== id));
+    supabase.from("ordenes_trabajo").delete().eq("id", id).then();
   };
 
   // Importar Excel manteniendo el mismo formato usado en la exportación
@@ -520,7 +574,7 @@ function OrdenesTrabajo({ area, color }) {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       try {
         const data = new Uint8Array(evt.target.result);
         const wb = XLSX.read(data, { type: "array", cellDates: true });
@@ -528,20 +582,21 @@ function OrdenesTrabajo({ area, color }) {
         const json = XLSX.utils.sheet_to_json(ws);
         const nuevas = json
           .map((row) => ({
-            id: uid(),
+            area,
             od: row["OD"] ?? row["od"] ?? "",
             cliente: row["Cliente"] ?? row["cliente"] ?? "",
             estado: row["Activo/No Activo"] ?? row["Estado"] ?? "Activo",
             tecnico: row[`${tecnicoLabel} asignado`] ?? row["Técnico asignado"] ?? row["Encargado"] ?? row["Tecnico"] ?? row["tecnico"] ?? "",
-            vencimiento: excelValueToISODate(row["Fecha de Vencimiento"] ?? row["Vencimiento"] ?? ""),
+            vencimiento: excelValueToISODate(row["Fecha de Vencimiento"] ?? row["Vencimiento"] ?? "") || null,
             frecuencia: row["Frecuencia"] ?? "",
-            fechaInicio: excelValueToISODate(row["Fecha de Inicio"] ?? ""),
-            fechaEntrega: excelValueToISODate(row["Fecha de Entrega"] ?? ""),
+            fecha_inicio: excelValueToISODate(row["Fecha de Inicio"] ?? "") || null,
+            fecha_entrega: excelValueToISODate(row["Fecha de Entrega"] ?? "") || null,
             accion: row["Acción"] ?? row["Accion"] ?? row["accion"] ?? "",
-            area,
           }))
           .filter((r) => r.od || r.cliente);
-        setRows((prev) => [...nuevas, ...prev]);
+        if (nuevas.length === 0) return;
+        const { data: inserted, error } = await supabase.from("ordenes_trabajo").insert(nuevas).select();
+        if (!error && inserted) setRows((prev) => [...inserted.map(odRowFromDb), ...prev]);
       } catch (err) {
         console.error(err);
       }
@@ -1575,18 +1630,29 @@ function AppInner() {
 export default function App() {
   const [logo, setLogo] = useState(null);
   const [users, setUsers] = useState([]);
-  const [clientes, setClientes] = useState({
-    inspecciones: seedClientes("inspecciones"),
-    proyectos: seedClientes("proyectos"),
-  });
+  const [clientes, setClientes] = useState({ inspecciones: [], proyectos: [] });
 
   const refetchUsers = async () => {
     const { data, error } = await supabase.rpc("listar_usuarios");
     if (!error && data) setUsers(data);
   };
 
+  const refetchClientes = async () => {
+    const { data, error } = await supabase
+      .from("ordenes_trabajo")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (!error && data) {
+      setClientes({
+        inspecciones: data.filter((r) => r.area === "inspecciones").map(odRowFromDb),
+        proyectos: data.filter((r) => r.area === "proyectos").map(odRowFromDb),
+      });
+    }
+  };
+
   useEffect(() => {
     refetchUsers();
+    refetchClientes();
   }, []);
 
   return (

@@ -343,6 +343,26 @@ function odPatchToDb(patch) {
   return out;
 }
 
+function cotRowFromDb(r) {
+  return {
+    id: r.id,
+    consecutivo: String(r.numero).padStart(5, "0"),
+    solicitante: r.solicitante || "",
+    cliente: r.cliente || "",
+    contacto: r.contacto || "",
+    email: r.email || "",
+    telefono: r.telefono || "",
+    provincia: r.provincia || "",
+    dias: r.dias || "",
+    personal: r.personal || "",
+    descripcion: r.descripcion || "",
+    equipos: r.equipos || "",
+    dispositivos: r.dispositivos || "",
+    numCot: r.num_cot || "",
+    estado: r.estado || "Abierto",
+  };
+}
+
 /* ---------------------------------------------------------
    LOGIN
    --------------------------------------------------------- */
@@ -1054,7 +1074,7 @@ function Cotizaciones() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
   const confirmar = useContext(ConfirmContext);
-  const [rows, setRows] = useState(seedCotizaciones);
+  const [rows, setRows] = useState([]);
   const [open, setOpen] = useState(false);
   const [printRow, setPrintRow] = useState(null);
   const [form, setForm] = useState({
@@ -1062,19 +1082,40 @@ function Cotizaciones() {
     dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Abierto",
   });
 
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("cotizaciones").select("*").order("numero", { ascending: false });
+      if (data) setRows(data.map(cotRowFromDb));
+    })();
+  }, []);
+
   const nextConsecutivo = String(rows.length + 1).padStart(5, "0");
 
-  const submit = () => {
+  const submit = async () => {
     if (!form.solicitante || !form.cliente) return;
-    setRows([{ id: uid(), consecutivo: nextConsecutivo, ...form }, ...rows]);
+    const payload = {
+      solicitante: form.solicitante, cliente: form.cliente, contacto: form.contacto, email: form.email,
+      telefono: form.telefono, provincia: form.provincia, dias: form.dias || null, personal: form.personal,
+      descripcion: form.descripcion, equipos: form.equipos, dispositivos: form.dispositivos,
+      num_cot: form.numCot, estado: form.estado,
+    };
     setForm({ solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "", dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Abierto" });
     setOpen(false);
+    const { data, error } = await supabase.from("cotizaciones").insert(payload).select().single();
+    if (!error && data) setRows((prev) => [cotRowFromDb(data), ...prev]);
   };
-  const setEstado = (id, estado) => setRows(rows.map((r) => r.id === id ? { ...r, estado } : r));
-  const setNumCot = (id, numCot) => setRows(rows.map((r) => r.id === id ? { ...r, numCot } : r));
+  const setEstado = (id, estado) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado } : r));
+    supabase.from("cotizaciones").update({ estado }).eq("id", id).then();
+  };
+  const setNumCot = (id, numCot) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, numCot } : r));
+    supabase.from("cotizaciones").update({ num_cot: numCot }).eq("id", id).then();
+  };
   const del = async (id) => {
     if (!(await confirmar("¿Está seguro que desea eliminar esta cotización? Esta acción no se puede deshacer."))) return;
-    setRows(rows.filter((r) => r.id !== id));
+    setRows((prev) => prev.filter((r) => r.id !== id));
+    supabase.from("cotizaciones").delete().eq("id", id).then();
   };
 
   const estadoColor = { Abierto: [T.amber, T.amberSoft], "En espera": [T.steelSoft, T.graySoft], Cerrado: [T.green, T.greenSoft], Cancelado: [T.red, T.redSoft] };

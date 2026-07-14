@@ -944,6 +944,30 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
 
   const eventosDelDia = (d) => eventos.filter((e) => e.fecha === isoDate(d));
 
+  // Para cada OD con visitas en más de una fecha (generadas en rango), calculamos
+  // su fecha mínima y máxima, para marcar visualmente todo ese rango en la agenda.
+  const RANGO_COLORES = [T.accent, T.steel, T.green, T.blue, T.amber];
+  const hashColor = (str) => {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % RANGO_COLORES.length;
+    return RANGO_COLORES[Math.abs(h)];
+  };
+  const rangosPorOD = useMemo(() => {
+    const porOD = {};
+    eventos.forEach((e) => {
+      if (!e.od) return;
+      if (!porOD[e.od]) porOD[e.od] = { min: e.fecha, max: e.fecha };
+      else {
+        if (e.fecha < porOD[e.od].min) porOD[e.od].min = e.fecha;
+        if (e.fecha > porOD[e.od].max) porOD[e.od].max = e.fecha;
+      }
+    });
+    return Object.entries(porOD)
+      .filter(([, r]) => r.min !== r.max)
+      .map(([od, r]) => ({ od, ...r, color: hashColor(od) }));
+  }, [eventos]);
+  const rangosDelDia = (d) => rangosPorOD.filter((r) => isoDate(d) >= r.min && isoDate(d) <= r.max);
+
   const topFor = (hora) => {
     const [h, m] = (hora || "08:00").split(":").map(Number);
     const clamped = Math.max(HORA_INICIO, Math.min(HORA_FIN, h + m / 60));
@@ -988,6 +1012,11 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
                   background: isToday ? color : "transparent", width: 27, height: 27, lineHeight: "27px",
                   borderRadius: "50%", margin: "3px auto 0", boxShadow: isToday ? `0 2px 6px ${color}55` : "none",
                 }}>{d.getDate()}</div>
+                <div style={{ display: "flex", justifyContent: "center", gap: 2, marginTop: 4, minHeight: 4 }}>
+                  {rangosDelDia(d).map((r) => (
+                    <div key={r.od} title={`OD ${r.od}: ${r.min} a ${r.max}`} style={{ width: 16, height: 4, borderRadius: 2, background: r.color }} />
+                  ))}
+                </div>
               </div>
             );
           })}
@@ -1007,11 +1036,12 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
           {/* columnas de días con líneas punteadas horizontales */}
           {days.map((d, di) => {
             const isToday = isoDate(d) === todayISO();
+            const rangosHoy = rangosDelDia(d);
             return (
               <div key={d.toISOString()} style={{
                 position: "relative",
                 borderLeft: `1px solid ${T.line}`,
-                background: isToday ? `${color}0F` : "#FBFBF8",
+                background: rangosHoy.length > 0 ? `${rangosHoy[0].color}12` : isToday ? `${color}0F` : "#FBFBF8",
               }}>
                 {hours.map((h) => (
                   <div key={h} style={{ height: HOUR_PX, borderBottom: `1px dashed rgba(16,24,38,0.16)` }} />

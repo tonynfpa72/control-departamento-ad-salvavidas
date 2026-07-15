@@ -835,15 +835,20 @@ function HorasExtras({ area, color }) {
                   ) : (r.hora_inicio && r.hora_fin ? `${r.hora_inicio} – ${r.hora_fin}` : "—")}
                 </td>
                 <td>{r.horas}h</td>
-                <td><Badge color={r.estado === "Aprobada" ? T.green : r.estado === "Rechazada" ? T.red : r.estado === "Cerrada" ? T.steel : T.amber} soft={r.estado === "Aprobada" ? T.greenSoft : r.estado === "Rechazada" ? T.redSoft : r.estado === "Cerrada" ? T.graySoft : T.amberSoft}>{r.estado}</Badge></td>
+                <td>
+                  {isAdmin ? (
+                    <select value={r.estado} onChange={(e) => setEstado(r.id, e.target.value)} style={{ border: "none", background: r.estado === "Aprobada" ? T.greenSoft : r.estado === "Rechazada" ? T.redSoft : r.estado === "Cerrada" ? T.graySoft : T.amberSoft, color: r.estado === "Aprobada" ? T.green : r.estado === "Rechazada" ? T.red : r.estado === "Cerrada" ? T.steel : T.amber, borderRadius: 999, fontSize: 12, fontWeight: 600, padding: "4px 10px" }}>
+                      {["Pendiente", "Aprobada", "Rechazada", "Cerrada"].map((s) => <option key={s}>{s}</option>)}
+                    </select>
+                  ) : (
+                    <Badge color={r.estado === "Aprobada" ? T.green : r.estado === "Rechazada" ? T.red : r.estado === "Cerrada" ? T.steel : T.amber} soft={r.estado === "Aprobada" ? T.greenSoft : r.estado === "Rechazada" ? T.redSoft : r.estado === "Cerrada" ? T.graySoft : T.amberSoft}>{r.estado}</Badge>
+                  )}
+                </td>
                 <td style={{ display: "flex", gap: 6, padding: "9px 8px" }}>
                   {isAdmin && r.estado === "Pendiente" && <>
                     <Btn small variant="success" onClick={() => setEstado(r.id, "Aprobada")}><Check size={12} /></Btn>
                     <Btn small variant="danger" onClick={() => setEstado(r.id, "Rechazada")}><X size={12} /></Btn>
                   </>}
-                  {isAdmin && r.estado === "Aprobada" && (
-                    <Btn small variant="ghost" onClick={() => setEstado(r.id, "Cerrada")}>Cerrar</Btn>
-                  )}
                   {isAdmin && <Btn small variant="danger" onClick={() => del(r.id)} style={{ opacity: 0.7 }}>Borrar</Btn>}
                 </td>
               </tr>
@@ -2490,7 +2495,7 @@ function Planilla() {
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <Btn variant={tab === "personal" ? "accent" : "ghost"} small onClick={() => setTab("personal")}>Personal</Btn>
         <Btn variant={tab === "reporte1" ? "accent" : "ghost"} small onClick={() => setTab("reporte1")}>Reporte 1</Btn>
-        <Btn variant={tab === "reporte2" ? "accent" : "ghost"} small onClick={() => setTab("reporte2")}>Reporte 2</Btn>
+        <Btn variant={tab === "reporte2" ? "accent" : "ghost"} small onClick={() => setTab("reporte2")}>Reporte Horas Extras</Btn>
       </div>
 
       {tab === "personal" && (
@@ -2559,15 +2564,8 @@ function Planilla() {
       )}
 
       {tab === "reporte2" && (
-        <Card title="Reporte 2">
+        <Card title="Reporte Horas Extras">
           <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
-            <div style={{ color: T.inkSoft, fontSize: 13.5, lineHeight: 1.5 }}>
-              Genera el formulario de solicitud de horas extras (nombre y puesto cargados solos
-              desde Planilla, horas marcadas por día). Los totales en gris se calculan solos con
-              fórmulas de Excel. Se agrupa por OD y por quincena — descarga un archivo por cada
-              combinación. Solo toma las solicitudes que están en la pestaña "Solicitud" (pendientes
-              o aprobadas); las Denegadas y Cerradas no se incluyen.
-            </div>
             <div style={{ display: "flex", gap: 8 }}>
               <Btn variant="accent" onClick={() => reporte2Descargar("inspecciones")}><Download size={14} /> Descargar Inspecciones</Btn>
               <Btn variant="accent" onClick={() => reporte2Descargar("proyectos")}><Download size={14} /> Descargar Proyectos</Btn>

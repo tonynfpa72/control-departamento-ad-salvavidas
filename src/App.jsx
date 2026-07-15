@@ -475,6 +475,15 @@ function HorasExtras({ area, color }) {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, personal } : r)));
     supabase.from("horas_extras").update({ personal }).eq("id", id).then();
   };
+  const setOd = (id, od) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, od } : r)));
+    supabase.from("horas_extras").update({ od }).eq("id", id).then();
+  };
+  const setHoras = (id, horas) => {
+    const valor = Number(horas) || 0;
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, horas: valor } : r)));
+    supabase.from("horas_extras").update({ horas: valor }).eq("id", id).then();
+  };
   const setFechaEjecucion = (id, fecha_ejecucion) => {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, fecha_ejecucion } : r)));
     supabase.from("horas_extras").update({ fecha_ejecucion: fecha_ejecucion || null }).eq("id", id).then();
@@ -529,13 +538,21 @@ function HorasExtras({ area, color }) {
                     <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 130 }} value={r.fecha_ejecucion || ""} onChange={(e) => setFechaEjecucion(r.id, e.target.value)} />
                   ) : (r.fecha_ejecucion || "—")}
                 </td>
-                <td>{r.od}</td>
+                <td>
+                  {isAdmin ? (
+                    <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 100 }} value={r.od} onChange={(e) => setOd(r.id, e.target.value)} />
+                  ) : r.od}
+                </td>
                 <td>
                   {isAdmin ? (
                     <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 130 }} value={r.personal} onChange={(e) => setPersonal(r.id, e.target.value)} />
                   ) : (r.personal || "—")}
                 </td>
-                <td>{r.horas}h</td>
+                <td>
+                  {isAdmin ? (
+                    <input type="number" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 70 }} value={r.horas} onChange={(e) => setHoras(r.id, e.target.value)} />
+                  ) : `${r.horas}h`}
+                </td>
                 <td><Badge color={r.estado === "Aprobada" ? T.green : r.estado === "Rechazada" ? T.red : T.amber} soft={r.estado === "Aprobada" ? T.greenSoft : r.estado === "Rechazada" ? T.redSoft : T.amberSoft}>{r.estado}</Badge></td>
                 <td style={{ display: "flex", gap: 6, padding: "9px 8px" }}>
                   {isAdmin && r.estado === "Pendiente" && <>

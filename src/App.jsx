@@ -327,18 +327,17 @@ function exportExcel(rows, filename) {
 
 /* ---------------------------------------------------------
    REPORTE 2 (Planilla): "Formulario de Solicitud de Horas Extras"
-   Se construye 100% en código con exceljs (no depende de subir
-   ningún archivo a public/). Nombre y puesto se cargan solos desde
-   Planilla. Las celdas grises son totales que se calculan solos con
-   fórmulas reales de Excel (si editas un valor a mano, se recalculan).
-   Se agrupa por OD y por quincena (1-15 / 16-fin de mes); si dentro
-   de una quincena hay solicitudes en más de una semana, se arma un
-   bloque de tabla por cada semana dentro del mismo archivo.
+   Usa tu Excel real (public/plantilla-horas-extra.xlsx) como base y
+   solo cambia los valores de las celdas que corresponden — así se
+   conserva el formato exacto (combinadas, bordes, colores, fuentes).
+   Se agrupa por OD y por quincena (1-15 / 16-fin de mes). Como la
+   plantilla en sí es semanal (columnas L M M J V S D con fechas de
+   una semana puntual), si dentro de una quincena hay solicitudes en
+   más de una semana, se arma un bloque adicional (duplicando filas)
+   para cada semana extra dentro del mismo archivo. Solo toma las
+   solicitudes en Pendiente/Aprobada (Denegadas y Cerradas no entran).
    --------------------------------------------------------- */
-const REPORTE2_DIAS_LETRA = ["L", "M", "M", "J", "V", "S", "D"];
-const REPORTE2_DIAS_COL = ["E", "F", "G", "H", "I", "J", "K"];
-const REPORTE2_GRIS = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE1E1E1" } };
-const REPORTE2_BORDE = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+const REPORTE2_DIAS_COL = ["H", "I", "J", "K", "L", "M", "N"];
 
 // Lunes (00:00) de la semana ISO a la que pertenece una fecha "YYYY-MM-DD".
 function reporte2LunesDeSemana(fechaISO) {
@@ -362,93 +361,51 @@ function reporte2NombreQuincena(clave) {
   return q === "Q1" ? `1-15${nombreMes}${anio}` : `16-fin${nombreMes}${anio}`;
 }
 
-function reporte2CeldaTitulo(cell, texto) {
-  cell.value = texto;
-  cell.font = { bold: true };
-}
+// Llena UNA copia de la plantilla (una semana) para un OD y devuelve el
+// workbook de exceljs listo para exportar, con el formato original intacto.
+async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSemana, lunes, empleadosPorCodigo) {
+  const workbook = new Workbook();
+  await workbook.xlsx.load(plantillaBuffer);
+  const ws = workbook.worksheets[0];
 
-// Arma, dentro de una hoja ya existente, un bloque de formulario para una
-// semana puntual de un OD, a partir de la fila indicada. Devuelve la fila
-// donde debería empezar el siguiente bloque.
-function reporte2ArmarBloque(ws, filaInicio, od, cliente, entradasSemana, lunes, empleadosPorCodigo) {
-  let fila = filaInicio;
+  ws.getCell("E14").value = "";
+  ws.getCell("E15").value = new Date();
+  ws.getCell("E16").value = cliente || "";
+  ws.getCell("E17").value = od;
 
-  reporte2CeldaTitulo(ws.getCell(`A${fila}`), "FORMULARIO DE SOLICITUD DE HORAS EXTRAS");
-  fila += 2;
-  ws.getCell(`A${fila}`).font = { bold: true }; ws.getCell(`A${fila}`).value = "FECHA DE SOLICITUD:";
-  ws.getCell(`B${fila}`).value = new Date(); fila++;
-  ws.getCell(`A${fila}`).font = { bold: true }; ws.getCell(`A${fila}`).value = "PROYECTO:";
-  ws.getCell(`B${fila}`).value = cliente || ""; fila++;
-  ws.getCell(`A${fila}`).font = { bold: true }; ws.getCell(`A${fila}`).value = "O/D:";
-  ws.getCell(`B${fila}`).value = od; fila += 2;
-
-  const filaLetras = fila;
-  REPORTE2_DIAS_LETRA.forEach((letra, i) => {
-    const c = ws.getCell(`${REPORTE2_DIAS_COL[i]}${filaLetras}`);
-    c.value = letra; c.font = { bold: true }; c.alignment = { horizontal: "center" };
-  });
-  fila++;
-
-  const filaEncabezado = fila;
-  ["NOMBRE", "PUESTO", "HORA INICIO", "HORA FINAL"].forEach((titulo, i) => {
-    const c = ws.getCell(`${["A", "B", "C", "D"][i]}${filaEncabezado}`);
-    c.value = titulo; c.font = { bold: true }; c.border = REPORTE2_BORDE;
-  });
   REPORTE2_DIAS_COL.forEach((col, i) => {
-    const d = new Date(lunes); d.setDate(d.getDate() + i);
-    const c = ws.getCell(`${col}${filaEncabezado}`);
-    c.value = d; c.numFmt = "dd/mm"; c.font = { bold: true }; c.alignment = { horizontal: "center" }; c.border = REPORTE2_BORDE;
+    const d = new Date(lunes);
+    d.setDate(d.getDate() + i);
+    ws.getCell(`${col}25`).value = d;
   });
-  const colTotal = "L";
-  const cTotal = ws.getCell(`${colTotal}${filaEncabezado}`);
-  cTotal.value = "TOTAL HRS"; cTotal.font = { bold: true }; cTotal.border = REPORTE2_BORDE;
-  fila++;
 
-  const filaPrimeraEntrada = fila;
-  entradasSemana.forEach((s) => {
+  // Si hay más personas que filas en la plantilla (26-33, 8 filas), se
+  // duplica la última fila del bloque para que no falten solicitudes,
+  // conservando el mismo formato de esa fila.
+  const filasPlantilla = 8;
+  if (entradasSemana.length > filasPlantilla) {
+    const extra = entradasSemana.length - filasPlantilla;
+    ws.duplicateRow(33, extra, true);
+  }
+
+  entradasSemana.forEach((s, idx) => {
+    const filaActual = 26 + idx;
     const emp = empleadosPorCodigo[s.personal_codigos?.[0]];
-    ws.getCell(`A${fila}`).value = emp?.nombre || s.personal || "";
-    ws.getCell(`B${fila}`).value = emp?.puesto || "";
-    ws.getCell(`C${fila}`).value = s.hora_inicio || "";
-    ws.getCell(`D${fila}`).value = s.hora_fin || "";
-    ["A", "B", "C", "D", ...REPORTE2_DIAS_COL, colTotal].forEach((col) => { ws.getCell(`${col}${fila}`).border = REPORTE2_BORDE; });
+    ws.getCell(`C${filaActual}`).value = emp?.nombre || s.personal || "";
+    ws.getCell(`E${filaActual}`).value = emp?.puesto || "";
+    ws.getCell(`F${filaActual}`).value = s.hora_inicio || "";
+    ws.getCell(`G${filaActual}`).value = s.hora_fin || "";
     const fechaRef = s.fecha_ejecucion || s.fecha;
     if (fechaRef) {
       const diaSemana = (new Date(fechaRef + "T00:00:00").getDay() + 6) % 7;
-      ws.getCell(`${REPORTE2_DIAS_COL[diaSemana]}${fila}`).value = Number(s.horas) || 0;
+      ws.getCell(`${REPORTE2_DIAS_COL[diaSemana]}${filaActual}`).value = Number(s.horas) || 0;
     }
-    const cFilaTotal = ws.getCell(`${colTotal}${fila}`);
-    cFilaTotal.value = { formula: `SUM(${REPORTE2_DIAS_COL[0]}${fila}:${REPORTE2_DIAS_COL[6]}${fila})` };
-    cFilaTotal.fill = REPORTE2_GRIS;
-    fila++;
   });
-  const filaUltimaEntrada = fila - 1;
 
-  const filaTotales = fila;
-  REPORTE2_DIAS_COL.forEach((col) => {
-    const c = ws.getCell(`${col}${filaTotales}`);
-    c.value = { formula: `SUM(${col}${filaPrimeraEntrada}:${col}${filaUltimaEntrada})` };
-    c.fill = REPORTE2_GRIS; c.border = REPORTE2_BORDE; c.font = { bold: true };
-  });
-  const cGranTotal = ws.getCell(`${colTotal}${filaTotales}`);
-  cGranTotal.value = { formula: `SUM(${colTotal}${filaPrimeraEntrada}:${colTotal}${filaUltimaEntrada})` };
-  cGranTotal.fill = REPORTE2_GRIS; cGranTotal.border = REPORTE2_BORDE; cGranTotal.font = { bold: true };
-  fila += 2;
-
-  ws.getCell(`A${fila}`).font = { bold: true }; ws.getCell(`A${fila}`).value = "TOTAL DE PERSONAS:";
   const personasUnicas = new Set(entradasSemana.map((s) => s.personal_codigos?.[0] || s.personal));
-  const cPersonas = ws.getCell(`B${fila}`);
-  cPersonas.value = personasUnicas.size;
-  cPersonas.fill = REPORTE2_GRIS;
-  fila += 3;
+  ws.getCell(`E${35 + Math.max(0, entradasSemana.length - filasPlantilla)}`).value = personasUnicas.size;
 
-  ws.columns = [
-    { width: 22 }, { width: 16 }, { width: 12 }, { width: 12 },
-    { width: 9 }, { width: 9 }, { width: 9 }, { width: 9 }, { width: 9 }, { width: 9 }, { width: 9 },
-    { width: 11 },
-  ];
-
-  return fila;
+  return workbook;
 }
 
 function reporte2Descargar_disparar(buffer, nombreArchivo) {
@@ -463,9 +420,9 @@ function reporte2Descargar_disparar(buffer, nombreArchivo) {
   URL.revokeObjectURL(url);
 }
 
-// Junta las solicitudes de horas extra de Inspecciones y Proyectos,
-// agrupadas por OD + quincena, y descarga un archivo por cada grupo
-// (con un bloque de tabla por cada semana dentro de esa quincena).
+// Junta las solicitudes de horas extra (Pendiente/Aprobada) de UN área,
+// agrupadas por OD + quincena (y por semana dentro de la quincena, ya
+// que la plantilla es semanal), y descarga un archivo por cada grupo.
 async function reporte2Descargar(area) {
   const { data: horas } = await supabase.from("horas_extras").select("*").eq("area", area).in("estado", ["Pendiente", "Aprobada"]);
   const { data: emps } = await supabase.from("empleados").select("*");
@@ -495,24 +452,35 @@ async function reporte2Descargar(area) {
     return;
   }
 
+  let plantillaBuffer;
+  try {
+    const resp = await fetch("/plantilla-horas-extra.xlsx");
+    if (!resp.ok) throw new Error(`No se encontró la plantilla (HTTP ${resp.status}). Verifica que "plantilla-horas-extra.xlsx" esté en la carpeta public/ de tu proyecto.`);
+    plantillaBuffer = await resp.arrayBuffer();
+  } catch (err) {
+    alert("No se pudo generar el Reporte: " + (err.message || "error desconocido al cargar la plantilla."));
+    return;
+  }
+
   try {
     for (const od of odsConDatos) {
       for (const quincena of Object.keys(grupos[od])) {
         const semanas = Object.keys(grupos[od][quincena]).sort();
-        const workbook = new Workbook();
-        const ws = workbook.addWorksheet("Solicitud");
-        let fila = 1;
-        semanas.forEach((lunesISO) => {
-          fila = reporte2ArmarBloque(ws, fila, od, clientePorOd[od], grupos[od][quincena][lunesISO], new Date(lunesISO + "T00:00:00"), empleadosPorCodigo);
-        });
-        const buffer = await workbook.xlsx.writeBuffer();
-        const nombreOd = String(od).replace(/[^a-zA-Z0-9-]/g, "");
-        const nombreArchivo = `SolicitudHoras_${nombreArea}_${nombreOd}_${reporte2NombreQuincena(quincena)}.xlsx`;
-        reporte2Descargar_disparar(buffer, nombreArchivo);
+        for (const lunesISO of semanas) {
+          const entradasSemana = grupos[od][quincena][lunesISO];
+          const workbook = await reporte2LlenarPlantilla(
+            plantillaBuffer, od, clientePorOd[od], entradasSemana, new Date(lunesISO + "T00:00:00"), empleadosPorCodigo
+          );
+          const buffer = await workbook.xlsx.writeBuffer();
+          const sufijoSemana = semanas.length > 1 ? `_semana-${lunesISO}` : "";
+          const nombreOd = String(od).replace(/[^a-zA-Z0-9-]/g, "");
+          const nombreArchivo = `SolicitudHoras_${nombreArea}_${nombreOd}_${reporte2NombreQuincena(quincena)}${sufijoSemana}.xlsx`;
+          reporte2Descargar_disparar(buffer, nombreArchivo);
+        }
       }
     }
   } catch (err) {
-    alert("No se pudo generar el Reporte 2: " + (err.message || "error desconocido al armar el Excel."));
+    alert("No se pudo generar el Reporte: " + (err.message || "error desconocido al armar el Excel."));
   }
 }
 

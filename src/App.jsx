@@ -470,6 +470,7 @@ function HorasExtras({ area, color }) {
   const [rows, setRows] = useState([]);
   const [empleados, setEmpleados] = useState([]);
   const [form, setForm] = useState({ od: "", personalCodigos: [], horaInicio: "07:00", horaFin: "15:00", fechaEjecucion: "" });
+  const [nuevoEmp, setNuevoEmp] = useState({ codigo: "", nombre: "" });
   const used = rows.reduce((s, r) => s + (r.estado !== "Rechazada" ? Number(r.horas) : 0), 0);
   const saldo = disponible - used;
   const horasCalculadas = calcularHorasRango(form.horaInicio, form.horaFin);
@@ -497,6 +498,17 @@ function HorasExtras({ area, color }) {
         ? f.personalCodigos.filter((c) => c !== codigo)
         : [...f.personalCodigos, codigo],
     }));
+  };
+
+  const agregarEmpleadoDesdeSolicitud = async () => {
+    if (!nuevoEmp.codigo || !nuevoEmp.nombre) return;
+    const payload = { codigo: nuevoEmp.codigo, nombre: nuevoEmp.nombre, activo: true };
+    const { data, error } = await supabase.from("empleados").insert(payload).select().single();
+    if (!error && data) {
+      setEmpleados((prev) => [...prev, data].sort((a, b) => a.nombre.localeCompare(b.nombre)));
+      setForm((f) => ({ ...f, personalCodigos: [...f.personalCodigos, data.codigo] }));
+      setNuevoEmp({ codigo: "", nombre: "" });
+    }
   };
 
   const add = async () => {
@@ -575,6 +587,12 @@ function HorasExtras({ area, color }) {
                   ))}
                 </div>
               )}
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <input style={{ ...inputStyle, width: 90, fontSize: 12 }} placeholder="Código" value={nuevoEmp.codigo} onChange={(e) => setNuevoEmp({ ...nuevoEmp, codigo: e.target.value })} />
+                <input style={{ ...inputStyle, flex: 1, fontSize: 12 }} placeholder="Nombre del nuevo empleado" value={nuevoEmp.nombre} onChange={(e) => setNuevoEmp({ ...nuevoEmp, nombre: e.target.value })} />
+                <Btn small variant="ghost" onClick={agregarEmpleadoDesdeSolicitud}><Plus size={12} /></Btn>
+              </div>
+              <div style={{ fontSize: 10.5, color: T.gray, marginTop: 4 }}>¿No está en la lista? Agrégalo aquí mismo y queda disponible para siempre en Planilla.</div>
             </Field>
             <div style={{ display: "flex", gap: 8 }}>
               <Field label="Desde"><input style={inputStyle} type="time" value={form.horaInicio} onChange={(e) => setForm({ ...form, horaInicio: e.target.value })} /></Field>

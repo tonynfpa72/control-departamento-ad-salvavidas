@@ -981,6 +981,7 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
   const confirmar = useContext(ConfirmContext);
   const [cursor, setCursor] = useState(new Date());
   const [eventos, setEventos] = useState([]);
+  const [errorMsg, setErrorMsg] = useState("");
   const [form, setForm] = useState({ tipo: tipoLabel[0], od: "", personas: "", fecha: todayISO(), hora: "08:00" });
   const [modoRango, setModoRango] = useState(false);
   const [ultimoRango, setUltimoRango] = useState(null);
@@ -1016,8 +1017,10 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
     if (!form.od || !form.fecha) return;
     const payload = { area, tipo: form.tipo, od: form.od, personas: form.personas, fecha: form.fecha, hora: form.hora };
     setForm({ ...form, od: "", personas: "" });
+    setErrorMsg("");
     const { data, error } = await supabase.from("calendario_eventos").insert(payload).select().single();
     if (!error && data) setEventos((prev) => [...prev, data]);
+    if (error) setErrorMsg("No se pudo guardar la visita: " + (error.message || "error desconocido en la base de datos."));
   };
 
   const FRECUENCIA_DIAS = { Diaria: 1, Semanal: 7, Quincenal: 14, Mensual: null };
@@ -1043,11 +1046,13 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
       { confirmLabel: "Sí, generar", variant: "accent" }
     ))) return;
     const payloads = fechas.map((fecha) => ({ area, tipo: formRango.tipo, od: formRango.od, personas: formRango.personas, fecha, hora: formRango.hora }));
+    setErrorMsg("");
     const { data: inserted, error } = await supabase.from("calendario_eventos").insert(payloads).select();
     if (!error && inserted) {
       setEventos((prev) => [...prev, ...inserted]);
       setUltimoRango({ od: formRango.od, min: formRango.fechaInicio, max: formRango.fechaFin, color: hashColor(formRango.od) });
     }
+    if (error) setErrorMsg("No se pudieron guardar las visitas: " + (error.message || "error desconocido en la base de datos."));
     setFormRango((f) => ({ ...f, od: "", personas: "" }));
   };
 
@@ -1226,6 +1231,11 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
             {modoRango ? "Visita única" : "Rango extendido"}
           </Btn>
         }>
+          {errorMsg && (
+            <div style={{ color: T.red, fontSize: 12, display: "flex", gap: 6, alignItems: "center", marginBottom: 10, background: T.redSoft, padding: "8px 10px", borderRadius: 8 }}>
+              <AlertCircle size={14} style={{ flexShrink: 0 }} />{errorMsg}
+            </div>
+          )}
           {!modoRango ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <Field label="Tipo">
@@ -2214,12 +2224,12 @@ function Planilla() {
       </div>
 
       {tab === "personal" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: isAdmin ? "1.4fr 1fr" : "1fr", gap: 16 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <Card title="Personal / Código de empleado" action={
               <div style={{ display: "flex", gap: 8 }}>
-                <input ref={fileInputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleImport} />
-                <Btn small variant="ghost" onClick={() => fileInputRef.current?.click()}><Upload size={13} /> Importar Excel</Btn>
+                {isAdmin && <input ref={fileInputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleImport} />}
+                {isAdmin && <Btn small variant="ghost" onClick={() => fileInputRef.current?.click()}><Upload size={13} /> Importar Excel</Btn>}
                 <Btn small variant="ghost" onClick={() => exportExcel(empleados.map(({ codigo, nombre, puesto, area, activo }) => ({ Código: codigo, Nombre: nombre, Puesto: puesto, Área: area, Activo: activo ? "Sí" : "No" })), "empleados.xlsx")}><Download size={13} /> Excel</Btn>
               </div>
             }>
@@ -2259,15 +2269,17 @@ function Planilla() {
             </Card>
           </div>
 
-          <Card title="Agregar empleado manualmente">
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <Field label="Código de empleado"><input style={inputStyle} value={form.codigo} onChange={(e) => setForm({ ...form, codigo: e.target.value })} placeholder="EMP-004" /></Field>
-              <Field label="Nombre"><input style={inputStyle} value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} placeholder="Nombre completo" /></Field>
-              <Field label="Puesto (opcional)"><input style={inputStyle} value={form.puesto} onChange={(e) => setForm({ ...form, puesto: e.target.value })} /></Field>
-              <Field label="Área (opcional)"><input style={inputStyle} value={form.area} onChange={(e) => setForm({ ...form, area: e.target.value })} placeholder="inspecciones / proyectos / salud" /></Field>
-              <Btn variant="accent" onClick={add} style={{ justifyContent: "center" }}><Plus size={14} /> Agregar</Btn>
-            </div>
-          </Card>
+          {isAdmin && (
+            <Card title="Agregar empleado manualmente">
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <Field label="Código de empleado"><input style={inputStyle} value={form.codigo} onChange={(e) => setForm({ ...form, codigo: e.target.value })} placeholder="EMP-004" /></Field>
+                <Field label="Nombre"><input style={inputStyle} value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} placeholder="Nombre completo" /></Field>
+                <Field label="Puesto (opcional)"><input style={inputStyle} value={form.puesto} onChange={(e) => setForm({ ...form, puesto: e.target.value })} /></Field>
+                <Field label="Área (opcional)"><input style={inputStyle} value={form.area} onChange={(e) => setForm({ ...form, area: e.target.value })} placeholder="inspecciones / proyectos / salud" /></Field>
+                <Btn variant="accent" onClick={add} style={{ justifyContent: "center" }}><Plus size={14} /> Agregar</Btn>
+              </div>
+            </Card>
+          )}
         </div>
       )}
 

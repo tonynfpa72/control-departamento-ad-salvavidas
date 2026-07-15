@@ -4,6 +4,7 @@ import {
   PieChart, Pie, Cell, Legend, ReferenceLine, LineChart, Line, LabelList
 } from "recharts";
 import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import {
   LogOut, Plus, Download, Check, X, Clock, ClipboardList,
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
@@ -322,6 +323,151 @@ function exportExcel(rows, filename) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Datos");
   XLSX.writeFile(wb, filename);
+}
+
+/* ---------------------------------------------------------
+   REPORTE 2 (Planilla): "Formulario de Solicitud de Horas Extras"
+   Usa tu Excel real (public/plantilla-horas-extra.xlsx) como base y
+   solo cambia los valores de las celdas que corresponden — así se
+   conserva el formato exacto (combinadas, bordes, colores, fuentes).
+   Se agrupa por OD y por quincena (1-15 / 16-fin de mes). Como la
+   plantilla en sí es semanal (columnas L M M J V S D con fechas de
+   una semana puntual), si dentro de una quincena hay solicitudes en
+   más de una semana, se genera un archivo por cada semana — todos
+   quedan identificados con su OD y su quincena en el nombre.
+   --------------------------------------------------------- */
+const REPORTE2_DIAS_COL = ["H", "I", "J", "K", "L", "M", "N"];
+
+// Lunes (00:00) de la semana ISO a la que pertenece una fecha "YYYY-MM-DD".
+function reporte2LunesDeSemana(fechaISO) {
+  const d = new Date(fechaISO + "T00:00:00");
+  const dia = (d.getDay() + 6) % 7; // 0 = lunes
+  d.setDate(d.getDate() - dia);
+  return d;
+}
+
+// "2026-06-Q1" (días 1-15) o "2026-06-Q2" (16-fin de mes)
+function reporte2Quincena(fechaISO) {
+  const [anio, mes, dia] = fechaISO.split("-").map(Number);
+  const q = dia <= 15 ? "Q1" : "Q2";
+  return `${anio}-${String(mes).padStart(2, "0")}-${q}`;
+}
+
+function reporte2NombreQuincena(clave) {
+  const [anio, mes, q] = clave.split("-");
+  const meses = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+  const nombreMes = meses[Number(mes) - 1];
+  return q === "Q1" ? `1-15${nombreMes}${anio}` : `16-fin${nombreMes}${anio}`;
+}
+
+// Llena UNA copia de la plantilla (una semana) para un OD y devuelve el
+// workbook de exceljs listo para exportar, con el formato original intacto.
+async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSemana, lunes, empleadosPorCodigo) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(plantillaBuffer);
+  const ws = workbook.worksheets[0];
+
+  ws.getCell("E14").value = "";
+  ws.getCell("E15").value = new Date();
+  ws.getCell("E16").value = cliente || "";
+  ws.getCell("E17").value = od;
+
+  REPORTE2_DIAS_COL.forEach((col, i) => {
+    const d = new Date(lunes);
+    d.setDate(d.getDate() + i);
+    ws.getCell(`${col}25`).value = d;
+  });
+
+  // Si hay más personas que filas en la plantilla (26-33, 8 filas), se
+  // duplica la última fila del bloque para que no falten solicitudes,
+  // conservando el mismo formato de esa fila.
+  const filasPlantilla = 8;
+  if (entradasSemana.length > filasPlantilla) {
+    const extra = entradasSemana.length - filasPlantilla;
+    ws.duplicateRow(33, extra, true);
+  }
+
+  entradasSemana.forEach((s, idx) => {
+    const filaActual = 26 + idx;
+    const emp = empleadosPorCodigo[s.personal_codigos?.[0]];
+    ws.getCell(`C${filaActual}`).value = emp?.nombre || s.personal || "";
+    ws.getCell(`E${filaActual}`).value = emp?.puesto || "";
+    ws.getCell(`F${filaActual}`).value = s.hora_inicio || "";
+    ws.getCell(`G${filaActual}`).value = s.hora_fin || "";
+    const fechaRef = s.fecha_ejecucion || s.fecha;
+    if (fechaRef) {
+      const diaSemana = (new Date(fechaRef + "T00:00:00").getDay() + 6) % 7;
+      ws.getCell(`${REPORTE2_DIAS_COL[diaSemana]}${filaActual}`).value = Number(s.horas) || 0;
+    }
+  });
+
+  const personasUnicas = new Set(entradasSemana.map((s) => s.personal_codigos?.[0] || s.personal));
+  ws.getCell(`E${35 + Math.max(0, entradasSemana.length - filasPlantilla)}`).value = personasUnicas.size;
+
+  return workbook;
+}
+
+function reporte2Descargar_disparar(buffer, nombreArchivo) {
+  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = nombreArchivo;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Junta las solicitudes de horas extra de Inspecciones y Proyectos,
+// agrupadas por OD + quincena (y por semana dentro de la quincena, ya
+// que la plantilla es semanal), y descarga un archivo por cada grupo.
+async function reporte2Descargar() {
+  const { data: horas } = await supabase.from("horas_extras").select("*").in("area", ["inspecciones", "proyectos"]);
+  const { data: emps } = await supabase.from("empleados").select("*");
+  const { data: ods } = await supabase.from("ordenes_trabajo").select("*").in("area", ["inspecciones", "proyectos"]);
+
+  const empleadosPorCodigo = {};
+  (emps || []).forEach((e) => { empleadosPorCodigo[e.codigo] = e; });
+  const clientePorOd = {};
+  (ods || []).forEach((o) => { clientePorOd[o.od] = o.cliente; });
+
+  // od -> quincena -> semana(lunes ISO) -> [entradas]
+  const grupos = {};
+  (horas || []).forEach((h) => {
+    const fechaRef = h.fecha_ejecucion || h.fecha;
+    if (!fechaRef || !h.od) return;
+    const quincena = reporte2Quincena(fechaRef);
+    const lunes = reporte2LunesDeSemana(fechaRef).toISOString().slice(0, 10);
+    grupos[h.od] = grupos[h.od] || {};
+    grupos[h.od][quincena] = grupos[h.od][quincena] || {};
+    (grupos[h.od][quincena][lunes] = grupos[h.od][quincena][lunes] || []).push(h);
+  });
+
+  const odsConDatos = Object.keys(grupos);
+  if (odsConDatos.length === 0) {
+    alert("Todavía no hay solicitudes de horas extra registradas en Inspecciones o Proyectos.");
+    return;
+  }
+
+  const plantillaBuffer = await (await fetch("/plantilla-horas-extra.xlsx")).arrayBuffer();
+
+  for (const od of odsConDatos) {
+    for (const quincena of Object.keys(grupos[od])) {
+      const semanas = Object.keys(grupos[od][quincena]).sort();
+      for (const lunesISO of semanas) {
+        const entradasSemana = grupos[od][quincena][lunesISO];
+        const workbook = await reporte2LlenarPlantilla(
+          plantillaBuffer, od, clientePorOd[od], entradasSemana, new Date(lunesISO + "T00:00:00"), empleadosPorCodigo
+        );
+        const buffer = await workbook.xlsx.writeBuffer();
+        const sufijoSemana = semanas.length > 1 ? `_semana-${lunesISO}` : "";
+        const nombreOd = String(od).replace(/[^a-zA-Z0-9-]/g, "");
+        const nombreArchivo = `SolicitudHoras_${nombreOd}_${reporte2NombreQuincena(quincena)}${sufijoSemana}.xlsx`;
+        reporte2Descargar_disparar(buffer, nombreArchivo);
+      }
+    }
+  }
 }
 
 // Normaliza un valor de fecha proveniente de un Excel importado (puede llegar
@@ -766,12 +912,13 @@ function OrdenesTrabajo({ area, color }) {
     e.target.value = "";
   };
 
-  const activos = rows.filter((r) => r.estado === "Activo").length;
+  const vencidos = rows.filter((r) => estadoEfectivoOD(r, campoFechaControl) === "Vencido").length;
+  const activos = rows.filter((r) => r.estado === "Activo" && estadoEfectivoOD(r, campoFechaControl) !== "Vencido").length;
   const noActivos = rows.filter((r) => r.estado === "No Activo").length;
   const entregados = rows.filter((r) => r.estado === "Entregado").length;
   const pieData = isProyectos
-    ? [{ name: "Activos", value: activos, fill: T.green }, { name: "No Activos", value: noActivos, fill: T.red }, { name: "Entregados", value: entregados, fill: T.blue }]
-    : [{ name: "Activos", value: activos, fill: T.green }, { name: "No Activos", value: noActivos, fill: T.red }];
+    ? [{ name: "Activos", value: activos, fill: T.green }, { name: "No Activos", value: noActivos, fill: T.red }, { name: "Entregados", value: entregados, fill: T.blue }, { name: "Vencidos", value: vencidos, fill: T.amber }]
+    : [{ name: "Activos", value: activos, fill: T.green }, { name: "No Activos", value: noActivos, fill: T.red }, { name: "Vencidos", value: vencidos, fill: T.amber }];
 
   const filteredRows = rows.filter((r) => {
     const texto = filtroTexto.trim().toLowerCase();
@@ -934,6 +1081,10 @@ function OrdenesTrabajo({ area, color }) {
             <div style={{ flex: 1, background: T.redSoft, borderRadius: 10, padding: 14 }}>
               <div style={{ fontSize: 22, fontWeight: 800, color: T.red }}>{noActivos}</div>
               <div style={{ fontSize: 12, color: T.inkSoft }}>No Activos</div>
+            </div>
+            <div style={{ flex: 1, background: T.amberSoft, borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 22, fontWeight: 800, color: T.amber }}>{vencidos}</div>
+              <div style={{ fontSize: 12, color: T.inkSoft }}>Vencidos</div>
             </div>
             {isProyectos && (
               <div style={{ flex: 1, background: T.blueSoft, borderRadius: 10, padding: 14 }}>
@@ -2296,6 +2447,15 @@ function Planilla() {
 
       {tab === "reporte2" && (
         <Card title="Reporte 2">
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
+            <div style={{ color: T.inkSoft, fontSize: 13.5, lineHeight: 1.5 }}>
+              Genera el formulario de solicitud de horas extras, idéntico a tu plantilla real
+              (mismas celdas, combinadas y formato), con nombre y puesto cargados solos desde
+              Planilla. Se agrupa por OD y por quincena — descarga un archivo por cada
+              combinación que tenga solicitudes registradas en Inspecciones o Proyectos.
+            </div>
+            <Btn variant="accent" onClick={reporte2Descargar}><Download size={14} /> Descargar Reporte 2</Btn>
+          </div>
         </Card>
       )}
     </div>

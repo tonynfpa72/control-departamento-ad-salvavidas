@@ -469,10 +469,7 @@ function HorasExtras({ area, color }) {
   const [disponible, setDisponibleState] = useState(150);
   const [rows, setRows] = useState([]);
   const [empleados, setEmpleados] = useState([]);
-  const [form, setForm] = useState({ od: "", personalCodigos: [], horaInicio: "07:00", horaFin: "15:00", fechaEjecucion: "" });
-  const [nuevoEmp, setNuevoEmp] = useState({ codigo: "", nombre: "" });
-  const [buscarPersonal, setBuscarPersonal] = useState("");
-  const empleadosFiltrados = empleados.filter((e) => e.nombre.toLowerCase().includes(buscarPersonal.trim().toLowerCase()));
+  const [form, setForm] = useState({ od: "", personalCodigo: "", horaInicio: "07:00", horaFin: "15:00", fechaEjecucion: "" });
   const used = rows.reduce((s, r) => s + (r.estado !== "Rechazada" ? Number(r.horas) : 0), 0);
   const saldo = disponible - used;
   const horasCalculadas = calcularHorasRango(form.horaInicio, form.horaFin);
@@ -493,39 +490,16 @@ function HorasExtras({ area, color }) {
     supabase.from("horas_disponible").upsert({ area, disponible: valor }).then();
   };
 
-  const toggleEmpleado = (codigo) => {
-    setForm((f) => ({
-      ...f,
-      personalCodigos: f.personalCodigos.includes(codigo)
-        ? f.personalCodigos.filter((c) => c !== codigo)
-        : [...f.personalCodigos, codigo],
-    }));
-  };
-
-  const agregarEmpleadoDesdeSolicitud = async () => {
-    if (!nuevoEmp.codigo || !nuevoEmp.nombre) return;
-    const payload = { codigo: nuevoEmp.codigo, nombre: nuevoEmp.nombre, activo: true };
-    const { data, error } = await supabase.from("empleados").insert(payload).select().single();
-    if (!error && data) {
-      setEmpleados((prev) => [...prev, data].sort((a, b) => a.nombre.localeCompare(b.nombre)));
-      setForm((f) => ({ ...f, personalCodigos: [...f.personalCodigos, data.codigo] }));
-      setNuevoEmp({ codigo: "", nombre: "" });
-    }
-  };
-
   const add = async () => {
     const horas = calcularHorasRango(form.horaInicio, form.horaFin);
-    if (!form.od || !horas) return;
-    const nombresSeleccionados = empleados
-      .filter((e) => form.personalCodigos.includes(e.codigo))
-      .map((e) => e.nombre)
-      .join(", ");
+    if (!form.od || !form.personalCodigo || !horas) return;
+    const empleado = empleados.find((e) => e.codigo === form.personalCodigo);
     const payload = {
       area, fecha: todayISO(), fecha_ejecucion: form.fechaEjecucion || null, od: form.od,
-      personal: nombresSeleccionados, personal_codigos: form.personalCodigos,
+      personal: empleado?.nombre || "", personal_codigos: [form.personalCodigo],
       hora_inicio: form.horaInicio, hora_fin: form.horaFin, horas, estado: "Pendiente",
     };
-    setForm({ od: "", personalCodigos: [], horaInicio: "07:00", horaFin: "15:00", fechaEjecucion: "" });
+    setForm({ od: "", personalCodigo: "", horaInicio: "07:00", horaFin: "15:00", fechaEjecucion: "" });
     const { data, error } = await supabase.from("horas_extras").insert(payload).select().single();
     if (!error && data) setRows((prev) => [data, ...prev]);
   };
@@ -542,9 +516,10 @@ function HorasExtras({ area, color }) {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, hora_inicio: horaInicio, hora_fin: horaFin, horas } : r)));
     supabase.from("horas_extras").update({ hora_inicio: horaInicio, hora_fin: horaFin, horas }).eq("id", id).then();
   };
-  const setPersonal = (id, personal) => {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, personal } : r)));
-    supabase.from("horas_extras").update({ personal }).eq("id", id).then();
+  const setPersonalCodigo = (id, codigo) => {
+    const empleado = empleados.find((e) => e.codigo === codigo);
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, personal: empleado?.nombre || "", personal_codigos: [codigo] } : r)));
+    supabase.from("horas_extras").update({ personal: empleado?.nombre || "", personal_codigos: [codigo] }).eq("id", id).then();
   };
   const setFechaEjecucion = (id, fecha_ejecucion) => {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, fecha_ejecucion } : r)));
@@ -576,49 +551,16 @@ function HorasExtras({ area, color }) {
         <Card title="Nueva solicitud">
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <Field label="OD del proyecto"><input style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })} placeholder="OD-1004" /></Field>
-            <Field label="Personal asistente">
-              {form.personalCodigos.length > 0 && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 6 }}>
-                  {form.personalCodigos.map((cod) => {
-                    const emp = empleados.find((e) => e.codigo === cod);
-                    return (
-                      <span key={cod} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: T.accentSoft, color: T.accent, borderRadius: 999, padding: "3px 8px 3px 10px", fontSize: 11.5, fontWeight: 600 }}>
-                        {emp?.nombre || cod}
-                        <X size={11} style={{ cursor: "pointer" }} onClick={() => toggleEmpleado(cod)} />
-                      </span>
-                    );
-                  })}
-                </div>
-              )}
+            <Field label="Persona que solicita">
               {empleados.length === 0 ? (
-                <div style={{ fontSize: 11.5, color: T.gray }}>Aún no hay personal cargado en la base de datos.</div>
+                <div style={{ fontSize: 11.5, color: T.gray }}>Aún no hay personal cargado. Agrégalo desde Planilla.</div>
               ) : (
-                <>
-                  <input
-                    style={{ ...inputStyle, fontSize: 12.5, marginBottom: 6 }}
-                    placeholder="Buscar por nombre..."
-                    value={buscarPersonal}
-                    onChange={(e) => setBuscarPersonal(e.target.value)}
-                  />
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 130, overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 8, padding: 8 }}>
-                    {empleadosFiltrados.length === 0 && (
-                      <div style={{ fontSize: 11.5, color: T.gray }}>Nadie coincide con "{buscarPersonal}".</div>
-                    )}
-                    {empleadosFiltrados.map((emp) => (
-                      <label key={emp.codigo} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: T.ink, fontWeight: 500, cursor: "pointer" }}>
-                        <input type="checkbox" checked={form.personalCodigos.includes(emp.codigo)} onChange={() => toggleEmpleado(emp.codigo)} />
-                        {emp.nombre} <span style={{ color: T.gray, fontSize: 11 }}>({emp.codigo})</span>
-                      </label>
-                    ))}
-                  </div>
-                </>
+                <select style={inputStyle} value={form.personalCodigo} onChange={(e) => setForm({ ...form, personalCodigo: e.target.value })}>
+                  <option value="">Selecciona una persona…</option>
+                  {empleados.map((emp) => <option key={emp.codigo} value={emp.codigo}>{emp.nombre} ({emp.codigo})</option>)}
+                </select>
               )}
-              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                <input style={{ ...inputStyle, width: 90, fontSize: 12 }} placeholder="Código" value={nuevoEmp.codigo} onChange={(e) => setNuevoEmp({ ...nuevoEmp, codigo: e.target.value })} />
-                <input style={{ ...inputStyle, flex: 1, fontSize: 12 }} placeholder="Nombre del nuevo empleado" value={nuevoEmp.nombre} onChange={(e) => setNuevoEmp({ ...nuevoEmp, nombre: e.target.value })} />
-                <Btn small variant="ghost" onClick={agregarEmpleadoDesdeSolicitud}><Plus size={12} /></Btn>
-              </div>
-              <div style={{ fontSize: 10.5, color: T.gray, marginTop: 4 }}>¿No está en la lista? Agrégalo aquí mismo y queda disponible para siempre en Planilla.</div>
+              <div style={{ fontSize: 10.5, color: T.gray, marginTop: 4 }}>Esta lista se administra desde Planilla.</div>
             </Field>
             <div style={{ display: "flex", gap: 8 }}>
               <Field label="Desde"><input style={inputStyle} type="time" value={form.horaInicio} onChange={(e) => setForm({ ...form, horaInicio: e.target.value })} /></Field>
@@ -631,7 +573,7 @@ function HorasExtras({ area, color }) {
               )}
             </div>
             <Field label="Fecha en que se ejecutarán"><input style={inputStyle} type="date" value={form.fechaEjecucion} onChange={(e) => setForm({ ...form, fechaEjecucion: e.target.value })} /></Field>
-            <Btn onClick={add} variant="accent" style={{ justifyContent: "center" }} disabled={!horasCalculadas}><Plus size={14} /> Solicitar</Btn>
+            <Btn onClick={add} variant="accent" style={{ justifyContent: "center" }} disabled={!horasCalculadas || !form.personalCodigo}><Plus size={14} /> Solicitar</Btn>
           </div>
         </Card>
       </div>
@@ -659,7 +601,10 @@ function HorasExtras({ area, color }) {
                 </td>
                 <td>
                   {isAdmin ? (
-                    <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 130 }} value={r.personal} onChange={(e) => setPersonal(r.id, e.target.value)} />
+                    <select style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 150 }} value={r.personal_codigos?.[0] || ""} onChange={(e) => setPersonalCodigo(r.id, e.target.value)}>
+                      <option value="">Selecciona…</option>
+                      {empleados.map((emp) => <option key={emp.codigo} value={emp.codigo}>{emp.nombre}</option>)}
+                    </select>
                   ) : (r.personal || "—")}
                 </td>
                 <td style={{ fontSize: 12, whiteSpace: "nowrap" }}>

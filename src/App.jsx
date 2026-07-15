@@ -543,6 +543,8 @@ function cotRowFromDb(r) {
     dispositivos: r.dispositivos || "",
     numCot: r.num_cot || "",
     estado: r.estado || "Abierto",
+    actividad: r.actividad || "Seguimiento",
+    tipo: r.tipo || "Inspecciones",
   };
 }
 
@@ -809,6 +811,7 @@ function OrdenesTrabajo({ area, color }) {
   // La fecha de vencimiento (Inspecciones) y la fecha de entrega (Proyectos)
   // solo puede modificarlas un usuario Administrativo.
   const canEditFechaControl = isAdmin;
+  const canEditEstado = isAdmin || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
   const isInspecciones = area === "inspecciones";
   const isProyectos = area === "proyectos";
@@ -827,7 +830,7 @@ function OrdenesTrabajo({ area, color }) {
     if (!error && data) setRows((prev) => [odRowFromDb(data), ...prev]);
   };
   const toggle = (id) => {
-    if (!isAdmin) return;
+    if (!canEditEstado) return;
     const actual = rows.find((r) => r.id === id);
     const estado = actual?.estado === "Activo" ? "No Activo" : "Activo";
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado } : r));
@@ -983,13 +986,13 @@ function OrdenesTrabajo({ area, color }) {
                       vencidoAuto ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
                           <Badge color={T.amber} soft={T.amberSoft}><Dot color={T.amber} /> Vencido</Badge>
-                          {isAdmin && (
+                          {canEditEstado && (
                             <select value={r.estado} onChange={(e) => setEstadoOD(r.id, e.target.value)} style={{ border: "none", background: "transparent", color: T.gray, fontSize: 11, padding: "0 2px" }}>
                               {["Activo", "No Activo", "Entregado"].map((s) => <option key={s}>{s}</option>)}
                             </select>
                           )}
                         </div>
-                      ) : isAdmin ? (
+                      ) : canEditEstado ? (
                         <select
                           value={r.estado}
                           onChange={(e) => setEstadoOD(r.id, e.target.value)}
@@ -1003,11 +1006,11 @@ function OrdenesTrabajo({ area, color }) {
                         </Badge>
                       )
                     ) : vencidoAuto ? (
-                      <span onClick={() => toggle(r.id)} style={{ cursor: isAdmin ? "pointer" : "default" }}>
+                      <span onClick={() => toggle(r.id)} style={{ cursor: canEditEstado ? "pointer" : "default" }}>
                         <Badge color={T.amber} soft={T.amberSoft}><Dot color={T.amber} /> Vencido</Badge>
                       </span>
                     ) : (
-                      <span onClick={() => toggle(r.id)} style={{ cursor: isAdmin ? "pointer" : "default" }}>
+                      <span onClick={() => toggle(r.id)} style={{ cursor: canEditEstado ? "pointer" : "default" }}>
                         <Badge color={r.estado === "Activo" ? T.green : T.red} soft={r.estado === "Activo" ? T.greenSoft : T.redSoft}><Dot color={r.estado === "Activo" ? T.green : T.red} />{r.estado}</Badge>
                       </span>
                     )}
@@ -1372,11 +1375,9 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
                       {e.od} — {e.personas}
                     </div>
                   </div>
-                  {isAdmin && (
-                    <button onClick={() => delEvento(e.id)} style={{ background: "transparent", border: "none", color: T.gray, cursor: "pointer", padding: 2, flexShrink: 0 }} title="Borrar">
-                      <X size={13} />
-                    </button>
-                  )}
+                  <button onClick={() => delEvento(e.id)} style={{ background: "transparent", border: "none", color: T.gray, cursor: "pointer", padding: 2, flexShrink: 0 }} title="Borrar">
+                    <X size={13} />
+                  </button>
                 </div>
               ))}
             </div>
@@ -1497,7 +1498,9 @@ function CotizacionPrintView({ r, onClose }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <tbody>
               {row("N° de cotización", r.numCot)}
+              {row("Tipo de oferta", r.tipo)}
               {row("Estatus", r.estado)}
+              {row("Actividad", r.actividad)}
             </tbody>
           </table>
         </div>
@@ -1516,6 +1519,7 @@ function Cotizaciones() {
   const [form, setForm] = useState({
     solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "",
     dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Abierto",
+    actividad: "Seguimiento", tipo: "Inspecciones",
   });
 
   useEffect(() => {
@@ -1535,9 +1539,9 @@ function Cotizaciones() {
       solicitante: form.solicitante, cliente: form.cliente, contacto: form.contacto, email: form.email,
       telefono: form.telefono, provincia: form.provincia, dias: form.dias || null, personal: form.personal,
       descripcion: form.descripcion, equipos: form.equipos, dispositivos: form.dispositivos,
-      num_cot: form.numCot, estado: form.estado,
+      num_cot: form.numCot, estado: form.estado, actividad: form.actividad, tipo: form.tipo,
     };
-    setForm({ solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "", dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Abierto" });
+    setForm({ solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "", dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Abierto", actividad: "Seguimiento", tipo: "Inspecciones" });
     setOpen(false);
     const { data, error } = await supabase.from("cotizaciones").insert(payload).select().single();
     if (!error && data) setRows((prev) => [cotRowFromDb(data), ...prev]);
@@ -1545,6 +1549,14 @@ function Cotizaciones() {
   const setEstado = (id, estado) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado } : r));
     supabase.from("cotizaciones").update({ estado }).eq("id", id).then();
+  };
+  const setActividad = (id, actividad) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, actividad } : r));
+    supabase.from("cotizaciones").update({ actividad }).eq("id", id).then();
+  };
+  const setTipo = (id, tipo) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, tipo } : r));
+    supabase.from("cotizaciones").update({ tipo }).eq("id", id).then();
   };
   const setNumCot = (id, numCot) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, numCot } : r));
@@ -1557,6 +1569,8 @@ function Cotizaciones() {
   };
 
   const estadoColor = { Abierto: [T.amber, T.amberSoft], "En espera": [T.steelSoft, T.graySoft], Enviada: [T.green, T.greenSoft], Cancelado: [T.red, T.redSoft] };
+  const actividadColor = { Seguimiento: [T.blue, T.blueSoft], Cancelado: [T.red, T.redSoft], "Con OC": [T.green, T.greenSoft] };
+  const TIPO_OFERTA_OPCIONES = ["Inspecciones", "Proyectos", "Inspecciones y Proyectos"];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -1564,7 +1578,7 @@ function Cotizaciones() {
       <Card
         title={`Historial de solicitudes — próximo consecutivo #${nextConsecutivo}`}
         action={<div style={{ display: "flex", gap: 8 }}>
-          <Btn small variant="ghost" onClick={() => exportExcel(rows.map(r => ({ Consecutivo: r.consecutivo, Solicitante: r.solicitante, Cliente: r.cliente, "Nombre del contacto": r.contacto, Email: r.email, Telefono: r.telefono, Provincia: r.provincia, Dias: r.dias, Personal: r.personal, "Descripción del trabajo": r.descripcion, Equipos: r.equipos, "Lista de dispositivos": r.dispositivos, "N° Cotización": r.numCot, Estado: r.estado })), "cotizaciones.xlsx")}><Download size={13} /> Excel</Btn>
+          <Btn small variant="ghost" onClick={() => exportExcel(rows.map(r => ({ Consecutivo: r.consecutivo, Solicitante: r.solicitante, Cliente: r.cliente, "Nombre del contacto": r.contacto, Email: r.email, Telefono: r.telefono, Provincia: r.provincia, Dias: r.dias, Personal: r.personal, "Descripción del trabajo": r.descripcion, Equipos: r.equipos, "Lista de dispositivos": r.dispositivos, "N° Cotización": r.numCot, Tipo: r.tipo, Estado: r.estado, Actividad: r.actividad })), "cotizaciones.xlsx")}><Download size={13} /> Excel</Btn>
           <Btn small variant="accent" onClick={() => setOpen(!open)}><Plus size={13} /> Nueva solicitud</Btn>
         </div>}
       >
@@ -1584,6 +1598,11 @@ function Cotizaciones() {
             <Field label="Equipos (cant./tipo/marca/modelo)"><input style={inputStyle} value={form.equipos} onChange={(e) => setForm({ ...form, equipos: e.target.value })} placeholder="1x Grúa / Terex / AC55" /></Field>
             <Field label="Lista de dispositivos"><input style={inputStyle} value={form.dispositivos} onChange={(e) => setForm({ ...form, dispositivos: e.target.value })} placeholder="Materiales y/o equipos..." /></Field>
             <Field label="N° de cotización (si aplica)"><input style={inputStyle} value={form.numCot} onChange={(e) => setForm({ ...form, numCot: e.target.value })} /></Field>
+            <Field label="Tipo de oferta">
+              <select style={inputStyle} value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
+                {TIPO_OFERTA_OPCIONES.map((t) => <option key={t}>{t}</option>)}
+              </select>
+            </Field>
             <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end", gap: 8 }}>
               <Btn variant="ghost" onClick={() => setOpen(false)}>Cancelar</Btn>
               <Btn variant="accent" onClick={submit}>Guardar solicitud</Btn>
@@ -1594,7 +1613,7 @@ function Cotizaciones() {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
-              <th style={{ padding: "6px 8px" }}>#</th><th>Solicitante</th><th>Cliente</th><th>Provincia</th><th>Días</th><th>N° Cotización</th><th>Estado</th><th></th><th></th>
+              <th style={{ padding: "6px 8px" }}>#</th><th>Solicitante</th><th>Cliente</th><th>Provincia</th><th>Días</th><th>N° Cotización</th><th>Tipo</th><th>Estado</th><th>Actividad</th><th></th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -1612,11 +1631,27 @@ function Cotizaciones() {
                 </td>
                 <td>
                   {isAdmin ? (
+                    <select value={r.tipo} onChange={(e) => setTipo(r.id, e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }}>
+                      {TIPO_OFERTA_OPCIONES.map((t) => <option key={t}>{t}</option>)}
+                    </select>
+                  ) : (r.tipo || "—")}
+                </td>
+                <td>
+                  {isAdmin ? (
                     <select value={r.estado} onChange={(e) => setEstado(r.id, e.target.value)} style={{ border: "none", background: (estadoColor[r.estado] || [T.gray, T.graySoft])[1], color: (estadoColor[r.estado] || [T.gray, T.graySoft])[0], borderRadius: 999, fontSize: 12, fontWeight: 600, padding: "4px 10px" }}>
                       {Object.keys(estadoColor).map((s) => <option key={s}>{s}</option>)}
                     </select>
                   ) : (
                     <Badge color={(estadoColor[r.estado] || [T.gray, T.graySoft])[0]} soft={(estadoColor[r.estado] || [T.gray, T.graySoft])[1]}>{r.estado}</Badge>
+                  )}
+                </td>
+                <td>
+                  {isAdmin ? (
+                    <select value={r.actividad} onChange={(e) => setActividad(r.id, e.target.value)} style={{ border: "none", background: (actividadColor[r.actividad] || [T.gray, T.graySoft])[1], color: (actividadColor[r.actividad] || [T.gray, T.graySoft])[0], borderRadius: 999, fontSize: 12, fontWeight: 600, padding: "4px 10px" }}>
+                      {Object.keys(actividadColor).map((a) => <option key={a}>{a}</option>)}
+                    </select>
+                  ) : (
+                    <Badge color={(actividadColor[r.actividad] || [T.gray, T.graySoft])[0]} soft={(actividadColor[r.actividad] || [T.gray, T.graySoft])[1]}>{r.actividad}</Badge>
                   )}
                 </td>
                 <td>
@@ -1640,6 +1675,7 @@ function Cotizaciones() {
 function CursosEHS() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
+  const canEditCurso = isAdmin || currentUser?.categoria === "tecnico";
   const confirmar = useContext(ConfirmContext);
   const [rows, setRows] = useState([]);
   const [subTab, setSubTab] = useState("activos");
@@ -1703,13 +1739,13 @@ function CursosEHS() {
                   <td>{r.personal}</td>
                   <td>{r.lugar}</td>
                   <td>
-                    {isAdmin ? (
+                    {canEditCurso ? (
                       <input type="date" style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: 130 }} value={r.fecha || ""} onChange={(e) => setFecha(r.id, e.target.value)} title="Cambiar esta fecha renueva el curso y recalcula el vencimiento" />
                     ) : (r.fecha || "—")}
                   </td>
                   <td style={{ color: efectivo === "Vencido" ? T.red : T.inkSoft, fontWeight: efectivo === "Vencido" ? 700 : 500 }}>{venc || "—"}</td>
                   <td>
-                    {isAdmin ? (
+                    {canEditCurso ? (
                       efectivo === "Vencido" ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
                           <Badge color={T.red} soft={`${T.red}1A`}><Dot color={T.red} /> Vencido</Badge>

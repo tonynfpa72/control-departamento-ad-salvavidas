@@ -7,7 +7,7 @@ import * as XLSX from "xlsx";
 import {
   LogOut, Plus, Download, Check, X, Clock, ClipboardList,
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
-  ChevronLeft, ChevronRight, AlertCircle, Upload, Flame
+  ChevronLeft, ChevronRight, AlertCircle, Upload, Flame, Wallet
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -97,6 +97,20 @@ function ConfirmProvider({ children }) {
   );
 }
 
+// Calcula el total de horas extra a partir de un rango "HH:MM" a "HH:MM".
+// Si el rango cruza el mediodía, se resta 1 hora de almuerzo (no se paga).
+function calcularHorasRango(horaInicio, horaFin) {
+  if (!horaInicio || !horaFin) return 0;
+  const [h1, m1] = horaInicio.split(":").map(Number);
+  const [h2, m2] = horaFin.split(":").map(Number);
+  const inicio = h1 + m1 / 60;
+  let fin = h2 + m2 / 60;
+  if (fin <= inicio) fin += 24; // por si el rango cruza medianoche
+  let total = fin - inicio;
+  if (inicio < 12 && fin > 12) total -= 1; // hora de almuerzo, no se paga
+  return Math.max(0, Math.round(total * 100) / 100);
+}
+
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const uid = () => Math.random().toString(36).slice(2, 9);
 const fmtMoney = (n) => "$" + Number(n || 0).toLocaleString("en-US");
@@ -139,6 +153,7 @@ const AREAS = [
   { id: "apertura", label: "Apertura de OD", icon: Building2, color: T.blue },
   { id: "calendario_global", label: "Calendario General", icon: CalendarDays, color: T.accent },
   { id: "facturacion_publica", label: "Facturación", icon: LayoutDashboard, color: T.green },
+  { id: "planilla", label: "Planilla", icon: Wallet, color: T.amber },
   { id: "admin", label: "Administrativo", icon: LayoutDashboard, color: T.steelSoft },
 ];
 
@@ -170,7 +185,7 @@ const SEMAFORO = {
 // Cancelado ni Realizado y su fecha de vencimiento ya pasó, se muestra
 // como Vencido (rojo) sin que nadie tenga que cambiarlo manualmente.
 function estadoEfectivoCurso(r) {
-  if (r.estado === "Cancelado" || r.estado === "Realizado") return r.estado;
+  if (r.estado === "Cancelado") return r.estado;
   const venc = vencimientoCalculado(r.fecha);
   if (venc && venc < todayISO()) return "Vencido";
   return r.estado;
@@ -184,6 +199,17 @@ function vencimientoCalculado(fecha) {
   const d = new Date(fecha + "T00:00:00");
   d.setFullYear(d.getFullYear() + 1);
   return d.toISOString().slice(0, 10);
+}
+
+// Estado efectivo de una OD (Inspecciones/Proyectos): si el registro está
+// "Activo" y la fecha de control (vencimiento en Inspecciones, o fecha de
+// entrega en Proyectos) ya pasó, se muestra automáticamente como "Vencido"
+// (rojo) sin que nadie tenga que cambiarlo a mano. "No Activo" y
+// "Entregado" no se ven afectados por esta regla.
+function estadoEfectivoOD(r, campoFecha) {
+  const fecha = r[campoFecha];
+  if (r.estado === "Activo" && fecha && fecha < todayISO()) return "Vencido";
+  return r.estado;
 }
 
 /* ---------------------------------------------------------
@@ -207,7 +233,7 @@ const seedEventos = (area) => ([
 ]);
 
 const seedCotizaciones = ([
-  { id: uid(), consecutivo: "00001", solicitante: "J. Solano", cliente: "Grupo Andina S.A.", contacto: "R. Méndez", email: "compras@andina.com", telefono: "8888-1111", provincia: "San José", dias: 5, personal: "2 técnicos", descripcion: "Montaje de andamio Layher para mantenimiento de fachada.", equipos: "2x Andamio / Layher / Layher 3000", dispositivos: "Materiales de anclaje, detector de gases", numCot: "COT-0451", estado: "Cerrado" },
+  { id: uid(), consecutivo: "00001", solicitante: "J. Solano", cliente: "Grupo Andina S.A.", contacto: "R. Méndez", email: "compras@andina.com", telefono: "8888-1111", provincia: "San José", dias: 5, personal: "2 técnicos", descripcion: "Montaje de andamio Layher para mantenimiento de fachada.", equipos: "2x Andamio / Layher / Layher 3000", dispositivos: "Materiales de anclaje, detector de gases", numCot: "COT-0451", estado: "Enviada" },
   { id: uid(), consecutivo: "00002", solicitante: "M. Rojas", cliente: "Portuaria del Golfo", contacto: "L. Araya", email: "gerencia@golfo.com", telefono: "8888-2222", provincia: "Puntarenas", dias: 12, personal: "4 técnicos, 1 supervisor", descripcion: "Izaje de equipo pesado en muelle de carga.", equipos: "1x Grúa telescópica / Terex / AC55", dispositivos: "Equipos de izaje, materiales de rigging", numCot: "", estado: "Abierto" },
 ]);
 
@@ -442,9 +468,11 @@ function HorasExtras({ area, color }) {
   const confirmar = useContext(ConfirmContext);
   const [disponible, setDisponibleState] = useState(150);
   const [rows, setRows] = useState([]);
-  const [form, setForm] = useState({ od: "", personal: "", horas: "", fechaEjecucion: "" });
+  const [empleados, setEmpleados] = useState([]);
+  const [form, setForm] = useState({ od: "", personalCodigos: [], horaInicio: "07:00", horaFin: "15:00", fechaEjecucion: "" });
   const used = rows.reduce((s, r) => s + (r.estado !== "Rechazada" ? Number(r.horas) : 0), 0);
   const saldo = disponible - used;
+  const horasCalculadas = calcularHorasRango(form.horaInicio, form.horaFin);
 
   useEffect(() => {
     (async () => {
@@ -452,6 +480,8 @@ function HorasExtras({ area, color }) {
       if (filas) setRows(filas);
       const { data: config } = await supabase.from("horas_disponible").select("*").eq("area", area).single();
       if (config) setDisponibleState(Number(config.disponible));
+      const { data: personal } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
+      if (personal) setEmpleados(personal);
     })();
   }, [area]);
 
@@ -460,10 +490,28 @@ function HorasExtras({ area, color }) {
     supabase.from("horas_disponible").upsert({ area, disponible: valor }).then();
   };
 
+  const toggleEmpleado = (codigo) => {
+    setForm((f) => ({
+      ...f,
+      personalCodigos: f.personalCodigos.includes(codigo)
+        ? f.personalCodigos.filter((c) => c !== codigo)
+        : [...f.personalCodigos, codigo],
+    }));
+  };
+
   const add = async () => {
-    if (!form.od || !form.horas) return;
-    const payload = { area, fecha: todayISO(), fecha_ejecucion: form.fechaEjecucion || null, od: form.od, personal: form.personal, horas: Number(form.horas), estado: "Pendiente" };
-    setForm({ od: "", personal: "", horas: "", fechaEjecucion: "" });
+    const horas = calcularHorasRango(form.horaInicio, form.horaFin);
+    if (!form.od || !horas) return;
+    const nombresSeleccionados = empleados
+      .filter((e) => form.personalCodigos.includes(e.codigo))
+      .map((e) => e.nombre)
+      .join(", ");
+    const payload = {
+      area, fecha: todayISO(), fecha_ejecucion: form.fechaEjecucion || null, od: form.od,
+      personal: nombresSeleccionados, personal_codigos: form.personalCodigos,
+      hora_inicio: form.horaInicio, hora_fin: form.horaFin, horas, estado: "Pendiente",
+    };
+    setForm({ od: "", personalCodigos: [], horaInicio: "07:00", horaFin: "15:00", fechaEjecucion: "" });
     const { data, error } = await supabase.from("horas_extras").insert(payload).select().single();
     if (!error && data) setRows((prev) => [data, ...prev]);
   };
@@ -471,18 +519,18 @@ function HorasExtras({ area, color }) {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, estado } : r)));
     supabase.from("horas_extras").update({ estado }).eq("id", id).then();
   };
-  const setPersonal = (id, personal) => {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, personal } : r)));
-    supabase.from("horas_extras").update({ personal }).eq("id", id).then();
-  };
   const setOd = (id, od) => {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, od } : r)));
     supabase.from("horas_extras").update({ od }).eq("id", id).then();
   };
-  const setHoras = (id, horas) => {
-    const valor = Number(horas) || 0;
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, horas: valor } : r)));
-    supabase.from("horas_extras").update({ horas: valor }).eq("id", id).then();
+  const setRango = (id, horaInicio, horaFin) => {
+    const horas = calcularHorasRango(horaInicio, horaFin);
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, hora_inicio: horaInicio, hora_fin: horaFin, horas } : r)));
+    supabase.from("horas_extras").update({ hora_inicio: horaInicio, hora_fin: horaFin, horas }).eq("id", id).then();
+  };
+  const setPersonal = (id, personal) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, personal } : r)));
+    supabase.from("horas_extras").update({ personal }).eq("id", id).then();
   };
   const setFechaEjecucion = (id, fecha_ejecucion) => {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, fecha_ejecucion } : r)));
@@ -514,19 +562,41 @@ function HorasExtras({ area, color }) {
         <Card title="Nueva solicitud">
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <Field label="OD del proyecto"><input style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })} placeholder="OD-1004" /></Field>
-            <Field label="Personal asistente"><input style={inputStyle} value={form.personal} onChange={(e) => setForm({ ...form, personal: e.target.value })} placeholder="Nombres" /></Field>
-            <Field label="Horas"><input style={inputStyle} type="number" value={form.horas} onChange={(e) => setForm({ ...form, horas: e.target.value })} /></Field>
+            <Field label="Personal asistente">
+              {empleados.length === 0 ? (
+                <div style={{ fontSize: 11.5, color: T.gray }}>Aún no hay personal cargado en la base de datos.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 130, overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 8, padding: 8 }}>
+                  {empleados.map((emp) => (
+                    <label key={emp.codigo} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: T.ink, fontWeight: 500, cursor: "pointer" }}>
+                      <input type="checkbox" checked={form.personalCodigos.includes(emp.codigo)} onChange={() => toggleEmpleado(emp.codigo)} />
+                      {emp.nombre} <span style={{ color: T.gray, fontSize: 11 }}>({emp.codigo})</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </Field>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Field label="Desde"><input style={inputStyle} type="time" value={form.horaInicio} onChange={(e) => setForm({ ...form, horaInicio: e.target.value })} /></Field>
+              <Field label="Hasta"><input style={inputStyle} type="time" value={form.horaFin} onChange={(e) => setForm({ ...form, horaFin: e.target.value })} /></Field>
+            </div>
+            <div style={{ fontSize: 12, color: T.inkSoft }}>
+              Total: <strong style={{ color: T.ink }}>{horasCalculadas}h</strong>
+              {form.horaInicio && form.horaFin && (Number(form.horaInicio.split(":")[0]) < 12 && Number(form.horaFin.split(":")[0]) >= 12) && (
+                <span> (ya se restó 1h de almuerzo)</span>
+              )}
+            </div>
             <Field label="Fecha en que se ejecutarán"><input style={inputStyle} type="date" value={form.fechaEjecucion} onChange={(e) => setForm({ ...form, fechaEjecucion: e.target.value })} /></Field>
-            <Btn onClick={add} variant="accent" style={{ justifyContent: "center" }}><Plus size={14} /> Solicitar</Btn>
+            <Btn onClick={add} variant="accent" style={{ justifyContent: "center" }} disabled={!horasCalculadas}><Plus size={14} /> Solicitar</Btn>
           </div>
         </Card>
       </div>
 
-      <Card title="Solicitudes" action={<Btn small variant="ghost" onClick={() => exportExcel(rows.map(({ fecha, fecha_ejecucion, od, personal, horas, estado }) => ({ Fecha: fecha, "Fecha Ejecución": fecha_ejecucion, OD: od, Personal: personal, Horas: horas, Estado: estado })), `horas_${area}.xlsx`)}><Download size={13} /> Excel</Btn>}>
+      <Card title="Solicitudes" action={<Btn small variant="ghost" onClick={() => exportExcel(rows.map(({ fecha, fecha_ejecucion, od, personal, hora_inicio, hora_fin, horas, estado }) => ({ Fecha: fecha, "Fecha Ejecución": fecha_ejecucion, OD: od, Personal: personal, "Hora Inicio": hora_inicio, "Hora Fin": hora_fin, Horas: horas, Estado: estado })), `horas_${area}.xlsx`)}><Download size={13} /> Excel</Btn>}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
-              <th style={{ padding: "6px 8px" }}>Fecha</th><th>Fecha ejecución</th><th>OD</th><th>Personal</th><th>Horas</th><th>Estado</th><th></th>
+              <th style={{ padding: "6px 8px" }}>Fecha</th><th>Fecha ejecución</th><th>OD</th><th>Personal</th><th>Rango</th><th>Horas</th><th>Estado</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -540,19 +610,24 @@ function HorasExtras({ area, color }) {
                 </td>
                 <td>
                   {isAdmin ? (
-                    <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 100 }} value={r.od} onChange={(e) => setOd(r.id, e.target.value)} />
-                  ) : r.od}
+                    <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 90 }} value={r.od} onChange={(e) => setOd(r.id, e.target.value)} />
+                  ) : (r.od)}
                 </td>
                 <td>
                   {isAdmin ? (
                     <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 130 }} value={r.personal} onChange={(e) => setPersonal(r.id, e.target.value)} />
                   ) : (r.personal || "—")}
                 </td>
-                <td>
+                <td style={{ fontSize: 12, whiteSpace: "nowrap" }}>
                   {isAdmin ? (
-                    <input type="number" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 70 }} value={r.horas} onChange={(e) => setHoras(r.id, e.target.value)} />
-                  ) : `${r.horas}h`}
+                    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                      <input type="time" style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: 90 }} value={r.hora_inicio || ""} onChange={(e) => setRango(r.id, e.target.value, r.hora_fin)} />
+                      <span>–</span>
+                      <input type="time" style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: 90 }} value={r.hora_fin || ""} onChange={(e) => setRango(r.id, r.hora_inicio, e.target.value)} />
+                    </div>
+                  ) : (r.hora_inicio && r.hora_fin ? `${r.hora_inicio} – ${r.hora_fin}` : "—")}
                 </td>
+                <td>{r.horas}h</td>
                 <td><Badge color={r.estado === "Aprobada" ? T.green : r.estado === "Rechazada" ? T.red : T.amber} soft={r.estado === "Aprobada" ? T.greenSoft : r.estado === "Rechazada" ? T.redSoft : T.amberSoft}>{r.estado}</Badge></td>
                 <td style={{ display: "flex", gap: 6, padding: "9px 8px" }}>
                   {isAdmin && r.estado === "Pendiente" && <>
@@ -565,6 +640,9 @@ function HorasExtras({ area, color }) {
             ))}
           </tbody>
         </table>
+        <div style={{ marginTop: 10, fontSize: 12.5, color: T.inkSoft, textAlign: "right", fontWeight: 700 }}>
+          Total horas (todas las solicitudes): {rows.reduce((s, r) => s + Number(r.horas || 0), 0)}h
+        </div>
       </Card>
     </div>
   );
@@ -593,6 +671,9 @@ function OrdenesTrabajo({ area, color }) {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
   const canEditFechas = isAdmin || currentUser?.categoria === "asistente";
+  // La fecha de vencimiento (Inspecciones) y la fecha de entrega (Proyectos)
+  // solo puede modificarlas un usuario Administrativo.
+  const canEditFechaControl = isAdmin;
   const confirmar = useContext(ConfirmContext);
   const isInspecciones = area === "inspecciones";
   const isProyectos = area === "proyectos";
@@ -617,7 +698,8 @@ function OrdenesTrabajo({ area, color }) {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado } : r));
     supabase.from("ordenes_trabajo").update({ estado }).eq("id", id).then();
   };
-  const ESTADO_OD_COLOR = { "Activo": [T.green, T.greenSoft], "No Activo": [T.red, T.redSoft], "Entregado": [T.blue, T.blueSoft] };
+  const ESTADO_OD_COLOR = { "Activo": [T.green, T.greenSoft], "No Activo": [T.red, T.redSoft], "Entregado": [T.blue, T.blueSoft], "Vencido": [T.red, T.redSoft] };
+  const campoFechaControl = isInspecciones ? "vencimiento" : "fechaEntrega";
   const setEstadoOD = (id, estado) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado } : r));
     supabase.from("ordenes_trabajo").update({ estado }).eq("id", id).then();
@@ -708,10 +790,11 @@ function OrdenesTrabajo({ area, color }) {
       || (r.od || "").toLowerCase().includes(texto)
       || (r.cliente || "").toLowerCase().includes(texto)
       || (r.tecnico || "").toLowerCase().includes(texto);
-    const matchEstado = filtroEstado === "Todos" || r.estado === filtroEstado;
+    const efectivoFiltro = estadoEfectivoOD(r, campoFechaControl);
+    const matchEstado = filtroEstado === "Todos" || r.estado === filtroEstado || efectivoFiltro === filtroEstado;
     return matchTexto && matchEstado;
   });
-  const estadoOpciones = isProyectos ? ["Todos", "Activo", "No Activo", "Entregado"] : ["Todos", "Activo", "No Activo"];
+  const estadoOpciones = isProyectos ? ["Todos", "Activo", "No Activo", "Entregado", "Vencido"] : ["Todos", "Activo", "No Activo", "Vencido"];
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16 }}>
@@ -752,13 +835,25 @@ function OrdenesTrabajo({ area, color }) {
               </tr>
             </thead>
             <tbody>
-              {filteredRows.map((r) => (
+              {filteredRows.map((r) => {
+                const efectivo = estadoEfectivoOD(r, campoFechaControl);
+                const vencidoAuto = efectivo === "Vencido";
+                return (
                 <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
                   <td style={{ padding: "9px 8px", fontWeight: 600 }}>{r.od}</td>
                   <td>{r.cliente}</td>
                   <td>
                     {isProyectos ? (
-                      isAdmin ? (
+                      vencidoAuto ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+                          <Badge color={T.red} soft={T.redSoft}><Dot color={T.red} /> Vencido</Badge>
+                          {isAdmin && (
+                            <select value={r.estado} onChange={(e) => setEstadoOD(r.id, e.target.value)} style={{ border: "none", background: "transparent", color: T.gray, fontSize: 11, padding: "0 2px" }}>
+                              {["Activo", "No Activo", "Entregado"].map((s) => <option key={s}>{s}</option>)}
+                            </select>
+                          )}
+                        </div>
+                      ) : isAdmin ? (
                         <select
                           value={r.estado}
                           onChange={(e) => setEstadoOD(r.id, e.target.value)}
@@ -771,6 +866,10 @@ function OrdenesTrabajo({ area, color }) {
                           <Dot color={(ESTADO_OD_COLOR[r.estado] || [T.gray, T.graySoft])[0]} />{r.estado}
                         </Badge>
                       )
+                    ) : vencidoAuto ? (
+                      <span onClick={() => toggle(r.id)} style={{ cursor: isAdmin ? "pointer" : "default" }}>
+                        <Badge color={T.red} soft={T.redSoft}><Dot color={T.red} /> Vencido</Badge>
+                      </span>
                     ) : (
                       <span onClick={() => toggle(r.id)} style={{ cursor: isAdmin ? "pointer" : "default" }}>
                         <Badge color={r.estado === "Activo" ? T.green : T.red} soft={r.estado === "Activo" ? T.greenSoft : T.redSoft}><Dot color={r.estado === "Activo" ? T.green : T.red} />{r.estado}</Badge>
@@ -784,7 +883,7 @@ function OrdenesTrabajo({ area, color }) {
                   </td>
                   {isInspecciones && (
                     <td>
-                      {canEditFechas ? (
+                      {canEditFechaControl ? (
                         <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 130 }} value={r.vencimiento || ""} onChange={(e) => setVencimiento(r.id, e.target.value)} />
                       ) : (r.vencimiento || "—")}
                     </td>
@@ -808,7 +907,7 @@ function OrdenesTrabajo({ area, color }) {
                   )}
                   {isProyectos && (
                     <td>
-                      {canEditFechas ? (
+                      {canEditFechaControl ? (
                         <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 130 }} value={r.fechaEntrega || ""} onChange={(e) => setFechaEntrega(r.id, e.target.value)} />
                       ) : (r.fechaEntrega || "—")}
                     </td>
@@ -822,7 +921,7 @@ function OrdenesTrabajo({ area, color }) {
                     {isAdmin && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}
                   </td>
                 </tr>
-              ))}
+              );})}
             </tbody>
           </table>
         </Card>
@@ -1301,7 +1400,7 @@ function Cotizaciones() {
     supabase.from("cotizaciones").delete().eq("id", id).then();
   };
 
-  const estadoColor = { Abierto: [T.amber, T.amberSoft], "En espera": [T.steelSoft, T.graySoft], Cerrado: [T.green, T.greenSoft], Cancelado: [T.red, T.redSoft] };
+  const estadoColor = { Abierto: [T.amber, T.amberSoft], "En espera": [T.steelSoft, T.graySoft], Enviada: [T.green, T.greenSoft], Cancelado: [T.red, T.redSoft] };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -1357,11 +1456,11 @@ function Cotizaciones() {
                 </td>
                 <td>
                   {isAdmin ? (
-                    <select value={r.estado} onChange={(e) => setEstado(r.id, e.target.value)} style={{ border: "none", background: estadoColor[r.estado][1], color: estadoColor[r.estado][0], borderRadius: 999, fontSize: 12, fontWeight: 600, padding: "4px 10px" }}>
+                    <select value={r.estado} onChange={(e) => setEstado(r.id, e.target.value)} style={{ border: "none", background: (estadoColor[r.estado] || [T.gray, T.graySoft])[1], color: (estadoColor[r.estado] || [T.gray, T.graySoft])[0], borderRadius: 999, fontSize: 12, fontWeight: 600, padding: "4px 10px" }}>
                       {Object.keys(estadoColor).map((s) => <option key={s}>{s}</option>)}
                     </select>
                   ) : (
-                    <Badge color={estadoColor[r.estado][0]} soft={estadoColor[r.estado][1]}>{r.estado}</Badge>
+                    <Badge color={(estadoColor[r.estado] || [T.gray, T.graySoft])[0]} soft={(estadoColor[r.estado] || [T.gray, T.graySoft])[1]}>{r.estado}</Badge>
                   )}
                 </td>
                 <td>
@@ -1418,15 +1517,17 @@ function CursosEHS() {
     supabase.from("cursos_ehs").delete().eq("id", id).then();
   };
 
-  const rowsActivos = rows.filter((r) => r.estado !== "Realizado");
-  const rowsRealizados = rows.filter((r) => r.estado === "Realizado");
-  const rowsMostrados = subTab === "activos" ? rowsActivos : rowsRealizados;
+  const rowsVencidos = rows.filter((r) => estadoEfectivoCurso(r) === "Vencido");
+  const rowsRealizados = rows.filter((r) => r.estado === "Realizado" && estadoEfectivoCurso(r) !== "Vencido");
+  const rowsActivos = rows.filter((r) => r.estado !== "Realizado" && estadoEfectivoCurso(r) !== "Vencido");
+  const rowsMostrados = subTab === "activos" ? rowsActivos : subTab === "vencidos" ? rowsVencidos : rowsRealizados;
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
       <Card title="Solicitudes de curso" action={<Btn small variant="ghost" onClick={() => exportExcel(rowsMostrados.map(r => ({ Solicitante: r.solicitante, Personal: r.personal, Lugar: r.lugar, Tipo: r.tipo, Estado: r.estado, Fecha: r.fecha, Vencimiento: vencimientoCalculado(r.fecha) || "" })), "cursos_ehs.xlsx")}><Download size={13} /> Excel</Btn>}>
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           <Btn small variant={subTab === "activos" ? "accent" : "ghost"} onClick={() => setSubTab("activos")}>Activos ({rowsActivos.length})</Btn>
+          <Btn small variant={subTab === "vencidos" ? "accent" : "ghost"} onClick={() => setSubTab("vencidos")}>Vencidos ({rowsVencidos.length})</Btn>
           <Btn small variant={subTab === "realizados" ? "accent" : "ghost"} onClick={() => setSubTab("realizados")}>Realizados ({rowsRealizados.length})</Btn>
         </div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
@@ -2048,6 +2149,154 @@ function FacturacionPublica() {
   );
 }
 
+/* ---------------------------------------------------------
+   PLANILLA (placeholder — pendiente de definir alcance)
+   --------------------------------------------------------- */
+function Planilla() {
+  const currentUser = useContext(CurrentUserContext);
+  const isAdmin = currentUser?.categoria === "admin";
+  const confirmar = useContext(ConfirmContext);
+  const [tab, setTab] = useState("personal");
+  const [empleados, setEmpleados] = useState([]);
+  const [form, setForm] = useState({ codigo: "", nombre: "", puesto: "", area: "" });
+  const fileInputRef = React.useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("empleados").select("*").order("nombre", { ascending: true });
+      if (data) setEmpleados(data);
+    })();
+  }, []);
+
+  const add = async () => {
+    if (!form.codigo || !form.nombre) return;
+    const payload = { codigo: form.codigo, nombre: form.nombre, puesto: form.puesto || null, area: form.area || null, activo: true };
+    setForm({ codigo: "", nombre: "", puesto: "", area: "" });
+    const { data, error } = await supabase.from("empleados").insert(payload).select().single();
+    if (!error && data) setEmpleados((prev) => [...prev, data].sort((a, b) => a.nombre.localeCompare(b.nombre)));
+  };
+  const toggleActivo = (id, activo) => {
+    setEmpleados((prev) => prev.map((e) => e.id === id ? { ...e, activo } : e));
+    supabase.from("empleados").update({ activo }).eq("id", id).then();
+  };
+  const del = async (id) => {
+    if (!(await confirmar("¿Está seguro que desea eliminar este empleado? Esta acción no se puede deshacer."))) return;
+    setEmpleados((prev) => prev.filter((e) => e.id !== id));
+    supabase.from("empleados").delete().eq("id", id).then();
+  };
+
+  // Importa un Excel con columnas Código / Nombre (y opcionalmente Puesto, Área).
+  const handleImport = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const data = new Uint8Array(evt.target.result);
+        const wb = XLSX.read(data, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(ws);
+        const nuevos = json
+          .map((row) => ({
+            codigo: String(row["Código"] ?? row["Codigo"] ?? row["codigo"] ?? "").trim(),
+            nombre: String(row["Nombre"] ?? row["nombre"] ?? "").trim(),
+            puesto: row["Puesto"] ?? row["puesto"] ?? null,
+            area: row["Área"] ?? row["Area"] ?? row["area"] ?? null,
+            activo: true,
+          }))
+          .filter((r) => r.codigo && r.nombre);
+        if (nuevos.length === 0) return;
+        const { data: inserted, error } = await supabase.from("empleados").insert(nuevos).select();
+        if (!error && inserted) setEmpleados((prev) => [...prev, ...inserted].sort((a, b) => a.nombre.localeCompare(b.nombre)));
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <Btn variant={tab === "personal" ? "accent" : "ghost"} small onClick={() => setTab("personal")}>Personal</Btn>
+        <Btn variant={tab === "reporte1" ? "accent" : "ghost"} small onClick={() => setTab("reporte1")}>Reporte 1</Btn>
+        <Btn variant={tab === "reporte2" ? "accent" : "ghost"} small onClick={() => setTab("reporte2")}>Reporte 2</Btn>
+      </div>
+
+      {tab === "personal" && (
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <Card title="Personal / Código de empleado" action={
+              <div style={{ display: "flex", gap: 8 }}>
+                <input ref={fileInputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleImport} />
+                <Btn small variant="ghost" onClick={() => fileInputRef.current?.click()}><Upload size={13} /> Importar Excel</Btn>
+                <Btn small variant="ghost" onClick={() => exportExcel(empleados.map(({ codigo, nombre, puesto, area, activo }) => ({ Código: codigo, Nombre: nombre, Puesto: puesto, Área: area, Activo: activo ? "Sí" : "No" })), "empleados.xlsx")}><Download size={13} /> Excel</Btn>
+              </div>
+            }>
+              <div style={{ fontSize: 11.5, color: T.gray, marginBottom: 12 }}>
+                El Excel debe traer columnas <strong>Código</strong> y <strong>Nombre</strong> (opcional: Puesto, Área).
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                    <th style={{ padding: "6px 8px" }}>Código</th><th>Nombre</th><th>Puesto</th><th>Área</th><th>Activo</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {empleados.map((e) => (
+                    <tr key={e.id} style={{ borderTop: `1px solid ${T.line}` }}>
+                      <td style={{ padding: "9px 8px", fontWeight: 700 }}>{e.codigo}</td>
+                      <td>{e.nombre}</td>
+                      <td>{e.puesto || "—"}</td>
+                      <td>{e.area || "—"}</td>
+                      <td>
+                        {isAdmin ? (
+                          <span onClick={() => toggleActivo(e.id, !e.activo)} style={{ cursor: "pointer" }}>
+                            <Badge color={e.activo ? T.green : T.gray} soft={e.activo ? T.greenSoft : T.graySoft}>{e.activo ? "Activo" : "Inactivo"}</Badge>
+                          </span>
+                        ) : (
+                          <Badge color={e.activo ? T.green : T.gray} soft={e.activo ? T.greenSoft : T.graySoft}>{e.activo ? "Activo" : "Inactivo"}</Badge>
+                        )}
+                      </td>
+                      <td>{isAdmin && <Btn small variant="danger" onClick={() => del(e.id)}><X size={12} /></Btn>}</td>
+                    </tr>
+                  ))}
+                  {empleados.length === 0 && (
+                    <tr><td colSpan={6} style={{ padding: "14px 8px", color: T.gray, fontSize: 12.5 }}>Todavía no hay personal cargado. Importa un Excel o agrégalo manualmente.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </Card>
+          </div>
+
+          <Card title="Agregar empleado manualmente">
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <Field label="Código de empleado"><input style={inputStyle} value={form.codigo} onChange={(e) => setForm({ ...form, codigo: e.target.value })} placeholder="EMP-004" /></Field>
+              <Field label="Nombre"><input style={inputStyle} value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} placeholder="Nombre completo" /></Field>
+              <Field label="Puesto (opcional)"><input style={inputStyle} value={form.puesto} onChange={(e) => setForm({ ...form, puesto: e.target.value })} /></Field>
+              <Field label="Área (opcional)"><input style={inputStyle} value={form.area} onChange={(e) => setForm({ ...form, area: e.target.value })} placeholder="inspecciones / proyectos / salud" /></Field>
+              <Btn variant="accent" onClick={add} style={{ justifyContent: "center" }}><Plus size={14} /> Agregar</Btn>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {tab === "reporte1" && (
+        <Card title="Reporte 1">
+          <div style={{ color: T.inkSoft, fontSize: 13.5 }}>Pendiente de definir. Dime qué debe mostrar este reporte y lo construyo aquí.</div>
+        </Card>
+      )}
+
+      {tab === "reporte2" && (
+        <Card title="Reporte 2">
+          <div style={{ color: T.inkSoft, fontSize: 13.5 }}>Pendiente de definir. Dime qué debe mostrar este reporte y lo construyo aquí.</div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function AppInner() {
   const [user, setUser] = useState(null);
   const [tab, setTab] = useState(null);
@@ -2131,6 +2380,7 @@ function AppInner() {
         {tab === "apertura" && <AperturaOD />}
         {tab === "calendario_global" && <CalendarioGlobal />}
         {tab === "facturacion_publica" && <FacturacionPublica />}
+        {tab === "planilla" && <Planilla />}
         {tab === "admin" && <Administrativo />}
       </div>
     </div>

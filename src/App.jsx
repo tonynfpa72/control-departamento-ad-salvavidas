@@ -4,7 +4,7 @@ import {
   PieChart, Pie, Cell, Legend, ReferenceLine, LineChart, Line, LabelList
 } from "recharts";
 import * as XLSX from "xlsx";
-import ExcelJS from "exceljs";
+import { Workbook } from "exceljs";
 import {
   LogOut, Plus, Download, Check, X, Clock, ClipboardList,
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
@@ -363,7 +363,7 @@ function reporte2NombreQuincena(clave) {
 // Llena UNA copia de la plantilla (una semana) para un OD y devuelve el
 // workbook de exceljs listo para exportar, con el formato original intacto.
 async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSemana, lunes, empleadosPorCodigo) {
-  const workbook = new ExcelJS.Workbook();
+  const workbook = new Workbook();
   await workbook.xlsx.load(plantillaBuffer);
   const ws = workbook.worksheets[0];
 
@@ -450,23 +450,35 @@ async function reporte2Descargar() {
     return;
   }
 
-  const plantillaBuffer = await (await fetch("/plantilla-horas-extra.xlsx")).arrayBuffer();
+  let plantillaBuffer;
+  try {
+    const resp = await fetch("/plantilla-horas-extra.xlsx");
+    if (!resp.ok) throw new Error(`No se encontró la plantilla (HTTP ${resp.status}). Verifica que "plantilla-horas-extra.xlsx" esté en la carpeta public/ de tu proyecto.`);
+    plantillaBuffer = await resp.arrayBuffer();
+  } catch (err) {
+    alert("No se pudo generar el Reporte 2: " + (err.message || "error desconocido al cargar la plantilla."));
+    return;
+  }
 
-  for (const od of odsConDatos) {
-    for (const quincena of Object.keys(grupos[od])) {
-      const semanas = Object.keys(grupos[od][quincena]).sort();
-      for (const lunesISO of semanas) {
-        const entradasSemana = grupos[od][quincena][lunesISO];
-        const workbook = await reporte2LlenarPlantilla(
-          plantillaBuffer, od, clientePorOd[od], entradasSemana, new Date(lunesISO + "T00:00:00"), empleadosPorCodigo
-        );
-        const buffer = await workbook.xlsx.writeBuffer();
-        const sufijoSemana = semanas.length > 1 ? `_semana-${lunesISO}` : "";
-        const nombreOd = String(od).replace(/[^a-zA-Z0-9-]/g, "");
-        const nombreArchivo = `SolicitudHoras_${nombreOd}_${reporte2NombreQuincena(quincena)}${sufijoSemana}.xlsx`;
-        reporte2Descargar_disparar(buffer, nombreArchivo);
+  try {
+    for (const od of odsConDatos) {
+      for (const quincena of Object.keys(grupos[od])) {
+        const semanas = Object.keys(grupos[od][quincena]).sort();
+        for (const lunesISO of semanas) {
+          const entradasSemana = grupos[od][quincena][lunesISO];
+          const workbook = await reporte2LlenarPlantilla(
+            plantillaBuffer, od, clientePorOd[od], entradasSemana, new Date(lunesISO + "T00:00:00"), empleadosPorCodigo
+          );
+          const buffer = await workbook.xlsx.writeBuffer();
+          const sufijoSemana = semanas.length > 1 ? `_semana-${lunesISO}` : "";
+          const nombreOd = String(od).replace(/[^a-zA-Z0-9-]/g, "");
+          const nombreArchivo = `SolicitudHoras_${nombreOd}_${reporte2NombreQuincena(quincena)}${sufijoSemana}.xlsx`;
+          reporte2Descargar_disparar(buffer, nombreArchivo);
+        }
       }
     }
+  } catch (err) {
+    alert("No se pudo generar el Reporte 2: " + (err.message || "error desconocido al armar el Excel."));
   }
 }
 
@@ -2499,9 +2511,26 @@ function Planilla() {
 }
 
 function AppInner() {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => {
+    try {
+      const guardado = localStorage.getItem("sesion_usuario");
+      return guardado ? JSON.parse(guardado) : null;
+    } catch {
+      return null;
+    }
+  });
   const [tab, setTab] = useState(null);
   const { logo } = useContext(LogoContext);
+
+  const iniciarSesion = (u) => {
+    setUser(u);
+    try { localStorage.setItem("sesion_usuario", JSON.stringify(u)); } catch {}
+  };
+  const cerrarSesion = () => {
+    setUser(null);
+    setTab(null);
+    try { localStorage.removeItem("sesion_usuario"); } catch {}
+  };
 
   const visibleAreas = useMemo(() => {
     if (!user) return [];
@@ -2516,7 +2545,7 @@ function AppInner() {
     if (user && !tab) setTab(visibleAreas[0]?.id);
   }, [user]);
 
-  if (!user) return <Login onLogin={(u) => setUser(u)} />;
+  if (!user) return <Login onLogin={iniciarSesion} />;
 
   const current = AREAS.find((a) => a.id === tab);
 
@@ -2561,7 +2590,7 @@ function AppInner() {
               {CATEGORIAS_USUARIO.find((c) => c.id === user.categoria)?.label || user.categoria}
             </Badge>
           </div>
-          <button onClick={() => { setUser(null); setTab(null); }} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "none", color: "#fff", opacity: 0.85, cursor: "pointer", fontSize: 12.5 }}>
+          <button onClick={cerrarSesion} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "none", color: "#fff", opacity: 0.85, cursor: "pointer", fontSize: 12.5 }}>
             <LogOut size={13} /> Cerrar sesión
           </button>
         </div>

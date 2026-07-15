@@ -557,7 +557,7 @@ function HorasExtras({ area, color }) {
               ) : (
                 <select style={inputStyle} value={form.personalCodigo} onChange={(e) => setForm({ ...form, personalCodigo: e.target.value })}>
                   <option value="">Selecciona una persona…</option>
-                  {empleados.map((emp) => <option key={emp.codigo} value={emp.codigo}>{emp.nombre} ({emp.codigo})</option>)}
+                  {empleados.map((emp) => <option key={emp.codigo} value={emp.codigo}>{emp.nombre}</option>)}
                 </select>
               )}
               <div style={{ fontSize: 10.5, color: T.gray, marginTop: 4 }}>Esta lista se administra desde Planilla.</div>

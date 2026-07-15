@@ -2273,13 +2273,11 @@ function Planilla() {
 
       {tab === "reporte1" && (
         <Card title="Reporte 1">
-          <div style={{ color: T.inkSoft, fontSize: 13.5 }}>Pendiente de definir. Dime qué debe mostrar este reporte y lo construyo aquí.</div>
         </Card>
       )}
 
       {tab === "reporte2" && (
         <Card title="Reporte 2">
-          <div style={{ color: T.inkSoft, fontSize: 13.5 }}>Pendiente de definir. Dime qué debe mostrar este reporte y lo construyo aquí.</div>
         </Card>
       )}
     </div>

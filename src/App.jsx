@@ -471,6 +471,8 @@ function HorasExtras({ area, color }) {
   const [empleados, setEmpleados] = useState([]);
   const [form, setForm] = useState({ od: "", personalCodigos: [], horaInicio: "07:00", horaFin: "15:00", fechaEjecucion: "" });
   const [nuevoEmp, setNuevoEmp] = useState({ codigo: "", nombre: "" });
+  const [buscarPersonal, setBuscarPersonal] = useState("");
+  const empleadosFiltrados = empleados.filter((e) => e.nombre.toLowerCase().includes(buscarPersonal.trim().toLowerCase()));
   const used = rows.reduce((s, r) => s + (r.estado !== "Rechazada" ? Number(r.horas) : 0), 0);
   const saldo = disponible - used;
   const horasCalculadas = calcularHorasRango(form.horaInicio, form.horaFin);
@@ -575,17 +577,41 @@ function HorasExtras({ area, color }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <Field label="OD del proyecto"><input style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })} placeholder="OD-1004" /></Field>
             <Field label="Personal asistente">
+              {form.personalCodigos.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 6 }}>
+                  {form.personalCodigos.map((cod) => {
+                    const emp = empleados.find((e) => e.codigo === cod);
+                    return (
+                      <span key={cod} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: T.accentSoft, color: T.accent, borderRadius: 999, padding: "3px 8px 3px 10px", fontSize: 11.5, fontWeight: 600 }}>
+                        {emp?.nombre || cod}
+                        <X size={11} style={{ cursor: "pointer" }} onClick={() => toggleEmpleado(cod)} />
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
               {empleados.length === 0 ? (
                 <div style={{ fontSize: 11.5, color: T.gray }}>Aún no hay personal cargado en la base de datos.</div>
               ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 130, overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 8, padding: 8 }}>
-                  {empleados.map((emp) => (
-                    <label key={emp.codigo} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: T.ink, fontWeight: 500, cursor: "pointer" }}>
-                      <input type="checkbox" checked={form.personalCodigos.includes(emp.codigo)} onChange={() => toggleEmpleado(emp.codigo)} />
-                      {emp.nombre} <span style={{ color: T.gray, fontSize: 11 }}>({emp.codigo})</span>
-                    </label>
-                  ))}
-                </div>
+                <>
+                  <input
+                    style={{ ...inputStyle, fontSize: 12.5, marginBottom: 6 }}
+                    placeholder="Buscar por nombre..."
+                    value={buscarPersonal}
+                    onChange={(e) => setBuscarPersonal(e.target.value)}
+                  />
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 130, overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 8, padding: 8 }}>
+                    {empleadosFiltrados.length === 0 && (
+                      <div style={{ fontSize: 11.5, color: T.gray }}>Nadie coincide con "{buscarPersonal}".</div>
+                    )}
+                    {empleadosFiltrados.map((emp) => (
+                      <label key={emp.codigo} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: T.ink, fontWeight: 500, cursor: "pointer" }}>
+                        <input type="checkbox" checked={form.personalCodigos.includes(emp.codigo)} onChange={() => toggleEmpleado(emp.codigo)} />
+                        {emp.nombre} <span style={{ color: T.gray, fontSize: 11 }}>({emp.codigo})</span>
+                      </label>
+                    ))}
+                  </div>
+                </>
               )}
               <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                 <input style={{ ...inputStyle, width: 90, fontSize: 12 }} placeholder="Código" value={nuevoEmp.codigo} onChange={(e) => setNuevoEmp({ ...nuevoEmp, codigo: e.target.value })} />

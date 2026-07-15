@@ -999,8 +999,14 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
 
   const delEvento = async (id) => {
     if (!(await confirmar("¿Está seguro que desea eliminar esta visita agendada?"))) return;
+    const respaldo = eventos.find((e) => e.id === id);
     setEventos((prev) => prev.filter((e) => e.id !== id));
-    supabase.from("calendario_eventos").delete().eq("id", id).then();
+    setErrorMsg("");
+    const { error } = await supabase.from("calendario_eventos").delete().eq("id", id);
+    if (error) {
+      setErrorMsg("No se pudo eliminar la visita: " + (error.message || "error desconocido en la base de datos."));
+      if (respaldo) setEventos((prev) => [...prev, respaldo]);
+    }
   };
 
   const weekStart = startOfWeek(cursor);

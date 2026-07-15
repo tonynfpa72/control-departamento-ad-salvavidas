@@ -327,16 +327,18 @@ function exportExcel(rows, filename) {
 
 /* ---------------------------------------------------------
    REPORTE 2 (Planilla): "Formulario de Solicitud de Horas Extras"
-   Usa tu Excel real (public/plantilla-horas-extra.xlsx) como base y
-   solo cambia los valores de las celdas que corresponden — así se
-   conserva el formato exacto (combinadas, bordes, colores, fuentes).
-   Se agrupa por OD y por quincena (1-15 / 16-fin de mes). Como la
-   plantilla en sí es semanal (columnas L M M J V S D con fechas de
-   una semana puntual), si dentro de una quincena hay solicitudes en
-   más de una semana, se genera un archivo por cada semana — todos
-   quedan identificados con su OD y su quincena en el nombre.
+   Se construye 100% en código con exceljs (no depende de subir
+   ningún archivo a public/). Nombre y puesto se cargan solos desde
+   Planilla. Las celdas grises son totales que se calculan solos con
+   fórmulas reales de Excel (si editas un valor a mano, se recalculan).
+   Se agrupa por OD y por quincena (1-15 / 16-fin de mes); si dentro
+   de una quincena hay solicitudes en más de una semana, se arma un
+   bloque de tabla por cada semana dentro del mismo archivo.
    --------------------------------------------------------- */
-const REPORTE2_DIAS_COL = ["H", "I", "J", "K", "L", "M", "N"];
+const REPORTE2_DIAS_LETRA = ["L", "M", "M", "J", "V", "S", "D"];
+const REPORTE2_DIAS_COL = ["E", "F", "G", "H", "I", "J", "K"];
+const REPORTE2_GRIS = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE1E1E1" } };
+const REPORTE2_BORDE = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
 
 // Lunes (00:00) de la semana ISO a la que pertenece una fecha "YYYY-MM-DD".
 function reporte2LunesDeSemana(fechaISO) {
@@ -360,51 +362,93 @@ function reporte2NombreQuincena(clave) {
   return q === "Q1" ? `1-15${nombreMes}${anio}` : `16-fin${nombreMes}${anio}`;
 }
 
-// Llena UNA copia de la plantilla (una semana) para un OD y devuelve el
-// workbook de exceljs listo para exportar, con el formato original intacto.
-async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSemana, lunes, empleadosPorCodigo) {
-  const workbook = new Workbook();
-  await workbook.xlsx.load(plantillaBuffer);
-  const ws = workbook.worksheets[0];
+function reporte2CeldaTitulo(cell, texto) {
+  cell.value = texto;
+  cell.font = { bold: true };
+}
 
-  ws.getCell("E14").value = "";
-  ws.getCell("E15").value = new Date();
-  ws.getCell("E16").value = cliente || "";
-  ws.getCell("E17").value = od;
+// Arma, dentro de una hoja ya existente, un bloque de formulario para una
+// semana puntual de un OD, a partir de la fila indicada. Devuelve la fila
+// donde debería empezar el siguiente bloque.
+function reporte2ArmarBloque(ws, filaInicio, od, cliente, entradasSemana, lunes, empleadosPorCodigo) {
+  let fila = filaInicio;
 
-  REPORTE2_DIAS_COL.forEach((col, i) => {
-    const d = new Date(lunes);
-    d.setDate(d.getDate() + i);
-    ws.getCell(`${col}25`).value = d;
+  reporte2CeldaTitulo(ws.getCell(`A${fila}`), "FORMULARIO DE SOLICITUD DE HORAS EXTRAS");
+  fila += 2;
+  ws.getCell(`A${fila}`).font = { bold: true }; ws.getCell(`A${fila}`).value = "FECHA DE SOLICITUD:";
+  ws.getCell(`B${fila}`).value = new Date(); fila++;
+  ws.getCell(`A${fila}`).font = { bold: true }; ws.getCell(`A${fila}`).value = "PROYECTO:";
+  ws.getCell(`B${fila}`).value = cliente || ""; fila++;
+  ws.getCell(`A${fila}`).font = { bold: true }; ws.getCell(`A${fila}`).value = "O/D:";
+  ws.getCell(`B${fila}`).value = od; fila += 2;
+
+  const filaLetras = fila;
+  REPORTE2_DIAS_LETRA.forEach((letra, i) => {
+    const c = ws.getCell(`${REPORTE2_DIAS_COL[i]}${filaLetras}`);
+    c.value = letra; c.font = { bold: true }; c.alignment = { horizontal: "center" };
   });
+  fila++;
 
-  // Si hay más personas que filas en la plantilla (26-33, 8 filas), se
-  // duplica la última fila del bloque para que no falten solicitudes,
-  // conservando el mismo formato de esa fila.
-  const filasPlantilla = 8;
-  if (entradasSemana.length > filasPlantilla) {
-    const extra = entradasSemana.length - filasPlantilla;
-    ws.duplicateRow(33, extra, true);
-  }
+  const filaEncabezado = fila;
+  ["NOMBRE", "PUESTO", "HORA INICIO", "HORA FINAL"].forEach((titulo, i) => {
+    const c = ws.getCell(`${["A", "B", "C", "D"][i]}${filaEncabezado}`);
+    c.value = titulo; c.font = { bold: true }; c.border = REPORTE2_BORDE;
+  });
+  REPORTE2_DIAS_COL.forEach((col, i) => {
+    const d = new Date(lunes); d.setDate(d.getDate() + i);
+    const c = ws.getCell(`${col}${filaEncabezado}`);
+    c.value = d; c.numFmt = "dd/mm"; c.font = { bold: true }; c.alignment = { horizontal: "center" }; c.border = REPORTE2_BORDE;
+  });
+  const colTotal = "L";
+  const cTotal = ws.getCell(`${colTotal}${filaEncabezado}`);
+  cTotal.value = "TOTAL HRS"; cTotal.font = { bold: true }; cTotal.border = REPORTE2_BORDE;
+  fila++;
 
-  entradasSemana.forEach((s, idx) => {
-    const filaActual = 26 + idx;
+  const filaPrimeraEntrada = fila;
+  entradasSemana.forEach((s) => {
     const emp = empleadosPorCodigo[s.personal_codigos?.[0]];
-    ws.getCell(`C${filaActual}`).value = emp?.nombre || s.personal || "";
-    ws.getCell(`E${filaActual}`).value = emp?.puesto || "";
-    ws.getCell(`F${filaActual}`).value = s.hora_inicio || "";
-    ws.getCell(`G${filaActual}`).value = s.hora_fin || "";
+    ws.getCell(`A${fila}`).value = emp?.nombre || s.personal || "";
+    ws.getCell(`B${fila}`).value = emp?.puesto || "";
+    ws.getCell(`C${fila}`).value = s.hora_inicio || "";
+    ws.getCell(`D${fila}`).value = s.hora_fin || "";
+    ["A", "B", "C", "D", ...REPORTE2_DIAS_COL, colTotal].forEach((col) => { ws.getCell(`${col}${fila}`).border = REPORTE2_BORDE; });
     const fechaRef = s.fecha_ejecucion || s.fecha;
     if (fechaRef) {
       const diaSemana = (new Date(fechaRef + "T00:00:00").getDay() + 6) % 7;
-      ws.getCell(`${REPORTE2_DIAS_COL[diaSemana]}${filaActual}`).value = Number(s.horas) || 0;
+      ws.getCell(`${REPORTE2_DIAS_COL[diaSemana]}${fila}`).value = Number(s.horas) || 0;
     }
+    const cFilaTotal = ws.getCell(`${colTotal}${fila}`);
+    cFilaTotal.value = { formula: `SUM(${REPORTE2_DIAS_COL[0]}${fila}:${REPORTE2_DIAS_COL[6]}${fila})` };
+    cFilaTotal.fill = REPORTE2_GRIS;
+    fila++;
   });
+  const filaUltimaEntrada = fila - 1;
 
+  const filaTotales = fila;
+  REPORTE2_DIAS_COL.forEach((col) => {
+    const c = ws.getCell(`${col}${filaTotales}`);
+    c.value = { formula: `SUM(${col}${filaPrimeraEntrada}:${col}${filaUltimaEntrada})` };
+    c.fill = REPORTE2_GRIS; c.border = REPORTE2_BORDE; c.font = { bold: true };
+  });
+  const cGranTotal = ws.getCell(`${colTotal}${filaTotales}`);
+  cGranTotal.value = { formula: `SUM(${colTotal}${filaPrimeraEntrada}:${colTotal}${filaUltimaEntrada})` };
+  cGranTotal.fill = REPORTE2_GRIS; cGranTotal.border = REPORTE2_BORDE; cGranTotal.font = { bold: true };
+  fila += 2;
+
+  ws.getCell(`A${fila}`).font = { bold: true }; ws.getCell(`A${fila}`).value = "TOTAL DE PERSONAS:";
   const personasUnicas = new Set(entradasSemana.map((s) => s.personal_codigos?.[0] || s.personal));
-  ws.getCell(`E${35 + Math.max(0, entradasSemana.length - filasPlantilla)}`).value = personasUnicas.size;
+  const cPersonas = ws.getCell(`B${fila}`);
+  cPersonas.value = personasUnicas.size;
+  cPersonas.fill = REPORTE2_GRIS;
+  fila += 3;
 
-  return workbook;
+  ws.columns = [
+    { width: 22 }, { width: 16 }, { width: 12 }, { width: 12 },
+    { width: 9 }, { width: 9 }, { width: 9 }, { width: 9 }, { width: 9 }, { width: 9 }, { width: 9 },
+    { width: 11 },
+  ];
+
+  return fila;
 }
 
 function reporte2Descargar_disparar(buffer, nombreArchivo) {
@@ -420,12 +464,12 @@ function reporte2Descargar_disparar(buffer, nombreArchivo) {
 }
 
 // Junta las solicitudes de horas extra de Inspecciones y Proyectos,
-// agrupadas por OD + quincena (y por semana dentro de la quincena, ya
-// que la plantilla es semanal), y descarga un archivo por cada grupo.
-async function reporte2Descargar() {
-  const { data: horas } = await supabase.from("horas_extras").select("*").in("area", ["inspecciones", "proyectos"]);
+// agrupadas por OD + quincena, y descarga un archivo por cada grupo
+// (con un bloque de tabla por cada semana dentro de esa quincena).
+async function reporte2Descargar(area) {
+  const { data: horas } = await supabase.from("horas_extras").select("*").eq("area", area).in("estado", ["Pendiente", "Aprobada"]);
   const { data: emps } = await supabase.from("empleados").select("*");
-  const { data: ods } = await supabase.from("ordenes_trabajo").select("*").in("area", ["inspecciones", "proyectos"]);
+  const { data: ods } = await supabase.from("ordenes_trabajo").select("*").eq("area", area);
 
   const empleadosPorCodigo = {};
   (emps || []).forEach((e) => { empleadosPorCodigo[e.codigo] = e; });
@@ -445,18 +489,9 @@ async function reporte2Descargar() {
   });
 
   const odsConDatos = Object.keys(grupos);
+  const nombreArea = area === "inspecciones" ? "Inspecciones" : "Proyectos";
   if (odsConDatos.length === 0) {
-    alert("Todavía no hay solicitudes de horas extra registradas en Inspecciones o Proyectos.");
-    return;
-  }
-
-  let plantillaBuffer;
-  try {
-    const resp = await fetch("/plantilla-horas-extra.xlsx");
-    if (!resp.ok) throw new Error(`No se encontró la plantilla (HTTP ${resp.status}). Verifica que "plantilla-horas-extra.xlsx" esté en la carpeta public/ de tu proyecto.`);
-    plantillaBuffer = await resp.arrayBuffer();
-  } catch (err) {
-    alert("No se pudo generar el Reporte 2: " + (err.message || "error desconocido al cargar la plantilla."));
+    alert(`Todavía no hay solicitudes de horas extra (pendientes o aprobadas) registradas en ${nombreArea}.`);
     return;
   }
 
@@ -464,17 +499,16 @@ async function reporte2Descargar() {
     for (const od of odsConDatos) {
       for (const quincena of Object.keys(grupos[od])) {
         const semanas = Object.keys(grupos[od][quincena]).sort();
-        for (const lunesISO of semanas) {
-          const entradasSemana = grupos[od][quincena][lunesISO];
-          const workbook = await reporte2LlenarPlantilla(
-            plantillaBuffer, od, clientePorOd[od], entradasSemana, new Date(lunesISO + "T00:00:00"), empleadosPorCodigo
-          );
-          const buffer = await workbook.xlsx.writeBuffer();
-          const sufijoSemana = semanas.length > 1 ? `_semana-${lunesISO}` : "";
-          const nombreOd = String(od).replace(/[^a-zA-Z0-9-]/g, "");
-          const nombreArchivo = `SolicitudHoras_${nombreOd}_${reporte2NombreQuincena(quincena)}${sufijoSemana}.xlsx`;
-          reporte2Descargar_disparar(buffer, nombreArchivo);
-        }
+        const workbook = new Workbook();
+        const ws = workbook.addWorksheet("Solicitud");
+        let fila = 1;
+        semanas.forEach((lunesISO) => {
+          fila = reporte2ArmarBloque(ws, fila, od, clientePorOd[od], grupos[od][quincena][lunesISO], new Date(lunesISO + "T00:00:00"), empleadosPorCodigo);
+        });
+        const buffer = await workbook.xlsx.writeBuffer();
+        const nombreOd = String(od).replace(/[^a-zA-Z0-9-]/g, "");
+        const nombreArchivo = `SolicitudHoras_${nombreArea}_${nombreOd}_${reporte2NombreQuincena(quincena)}.xlsx`;
+        reporte2Descargar_disparar(buffer, nombreArchivo);
       }
     }
   } catch (err) {
@@ -630,7 +664,8 @@ function HorasExtras({ area, color }) {
   const [rows, setRows] = useState([]);
   const [empleados, setEmpleados] = useState([]);
   const [form, setForm] = useState({ od: "", personalCodigo: "", horaInicio: "07:00", horaFin: "15:00", fechaEjecucion: "" });
-  const used = rows.reduce((s, r) => s + (r.estado !== "Rechazada" ? Number(r.horas) : 0), 0);
+  const [subTab, setSubTab] = useState("solicitud");
+  const used = rows.reduce((s, r) => s + ((r.estado === "Pendiente" || r.estado === "Aprobada") ? Number(r.horas) : 0), 0);
   const saldo = disponible - used;
   const horasCalculadas = calcularHorasRango(form.horaInicio, form.horaFin);
 
@@ -690,6 +725,18 @@ function HorasExtras({ area, color }) {
     setRows((prev) => prev.filter((r) => r.id !== id));
     supabase.from("horas_extras").delete().eq("id", id).then();
   };
+  const vaciarPestana = async (estadoObjetivo, etiqueta) => {
+    const idsAEliminar = rows.filter((r) => r.estado === estadoObjetivo).map((r) => r.id);
+    if (idsAEliminar.length === 0) return;
+    if (!(await confirmar(`¿Está seguro que desea eliminar las ${idsAEliminar.length} solicitudes de "${etiqueta}"? Esta acción no se puede deshacer.`))) return;
+    setRows((prev) => prev.filter((r) => r.estado !== estadoObjetivo));
+    idsAEliminar.forEach((id) => supabase.from("horas_extras").delete().eq("id", id).then());
+  };
+
+  const rowsSolicitud = rows.filter((r) => r.estado === "Pendiente" || r.estado === "Aprobada");
+  const rowsDenegadas = rows.filter((r) => r.estado === "Rechazada");
+  const rowsCerradas = rows.filter((r) => r.estado === "Cerrada");
+  const rowsMostradas = subTab === "solicitud" ? rowsSolicitud : subTab === "denegadas" ? rowsDenegadas : rowsCerradas;
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16 }}>
@@ -738,7 +785,18 @@ function HorasExtras({ area, color }) {
         </Card>
       </div>
 
-      <Card title="Solicitudes" action={<Btn small variant="ghost" onClick={() => exportExcel(rows.map(({ fecha, fecha_ejecucion, od, personal, hora_inicio, hora_fin, horas, estado }) => ({ Fecha: fecha, "Fecha Ejecución": fecha_ejecucion, OD: od, Personal: personal, "Hora Inicio": hora_inicio, "Hora Fin": hora_fin, Horas: horas, Estado: estado })), `horas_${area}.xlsx`)}><Download size={13} /> Excel</Btn>}>
+      <Card title="Solicitudes" action={<Btn small variant="ghost" onClick={() => exportExcel(rowsMostradas.map(({ fecha, fecha_ejecucion, od, personal, hora_inicio, hora_fin, horas, estado }) => ({ Fecha: fecha, "Fecha Ejecución": fecha_ejecucion, OD: od, Personal: personal, "Hora Inicio": hora_inicio, "Hora Fin": hora_fin, Horas: horas, Estado: estado })), `horas_${area}.xlsx`)}><Download size={13} /> Excel</Btn>}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <Btn small variant={subTab === "solicitud" ? "accent" : "ghost"} onClick={() => setSubTab("solicitud")}>Solicitud ({rowsSolicitud.length})</Btn>
+          <Btn small variant={subTab === "denegadas" ? "accent" : "ghost"} onClick={() => setSubTab("denegadas")}>Denegadas ({rowsDenegadas.length})</Btn>
+          <Btn small variant={subTab === "cerradas" ? "accent" : "ghost"} onClick={() => setSubTab("cerradas")}>Cerradas ({rowsCerradas.length})</Btn>
+          {isAdmin && subTab === "denegadas" && rowsDenegadas.length > 0 && (
+            <Btn small variant="danger" onClick={() => vaciarPestana("Rechazada", "Denegadas")}><X size={12} /> Eliminar Denegadas</Btn>
+          )}
+          {isAdmin && subTab === "cerradas" && rowsCerradas.length > 0 && (
+            <Btn small variant="danger" onClick={() => vaciarPestana("Cerrada", "Cerradas")}><X size={12} /> Eliminar Cerradas</Btn>
+          )}
+        </div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
@@ -746,7 +804,7 @@ function HorasExtras({ area, color }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {rowsMostradas.map((r) => (
               <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
                 <td style={{ padding: "9px 8px" }}>{r.fecha}</td>
                 <td>
@@ -777,12 +835,15 @@ function HorasExtras({ area, color }) {
                   ) : (r.hora_inicio && r.hora_fin ? `${r.hora_inicio} – ${r.hora_fin}` : "—")}
                 </td>
                 <td>{r.horas}h</td>
-                <td><Badge color={r.estado === "Aprobada" ? T.green : r.estado === "Rechazada" ? T.red : T.amber} soft={r.estado === "Aprobada" ? T.greenSoft : r.estado === "Rechazada" ? T.redSoft : T.amberSoft}>{r.estado}</Badge></td>
+                <td><Badge color={r.estado === "Aprobada" ? T.green : r.estado === "Rechazada" ? T.red : r.estado === "Cerrada" ? T.steel : T.amber} soft={r.estado === "Aprobada" ? T.greenSoft : r.estado === "Rechazada" ? T.redSoft : r.estado === "Cerrada" ? T.graySoft : T.amberSoft}>{r.estado}</Badge></td>
                 <td style={{ display: "flex", gap: 6, padding: "9px 8px" }}>
                   {isAdmin && r.estado === "Pendiente" && <>
                     <Btn small variant="success" onClick={() => setEstado(r.id, "Aprobada")}><Check size={12} /></Btn>
                     <Btn small variant="danger" onClick={() => setEstado(r.id, "Rechazada")}><X size={12} /></Btn>
                   </>}
+                  {isAdmin && r.estado === "Aprobada" && (
+                    <Btn small variant="ghost" onClick={() => setEstado(r.id, "Cerrada")}>Cerrar</Btn>
+                  )}
                   {isAdmin && <Btn small variant="danger" onClick={() => del(r.id)} style={{ opacity: 0.7 }}>Borrar</Btn>}
                 </td>
               </tr>
@@ -790,7 +851,7 @@ function HorasExtras({ area, color }) {
           </tbody>
         </table>
         <div style={{ marginTop: 10, fontSize: 12.5, color: T.inkSoft, textAlign: "right", fontWeight: 700 }}>
-          Total horas (todas las solicitudes): {rows.reduce((s, r) => s + Number(r.horas || 0), 0)}h
+          Total horas (esta pestaña): {rowsMostradas.reduce((s, r) => s + Number(r.horas || 0), 0)}h
         </div>
       </Card>
     </div>
@@ -1810,9 +1871,12 @@ function SaludOcupacional() {
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <Btn variant={tab === "cursos" ? "accent" : "ghost"} small onClick={() => setTab("cursos")}>Cursos EHS</Btn>
+        <Btn variant={tab === "horas" ? "accent" : "ghost"} small onClick={() => setTab("horas")}>Horas extras</Btn>
         <Btn variant={tab === "calendario" ? "accent" : "ghost"} small onClick={() => setTab("calendario")}>Agenda de visitas a Proyectos/Inspecciones</Btn>
       </div>
-      {tab === "cursos" ? <CursosEHS /> : <Calendario area="salud" color={T.red} tipoLabel={["Inspección", "Proyecto"]} />}
+      {tab === "cursos" && <CursosEHS />}
+      {tab === "horas" && <HorasExtras area="salud" color={T.red} />}
+      {tab === "calendario" && <Calendario area="salud" color={T.red} tipoLabel={["Inspección", "Proyecto"]} />}
     </div>
   );
 }
@@ -2498,12 +2562,16 @@ function Planilla() {
         <Card title="Reporte 2">
           <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
             <div style={{ color: T.inkSoft, fontSize: 13.5, lineHeight: 1.5 }}>
-              Genera el formulario de solicitud de horas extras, idéntico a tu plantilla real
-              (mismas celdas, combinadas y formato), con nombre y puesto cargados solos desde
-              Planilla. Se agrupa por OD y por quincena — descarga un archivo por cada
-              combinación que tenga solicitudes registradas en Inspecciones o Proyectos.
+              Genera el formulario de solicitud de horas extras (nombre y puesto cargados solos
+              desde Planilla, horas marcadas por día). Los totales en gris se calculan solos con
+              fórmulas de Excel. Se agrupa por OD y por quincena — descarga un archivo por cada
+              combinación. Solo toma las solicitudes que están en la pestaña "Solicitud" (pendientes
+              o aprobadas); las Denegadas y Cerradas no se incluyen.
             </div>
-            <Btn variant="accent" onClick={reporte2Descargar}><Download size={14} /> Descargar Reporte 2</Btn>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Btn variant="accent" onClick={() => reporte2Descargar("inspecciones")}><Download size={14} /> Descargar Inspecciones</Btn>
+              <Btn variant="accent" onClick={() => reporte2Descargar("proyectos")}><Download size={14} /> Descargar Proyectos</Btn>
+            </div>
           </div>
         </Card>
       )}

@@ -687,7 +687,7 @@ function OrdenesTrabajo({ area, color }) {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado } : r));
     supabase.from("ordenes_trabajo").update({ estado }).eq("id", id).then();
   };
-  const ESTADO_OD_COLOR = { "Activo": [T.green, T.greenSoft], "No Activo": [T.red, T.redSoft], "Entregado": [T.blue, T.blueSoft], "Vencido": [T.red, T.redSoft] };
+  const ESTADO_OD_COLOR = { "Activo": [T.green, T.greenSoft], "No Activo": [T.red, T.redSoft], "Entregado": [T.blue, T.blueSoft], "Vencido": [T.amber, T.amberSoft] };
   const campoFechaControl = isInspecciones ? "vencimiento" : "fechaEntrega";
   const setEstadoOD = (id, estado) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado } : r));
@@ -835,7 +835,7 @@ function OrdenesTrabajo({ area, color }) {
                     {isProyectos ? (
                       vencidoAuto ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
-                          <Badge color={T.red} soft={T.redSoft}><Dot color={T.red} /> Vencido</Badge>
+                          <Badge color={T.amber} soft={T.amberSoft}><Dot color={T.amber} /> Vencido</Badge>
                           {isAdmin && (
                             <select value={r.estado} onChange={(e) => setEstadoOD(r.id, e.target.value)} style={{ border: "none", background: "transparent", color: T.gray, fontSize: 11, padding: "0 2px" }}>
                               {["Activo", "No Activo", "Entregado"].map((s) => <option key={s}>{s}</option>)}
@@ -857,7 +857,7 @@ function OrdenesTrabajo({ area, color }) {
                       )
                     ) : vencidoAuto ? (
                       <span onClick={() => toggle(r.id)} style={{ cursor: isAdmin ? "pointer" : "default" }}>
-                        <Badge color={T.red} soft={T.redSoft}><Dot color={T.red} /> Vencido</Badge>
+                        <Badge color={T.amber} soft={T.amberSoft}><Dot color={T.amber} /> Vencido</Badge>
                       </span>
                     ) : (
                       <span onClick={() => toggle(r.id)} style={{ cursor: isAdmin ? "pointer" : "default" }}>

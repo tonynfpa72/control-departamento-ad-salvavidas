@@ -1524,6 +1524,7 @@ function CotizacionPrintView({ r, onClose }) {
 function Cotizaciones() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
+  const canEditEstadoCot = isAdmin || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
   const [rows, setRows] = useState([]);
   const [open, setOpen] = useState(false);
@@ -1649,7 +1650,7 @@ function Cotizaciones() {
                   ) : (r.tipo || "—")}
                 </td>
                 <td>
-                  {isAdmin ? (
+                  {canEditEstadoCot ? (
                     <select value={r.estado} onChange={(e) => setEstado(r.id, e.target.value)} style={{ border: "none", background: (estadoColor[r.estado] || [T.gray, T.graySoft])[1], color: (estadoColor[r.estado] || [T.gray, T.graySoft])[0], borderRadius: 999, fontSize: 12, fontWeight: 600, padding: "4px 10px" }}>
                       {Object.keys(estadoColor).map((s) => <option key={s}>{s}</option>)}
                     </select>
@@ -1658,7 +1659,7 @@ function Cotizaciones() {
                   )}
                 </td>
                 <td>
-                  {isAdmin ? (
+                  {canEditEstadoCot ? (
                     <select value={r.actividad} onChange={(e) => setActividad(r.id, e.target.value)} style={{ border: "none", background: (actividadColor[r.actividad] || [T.gray, T.graySoft])[1], color: (actividadColor[r.actividad] || [T.gray, T.graySoft])[0], borderRadius: 999, fontSize: 12, fontWeight: 600, padding: "4px 10px" }}>
                       {Object.keys(actividadColor).map((a) => <option key={a}>{a}</option>)}
                     </select>

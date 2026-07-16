@@ -904,6 +904,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   // solo puede modificarlas un usuario Administrativo.
   const canEditFechaControl = isAdmin;
   const canEditEstado = isAdmin || currentUser?.categoria === "asistente";
+  const canMoverTipo = isAdmin || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
   const isInspecciones = area === "inspecciones";
   const isProyectos = area === "proyectos";
@@ -1157,7 +1158,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                     ) : <span style={{ color: T.gray, fontSize: 12 }}>{r.accion || "—"}</span>}
                   </td>
                   <td style={{ display: "flex", gap: 6 }}>
-                    {isAdmin && (
+                    {canMoverTipo && (
                       <Btn small variant="ghost" onClick={() => moverTipoOD(r.id, r.od, esCorrectivo ? "Normal" : "Correctivo")} title={esCorrectivo ? "Mover a OD normal" : "Mover a OD Correctivos"}>
                         {esCorrectivo ? "← Normal" : "→ Correctivo"}
                       </Btn>

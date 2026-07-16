@@ -1037,7 +1037,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const estadoOpciones = isProyectos ? ["Todos", "Activo", "No Activo", "Entregado", "Vencido"] : ["Todos", "Activo", "No Activo", "Vencido"];
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "2fr 0.8fr", gap: 16 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "2.4fr 0.7fr", gap: 16 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <Card title={esCorrectivo ? "OD Correctivos" : "Clientes / OD"} action={
           <div style={{ display: "flex", gap: 8 }}>
@@ -1066,7 +1066,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
-                <th style={{ padding: "6px 8px" }}>OD</th><th>Cliente</th><th>Estado</th><th>{tecnicoLabel}</th>
+                <th style={{ padding: "6px 8px" }}>OD</th><th style={{ minWidth: 190 }}>Cliente</th><th>Estado</th><th>{tecnicoLabel}</th>
                 {isInspecciones && <th>Fecha de Vencimiento</th>}
                 {isInspecciones && <th>Frecuencia</th>}
                 {isProyectos && <th>Fecha de Inicio</th>}

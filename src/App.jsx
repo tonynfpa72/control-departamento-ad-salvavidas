@@ -2330,9 +2330,12 @@ function AperturaOD() {
   const isAdmin = currentUser?.categoria === "admin";
   const confirmar = useContext(ConfirmContext);
   const [rows, setRows] = useState([]);
-  const [form, setForm] = useState({ solicitante: "", od: "", cliente: "", fecha: todayISO() });
+  const [subTab, setSubTab] = useState("pendientes");
+  const [form, setForm] = useState({ solicitante: "", od: "", cliente: "", fecha: todayISO(), tipo: "Normal" });
   const ESTADOS = ["Pendiente", "Solicitado", "Cancelado"];
   const ESTADO_COLOR = { Pendiente: [T.amber, T.amberSoft], Solicitado: [T.green, T.greenSoft], Cancelado: [T.red, T.redSoft] };
+  const TIPO_APERTURA_OPCIONES = ["Normal", "QA", "OD Emergencia"];
+  const TIPO_APERTURA_COLOR = { Normal: [T.gray, T.graySoft], QA: [T.blue, T.blueSoft], "OD Emergencia": [T.red, T.redSoft] };
 
   useEffect(() => {
     (async () => {
@@ -2344,7 +2347,7 @@ function AperturaOD() {
   const add = async () => {
     if (!form.solicitante || !form.od) return;
     const payload = { ...form, estado: "Pendiente" };
-    setForm({ solicitante: "", od: "", cliente: "", fecha: todayISO() });
+    setForm({ solicitante: "", od: "", cliente: "", fecha: todayISO(), tipo: "Normal" });
     const { data, error } = await supabase.from("apertura_od").insert(payload).select().single();
     if (!error && data) setRows((prev) => [data, ...prev]);
   };
@@ -2352,28 +2355,49 @@ function AperturaOD() {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado } : r));
     supabase.from("apertura_od").update({ estado }).eq("id", id).then();
   };
+  const setTipo = (id, tipo) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, tipo } : r));
+    supabase.from("apertura_od").update({ tipo }).eq("id", id).then();
+  };
   const del = async (id) => {
     if (!(await confirmar("¿Está seguro que desea eliminar esta solicitud de apertura? Esta acción no se puede deshacer."))) return;
     setRows((prev) => prev.filter((r) => r.id !== id));
     supabase.from("apertura_od").delete().eq("id", id).then();
   };
 
+  const rowsPendientes = rows.filter((r) => r.estado === "Pendiente");
+  const rowsAbiertos = rows.filter((r) => r.estado === "Solicitado" || r.estado === "Cancelado");
+  const rowsMostradas = subTab === "pendientes" ? rowsPendientes : rowsAbiertos;
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
       <Card title="Solicitudes de apertura de OD">
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <Btn small variant={subTab === "pendientes" ? "accent" : "ghost"} onClick={() => setSubTab("pendientes")}>Pendientes ({rowsPendientes.length})</Btn>
+          <Btn small variant={subTab === "abiertos" ? "accent" : "ghost"} onClick={() => setSubTab("abiertos")}>Abiertos ({rowsAbiertos.length})</Btn>
+        </div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
-              <th style={{ padding: "6px 8px" }}>Solicitante</th><th>OD</th><th>Cliente</th><th>Fecha</th><th>Estado</th><th></th>
+              <th style={{ padding: "6px 8px" }}>Solicitante</th><th>OD</th><th>Cliente</th><th>Fecha</th><th>Tipo</th><th>Estado</th><th></th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {rowsMostradas.map((r) => (
               <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
                 <td style={{ padding: "9px 8px" }}>{r.solicitante}</td>
                 <td style={{ fontWeight: 700 }}>{r.od}</td>
                 <td>{r.cliente}</td>
                 <td>{r.fecha}</td>
+                <td>
+                  {isAdmin ? (
+                    <select value={r.tipo || "Normal"} onChange={(e) => setTipo(r.id, e.target.value)} style={{ border: "none", background: (TIPO_APERTURA_COLOR[r.tipo] || TIPO_APERTURA_COLOR.Normal)[1], color: (TIPO_APERTURA_COLOR[r.tipo] || TIPO_APERTURA_COLOR.Normal)[0], borderRadius: 999, fontSize: 12, fontWeight: 600, padding: "4px 10px" }}>
+                      {TIPO_APERTURA_OPCIONES.map((t) => <option key={t}>{t}</option>)}
+                    </select>
+                  ) : (
+                    <Badge color={(TIPO_APERTURA_COLOR[r.tipo] || TIPO_APERTURA_COLOR.Normal)[0]} soft={(TIPO_APERTURA_COLOR[r.tipo] || TIPO_APERTURA_COLOR.Normal)[1]}>{r.tipo || "Normal"}</Badge>
+                  )}
+                </td>
                 <td>
                   {isAdmin ? (
                     <select value={r.estado} onChange={(e) => setEstado(r.id, e.target.value)} style={{ border: "none", background: ESTADO_COLOR[r.estado][1], color: ESTADO_COLOR[r.estado][0], borderRadius: 999, fontSize: 12, fontWeight: 600, padding: "4px 10px" }}>
@@ -2395,6 +2419,11 @@ function AperturaOD() {
           <Field label="Número de OD"><input style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })} placeholder="OD-1005" /></Field>
           <Field label="Cliente"><input style={inputStyle} value={form.cliente} onChange={(e) => setForm({ ...form, cliente: e.target.value })} /></Field>
           <Field label="Fecha"><input style={inputStyle} type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} /></Field>
+          <Field label="Tipo de solicitud">
+            <select style={inputStyle} value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
+              {TIPO_APERTURA_OPCIONES.map((t) => <option key={t}>{t}</option>)}
+            </select>
+          </Field>
           <Btn variant="accent" onClick={add} style={{ justifyContent: "center" }}><Plus size={14} /> Solicitar apertura</Btn>
         </div>
       </Card>

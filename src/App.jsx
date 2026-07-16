@@ -39,6 +39,8 @@ const T = {
   redSoft: "#FBE4E4",
   gray: "#6B7280",
   graySoft: "#EDEFF2",
+  turquoise: "#4CA6A8", // turquesa suave, menos fuerte que el azul
+  turquoiseSoft: "#DCF0EF",
 };
 
 /* Contexto simple para compartir el logo subido entre Login, Sidebar y PDF */
@@ -1253,7 +1255,7 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
   const [ultimoRango, setUltimoRango] = useState(null);
   const [formRango, setFormRango] = useState({
     tipo: tipoLabel[0], od: "", personas: "", hora: "08:00",
-    fechaInicio: todayISO(), fechaFin: todayISO(), frecuencia: "Semanal",
+    fechaInicio: todayISO(), fechaFin: todayISO(),
   });
 
   useEffect(() => {
@@ -1295,8 +1297,6 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
     if (error) setErrorMsg("No se pudo guardar la visita: " + (error.message || "error desconocido en la base de datos."));
   };
 
-  const FRECUENCIA_DIAS = { Diaria: 1, Semanal: 7, Quincenal: 14, Mensual: null };
-
   const generarRango = async () => {
     if (!formRango.od || !formRango.fechaInicio || !formRango.fechaFin) return;
     const inicio = new Date(formRango.fechaInicio + "T00:00:00");
@@ -1306,15 +1306,11 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
     let cursorFecha = new Date(inicio);
     while (cursorFecha <= fin) {
       fechas.push(isoDate(cursorFecha));
-      if (formRango.frecuencia === "Mensual") {
-        cursorFecha.setMonth(cursorFecha.getMonth() + 1);
-      } else {
-        cursorFecha.setDate(cursorFecha.getDate() + FRECUENCIA_DIAS[formRango.frecuencia]);
-      }
+      cursorFecha.setDate(cursorFecha.getDate() + 1);
     }
     if (fechas.length === 0) return;
     if (!(await confirmar(
-      `Se generarán ${fechas.length} visitas entre ${formRango.fechaInicio} y ${formRango.fechaFin} (frecuencia: ${formRango.frecuencia}). ¿Continuar?`,
+      `Se generará una visita TODOS los días entre ${formRango.fechaInicio} y ${formRango.fechaFin} (${fechas.length} en total). ¿Continuar?`,
       { confirmLabel: "Sí, generar", variant: "accent" }
     ))) return;
     const payloads = fechas.map((fecha) => ({ area, tipo: formRango.tipo, od: formRango.od, personas: formRango.personas, fecha, hora: formRango.hora }));
@@ -1521,7 +1517,7 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div style={{ fontSize: 11.5, color: T.gray }}>Genera varias visitas repetidas entre dos fechas, según la frecuencia elegida.</div>
+              <div style={{ fontSize: 11.5, color: T.gray }}>Genera una visita para cada día entre las dos fechas elegidas.</div>
               <Field label="Tipo">
                 <select style={inputStyle} value={formRango.tipo} onChange={(e) => setFormRango({ ...formRango, tipo: e.target.value })}>
                   {tipoLabel.map((t) => <option key={t}>{t}</option>)}
@@ -1530,11 +1526,6 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
               <Field label="OD"><input style={inputStyle} value={formRango.od} onChange={(e) => setFormRango({ ...formRango, od: e.target.value })} placeholder="OD-1005" /></Field>
               <Field label="Personas asignadas"><input style={inputStyle} value={formRango.personas} onChange={(e) => setFormRango({ ...formRango, personas: e.target.value })} placeholder="Nombres" /></Field>
               <Field label="Hora"><input style={inputStyle} type="time" value={formRango.hora} onChange={(e) => setFormRango({ ...formRango, hora: e.target.value })} /></Field>
-              <Field label="Frecuencia">
-                <select style={inputStyle} value={formRango.frecuencia} onChange={(e) => setFormRango({ ...formRango, frecuencia: e.target.value })}>
-                  {["Diaria", "Semanal", "Quincenal", "Mensual"].map((f) => <option key={f}>{f}</option>)}
-                </select>
-              </Field>
               <Field label="Desde"><input style={inputStyle} type="date" value={formRango.fechaInicio} onChange={(e) => setFormRango({ ...formRango, fechaInicio: e.target.value })} /></Field>
               <Field label="Hasta"><input style={inputStyle} type="date" value={formRango.fechaFin} onChange={(e) => setFormRango({ ...formRango, fechaFin: e.target.value })} /></Field>
               <Btn variant="accent" onClick={generarRango} style={{ justifyContent: "center" }}><Plus size={14} /> Generar visitas</Btn>
@@ -2348,7 +2339,7 @@ function CalendarioGlobal() {
   }, []);
 
   const AREA_INFO = {
-    inspecciones: { label: "Inspecciones", color: T.steel, soft: T.steelSoft },
+    inspecciones: { label: "Inspecciones", color: T.turquoise, soft: T.turquoiseSoft },
     proyectos: { label: "Proyectos", color: T.green, soft: T.greenSoft },
     salud: { label: "Salud Ocupacional", color: T.red, soft: T.redSoft },
   };

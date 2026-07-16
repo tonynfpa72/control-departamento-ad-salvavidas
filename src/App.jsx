@@ -575,10 +575,11 @@ function odRowFromDb(r) {
     fechaInicio: r.fecha_inicio || "",
     fechaEntrega: r.fecha_entrega || "",
     accion: r.accion || "",
+    tipoOD: r.tipo_od || "Normal",
     area: r.area,
   };
 }
-const ODFIELD_TO_DB = { fechaInicio: "fecha_inicio", fechaEntrega: "fecha_entrega" };
+const ODFIELD_TO_DB = { fechaInicio: "fecha_inicio", fechaEntrega: "fecha_entrega", tipoOD: "tipo_od" };
 function odPatchToDb(patch) {
   const out = {};
   for (const k in patch) out[ODFIELD_TO_DB[k] || k] = patch[k] === "" ? null : patch[k];
@@ -895,7 +896,7 @@ function useClientesArea(area) {
   return [rows, setRows];
 }
 
-function OrdenesTrabajo({ area, color }) {
+function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
   const canEditFechas = isAdmin || currentUser?.categoria === "asistente";
@@ -906,8 +907,10 @@ function OrdenesTrabajo({ area, color }) {
   const confirmar = useContext(ConfirmContext);
   const isInspecciones = area === "inspecciones";
   const isProyectos = area === "proyectos";
+  const esCorrectivo = tipoOD === "Correctivo";
   const tecnicoLabel = isProyectos ? "Encargado" : "Técnico";
-  const [rows, setRows] = useClientesArea(area);
+  const [rowsTodas, setRows] = useClientesArea(area);
+  const rows = useMemo(() => rowsTodas.filter((r) => (r.tipoOD || "Normal") === tipoOD), [rowsTodas, tipoOD]);
   const [form, setForm] = useState({ od: "", cliente: "", tecnico: "" });
   const [filtroTexto, setFiltroTexto] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("Todos");
@@ -915,7 +918,7 @@ function OrdenesTrabajo({ area, color }) {
 
   const add = async () => {
     if (!form.od || !form.cliente) return;
-    const payload = { area, od: form.od, cliente: form.cliente, estado: "Activo", tecnico: form.tecnico, accion: "" };
+    const payload = { area, od: form.od, cliente: form.cliente, estado: "Activo", tecnico: form.tecnico, accion: "", tipo_od: tipoOD };
     setForm({ od: "", cliente: "", tecnico: "" });
     const { data, error } = await supabase.from("ordenes_trabajo").insert(payload).select().single();
     if (!error && data) setRows((prev) => [odRowFromDb(data), ...prev]);
@@ -966,7 +969,7 @@ function OrdenesTrabajo({ area, color }) {
     if (rows.length === 0) return;
     if (!(await confirmar(`¿Está seguro que desea eliminar TODAS las ${rows.length} OD de esta área? Esta acción no se puede deshacer.`))) return;
     const idsAEliminar = rows.map((r) => r.id);
-    setRows([]);
+    setRows((prev) => prev.filter((r) => !idsAEliminar.includes(r.id)));
     idsAEliminar.forEach((id) => supabase.from("ordenes_trabajo").delete().eq("id", id).then());
   };
 
@@ -993,6 +996,7 @@ function OrdenesTrabajo({ area, color }) {
             fecha_inicio: excelValueToISODate(row["Fecha de Inicio"] ?? "") || null,
             fecha_entrega: excelValueToISODate(row["Fecha de Entrega"] ?? "") || null,
             accion: row["Acción"] ?? row["Accion"] ?? row["accion"] ?? "",
+            tipo_od: tipoOD,
           }))
           .filter((r) => r.od || r.cliente);
         if (nuevas.length === 0) return;
@@ -1029,7 +1033,7 @@ function OrdenesTrabajo({ area, color }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <Card title="Clientes / OD" action={
+        <Card title={esCorrectivo ? "OD Correctivos" : "Clientes / OD"} action={
           <div style={{ display: "flex", gap: 8 }}>
             <input ref={fileInputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleImport} />
             <Btn small variant="ghost" onClick={() => fileInputRef.current?.click()}><Upload size={13} /> Importar Excel</Btn>
@@ -1038,7 +1042,7 @@ function OrdenesTrabajo({ area, color }) {
               ...(isInspecciones ? { "Fecha de Vencimiento": vencimiento, Frecuencia: frecuencia } : {}),
               ...(isProyectos ? { "Fecha de Inicio": fechaInicio, "Fecha de Entrega": fechaEntrega } : {}),
               Acción: accion,
-            })), `od_${area}.xlsx`)}><Download size={13} /> Excel</Btn>
+            })), `${esCorrectivo ? "od_correctivos" : "od"}_${area}.xlsx`)}><Download size={13} /> Excel</Btn>
             {isAdmin && <Btn small variant="danger" onClick={eliminarTodos}><X size={13} /> Eliminar todo</Btn>}
           </div>
         }>
@@ -1904,17 +1908,28 @@ function SaludOcupacional() {
    --------------------------------------------------------- */
 function ClientesPorPersona({ area, color }) {
   const [rows] = useClientesArea(area);
+  const [filtroTipo, setFiltroTipo] = useState("Todos");
   const isProyectos = area === "proyectos";
   const label = isProyectos ? "Encargado" : "Técnico";
+  const rowsFiltradas = rows.filter((r) => filtroTipo === "Todos" || (r.tipoOD || "Normal") === filtroTipo);
   const counts = {};
-  rows.forEach((r) => {
+  rowsFiltradas.forEach((r) => {
     const key = r.tecnico?.trim() || "Sin asignar";
     counts[key] = (counts[key] || 0) + 1;
   });
   const data = Object.entries(counts).map(([nombre, cantidad]) => ({ nombre, cantidad })).sort((a, b) => b.cantidad - a.cantidad);
 
   return (
-    <Card title={`Cantidad de clientes por ${label.toLowerCase()}`}>
+    <Card
+      title={`Cantidad de clientes por ${label.toLowerCase()}`}
+      action={
+        <div style={{ display: "flex", gap: 6 }}>
+          <Btn small variant={filtroTipo === "Todos" ? "accent" : "ghost"} onClick={() => setFiltroTipo("Todos")}>Todos</Btn>
+          <Btn small variant={filtroTipo === "Normal" ? "accent" : "ghost"} onClick={() => setFiltroTipo("Normal")}>OD Normal</Btn>
+          <Btn small variant={filtroTipo === "Correctivo" ? "accent" : "ghost"} onClick={() => setFiltroTipo("Correctivo")}>OD Correctivos</Btn>
+        </div>
+      }
+    >
       {data.length === 0 ? (
         <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay clientes cargados en esta área.</div>
       ) : (
@@ -1924,7 +1939,7 @@ function ClientesPorPersona({ area, color }) {
             <XAxis dataKey="nombre" tick={{ fontSize: 12 }} interval={0} angle={-15} textAnchor="end" height={60} />
             <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
             <Tooltip />
-            <Bar dataKey="cantidad" fill={color} radius={[4, 4, 0, 0]}>
+            <Bar dataKey="cantidad" fill={filtroTipo === "Correctivo" ? T.amber : color} radius={[4, 4, 0, 0]}>
               <LabelList dataKey="cantidad" position="top" style={{ fontSize: 12, fontWeight: 700, fill: T.ink }} />
             </Bar>
           </BarChart>
@@ -1940,6 +1955,7 @@ function AreaOperativa({ area, color }) {
   const tabs = [
     { id: "horas", label: "Horas extras", icon: Clock },
     { id: "od", label: "OD", icon: ClipboardList },
+    { id: "od_correctivos", label: "OD Correctivos", icon: AlertCircle },
     { id: "calendario", label: "Calendario", icon: CalendarDays },
     { id: "porpersona", label: `Por ${tecnicoLabel}`, icon: LayoutDashboard },
   ];
@@ -1953,7 +1969,8 @@ function AreaOperativa({ area, color }) {
         ))}
       </div>
       {tab === "horas" && <HorasExtras area={area} color={color} />}
-      {tab === "od" && <OrdenesTrabajo area={area} color={color} />}
+      {tab === "od" && <OrdenesTrabajo area={area} color={color} tipoOD="Normal" />}
+      {tab === "od_correctivos" && <OrdenesTrabajo area={area} color={T.amber} tipoOD="Correctivo" />}
       {tab === "calendario" && <Calendario area={area} color={color} />}
       {tab === "porpersona" && <ClientesPorPersona area={area} color={color} />}
     </div>
@@ -2015,6 +2032,20 @@ function ResumenEjecutivo() {
     { name: "Inspecciones — No Activos", value: insp.noActivos, fill: T.amber },
   ];
   const totalActivos = insp.activos + proj.activos;
+
+  // OD Correctivos: resumen general (ambas áreas), para saber cuántos
+  // entran y quién hace más.
+  const correctivosInsp = inspRows.filter((r) => (r.tipoOD || "Normal") === "Correctivo");
+  const correctivosProj = projRows.filter((r) => (r.tipoOD || "Normal") === "Correctivo");
+  const totalCorrectivos = correctivosInsp.length + correctivosProj.length;
+  const correctivosPorTecnico = {};
+  [...correctivosInsp, ...correctivosProj].forEach((r) => {
+    const key = r.tecnico?.trim() || "Sin asignar";
+    correctivosPorTecnico[key] = (correctivosPorTecnico[key] || 0) + 1;
+  });
+  const correctivosPorTecnicoData = Object.entries(correctivosPorTecnico)
+    .map(([nombre, cantidad]) => ({ nombre, cantidad }))
+    .sort((a, b) => b.cantidad - a.cantidad);
 
   const totalFacturado = facturas.reduce((s, f) => s + f.monto, 0);
   const avgFactura = totalFacturado / (facturas.length || 1);
@@ -2116,6 +2147,38 @@ function ResumenEjecutivo() {
           </ResponsiveContainer>
         </Card>
       </div>
+
+      <Card title="OD Correctivos — resumen general">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 16 }}>
+          <div style={{ background: T.amberSoft, borderRadius: 10, padding: 14 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: T.amber }}>{totalCorrectivos}</div>
+            <div style={{ fontSize: 12, color: T.inkSoft }}>Total Correctivos</div>
+          </div>
+          <div style={{ background: T.graySoft, borderRadius: 10, padding: 14 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: T.steel }}>{correctivosInsp.length}</div>
+            <div style={{ fontSize: 12, color: T.inkSoft }}>En Inspecciones</div>
+          </div>
+          <div style={{ background: T.graySoft, borderRadius: 10, padding: 14 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: T.green }}>{correctivosProj.length}</div>
+            <div style={{ fontSize: 12, color: T.inkSoft }}>En Proyectos</div>
+          </div>
+        </div>
+        {correctivosPorTecnicoData.length === 0 ? (
+          <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay OD Correctivos cargados.</div>
+        ) : (
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={correctivosPorTecnicoData} margin={{ top: 24, right: 20, left: 0, bottom: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
+              <XAxis dataKey="nombre" tick={{ fontSize: 12 }} interval={0} angle={-15} textAnchor="end" height={60} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
+              <Tooltip />
+              <Bar dataKey="cantidad" fill={T.amber} radius={[4, 4, 0, 0]}>
+                <LabelList dataKey="cantidad" position="top" style={{ fontSize: 12, fontWeight: 700, fill: T.ink }} />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </Card>
     </div>
   );
 }

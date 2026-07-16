@@ -1227,27 +1227,39 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
 }
 
 /* ---------------------------------------------------------
-   MODULO: CALENDARIO — agenda semanal, líneas horizontales
-   por hora (estilo Google Calendar).
+   MODULO: CALENDARIO — vista de mes en cuadrícula (estilo
+   Google Calendar mensual), con un color por OD.
    --------------------------------------------------------- */
-const HORA_INICIO = 7;   // 7:00
-const HORA_FIN = 18;     // 18:00
-const HOUR_PX = 52;
-
-function startOfWeek(d) {
-  const date = new Date(d);
-  const day = date.getDay(); // 0=domingo
-  date.setDate(date.getDate() - day);
-  date.setHours(0, 0, 0, 0);
-  return date;
-}
 const isoDate = (d) => d.toISOString().slice(0, 10);
+
+// Primer día (domingo) de la cuadrícula del mes que contiene "d".
+function startOfMonthGrid(d) {
+  const primero = new Date(d.getFullYear(), d.getMonth(), 1);
+  const dia = primero.getDay(); // 0 = domingo
+  primero.setDate(primero.getDate() - dia);
+  primero.setHours(0, 0, 0, 0);
+  return primero;
+}
+
+const DIAS_SEMANA_CORTO = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+const CALENDARIO_MAX_VISIBLE = 4;
+
+// Color consistente por OD, compartido entre el Calendario de cada área y
+// el Calendario General, para que un mismo OD siempre se vea del mismo color.
+const PALETA_OD = [T.accent, T.steel, T.green, T.blue, T.amber, T.red, T.turquoise];
+function odColor(str) {
+  let h = 0;
+  const s = str || "sin-od";
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % PALETA_OD.length;
+  return PALETA_OD[Math.abs(h)];
+}
 
 function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
   const confirmar = useContext(ConfirmContext);
   const [cursor, setCursor] = useState(new Date());
+  const [diaSeleccionado, setDiaSeleccionado] = useState(todayISO());
   const [eventos, setEventos] = useState([]);
   const [errorMsg, setErrorMsg] = useState("");
   const [form, setForm] = useState({ tipo: tipoLabel[0], od: "", personas: "", fecha: todayISO(), hora: "08:00" });
@@ -1277,15 +1289,13 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
     }
   };
 
-  const weekStart = startOfWeek(cursor);
-  const days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(weekStart);
+  const monthLabel = cursor.toLocaleDateString("es-CR", { month: "long", year: "numeric" });
+  const gridStart = startOfMonthGrid(cursor);
+  const gridDays = Array.from({ length: 42 }, (_, i) => {
+    const d = new Date(gridStart);
     d.setDate(d.getDate() + i);
     return d;
   });
-  const hours = Array.from({ length: HORA_FIN - HORA_INICIO + 1 }, (_, i) => HORA_INICIO + i);
-
-  const rangeLabel = `${days[0].toLocaleDateString("es-CR", { day: "numeric", month: "short" })} – ${days[6].toLocaleDateString("es-CR", { day: "numeric", month: "short", year: "numeric" })}`;
 
   const addEvento = async () => {
     if (!form.od || !form.fecha) return;
@@ -1326,140 +1336,76 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
 
   const eventosDelDia = (d) => eventos.filter((e) => e.fecha === isoDate(d));
 
-  // Para cada OD con visitas en más de una fecha (generadas en rango), calculamos
-  // su fecha mínima y máxima, para marcar visualmente todo ese rango en la agenda.
-  const RANGO_COLORES = [T.accent, T.steel, T.green, T.blue, T.amber];
-  const hashColor = (str) => {
-    let h = 0;
-    for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % RANGO_COLORES.length;
-    return RANGO_COLORES[Math.abs(h)];
-  };
-  const rangosPorOD = useMemo(() => {
-    const porOD = {};
-    eventos.forEach((e) => {
-      if (!e.od) return;
-      if (!porOD[e.od]) porOD[e.od] = { min: e.fecha, max: e.fecha };
-      else {
-        if (e.fecha < porOD[e.od].min) porOD[e.od].min = e.fecha;
-        if (e.fecha > porOD[e.od].max) porOD[e.od].max = e.fecha;
-      }
-    });
-    return Object.entries(porOD)
-      .filter(([, r]) => r.min !== r.max)
-      .map(([od, r]) => ({ od, ...r, color: hashColor(od) }));
-  }, [eventos]);
-  const rangosDelDia = (d) => {
-    const iso = isoDate(d);
-    const lista = rangosPorOD.filter((r) => iso >= r.min && iso <= r.max);
-    if (ultimoRango && iso >= ultimoRango.min && iso <= ultimoRango.max && !lista.some((r) => r.od === ultimoRango.od)) {
-      lista.push(ultimoRango);
-    }
-    return lista;
-  };
+  // Color consistente por OD (cada OD siempre se ve del mismo color en
+  // todo el calendario, como en Google Calendar por "calendario"/cliente).
+  const hashColor = odColor;
 
-  const topFor = (hora) => {
-    const [h, m] = (hora || "08:00").split(":").map(Number);
-    const clamped = Math.max(HORA_INICIO, Math.min(HORA_FIN, h + m / 60));
-    return (clamped - HORA_INICIO) * HOUR_PX;
-  };
-
-  // Ahora mismo, para la línea indicadora de hora actual (solo visible en la columna de hoy)
-  const now = new Date();
-  const nowDecimal = now.getHours() + now.getMinutes() / 60;
-  const showNowLine = nowDecimal >= HORA_INICIO && nowDecimal <= HORA_FIN;
-
-  // Resumen semanal ordenado cronológicamente, estilo lista de planificador
-  const eventosSemana = days.flatMap((d) => eventosDelDia(d).map((e) => ({ ...e, _dia: d })))
-    .sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora));
+  const eventosDelDiaSeleccionado = eventos
+    .filter((e) => e.fecha === diaSeleccionado)
+    .sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16 }}>
       <Card
-        title={rangeLabel}
+        title={monthLabel}
         action={
           <div style={{ display: "flex", gap: 6 }}>
-            <Btn small variant="ghost" onClick={() => setCursor(new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() - 7))}><ChevronLeft size={14} /></Btn>
-            <Btn small variant="ghost" onClick={() => setCursor(new Date())}>Hoy</Btn>
-            <Btn small variant="ghost" onClick={() => setCursor(new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 7))}><ChevronRight size={14} /></Btn>
+            <Btn small variant="ghost" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}><ChevronLeft size={14} /></Btn>
+            <Btn small variant="ghost" onClick={() => { setCursor(new Date()); setDiaSeleccionado(todayISO()); }}>Hoy</Btn>
+            <Btn small variant="ghost" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}><ChevronRight size={14} /></Btn>
             <Btn small variant="ghost" onClick={() => exportExcel(eventos.map(({ tipo, od, personas, fecha, hora }) => ({ Tipo: tipo, OD: od, "Personas asignadas": personas, Fecha: fecha, Hora: hora })), `agenda_${area}.xlsx`)}><Download size={13} /> Excel</Btn>
           </div>
         }
-        style={{ background: "#FFFDF9" }}
       >
-        {/* Cabecera de días */}
-        <div style={{ display: "grid", gridTemplateColumns: "56px repeat(7,1fr)", borderBottom: `2px solid ${T.ink}` }}>
-          <div />
-          {days.map((d) => {
-            const isToday = isoDate(d) === todayISO();
-            return (
-              <div key={d.toISOString()} style={{ textAlign: "center", padding: "4px 0 10px" }}>
-                <div style={{ fontSize: 10, color: T.gray, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.6 }}>
-                  {d.toLocaleDateString("es-CR", { weekday: "short" })}
-                </div>
-                <div style={{
-                  fontSize: 14, fontWeight: 800, color: isToday ? "#fff" : T.ink,
-                  background: isToday ? color : "transparent", width: 27, height: 27, lineHeight: "27px",
-                  borderRadius: "50%", margin: "3px auto 0", boxShadow: isToday ? `0 2px 6px ${color}55` : "none",
-                }}>{d.getDate()}</div>
-                <div style={{ display: "flex", justifyContent: "center", gap: 2, marginTop: 4, minHeight: 4 }}>
-                  {rangosDelDia(d).map((r) => (
-                    <div key={r.od} title={`OD ${r.od}: ${r.min} a ${r.max}`} style={{ width: 16, height: 4, borderRadius: 2, background: r.color }} />
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4, marginBottom: 6 }}>
+          {DIAS_SEMANA_CORTO.map((d) => (
+            <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, padding: "2px 0" }}>{d}</div>
+          ))}
         </div>
-
-        {/* Grilla estilo planificador: líneas punteadas tipo cuaderno + margen rojo */}
-        <div style={{ display: "grid", gridTemplateColumns: "56px repeat(7,1fr)", position: "relative" }}>
-          {/* columna de horas con "margen" tipo agenda física */}
-          <div style={{ borderRight: `2px solid ${T.accentSoft}`, position: "relative" }}>
-            {hours.map((h) => (
-              <div key={h} style={{ height: HOUR_PX, fontSize: 10.5, color: T.gray, fontWeight: 600, textAlign: "right", paddingRight: 10, transform: "translateY(-6px)" }}>
-                {String(h).padStart(2, "0")}:00
-              </div>
-            ))}
-          </div>
-
-          {/* columnas de días con líneas punteadas horizontales */}
-          {days.map((d, di) => {
-            const isToday = isoDate(d) === todayISO();
-            const rangosHoy = rangosDelDia(d);
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
+          {gridDays.map((d) => {
+            const iso = isoDate(d);
+            const esMesActual = d.getMonth() === cursor.getMonth();
+            const esHoy = iso === todayISO();
+            const esSeleccionado = iso === diaSeleccionado;
+            const eventosDia = eventosDelDia(d);
             return (
-              <div key={d.toISOString()} style={{
-                position: "relative",
-                borderLeft: `1px solid ${T.line}`,
-                background: rangosHoy.length > 0 ? `${rangosHoy[0].color}12` : isToday ? `${color}0F` : "#FBFBF8",
-              }}>
-                {hours.map((h) => (
-                  <div key={h} style={{ height: HOUR_PX, borderBottom: `1px dashed rgba(16,24,38,0.16)` }} />
-                ))}
-                {isToday && showNowLine && (
-                  <div style={{
-                    position: "absolute", left: 0, right: 0, top: (nowDecimal - HORA_INICIO) * HOUR_PX,
-                    borderTop: `2px solid ${T.accent}`, zIndex: 2,
-                  }}>
-                    <div style={{ width: 7, height: 7, borderRadius: "50%", background: T.accent, position: "absolute", left: -4, top: -4 }} />
-                  </div>
-                )}
-                {eventosDelDia(d).map((e) => (
-                  <div
-                    key={e.id}
-                    title={`${e.tipo} · ${e.od} · ${e.personas} · ${e.hora}`}
-                    style={{
-                      position: "absolute", left: 3, right: 3, top: topFor(e.hora), height: 44,
-                      background: e.tipo === tipoLabel[1] ? T.greenSoft : T.accentSoft,
-                      borderLeft: `3px solid ${e.tipo === tipoLabel[1] ? T.green : T.accent}`,
-                      color: e.tipo === tipoLabel[1] ? T.green : T.accent,
-                      borderRadius: 6, padding: "3px 6px", fontSize: 10.5, fontWeight: 700,
-                      overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,.08)", zIndex: 1,
-                    }}
-                  >
-                    <div>{e.hora} · {e.od}</div>
-                    <div style={{ fontWeight: 500, opacity: 0.85, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.personas}</div>
-                  </div>
-                ))}
+              <div
+                key={iso}
+                onClick={() => setDiaSeleccionado(iso)}
+                style={{
+                  minHeight: 104, border: `1px solid ${esSeleccionado ? color : T.line}`,
+                  borderWidth: esSeleccionado ? 2 : 1,
+                  borderRadius: 8, padding: 5, cursor: "pointer",
+                  background: esMesActual ? T.panel : T.bg,
+                  display: "flex", flexDirection: "column", gap: 3,
+                }}
+              >
+                <div style={{
+                  fontSize: 11.5, fontWeight: esHoy ? 800 : 600, color: esMesActual ? (esHoy ? "#fff" : T.ink) : T.gray,
+                  background: esHoy ? color : "transparent", width: 20, height: 20, lineHeight: "20px",
+                  textAlign: "center", borderRadius: "50%",
+                }}>{d.getDate()}</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2, overflow: "hidden" }}>
+                  {eventosDia.slice(0, CALENDARIO_MAX_VISIBLE).map((e) => (
+                    <div
+                      key={e.id}
+                      title={`${e.tipo} · ${e.od} · ${e.personas} · ${e.hora}`}
+                      style={{
+                        background: hashColor(e.od), color: "#fff", fontSize: 10, fontWeight: 600,
+                        borderRadius: 5, padding: "2px 5px", overflow: "hidden",
+                        textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      }}
+                    >
+                      {e.od}{e.personas ? ` // ${e.personas}` : ""}
+                    </div>
+                  ))}
+                  {eventosDia.length > CALENDARIO_MAX_VISIBLE && (
+                    <div style={{ fontSize: 9.5, color: T.gray, fontWeight: 700, paddingLeft: 3 }}>
+                      +{eventosDia.length - CALENDARIO_MAX_VISIBLE} más
+                    </div>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -1467,18 +1413,16 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
       </Card>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <Card title="Resumen de la semana">
-          {eventosSemana.length === 0 ? (
-            <div style={{ fontSize: 12.5, color: T.gray }}>Sin visitas agendadas esta semana.</div>
+        <Card title={`Visitas — ${new Date(diaSeleccionado + "T00:00:00").toLocaleDateString("es-CR", { weekday: "long", day: "numeric", month: "short" })}`}>
+          {eventosDelDiaSeleccionado.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: T.gray }}>Sin visitas agendadas este día.</div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 260, overflowY: "auto" }}>
-              {eventosSemana.map((e) => (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 320, overflowY: "auto" }}>
+              {eventosDelDiaSeleccionado.map((e) => (
                 <div key={e.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", borderBottom: `1px dashed ${T.line}`, paddingBottom: 8 }}>
-                  <div style={{ marginTop: 4, width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: e.tipo === tipoLabel[1] ? T.green : T.accent }} />
+                  <div style={{ marginTop: 4, width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: hashColor(e.od) }} />
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: T.ink }}>
-                      {e._dia.toLocaleDateString("es-CR", { weekday: "short", day: "numeric" })} · {e.hora}
-                    </div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: T.ink }}>{e.hora} · {e.tipo}</div>
                     <div style={{ fontSize: 12, color: T.inkSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {e.od} — {e.personas}
                     </div>
@@ -2331,6 +2275,8 @@ function Administrativo() {
 function CalendarioGlobal() {
   const [eventos, setEventos] = useState([]);
   const [filtroArea, setFiltroArea] = useState("Todos");
+  const [vista, setVista] = useState("agenda");
+  const [cursor, setCursor] = useState(new Date());
   useEffect(() => {
     (async () => {
       const { data } = await supabase.from("calendario_eventos").select("*").order("fecha", { ascending: true });
@@ -2344,51 +2290,224 @@ function CalendarioGlobal() {
     salud: { label: "Salud Ocupacional", color: T.red, soft: T.redSoft },
   };
   const FILTRO_OPCIONES = ["Todos", "Inspecciones", "Proyectos", "Salud Ocupacional"];
+  const VISTAS = [
+    { id: "mes", label: "Mes" },
+    { id: "semana", label: "Semana" },
+    { id: "dia", label: "Día" },
+    { id: "agenda", label: "Agenda" },
+  ];
+  const colorDe = (e) => AREA_INFO[e.area]?.color || T.gray;
 
   const eventosFiltrados = eventos.filter((e) => {
     if (filtroArea === "Todos") return true;
     return (AREA_INFO[e.area]?.label || e.area) === filtroArea;
   });
+  const eventosDelDia = (iso) => eventosFiltrados.filter((e) => e.fecha === iso).sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
 
+  // ---- datos para vista Agenda ----
   const grupos = {};
   eventosFiltrados.forEach((e) => {
     if (!e.fecha) return;
     (grupos[e.fecha] = grupos[e.fecha] || []).push(e);
   });
-  const fechas = Object.keys(grupos).sort();
+  const fechasAgenda = Object.keys(grupos).sort();
+
+  // ---- datos para vista Mes ----
+  const monthLabel = cursor.toLocaleDateString("es-CR", { month: "long", year: "numeric" });
+  const gridStart = startOfMonthGrid(cursor);
+  const gridDaysMes = Array.from({ length: 42 }, (_, i) => {
+    const d = new Date(gridStart);
+    d.setDate(d.getDate() + i);
+    return d;
+  });
+
+  // ---- datos para vista Semana ----
+  const inicioSemana = new Date(cursor);
+  inicioSemana.setDate(cursor.getDate() - cursor.getDay());
+  inicioSemana.setHours(0, 0, 0, 0);
+  const diasSemana = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(inicioSemana);
+    d.setDate(d.getDate() + i);
+    return d;
+  });
+  const rangoSemanaLabel = `${diasSemana[0].toLocaleDateString("es-CR", { day: "numeric", month: "short" })} – ${diasSemana[6].toLocaleDateString("es-CR", { day: "numeric", month: "short", year: "numeric" })}`;
+
+  // ---- datos para vista Día ----
+  const diaIso = isoDate(cursor);
+  const eventosDiaUnico = eventosDelDia(diaIso);
+
+  const navegar = (delta) => {
+    if (vista === "mes") setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + delta, 1));
+    else if (vista === "semana") setCursor(new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + delta * 7));
+    else if (vista === "dia") setCursor(new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + delta));
+  };
+
+  const renderPill = (e) => (
+    <div
+      key={e.id}
+      title={`${AREA_INFO[e.area]?.label || e.area} · ${e.tipo} · ${e.hora} · ${e.personas}`}
+      style={{
+        background: colorDe(e), color: "#fff", fontWeight: 600, fontSize: 10.5,
+        borderRadius: 5, padding: "2px 6px", overflow: "hidden",
+        textOverflow: "ellipsis", whiteSpace: "nowrap",
+      }}
+    >
+      {e.od}{e.personas ? ` // ${e.personas}` : ""}
+    </div>
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <Card>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Filtrar por área</span>
-          <select style={{ ...inputStyle, width: 200 }} value={filtroArea} onChange={(e) => setFiltroArea(e.target.value)}>
-            {FILTRO_OPCIONES.map((op) => <option key={op} value={op}>{op}</option>)}
-          </select>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Filtrar por área</span>
+            <select style={{ ...inputStyle, width: 200 }} value={filtroArea} onChange={(e) => setFiltroArea(e.target.value)}>
+              {FILTRO_OPCIONES.map((op) => <option key={op} value={op}>{op}</option>)}
+            </select>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {VISTAS.map((v) => (
+              <Btn key={v.id} small variant={vista === v.id ? "accent" : "ghost"} onClick={() => setVista(v.id)}>{v.label}</Btn>
+            ))}
+          </div>
         </div>
       </Card>
-      {fechas.length === 0 && (
-        <Card><div style={{ color: T.gray, fontSize: 13 }}>No hay eventos agendados todavía en esta selección.</div></Card>
-      )}
-      {fechas.map((fecha) => (
-        <Card key={fecha} title={new Date(fecha + "T00:00:00").toLocaleDateString("es-CR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {grupos[fecha]
-              .sort((a, b) => (a.hora || "").localeCompare(b.hora || ""))
-              .map((e) => {
-                const info = AREA_INFO[e.area] || { label: e.area, color: T.gray, soft: T.graySoft };
-                return (
-                  <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: T.graySoft, borderRadius: 8, flexWrap: "wrap" }}>
-                    <Badge color={info.color} soft={info.soft}>{info.label}</Badge>
-                    <div style={{ fontWeight: 800, fontSize: 13, minWidth: 50 }}>{e.hora}</div>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{e.tipo} — {e.od}</div>
-                    <div style={{ fontSize: 12.5, color: T.inkSoft }}>{e.personas}</div>
+
+      {vista === "mes" && (
+        <Card title={monthLabel} action={
+          <div style={{ display: "flex", gap: 6 }}>
+            <Btn small variant="ghost" onClick={() => navegar(-1)}><ChevronLeft size={14} /></Btn>
+            <Btn small variant="ghost" onClick={() => setCursor(new Date())}>Hoy</Btn>
+            <Btn small variant="ghost" onClick={() => navegar(1)}><ChevronRight size={14} /></Btn>
+          </div>
+        }>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4, marginBottom: 6 }}>
+            {DIAS_SEMANA_CORTO.map((d) => (
+              <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, padding: "2px 0" }}>{d}</div>
+            ))}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
+            {gridDaysMes.map((d) => {
+              const iso = isoDate(d);
+              const esMesActual = d.getMonth() === cursor.getMonth();
+              const esHoy = iso === todayISO();
+              const eventosDia = eventosDelDia(iso);
+              return (
+                <div key={iso} style={{
+                  minHeight: 100, border: `1px solid ${T.line}`, borderRadius: 8, padding: 5,
+                  background: esMesActual ? T.panel : T.bg, display: "flex", flexDirection: "column", gap: 3,
+                }}>
+                  <div style={{
+                    fontSize: 11.5, fontWeight: esHoy ? 800 : 600, color: esMesActual ? (esHoy ? "#fff" : T.ink) : T.gray,
+                    background: esHoy ? T.accent : "transparent", width: 20, height: 20, lineHeight: "20px",
+                    textAlign: "center", borderRadius: "50%",
+                  }}>{d.getDate()}</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2, overflow: "hidden" }}>
+                    {eventosDia.slice(0, CALENDARIO_MAX_VISIBLE).map(renderPill)}
+                    {eventosDia.length > CALENDARIO_MAX_VISIBLE && (
+                      <div style={{ fontSize: 9.5, color: T.gray, fontWeight: 700, paddingLeft: 3 }}>+{eventosDia.length - CALENDARIO_MAX_VISIBLE} más</div>
+                    )}
                   </div>
-                );
-              })}
+                </div>
+              );
+            })}
           </div>
         </Card>
-      ))}
+      )}
+
+      {vista === "semana" && (
+        <Card title={rangoSemanaLabel} action={
+          <div style={{ display: "flex", gap: 6 }}>
+            <Btn small variant="ghost" onClick={() => navegar(-1)}><ChevronLeft size={14} /></Btn>
+            <Btn small variant="ghost" onClick={() => setCursor(new Date())}>Hoy</Btn>
+            <Btn small variant="ghost" onClick={() => navegar(1)}><ChevronRight size={14} /></Btn>
+          </div>
+        }>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 6 }}>
+            {diasSemana.map((d) => {
+              const iso = isoDate(d);
+              const esHoy = iso === todayISO();
+              const eventosDia = eventosDelDia(iso);
+              return (
+                <div key={iso} style={{ minHeight: 220, border: `1px solid ${T.line}`, borderRadius: 8, padding: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ textAlign: "center", marginBottom: 2 }}>
+                    <div style={{ fontSize: 10, color: T.gray, fontWeight: 800, textTransform: "uppercase" }}>{d.toLocaleDateString("es-CR", { weekday: "short" })}</div>
+                    <div style={{
+                      fontSize: 13, fontWeight: 800, color: esHoy ? "#fff" : T.ink,
+                      background: esHoy ? T.accent : "transparent", width: 24, height: 24, lineHeight: "24px",
+                      borderRadius: "50%", margin: "2px auto 0",
+                    }}>{d.getDate()}</div>
+                  </div>
+                  {eventosDia.map(renderPill)}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {vista === "dia" && (
+        <Card title={cursor.toLocaleDateString("es-CR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })} action={
+          <div style={{ display: "flex", gap: 6 }}>
+            <Btn small variant="ghost" onClick={() => navegar(-1)}><ChevronLeft size={14} /></Btn>
+            <Btn small variant="ghost" onClick={() => setCursor(new Date())}>Hoy</Btn>
+            <Btn small variant="ghost" onClick={() => navegar(1)}><ChevronRight size={14} /></Btn>
+          </div>
+        }>
+          {eventosDiaUnico.length === 0 ? (
+            <div style={{ color: T.gray, fontSize: 13 }}>Sin visitas agendadas este día.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {eventosDiaUnico.map((e) => (
+                <div key={e.id} style={{ background: colorDe(e), color: "#fff", borderRadius: 10, padding: "12px 14px" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.9 }}>{AREA_INFO[e.area]?.label || e.area} · {e.hora}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>{e.od}{e.personas ? ` // ${e.personas}` : ""}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {vista === "agenda" && (
+        <>
+          {fechasAgenda.length === 0 && (
+            <Card><div style={{ color: T.gray, fontSize: 13 }}>No hay eventos agendados todavía en esta selección.</div></Card>
+          )}
+          <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 14, overflow: "hidden" }}>
+            {fechasAgenda.map((fecha, idx) => {
+              const fechaObj = new Date(fecha + "T00:00:00");
+              const eventosDia = grupos[fecha].sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
+              return (
+                <div key={fecha} style={{ display: "flex", borderTop: idx === 0 ? "none" : `1px solid ${T.line}` }}>
+                  <div style={{ width: 64, flexShrink: 0, padding: "16px 8px", textAlign: "center" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: T.inkSoft, textTransform: "lowercase" }}>
+                      {fechaObj.toLocaleDateString("es-CR", { weekday: "short" })}
+                    </div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: T.ink }}>{fechaObj.getDate()}</div>
+                  </div>
+                  <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6, padding: "14px 14px 14px 0" }}>
+                    {eventosDia.map((e) => (
+                      <div
+                        key={e.id}
+                        title={`${AREA_INFO[e.area]?.label || e.area} · ${e.tipo} · ${e.hora} · ${e.personas}`}
+                        style={{
+                          background: colorDe(e), color: "#fff", fontWeight: 700, fontSize: 13,
+                          borderRadius: 10, padding: "10px 14px", overflow: "hidden",
+                          textOverflow: "ellipsis", whiteSpace: "nowrap",
+                        }}
+                      >
+                        {e.od}{e.personas ? ` // ${e.personas}` : ""}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
     </div>
   );
 }

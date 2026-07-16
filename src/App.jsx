@@ -2331,7 +2331,7 @@ function AperturaOD() {
   const confirmar = useContext(ConfirmContext);
   const [rows, setRows] = useState([]);
   const [subTab, setSubTab] = useState("pendientes");
-  const [form, setForm] = useState({ solicitante: "", od: "", cliente: "", fecha: todayISO(), tipo: "Normal" });
+  const [form, setForm] = useState({ solicitante: "", od: "", cliente: "", fecha: todayISO(), tipo: "Normal", consecutivo: "" });
   const ESTADOS = ["Pendiente", "Solicitado", "Cancelado"];
   const ESTADO_COLOR = { Pendiente: [T.amber, T.amberSoft], Solicitado: [T.green, T.greenSoft], Cancelado: [T.red, T.redSoft] };
   const TIPO_APERTURA_OPCIONES = ["Normal", "QA", "OD Emergencia"];
@@ -2346,8 +2346,8 @@ function AperturaOD() {
 
   const add = async () => {
     if (!form.solicitante || !form.od) return;
-    const payload = { ...form, estado: "Pendiente" };
-    setForm({ solicitante: "", od: "", cliente: "", fecha: todayISO(), tipo: "Normal" });
+    const payload = { ...form, estado: "Pendiente", consecutivo: form.tipo === "Normal" ? null : form.consecutivo || null };
+    setForm({ solicitante: "", od: "", cliente: "", fecha: todayISO(), tipo: "Normal", consecutivo: "" });
     const { data, error } = await supabase.from("apertura_od").insert(payload).select().single();
     if (!error && data) setRows((prev) => [data, ...prev]);
   };
@@ -2358,6 +2358,10 @@ function AperturaOD() {
   const setTipo = (id, tipo) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, tipo } : r));
     supabase.from("apertura_od").update({ tipo }).eq("id", id).then();
+  };
+  const setConsecutivo = (id, consecutivo) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, consecutivo } : r));
+    supabase.from("apertura_od").update({ consecutivo: consecutivo || null }).eq("id", id).then();
   };
   const del = async (id) => {
     if (!(await confirmar("¿Está seguro que desea eliminar esta solicitud de apertura? Esta acción no se puede deshacer."))) return;
@@ -2379,7 +2383,7 @@ function AperturaOD() {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
-              <th style={{ padding: "6px 8px" }}>Solicitante</th><th>OD</th><th>Cliente</th><th>Fecha</th><th>Tipo</th><th>Estado</th><th></th>
+              <th style={{ padding: "6px 8px" }}>Solicitante</th><th>OD</th><th>Cliente</th><th>Fecha</th><th>Tipo</th><th>Consecutivo</th><th>Estado</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -2397,6 +2401,13 @@ function AperturaOD() {
                   ) : (
                     <Badge color={(TIPO_APERTURA_COLOR[r.tipo] || TIPO_APERTURA_COLOR.Normal)[0]} soft={(TIPO_APERTURA_COLOR[r.tipo] || TIPO_APERTURA_COLOR.Normal)[1]}>{r.tipo || "Normal"}</Badge>
                   )}
+                </td>
+                <td>
+                  {r.tipo && r.tipo !== "Normal" ? (
+                    isAdmin ? (
+                      <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 100 }} value={r.consecutivo || ""} onChange={(e) => setConsecutivo(r.id, e.target.value)} placeholder="Consecutivo" />
+                    ) : (r.consecutivo || "—")
+                  ) : "—"}
                 </td>
                 <td>
                   {isAdmin ? (
@@ -2424,6 +2435,11 @@ function AperturaOD() {
               {TIPO_APERTURA_OPCIONES.map((t) => <option key={t}>{t}</option>)}
             </select>
           </Field>
+          {form.tipo !== "Normal" && (
+            <Field label="Consecutivo">
+              <input style={inputStyle} value={form.consecutivo} onChange={(e) => setForm({ ...form, consecutivo: e.target.value })} placeholder="Ej. QA-045" />
+            </Field>
+          )}
           <Btn variant="accent" onClick={add} style={{ justifyContent: "center" }}><Plus size={14} /> Solicitar apertura</Btn>
         </div>
       </Card>

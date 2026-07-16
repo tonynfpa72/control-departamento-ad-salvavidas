@@ -1159,8 +1159,8 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                   </td>
                   <td style={{ display: "flex", gap: 6 }}>
                     {canMoverTipo && (
-                      <Btn small variant="ghost" onClick={() => moverTipoOD(r.id, r.od, esCorrectivo ? "Normal" : "Correctivo")} title={esCorrectivo ? "Mover a OD normal" : "Mover a OD Correctivos"}>
-                        {esCorrectivo ? "← Normal" : "→ Correctivo"}
+                      <Btn small variant="ghost" onClick={() => moverTipoOD(r.id, r.od, esCorrectivo ? "Normal" : "Correctivo")} title={esCorrectivo ? `Mover a OD ${isProyectos ? "Proyectos" : "IPM"}` : "Mover a OD Correctivos"}>
+                        {esCorrectivo ? `← ${isProyectos ? "Proyectos" : "IPM"}` : "→ Correctivo"}
                       </Btn>
                     )}
                     {isAdmin && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}

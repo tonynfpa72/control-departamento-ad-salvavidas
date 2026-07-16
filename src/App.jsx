@@ -220,6 +220,17 @@ function estadoEfectivoOD(r, campoFecha) {
    --------------------------------------------------------- */
 const FRECUENCIA_OPCIONES = ["Semanal", "Mensual", "Bimensual", "Trimestral", "Cuatrimestral", "Semestral", "Anual"];
 
+// Normaliza un valor de frecuencia importado desde Excel (espacios de más,
+// mayúsculas distintas, etc.) para que coincida exactamente con una de las
+// opciones válidas — si no, el desplegable de edición del admin se vería
+// vacío aunque el asistente sí viera el texto tal cual.
+function normalizarFrecuencia(valor) {
+  if (!valor) return "";
+  const limpio = String(valor).trim();
+  const encontrada = FRECUENCIA_OPCIONES.find((f) => f.toLowerCase() === limpio.toLowerCase());
+  return encontrada || limpio;
+}
+
 const seedClientes = (area) => ([
   { id: uid(), od: "OD-1001", cliente: "Grupo Andina S.A.", estado: "Activo", tecnico: "J. Solano", vencimiento: "", frecuencia: "Semestral", fechaInicio: "", fechaEntrega: "", accion: "", area },
   { id: uid(), od: "OD-1002", cliente: "Portuaria del Golfo", estado: "Activo", tecnico: "M. Rojas", vencimiento: "", frecuencia: "Anual", fechaInicio: "", fechaEntrega: "", accion: "", area },
@@ -1006,7 +1017,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
             estado: row["Activo/No Activo"] ?? row["Estado"] ?? "Activo",
             tecnico: row[`${tecnicoLabel} asignado`] ?? row["Técnico asignado"] ?? row["Encargado"] ?? row["Tecnico"] ?? row["tecnico"] ?? "",
             vencimiento: excelValueToISODate(row["Fecha de Vencimiento"] ?? row["Vencimiento"] ?? "") || null,
-            frecuencia: row["Frecuencia"] ?? "",
+            frecuencia: normalizarFrecuencia(row["Frecuencia"] ?? ""),
             fecha_inicio: excelValueToISODate(row["Fecha de Inicio"] ?? "") || null,
             fecha_entrega: excelValueToISODate(row["Fecha de Entrega"] ?? "") || null,
             accion: row["Acción"] ?? row["Accion"] ?? row["accion"] ?? "",

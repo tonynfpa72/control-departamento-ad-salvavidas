@@ -1918,11 +1918,7 @@ function ClientesPorPersona({ area, color }) {
    Administrativo (o aquí mismo, solo admin), y todos la pueden ver.
    --------------------------------------------------------- */
 function HorasExtrasQuincenales({ area, color }) {
-  const currentUser = useContext(CurrentUserContext);
-  const isAdmin = currentUser?.categoria === "admin";
-  const confirmar = useContext(ConfirmContext);
   const [filas, setFilas] = useState([]);
-  const [nueva, setNueva] = useState({ quincena: "", horas: "" });
 
   useEffect(() => {
     (async () => {
@@ -1931,58 +1927,24 @@ function HorasExtrasQuincenales({ area, color }) {
     })();
   }, [area]);
 
-  const agregar = async () => {
-    if (!nueva.quincena || !nueva.horas) return;
-    const payload = { area, quincena: nueva.quincena, horas: Number(nueva.horas) };
-    setNueva({ quincena: "", horas: "" });
-    const { data, error } = await supabase.from("horas_extras_manual").insert(payload).select().single();
-    if (!error && data) setFilas((prev) => [...prev, data]);
-  };
-  const editar = (id, horas) => {
-    const valor = Number(horas) || 0;
-    setFilas((prev) => prev.map((f) => f.id === id ? { ...f, horas: valor } : f));
-    supabase.from("horas_extras_manual").update({ horas: valor }).eq("id", id).then();
-  };
-  const eliminar = async (id) => {
-    if (!(await confirmar("¿Está seguro que desea eliminar esta quincena?"))) return;
-    setFilas((prev) => prev.filter((f) => f.id !== id));
-    supabase.from("horas_extras_manual").delete().eq("id", id).then();
-  };
+  const data = filas.map((f) => ({ quincena: f.quincena, horas: Number(f.horas) || 0 }));
 
   return (
     <Card title="Horas extras quincenales">
-      <div style={{ fontSize: 11.5, color: T.gray, marginBottom: 12 }}>
-        Este total lo carga el Administrativo a mano (igual que Facturación); aquí todos lo pueden ver.
-      </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
-        {filas.map((f) => (
-          <div key={f.id} style={{ display: "flex", flexDirection: "column", gap: 3, background: T.graySoft, borderRadius: 8, padding: "6px 10px" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-              <span style={{ fontSize: 10.5, color: T.inkSoft, fontWeight: 700 }}>{f.quincena}</span>
-              {isAdmin && (
-                <button onClick={() => eliminar(f.id)} title="Borrar" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}>×</button>
-              )}
-            </div>
-            {isAdmin ? (
-              <input
-                type="number"
-                value={f.horas}
-                onChange={(e) => editar(f.id, e.target.value)}
-                style={{ ...inputStyle, width: 100, padding: "4px 6px", fontSize: 12.5, border: `1px solid ${T.line}` }}
-              />
-            ) : (
-              <div style={{ fontSize: 18, fontWeight: 800, color: color || T.ink }}>{f.horas}h</div>
-            )}
-          </div>
-        ))}
-        {filas.length === 0 && <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay quincenas cargadas.</div>}
-      </div>
-      {isAdmin && (
-        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
-          <Field label="Quincena"><input style={inputStyle} value={nueva.quincena} onChange={(e) => setNueva({ ...nueva, quincena: e.target.value })} placeholder="1-15 Jul" /></Field>
-          <Field label="Horas"><input style={inputStyle} type="number" value={nueva.horas} onChange={(e) => setNueva({ ...nueva, horas: e.target.value })} placeholder="45" /></Field>
-          <Btn variant="accent" onClick={agregar}><Plus size={14} /> Agregar</Btn>
-        </div>
+      {data.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay quincenas cargadas (se editan desde Administrativo).</div>
+      ) : (
+        <ResponsiveContainer width="100%" height={280}>
+          <LineChart data={data} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
+            <XAxis dataKey="quincena" tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
+            <Tooltip formatter={(v) => `${v} h`} />
+            <Line type="monotone" dataKey="horas" stroke={color || T.steel} strokeWidth={3} dot={{ r: 4 }}>
+              <LabelList dataKey="horas" position="top" formatter={(v) => `${v}h`} style={{ fontSize: 11.5, fontWeight: 700, fill: T.ink }} />
+            </Line>
+          </LineChart>
+        </ResponsiveContainer>
       )}
     </Card>
   );
@@ -2025,8 +1987,6 @@ function ResumenEjecutivo() {
   const confirmar = useContext(ConfirmContext);
   const [facturas, setFacturas] = useState([]);
   const [nuevoMes, setNuevoMes] = useState({ mes: "", monto: "" });
-  const [horasExtras, setHorasExtras] = useState([]);
-  const [tabHoras, setTabHoras] = useState("inspecciones");
   const [horasManual, setHorasManual] = useState([]);
   const [nuevaQuincena, setNuevaQuincena] = useState({ area: "inspecciones", quincena: "", horas: "" });
   const { clientes } = useContext(ClientesContext);
@@ -2036,10 +1996,6 @@ function ResumenEjecutivo() {
     (async () => {
       const { data } = await supabase.from("facturacion").select("*").order("created_at", { ascending: true });
       if (data) setFacturas(data);
-    })();
-    (async () => {
-      const { data } = await supabase.from("horas_extras").select("*").in("area", ["inspecciones", "proyectos"]);
-      if (data) setHorasExtras(data);
     })();
     (async () => {
       const { data } = await supabase.from("horas_extras_manual").select("*").order("created_at", { ascending: true });
@@ -2128,9 +2084,6 @@ function ResumenEjecutivo() {
     Inspecciones: horasManual.filter((f) => f.quincena === q && f.area === "inspecciones").reduce((s, f) => s + Number(f.horas || 0), 0),
     Proyectos: horasManual.filter((f) => f.quincena === q && f.area === "proyectos").reduce((s, f) => s + Number(f.horas || 0), 0),
   }));
-  const horasExtrasMostradas = horasExtras
-    .filter((h) => h.area === tabHoras)
-    .sort((a, b) => (b.fecha_ejecucion || b.fecha || "").localeCompare(a.fecha_ejecucion || a.fecha || ""));
 
   const totalFacturado = facturas.reduce((s, f) => s + f.monto, 0);
   const avgFactura = totalFacturado / (facturas.length || 1);
@@ -2313,38 +2266,6 @@ function ResumenEjecutivo() {
           <Field label="Horas"><input style={inputStyle} type="number" value={nuevaQuincena.horas} onChange={(e) => setNuevaQuincena({ ...nuevaQuincena, horas: e.target.value })} placeholder="45" /></Field>
           <Btn variant="accent" onClick={agregarQuincena}><Plus size={14} /> Agregar</Btn>
         </div>
-
-        <div style={{ display: "flex", gap: 8, margin: "20px 0 10px" }}>
-          <Btn small variant={tabHoras === "inspecciones" ? "accent" : "ghost"} onClick={() => setTabHoras("inspecciones")}>Inspecciones</Btn>
-          <Btn small variant={tabHoras === "proyectos" ? "accent" : "ghost"} onClick={() => setTabHoras("proyectos")}>Proyectos</Btn>
-        </div>
-        {horasExtrasMostradas.length === 0 ? (
-          <div style={{ color: T.gray, fontSize: 13 }}>Sin solicitudes de horas extras en esta área.</div>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-            <thead>
-              <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
-                <th style={{ padding: "6px 8px" }}>Fecha</th><th>OD</th><th>Personal</th><th>Horas</th><th>Estado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {horasExtrasMostradas.map((h) => (
-                <tr key={h.id} style={{ borderTop: `1px solid ${T.line}` }}>
-                  <td style={{ padding: "8px" }}>{h.fecha_ejecucion || h.fecha}</td>
-                  <td style={{ fontWeight: 600 }}>{h.od}</td>
-                  <td>{h.personal}</td>
-                  <td>{h.horas}h</td>
-                  <td>
-                    <Badge
-                      color={h.estado === "Aprobada" ? T.green : h.estado === "Rechazada" ? T.red : h.estado === "Cerrada" ? T.steel : T.amber}
-                      soft={h.estado === "Aprobada" ? T.greenSoft : h.estado === "Rechazada" ? T.redSoft : h.estado === "Cerrada" ? T.graySoft : T.amberSoft}
-                    >{h.estado}</Badge>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
       </Card>
     </div>
   );

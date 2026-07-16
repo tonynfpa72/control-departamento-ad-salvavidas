@@ -335,7 +335,7 @@ function exportExcel(rows, filename) {
    tocar nada más (bordes, combinadas, colores, fórmulas, checkboxes).
    Se agrupa por OD y por quincena (1-15 / 16-fin de mes); si dentro
    de una quincena hay solicitudes en más de una semana, se descarga
-   un archivo por cada semana. Solo toma Pendiente/Aprobada.
+   un archivo por cada semana. Solo toma solicitudes Aprobadas.
    --------------------------------------------------------- */
 const REPORTE2_DIAS_COL = ["H", "I", "J", "K", "L", "M", "N"];
 const REPORTE2_HOJA = "xl/worksheets/sheet1.xml";
@@ -466,11 +466,11 @@ function reporte2Descargar_disparar(buffer, nombreArchivo) {
   URL.revokeObjectURL(url);
 }
 
-// Junta las solicitudes de horas extra (Pendiente/Aprobada) de UN área,
+// Junta las solicitudes de horas extra Aprobadas de UN área,
 // agrupadas por OD + quincena (y por semana dentro de la quincena, ya
 // que la plantilla es semanal), y descarga un archivo por cada grupo.
 async function reporte2Descargar(area) {
-  const { data: horas } = await supabase.from("horas_extras").select("*").eq("area", area).in("estado", ["Pendiente", "Aprobada"]);
+  const { data: horas } = await supabase.from("horas_extras").select("*").eq("area", area).eq("estado", "Aprobada");
   const { data: emps } = await supabase.from("empleados").select("*");
   const { data: ods } = await supabase.from("ordenes_trabajo").select("*").eq("area", area);
 
@@ -494,7 +494,7 @@ async function reporte2Descargar(area) {
   const odsConDatos = Object.keys(grupos);
   const nombreArea = area === "inspecciones" ? "Inspecciones" : "Proyectos";
   if (odsConDatos.length === 0) {
-    alert(`Todavía no hay solicitudes de horas extra (pendientes o aprobadas) registradas en ${nombreArea}.`);
+    alert(`Todavía no hay solicitudes de horas extra aprobadas registradas en ${nombreArea}.`);
     return;
   }
 
@@ -673,6 +673,7 @@ function Login({ onLogin }) {
 function HorasExtras({ area, color }) {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
+  const canCerrar = isAdmin || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
   const [disponible, setDisponibleState] = useState(150);
   const [rows, setRows] = useState([]);
@@ -855,7 +856,12 @@ function HorasExtras({ area, color }) {
                       {["Pendiente", "Aprobada", "Rechazada", "Cerrada"].map((s) => <option key={s}>{s}</option>)}
                     </select>
                   ) : (
-                    <Badge color={r.estado === "Aprobada" ? T.green : r.estado === "Rechazada" ? T.red : r.estado === "Cerrada" ? T.steel : T.amber} soft={r.estado === "Aprobada" ? T.greenSoft : r.estado === "Rechazada" ? T.redSoft : r.estado === "Cerrada" ? T.graySoft : T.amberSoft}>{r.estado}</Badge>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+                      <Badge color={r.estado === "Aprobada" ? T.green : r.estado === "Rechazada" ? T.red : r.estado === "Cerrada" ? T.steel : T.amber} soft={r.estado === "Aprobada" ? T.greenSoft : r.estado === "Rechazada" ? T.redSoft : r.estado === "Cerrada" ? T.graySoft : T.amberSoft}>{r.estado}</Badge>
+                      {canCerrar && r.estado === "Aprobada" && (
+                        <Btn small variant="ghost" onClick={() => setEstado(r.id, "Cerrada")}>Cerrar</Btn>
+                      )}
+                    </div>
                   )}
                 </td>
                 <td style={{ display: "flex", gap: 6, padding: "9px 8px" }}>

@@ -940,6 +940,11 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, accion } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ accion })).eq("id", id).then();
   };
+  const moverTipoOD = async (id, od, nuevoTipo) => {
+    if (!(await confirmar(`¿Mover la OD ${od} a "${nuevoTipo === "Correctivo" ? "OD Correctivos" : "OD " + (isProyectos ? "Proyectos" : "IPM")}"?`, { confirmLabel: "Sí, mover", variant: "accent" }))) return;
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, tipoOD: nuevoTipo } : r));
+    supabase.from("ordenes_trabajo").update({ tipo_od: nuevoTipo }).eq("id", id).then();
+  };
   const setTecnico = (id, tecnico) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, tecnico } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ tecnico })).eq("id", id).then();
@@ -1151,7 +1156,12 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                       <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }} placeholder="Acción tomada..." value={r.accion} onChange={(e) => setAccion(r.id, e.target.value)} />
                     ) : <span style={{ color: T.gray, fontSize: 12 }}>{r.accion || "—"}</span>}
                   </td>
-                  <td>
+                  <td style={{ display: "flex", gap: 6 }}>
+                    {isAdmin && (
+                      <Btn small variant="ghost" onClick={() => moverTipoOD(r.id, r.od, esCorrectivo ? "Normal" : "Correctivo")} title={esCorrectivo ? "Mover a OD normal" : "Mover a OD Correctivos"}>
+                        {esCorrectivo ? "← Normal" : "→ Correctivo"}
+                      </Btn>
+                    )}
                     {isAdmin && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}
                   </td>
                 </tr>
@@ -1954,7 +1964,7 @@ function AreaOperativa({ area, color }) {
   const tecnicoLabel = area === "proyectos" ? "Encargado" : "Técnico";
   const tabs = [
     { id: "horas", label: "Horas extras", icon: Clock },
-    { id: "od", label: "OD", icon: ClipboardList },
+    { id: "od", label: area === "inspecciones" ? "OD IPM" : "OD Proyectos", icon: ClipboardList },
     { id: "od_correctivos", label: "OD Correctivos", icon: AlertCircle },
     { id: "calendario", label: "Calendario", icon: CalendarDays },
     { id: "porpersona", label: `Por ${tecnicoLabel}`, icon: LayoutDashboard },

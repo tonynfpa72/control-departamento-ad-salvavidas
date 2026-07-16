@@ -4,7 +4,7 @@ import {
   PieChart, Pie, Cell, Legend, ReferenceLine, LineChart, Line, LabelList
 } from "recharts";
 import * as XLSX from "xlsx";
-import { Workbook } from "exceljs";
+import JSZip from "jszip";
 import {
   LogOut, Plus, Download, Check, X, Clock, ClipboardList,
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
@@ -327,17 +327,19 @@ function exportExcel(rows, filename) {
 
 /* ---------------------------------------------------------
    REPORTE 2 (Planilla): "Formulario de Solicitud de Horas Extras"
-   Usa tu Excel real (public/plantilla-horas-extra.xlsx) como base y
-   solo cambia los valores de las celdas que corresponden — así se
-   conserva el formato exacto (combinadas, bordes, colores, fuentes).
-   Se agrupa por OD y por quincena (1-15 / 16-fin de mes). Como la
-   plantilla en sí es semanal (columnas L M M J V S D con fechas de
-   una semana puntual), si dentro de una quincena hay solicitudes en
-   más de una semana, se arma un bloque adicional (duplicando filas)
-   para cada semana extra dentro del mismo archivo. Solo toma las
-   solicitudes en Pendiente/Aprobada (Denegadas y Cerradas no entran).
+   Usa tu Excel real (public/plantilla-horas-extra.xlsx) como base,
+   pero en vez de reconstruirlo con una librería (lo cual descarta
+   checkboxes/controles de formulario que no soportan), se edita
+   directamente el XML interno del archivo: se localizan las celdas
+   ya existentes en la plantilla y solo se les cambia el valor, sin
+   tocar nada más (bordes, combinadas, colores, fórmulas, checkboxes).
+   Se agrupa por OD y por quincena (1-15 / 16-fin de mes); si dentro
+   de una quincena hay solicitudes en más de una semana, se descarga
+   un archivo por cada semana. Solo toma Pendiente/Aprobada.
    --------------------------------------------------------- */
 const REPORTE2_DIAS_COL = ["H", "I", "J", "K", "L", "M", "N"];
+const REPORTE2_HOJA = "xl/worksheets/sheet1.xml";
+const REPORTE2_MAX_FILAS = 8; // filas 26-33 ya definidas en la plantilla
 
 // Lunes (00:00) de la semana ISO a la que pertenece una fecha "YYYY-MM-DD".
 function reporte2LunesDeSemana(fechaISO) {
@@ -361,51 +363,78 @@ function reporte2NombreQuincena(clave) {
   return q === "Q1" ? `1-15${nombreMes}${anio}` : `16-fin${nombreMes}${anio}`;
 }
 
-// Llena UNA copia de la plantilla (una semana) para un OD y devuelve el
-// workbook de exceljs listo para exportar, con el formato original intacto.
-async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSemana, lunes, empleadosPorCodigo) {
-  const workbook = new Workbook();
-  await workbook.xlsx.load(plantillaBuffer);
-  const ws = workbook.worksheets[0];
+function reporte2FechaASerial(fecha) {
+  const base = Date.UTC(1899, 11, 30);
+  return Math.round((Date.UTC(fecha.getFullYear(), fecha.getMonth(), fecha.getDate()) - base) / 86400000);
+}
 
-  ws.getCell("E14").value = "";
-  ws.getCell("E15").value = new Date();
-  ws.getCell("E16").value = cliente || "";
-  ws.getCell("E17").value = od;
+function reporte2EscaparXML(texto) {
+  return String(texto).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Reemplaza el valor de UNA celda ya existente en el XML de la hoja,
+// conservando sus demás atributos (estilo, etc.) intactos. Si la celda
+// no existe en la plantilla, no hace nada (no se crean celdas nuevas).
+function reporte2SetCeldaXML(xml, addr, { texto, numero }) {
+  const patronVacia = new RegExp(`<c r="${addr}"([^>]*)/>`);
+  const patronConValor = new RegExp(`<c r="${addr}"([^>]*)>.*?</c>`, "s");
+
+  let match = xml.match(patronVacia);
+  let esVacia = true;
+  if (!match) { match = xml.match(patronConValor); esVacia = false; }
+  if (!match) return xml;
+
+  let atributos = match[1].replace(/\st="[^"]*"/, "");
+  let tAttr = "";
+  let contenido;
+  if (texto !== undefined) {
+    tAttr = ` t="inlineStr"`;
+    contenido = `<is><t xml:space="preserve">${reporte2EscaparXML(texto)}</t></is>`;
+  } else {
+    contenido = `<v>${numero}</v>`;
+  }
+  const nuevaCelda = `<c r="${addr}"${atributos}${tAttr}>${contenido}</c>`;
+  return esVacia ? xml.replace(patronVacia, nuevaCelda) : xml.replace(patronConValor, nuevaCelda);
+}
+
+// Llena una copia (una semana) de la plantilla real para un OD,
+// editando solo el XML de la hoja, y devuelve el buffer final del .xlsx.
+async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSemana, lunes, empleadosPorCodigo) {
+  const zip = await JSZip.loadAsync(plantillaBuffer);
+  let xml = await zip.file(REPORTE2_HOJA).async("string");
+
+  xml = reporte2SetCeldaXML(xml, "E14", { texto: "" });
+  xml = reporte2SetCeldaXML(xml, "E15", { numero: reporte2FechaASerial(new Date()) });
+  xml = reporte2SetCeldaXML(xml, "E16", { texto: cliente || "" });
+  xml = reporte2SetCeldaXML(xml, "E17", { texto: od });
 
   REPORTE2_DIAS_COL.forEach((col, i) => {
     const d = new Date(lunes);
     d.setDate(d.getDate() + i);
-    ws.getCell(`${col}25`).value = d;
+    xml = reporte2SetCeldaXML(xml, `${col}25`, { numero: reporte2FechaASerial(d) });
   });
 
-  // Si hay más personas que filas en la plantilla (26-33, 8 filas), se
-  // duplica la última fila del bloque para que no falten solicitudes,
-  // conservando el mismo formato de esa fila.
-  const filasPlantilla = 8;
-  if (entradasSemana.length > filasPlantilla) {
-    const extra = entradasSemana.length - filasPlantilla;
-    ws.duplicateRow(33, extra, true);
-  }
-
-  entradasSemana.forEach((s, idx) => {
+  // La plantilla trae 8 filas de personal (26-33). Si hay más solicitudes
+  // que filas, se toman solo las primeras 8 (limitación conocida).
+  entradasSemana.slice(0, REPORTE2_MAX_FILAS).forEach((s, idx) => {
     const filaActual = 26 + idx;
     const emp = empleadosPorCodigo[s.personal_codigos?.[0]];
-    ws.getCell(`C${filaActual}`).value = emp?.nombre || s.personal || "";
-    ws.getCell(`E${filaActual}`).value = emp?.puesto || "";
-    ws.getCell(`F${filaActual}`).value = s.hora_inicio || "";
-    ws.getCell(`G${filaActual}`).value = s.hora_fin || "";
+    xml = reporte2SetCeldaXML(xml, `C${filaActual}`, { texto: emp?.nombre || s.personal || "" });
+    xml = reporte2SetCeldaXML(xml, `E${filaActual}`, { texto: emp?.puesto || "" });
+    xml = reporte2SetCeldaXML(xml, `F${filaActual}`, { texto: s.hora_inicio || "" });
+    xml = reporte2SetCeldaXML(xml, `G${filaActual}`, { texto: s.hora_fin || "" });
     const fechaRef = s.fecha_ejecucion || s.fecha;
     if (fechaRef) {
       const diaSemana = (new Date(fechaRef + "T00:00:00").getDay() + 6) % 7;
-      ws.getCell(`${REPORTE2_DIAS_COL[diaSemana]}${filaActual}`).value = Number(s.horas) || 0;
+      xml = reporte2SetCeldaXML(xml, `${REPORTE2_DIAS_COL[diaSemana]}${filaActual}`, { numero: Number(s.horas) || 0 });
     }
   });
 
   const personasUnicas = new Set(entradasSemana.map((s) => s.personal_codigos?.[0] || s.personal));
-  ws.getCell(`E${35 + Math.max(0, entradasSemana.length - filasPlantilla)}`).value = personasUnicas.size;
+  xml = reporte2SetCeldaXML(xml, "E35", { numero: personasUnicas.size });
 
-  return workbook;
+  zip.file(REPORTE2_HOJA, xml);
+  return zip.generateAsync({ type: "arraybuffer" });
 }
 
 function reporte2Descargar_disparar(buffer, nombreArchivo) {
@@ -468,10 +497,9 @@ async function reporte2Descargar(area) {
         const semanas = Object.keys(grupos[od][quincena]).sort();
         for (const lunesISO of semanas) {
           const entradasSemana = grupos[od][quincena][lunesISO];
-          const workbook = await reporte2LlenarPlantilla(
+          const buffer = await reporte2LlenarPlantilla(
             plantillaBuffer, od, clientePorOd[od], entradasSemana, new Date(lunesISO + "T00:00:00"), empleadosPorCodigo
           );
-          const buffer = await workbook.xlsx.writeBuffer();
           const sufijoSemana = semanas.length > 1 ? `_semana-${lunesISO}` : "";
           const nombreOd = String(od).replace(/[^a-zA-Z0-9-]/g, "");
           const nombreArchivo = `SolicitudHoras_${nombreArea}_${nombreOd}_${reporte2NombreQuincena(quincena)}${sufijoSemana}.xlsx`;

@@ -687,6 +687,7 @@ function HorasExtras({ area, color }) {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
   const canCerrar = isAdmin || currentUser?.categoria === "asistente";
+  const canBorrar = isAdmin || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
   const [disponible, setDisponibleState] = useState(150);
   const [rows, setRows] = useState([]);
@@ -842,7 +843,7 @@ function HorasExtras({ area, color }) {
                 </td>
                 <td>
                   {isAdmin ? (
-                    <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 90 }} value={r.od} onChange={(e) => setOd(r.id, e.target.value)} />
+                    <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }} value={r.od} onChange={(e) => setOd(r.id, e.target.value)} />
                   ) : (r.od)}
                 </td>
                 <td>
@@ -882,7 +883,7 @@ function HorasExtras({ area, color }) {
                     <Btn small variant="success" onClick={() => setEstado(r.id, "Aprobada")}><Check size={12} /></Btn>
                     <Btn small variant="danger" onClick={() => setEstado(r.id, "Rechazada")}><X size={12} /></Btn>
                   </>}
-                  {isAdmin && <Btn small variant="danger" onClick={() => del(r.id)} style={{ opacity: 0.7 }}>Borrar</Btn>}
+                  {canBorrar && <Btn small variant="danger" onClick={() => del(r.id)} style={{ opacity: 0.7 }}>Borrar</Btn>}
                 </td>
               </tr>
             ))}
@@ -1947,6 +1948,8 @@ function ResumenEjecutivo() {
   const confirmar = useContext(ConfirmContext);
   const [facturas, setFacturas] = useState([]);
   const [nuevoMes, setNuevoMes] = useState({ mes: "", monto: "" });
+  const [horasExtras, setHorasExtras] = useState([]);
+  const [tabHoras, setTabHoras] = useState("inspecciones");
   const { clientes } = useContext(ClientesContext);
   const PUNTO_EQUILIBRIO = 120000;
 
@@ -1954,6 +1957,10 @@ function ResumenEjecutivo() {
     (async () => {
       const { data } = await supabase.from("facturacion").select("*").order("created_at", { ascending: true });
       if (data) setFacturas(data);
+    })();
+    (async () => {
+      const { data } = await supabase.from("horas_extras").select("*").in("area", ["inspecciones", "proyectos"]);
+      if (data) setHorasExtras(data);
     })();
   }, []);
 
@@ -2009,6 +2016,25 @@ function ResumenEjecutivo() {
   const correctivosPorTecnicoData = Object.entries(correctivosPorTecnico)
     .map(([nombre, cantidad]) => ({ nombre, cantidad }))
     .sort((a, b) => b.cantidad - a.cantidad);
+
+  // Horas extras quincenales — Inspecciones vs Proyectos, para el gráfico
+  // de 2 curvas y las pestañas de detalle por área.
+  const horasPorQuincena = {};
+  horasExtras.forEach((h) => {
+    const fechaRef = h.fecha_ejecucion || h.fecha;
+    if (!fechaRef) return;
+    const clave = reporte2Quincena(fechaRef);
+    horasPorQuincena[clave] = horasPorQuincena[clave] || { inspecciones: 0, proyectos: 0 };
+    horasPorQuincena[clave][h.area] = (horasPorQuincena[clave][h.area] || 0) + (Number(h.horas) || 0);
+  });
+  const horasQuincenalesData = Object.keys(horasPorQuincena).sort().map((clave) => ({
+    quincena: reporte2NombreQuincena(clave),
+    Inspecciones: Math.round((horasPorQuincena[clave].inspecciones || 0) * 100) / 100,
+    Proyectos: Math.round((horasPorQuincena[clave].proyectos || 0) * 100) / 100,
+  }));
+  const horasExtrasMostradas = horasExtras
+    .filter((h) => h.area === tabHoras)
+    .sort((a, b) => (b.fecha_ejecucion || b.fecha || "").localeCompare(a.fecha_ejecucion || a.fecha || ""));
 
   const totalFacturado = facturas.reduce((s, f) => s + f.monto, 0);
   const avgFactura = totalFacturado / (facturas.length || 1);
@@ -2140,6 +2166,56 @@ function ResumenEjecutivo() {
               </Bar>
             </BarChart>
           </ResponsiveContainer>
+        )}
+      </Card>
+
+      <Card title="Horas extras quincenales — Inspecciones vs. Proyectos">
+        {horasQuincenalesData.length === 0 ? (
+          <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay horas extras registradas.</div>
+        ) : (
+          <ResponsiveContainer width="100%" height={260}>
+            <LineChart data={horasQuincenalesData} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
+              <XAxis dataKey="quincena" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
+              <Tooltip formatter={(v) => `${v} h`} />
+              <Legend />
+              <Line type="monotone" dataKey="Inspecciones" stroke={T.turquoise} strokeWidth={3} dot={{ r: 4 }} />
+              <Line type="monotone" dataKey="Proyectos" stroke={T.green} strokeWidth={3} dot={{ r: 4 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+
+        <div style={{ display: "flex", gap: 8, margin: "16px 0 10px" }}>
+          <Btn small variant={tabHoras === "inspecciones" ? "accent" : "ghost"} onClick={() => setTabHoras("inspecciones")}>Inspecciones</Btn>
+          <Btn small variant={tabHoras === "proyectos" ? "accent" : "ghost"} onClick={() => setTabHoras("proyectos")}>Proyectos</Btn>
+        </div>
+        {horasExtrasMostradas.length === 0 ? (
+          <div style={{ color: T.gray, fontSize: 13 }}>Sin solicitudes de horas extras en esta área.</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                <th style={{ padding: "6px 8px" }}>Fecha</th><th>OD</th><th>Personal</th><th>Horas</th><th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {horasExtrasMostradas.map((h) => (
+                <tr key={h.id} style={{ borderTop: `1px solid ${T.line}` }}>
+                  <td style={{ padding: "8px" }}>{h.fecha_ejecucion || h.fecha}</td>
+                  <td style={{ fontWeight: 600 }}>{h.od}</td>
+                  <td>{h.personal}</td>
+                  <td>{h.horas}h</td>
+                  <td>
+                    <Badge
+                      color={h.estado === "Aprobada" ? T.green : h.estado === "Rechazada" ? T.red : h.estado === "Cerrada" ? T.steel : T.amber}
+                      soft={h.estado === "Aprobada" ? T.greenSoft : h.estado === "Rechazada" ? T.redSoft : h.estado === "Cerrada" ? T.graySoft : T.amberSoft}
+                    >{h.estado}</Badge>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </Card>
     </div>

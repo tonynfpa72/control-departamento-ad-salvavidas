@@ -339,6 +339,7 @@ function exportExcel(rows, filename) {
    --------------------------------------------------------- */
 const REPORTE2_DIAS_COL = ["H", "I", "J", "K", "L", "M", "N"];
 const REPORTE2_HOJA = "xl/worksheets/sheet1.xml";
+const REPORTE2_WORKBOOK = "xl/workbook.xml";
 const REPORTE2_MAX_FILAS = 8; // filas 26-33 ya definidas en la plantilla
 
 // Lunes (00:00) de la semana ISO a la que pertenece una fecha "YYYY-MM-DD".
@@ -434,6 +435,22 @@ async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSem
   xml = reporte2SetCeldaXML(xml, "E35", { numero: personasUnicas.size });
 
   zip.file(REPORTE2_HOJA, xml);
+
+  // Fuerza a Excel a recalcular TODAS las fórmulas al abrir el archivo
+  // (por defecto, Excel confía en el valor guardado en caché de cada
+  // fórmula, y como aquí solo cambiamos los valores de entrada por fuera
+  // de Excel, esa caché queda desactualizada sin esta bandera).
+  const wbXmlFile = zip.file(REPORTE2_WORKBOOK);
+  if (wbXmlFile) {
+    let wbXml = await wbXmlFile.async("string");
+    if (/<calcPr[^/]*fullCalcOnLoad=/.test(wbXml)) {
+      wbXml = wbXml.replace(/fullCalcOnLoad="[^"]*"/, 'fullCalcOnLoad="1"');
+    } else if (/<calcPr[^/]*\/>/.test(wbXml)) {
+      wbXml = wbXml.replace(/<calcPr([^/]*)\/>/, '<calcPr$1 fullCalcOnLoad="1"/>');
+    }
+    zip.file(REPORTE2_WORKBOOK, wbXml);
+  }
+
   return zip.generateAsync({ type: "arraybuffer" });
 }
 

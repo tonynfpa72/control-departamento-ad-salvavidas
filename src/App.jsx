@@ -590,6 +590,8 @@ function odRowFromDb(r) {
     fechaEntrega: r.fecha_entrega || "",
     accion: r.accion || "",
     tipoOD: r.tipo_od || "Normal",
+    progreso: r.progreso || "Pendiente",
+    facturado: r.facturado || "Sin facturar",
     area: r.area,
   };
 }
@@ -938,14 +940,23 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const [form, setForm] = useState({ od: "", cliente: "", tecnico: "" });
   const [filtroTexto, setFiltroTexto] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("Todos");
+  const [subTabCorrectivo, setSubTabCorrectivo] = useState("Pendientes");
   const fileInputRef = React.useRef(null);
 
   const add = async () => {
     if (!form.od || !form.cliente) return;
-    const payload = { area, od: form.od, cliente: form.cliente, estado: "Activo", tecnico: form.tecnico, accion: "", tipo_od: tipoOD };
+    const payload = { area, od: form.od, cliente: form.cliente, estado: "Activo", tecnico: form.tecnico, accion: "", tipo_od: tipoOD, progreso: "Pendiente", facturado: "Sin facturar" };
     setForm({ od: "", cliente: "", tecnico: "" });
     const { data, error } = await supabase.from("ordenes_trabajo").insert(payload).select().single();
     if (!error && data) setRows((prev) => [odRowFromDb(data), ...prev]);
+  };
+  const setProgreso = (id, progreso) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, progreso } : r));
+    supabase.from("ordenes_trabajo").update({ progreso }).eq("id", id).then();
+  };
+  const setFacturado = (id, facturado) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, facturado } : r));
+    supabase.from("ordenes_trabajo").update({ facturado }).eq("id", id).then();
   };
   const toggle = (id) => {
     if (!canEditEstado) return;
@@ -1026,6 +1037,8 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
             fecha_entrega: excelValueToISODate(row["Fecha de Entrega"] ?? "") || null,
             accion: row["Acción"] ?? row["Accion"] ?? row["accion"] ?? "",
             tipo_od: tipoOD,
+            progreso: "Pendiente",
+            facturado: "Sin facturar",
           }))
           .filter((r) => r.od || r.cliente);
         if (nuevas.length === 0) return;
@@ -1055,9 +1068,12 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
       || (r.tecnico || "").toLowerCase().includes(texto);
     const efectivoFiltro = estadoEfectivoOD(r, campoFechaControl);
     const matchEstado = filtroEstado === "Todos" || r.estado === filtroEstado || efectivoFiltro === filtroEstado;
-    return matchTexto && matchEstado;
+    const matchProgreso = !esCorrectivo || (subTabCorrectivo === "Pendientes" ? (r.progreso || "Pendiente") !== "Completado" : (r.progreso || "Pendiente") === "Completado");
+    return matchTexto && matchEstado && matchProgreso;
   });
   const estadoOpciones = isProyectos ? ["Todos", "Activo", "No Activo", "Entregado", "Vencido"] : ["Todos", "Activo", "No Activo", "Vencido"];
+  const pendientesCorrectivoCount = rows.filter((r) => (r.progreso || "Pendiente") !== "Completado").length;
+  const completadosCorrectivoCount = rows.filter((r) => (r.progreso || "Pendiente") === "Completado").length;
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "2.4fr 0.7fr", gap: 16 }}>
@@ -1075,6 +1091,12 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
             {isAdmin && <Btn small variant="danger" onClick={eliminarTodos}><X size={13} /> Eliminar todo</Btn>}
           </div>
         }>
+          {esCorrectivo && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+              <Btn small variant={subTabCorrectivo === "Pendientes" ? "accent" : "ghost"} onClick={() => setSubTabCorrectivo("Pendientes")}>Pendientes ({pendientesCorrectivoCount})</Btn>
+              <Btn small variant={subTabCorrectivo === "Completados" ? "accent" : "ghost"} onClick={() => setSubTabCorrectivo("Completados")}>Completados ({completadosCorrectivoCount})</Btn>
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
             <input
               style={{ ...inputStyle, flex: 1 }}
@@ -1094,7 +1116,10 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                 {isInspecciones && <th>Frecuencia</th>}
                 {isProyectos && <th>Fecha de Inicio</th>}
                 {isProyectos && <th>Fecha de Entrega</th>}
-                <th>Acción</th><th></th>
+                <th>Acción</th>
+                {esCorrectivo && <th>Progreso</th>}
+                {esCorrectivo && <th>Facturado</th>}
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -1180,6 +1205,30 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                       <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }} placeholder="Acción tomada..." value={r.accion} onChange={(e) => setAccion(r.id, e.target.value)} />
                     ) : <span style={{ color: T.gray, fontSize: 12 }}>{r.accion || "—"}</span>}
                   </td>
+                  {esCorrectivo && (
+                    <td>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+                        <Badge color={(r.progreso || "Pendiente") === "Completado" ? T.green : T.amber} soft={(r.progreso || "Pendiente") === "Completado" ? T.greenSoft : T.amberSoft}>
+                          {r.progreso || "Pendiente"}
+                        </Badge>
+                        {(r.progreso || "Pendiente") !== "Completado" && (
+                          <Btn small variant="ghost" onClick={() => setProgreso(r.id, "Completado")}>Marcar completado</Btn>
+                        )}
+                      </div>
+                    </td>
+                  )}
+                  {esCorrectivo && (
+                    <td>
+                      {isAdmin ? (
+                        <select value={r.facturado || "Sin facturar"} onChange={(e) => setFacturado(r.id, e.target.value)} style={{ border: "none", background: (r.facturado === "Facturado") ? T.greenSoft : T.redSoft, color: (r.facturado === "Facturado") ? T.green : T.red, borderRadius: 999, fontSize: 12, fontWeight: 600, padding: "4px 10px" }}>
+                          <option>Sin facturar</option>
+                          <option>Facturado</option>
+                        </select>
+                      ) : (
+                        <Badge color={r.facturado === "Facturado" ? T.green : T.red} soft={r.facturado === "Facturado" ? T.greenSoft : T.redSoft}>{r.facturado || "Sin facturar"}</Badge>
+                      )}
+                    </td>
+                  )}
                   <td style={{ display: "flex", gap: 6 }}>
                     {canMoverTipo && (
                       <Btn small variant="ghost" onClick={() => moverTipoOD(r.id, r.od, esCorrectivo ? "Normal" : "Correctivo")} title={esCorrectivo ? `Mover a OD ${isProyectos ? "Proyectos" : "IPM"}` : "Mover a OD Correctivos"}>

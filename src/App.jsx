@@ -1356,7 +1356,7 @@ async function fetchGoogleCalendarEventos(area, timeMinISO, timeMaxISO) {
     return (data.items || []).flatMap((e) => {
       const base = {
         area, tipo: "Google Calendar", od: e.summary || "(Sin título)", personas: e.location || "",
-        _google: true, _color: GOOGLE_EVENT_COLORS[e.colorId] || "#4285F4",
+        _google: true, _color: GOOGLE_EVENT_COLORS[e.colorId] || "#4285F4", _colorIdCruda: e.colorId || "ninguno",
       };
       if (e.start?.date && e.end?.date) {
         // Evento de "todo el día" — puede durar varios días seguidos.
@@ -1525,7 +1525,7 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
   const renderPill = (e) => (
     <div
       key={e.id}
-      title={`${e._google ? "Desde Google Calendar · " : ""}${e.tipo} · ${e.od} · ${e.personas} · ${e.hora}`}
+      title={`${e._google ? `Desde Google Calendar (colorId: ${e._colorIdCruda}) · ` : ""}${e.tipo} · ${e.od} · ${e.personas} · ${e.hora}`}
       style={{
         background: e._google ? (e._color || "#4285F4") : hashColor(e.od), color: "#fff", fontSize: 10.5, fontWeight: 600,
         borderRadius: 5, padding: "2px 6px", overflow: "hidden",
@@ -1700,7 +1700,7 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
                       {eventosDia.map((e) => (
                         <div
                           key={e.id}
-                          title={`${e._google ? "Desde Google Calendar · " : ""}${e.tipo} · ${e.od} · ${e.personas} · ${e.hora}`}
+                          title={`${e._google ? `Desde Google Calendar (colorId: ${e._colorIdCruda}) · ` : ""}${e.tipo} · ${e.od} · ${e.personas} · ${e.hora}`}
                           style={{
                             background: e._google ? (e._color || "#4285F4") : hashColor(e.od), color: "#fff", fontWeight: 700, fontSize: 13,
                             borderRadius: 10, padding: "10px 14px", overflow: "hidden",
@@ -3158,7 +3158,7 @@ function CalendarioGlobal() {
   const renderPill = (e) => (
     <div
       key={e.id}
-      title={`${e._google ? "Desde Google Calendar · " : ""}${AREA_INFO[e.area]?.label || e.area} · ${e.tipo} · ${e.hora} · ${e.personas}`}
+      title={`${e._google ? `Desde Google Calendar (colorId: ${e._colorIdCruda}) · ` : ""}${AREA_INFO[e.area]?.label || e.area} · ${e.tipo} · ${e.hora} · ${e.personas}`}
       style={{
         background: colorDe(e), color: "#fff", fontWeight: 600, fontSize: 10.5,
         borderRadius: 5, padding: "2px 6px", overflow: "hidden",

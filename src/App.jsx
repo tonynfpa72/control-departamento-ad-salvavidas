@@ -4,8 +4,6 @@ import {
   PieChart, Pie, Cell, Legend, ReferenceLine, LineChart, Line, LabelList
 } from "recharts";
 import * as XLSX from "xlsx";
-import JSZip from "jszip";
-import { Workbook } from "exceljs";
 import {
   LogOut, Plus, Download, Check, X, Clock, ClipboardList,
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
@@ -415,6 +413,7 @@ function reporte2SetCeldaXML(xml, addr, { texto, numero }) {
 // Llena una copia (una semana) de la plantilla real para un OD,
 // editando solo el XML de la hoja, y devuelve el buffer final del .xlsx.
 async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSemana, lunes, empleadosPorCodigo) {
+  const { default: JSZip } = await import("jszip");
   const zip = await JSZip.loadAsync(plantillaBuffer);
   let xml = await zip.file(REPORTE2_HOJA).async("string");
 
@@ -2064,10 +2063,21 @@ function CursosEHS() {
   const isAdmin = currentUser?.categoria === "admin";
   const canEditCurso = isAdmin || currentUser?.categoria === "tecnico";
   const canEditEstadoCurso = isAdmin || currentUser?.categoria === "tecnico" || currentUser?.categoria === "asistente";
+  const canEditLugar = isAdmin || currentUser?.categoria === "asistente";
+  const canBorrarCurso = isAdmin || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
   const [rows, setRows] = useState([]);
+  const [empleados, setEmpleados] = useState([]);
   const [subTab, setSubTab] = useState("activos");
   const [form, setForm] = useState({ solicitante: "", personal: "", lugar: "", tipo: CURSO_TIPOS[0], fecha: "" });
+  const [personalSeleccionado, setPersonalSeleccionado] = useState([]);
+
+  useEffect(() => {
+    (async () => {
+      const { data: personal } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
+      if (personal) setEmpleados(personal);
+    })();
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -2095,9 +2105,11 @@ function CursosEHS() {
   }, []);
 
   const add = async () => {
-    if (!form.solicitante || !form.personal) return;
-    const payload = { ...form, fecha: form.fecha || null, estado: "Pendiente" };
+    const nombresPersonal = personalSeleccionado.map((codigo) => empleados.find((e) => e.codigo === codigo)?.nombre).filter(Boolean).join(", ");
+    if (!form.solicitante || !nombresPersonal) return;
+    const payload = { ...form, personal: nombresPersonal, fecha: form.fecha || null, estado: "Pendiente" };
     setForm({ solicitante: "", personal: "", lugar: "", tipo: CURSO_TIPOS[0], fecha: "" });
+    setPersonalSeleccionado([]);
     const { data, error } = await supabase.from("cursos_ehs").insert(payload).select().single();
     if (!error && data) setRows((prev) => [{ ...data, fecha: data.fecha || "" }, ...prev]);
   };
@@ -2108,6 +2120,10 @@ function CursosEHS() {
   const setFecha = (id, fecha) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, fecha } : r));
     supabase.from("cursos_ehs").update({ fecha: fecha || null }).eq("id", id).then();
+  };
+  const setLugar = (id, lugar) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, lugar } : r));
+    supabase.from("cursos_ehs").update({ lugar }).eq("id", id).then();
   };
   const del = async (id) => {
     if (!(await confirmar("¿Está seguro que desea eliminar este curso? Esta acción no se puede deshacer."))) return;
@@ -2143,7 +2159,11 @@ function CursosEHS() {
                   <td style={{ padding: "9px 8px" }}><Dot color={SEMAFORO[efectivo]} /></td>
                   <td style={{ fontWeight: 600 }}>{r.tipo}</td>
                   <td>{r.personal}</td>
-                  <td>{r.lugar}</td>
+                  <td>
+                    {canEditLugar ? (
+                      <input style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px" }} value={r.lugar || ""} onChange={(e) => setLugar(r.id, e.target.value)} />
+                    ) : (r.lugar || "—")}
+                  </td>
                   <td>
                     {canEditCurso ? (
                       <input type="date" style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: 130 }} value={r.fecha || ""} onChange={(e) => setFecha(r.id, e.target.value)} title="Cambiar esta fecha renueva el curso y recalcula el vencimiento" />
@@ -2168,7 +2188,7 @@ function CursosEHS() {
                       <Badge color={SEMAFORO[efectivo]} soft={`${SEMAFORO[efectivo]}1A`}><Dot color={SEMAFORO[efectivo]} />{efectivo}</Badge>
                     )}
                   </td>
-                  <td>{isAdmin && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}</td>
+                  <td>{canBorrarCurso && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}</td>
                 </tr>
               );
             })}
@@ -2179,7 +2199,25 @@ function CursosEHS() {
       <Card title="Nueva solicitud de curso">
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <Field label="Solicitante"><input style={inputStyle} value={form.solicitante} onChange={(e) => setForm({ ...form, solicitante: e.target.value })} /></Field>
-          <Field label="Personal que asistirá"><input style={inputStyle} value={form.personal} onChange={(e) => setForm({ ...form, personal: e.target.value })} placeholder="Nombres separados por coma" /></Field>
+          <Field label="Personal que asistirá">
+            {empleados.length === 0 ? (
+              <div style={{ fontSize: 11.5, color: T.gray }}>Aún no hay personal cargado. Agrégalo desde Planilla.</div>
+            ) : (
+              <div style={{ maxHeight: 160, overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 8, padding: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+                {empleados.map((emp) => (
+                  <label key={emp.codigo} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
+                    <input
+                      type="checkbox"
+                      checked={personalSeleccionado.includes(emp.codigo)}
+                      onChange={(e) => setPersonalSeleccionado((prev) => e.target.checked ? [...prev, emp.codigo] : prev.filter((c) => c !== emp.codigo))}
+                    />
+                    {emp.nombre}
+                  </label>
+                ))}
+              </div>
+            )}
+            <div style={{ fontSize: 10.5, color: T.gray, marginTop: 4 }}>Esta lista se administra desde Planilla.</div>
+          </Field>
           <Field label="Lugar del curso"><input style={inputStyle} value={form.lugar} onChange={(e) => setForm({ ...form, lugar: e.target.value })} /></Field>
           <Field label="Tipo de curso">
             <select style={inputStyle} value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
@@ -2569,6 +2607,7 @@ function ResumenEjecutivo() {
 
   const descargarReporteEjecutivo = async () => {
     const imagen = await capturarGraficoComoPNG(graficoRef);
+    const { Workbook } = await import("exceljs");
     const workbook = new Workbook();
 
     // ---- Hoja: Resumen Ejecutivo ----

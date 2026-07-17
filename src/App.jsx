@@ -2046,6 +2046,8 @@ function ResumenEjecutivo() {
   const [horasReales, setHorasReales] = useState([]);
   const [ventanaHoras, setVentanaHoras] = useState(0); // 0 = ventana más reciente
   const graficoRef = React.useRef(null);
+  const [ventanaFactura, setVentanaFactura] = useState(0);
+  const VENTANA_MESES = 12;
   const { clientes } = useContext(ClientesContext);
   const PUNTO_EQUILIBRIO = 120000;
   const PUNTO_EQUILIBRIO_HORAS = 150;
@@ -2344,6 +2346,23 @@ function ResumenEjecutivo() {
   const avgFactura = totalFacturado / (facturas.length || 1);
   const mesesSobre = facturas.filter((f) => f.monto >= PUNTO_EQUILIBRIO).length;
 
+  const totalVentanasFactura = Math.max(1, Math.ceil(facturas.length / VENTANA_MESES));
+  const ventanaFacturaActual = Math.min(ventanaFactura, totalVentanasFactura - 1);
+  const finVentanaFactura = facturas.length - ventanaFacturaActual * VENTANA_MESES;
+  const inicioVentanaFactura = Math.max(0, finVentanaFactura - VENTANA_MESES);
+  const facturasVentana = facturas.slice(inicioVentanaFactura, finVentanaFactura);
+
+  const reiniciarAnioFacturacion = async () => {
+    if (!(await confirmar(
+      "¿Está seguro que desea reiniciar la facturación? Esto borra TODOS los meses cargados para empezar de cero (para un año nuevo). Esta acción no se puede deshacer.",
+      { confirmLabel: "Sí, reiniciar", variant: "danger" }
+    ))) return;
+    const ids = facturas.map((f) => f.id);
+    setFacturas([]);
+    setVentanaFactura(0);
+    ids.forEach((id) => supabase.from("facturacion").delete().eq("id", id).then());
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 14 }}>
@@ -2369,9 +2388,18 @@ function ResumenEjecutivo() {
         </Card>
       </div>
 
-      <Card title="Facturación mensual vs. punto de equilibrio ($120,000)">
+      <Card
+        title="Facturación mensual vs. punto de equilibrio ($120,000)"
+        action={
+          <div style={{ display: "flex", gap: 6 }}>
+            <Btn small variant="ghost" onClick={() => setVentanaFactura((v) => Math.min(v + 1, totalVentanasFactura - 1))} disabled={ventanaFacturaActual >= totalVentanasFactura - 1}><ChevronLeft size={14} /></Btn>
+            <Btn small variant="ghost" onClick={() => setVentanaFactura((v) => Math.max(v - 1, 0))} disabled={ventanaFacturaActual <= 0}><ChevronRight size={14} /></Btn>
+            {isAdmin && <Btn small variant="danger" onClick={reiniciarAnioFacturacion}><X size={13} /> Reiniciar año</Btn>}
+          </div>
+        }
+      >
         <ResponsiveContainer width="100%" height={260}>
-          <LineChart data={facturas} margin={{ top: 26, right: 20, left: 0, bottom: 0 }}>
+          <LineChart data={facturasVentana} margin={{ top: 26, right: 20, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
             <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
             <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${v / 1000}k`} />
@@ -3014,6 +3042,8 @@ function AperturaOD() {
    --------------------------------------------------------- */
 function FacturacionPublica() {
   const [facturas, setFacturas] = useState([]);
+  const [ventana, setVentana] = useState(0);
+  const VENTANA_MESES = 12;
   const PUNTO_EQUILIBRIO = 120000;
   useEffect(() => {
     (async () => {
@@ -3021,13 +3051,26 @@ function FacturacionPublica() {
       if (data) setFacturas(data);
     })();
   }, []);
+  const totalVentanas = Math.max(1, Math.ceil(facturas.length / VENTANA_MESES));
+  const ventanaActual = Math.min(ventana, totalVentanas - 1);
+  const finVentana = facturas.length - ventanaActual * VENTANA_MESES;
+  const inicioVentana = Math.max(0, finVentana - VENTANA_MESES);
+  const facturasVentana = facturas.slice(inicioVentana, finVentana);
   return (
-    <Card title="Facturación mensual vs. punto de equilibrio ($120,000)">
+    <Card
+      title="Facturación mensual vs. punto de equilibrio ($120,000)"
+      action={facturas.length > 0 && (
+        <div style={{ display: "flex", gap: 6 }}>
+          <Btn small variant="ghost" onClick={() => setVentana((v) => Math.min(v + 1, totalVentanas - 1))} disabled={ventanaActual >= totalVentanas - 1}><ChevronLeft size={14} /></Btn>
+          <Btn small variant="ghost" onClick={() => setVentana((v) => Math.max(v - 1, 0))} disabled={ventanaActual <= 0}><ChevronRight size={14} /></Btn>
+        </div>
+      )}
+    >
       {facturas.length === 0 ? (
         <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay datos de facturación cargados.</div>
       ) : (
         <ResponsiveContainer width="100%" height={320}>
-          <LineChart data={facturas} margin={{ top: 26, right: 20, left: 0, bottom: 0 }}>
+          <LineChart data={facturasVentana} margin={{ top: 26, right: 20, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
             <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
             <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${v / 1000}k`} />

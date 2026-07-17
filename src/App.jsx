@@ -1686,7 +1686,7 @@ function Cotizaciones() {
                 <td>{r.provincia}</td>
                 <td>{r.dias}</td>
                 <td>
-                  {isAdmin ? (
+                  {canEditEstadoCot ? (
                     <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 100 }} value={r.numCot} onChange={(e) => setNumCot(r.id, e.target.value)} placeholder="COT-000" />
                   ) : (r.numCot || "—")}
                 </td>

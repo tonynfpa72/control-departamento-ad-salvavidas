@@ -1353,21 +1353,30 @@ async function fetchGoogleCalendarEventos(area, timeMinISO, timeMaxISO) {
     const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`);
     if (!resp.ok) return [];
     const data = await resp.json();
-    return (data.items || []).map((e) => {
-      const fecha = e.start?.date || (e.start?.dateTime ? e.start.dateTime.slice(0, 10) : "");
-      const hora = e.start?.dateTime ? e.start.dateTime.slice(11, 16) : "";
-      return {
-        id: `gcal-${e.id}`,
-        area,
-        tipo: "Google Calendar",
-        od: e.summary || "(Sin título)",
-        personas: e.location || "",
-        fecha,
-        hora,
-        _google: true,
-        _color: GOOGLE_EVENT_COLORS[e.colorId] || "#4285F4",
+    return (data.items || []).flatMap((e) => {
+      const base = {
+        area, tipo: "Google Calendar", od: e.summary || "(Sin título)", personas: e.location || "",
+        _google: true, _color: GOOGLE_EVENT_COLORS[e.colorId] || "#4285F4",
       };
-    }).filter((e) => e.fecha);
+      if (e.start?.date && e.end?.date) {
+        // Evento de "todo el día" — puede durar varios días seguidos.
+        // end.date en Google es EXCLUSIVO (el día después del último), así
+        // que hay que repetir el evento en cada día real que dura.
+        const inicio = new Date(e.start.date + "T00:00:00");
+        const finExclusivo = new Date(e.end.date + "T00:00:00");
+        const dias = [];
+        const cursorFecha = new Date(inicio);
+        while (cursorFecha < finExclusivo) {
+          dias.push(isoDate(cursorFecha));
+          cursorFecha.setDate(cursorFecha.getDate() + 1);
+        }
+        return dias.map((fecha, i) => ({ ...base, id: `gcal-${e.id}-${i}`, fecha, hora: "" }));
+      }
+      const fecha = e.start?.dateTime ? e.start.dateTime.slice(0, 10) : "";
+      if (!fecha) return [];
+      const hora = e.start.dateTime.slice(11, 16);
+      return [{ ...base, id: `gcal-${e.id}`, fecha, hora }];
+    });
   } catch (err) {
     console.error("Error cargando Google Calendar:", err);
     return [];

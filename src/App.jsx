@@ -1737,6 +1737,7 @@ function CursosEHS() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
   const canEditCurso = isAdmin || currentUser?.categoria === "tecnico";
+  const canEditEstadoCurso = isAdmin || currentUser?.categoria === "tecnico" || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
   const [rows, setRows] = useState([]);
   const [subTab, setSubTab] = useState("activos");
@@ -1745,7 +1746,25 @@ function CursosEHS() {
   useEffect(() => {
     (async () => {
       const { data } = await supabase.from("cursos_ehs").select("*").order("created_at", { ascending: false });
-      if (data) setRows(data.map((r) => ({ ...r, fecha: r.fecha || "" })));
+      if (data) {
+        const normalizados = data.map((r) => ({ ...r, fecha: r.fecha || "" }));
+        // Cuando un curso ya cumplió su año de vigencia (Vencido), se recicla
+        // solo a Pendiente y se limpia su fecha, para que vuelva a aparecer en
+        // Activos como una solicitud que hay que coordinar de nuevo.
+        const idsReciclados = [];
+        const finales = normalizados.map((r) => {
+          if (r.estado !== "Cancelado" && r.estado !== "Pendiente") {
+            const venc = vencimientoCalculado(r.fecha);
+            if (venc && venc < todayISO()) {
+              idsReciclados.push(r.id);
+              return { ...r, estado: "Pendiente", fecha: "" };
+            }
+          }
+          return r;
+        });
+        setRows(finales);
+        idsReciclados.forEach((id) => supabase.from("cursos_ehs").update({ estado: "Pendiente", fecha: null }).eq("id", id).then());
+      }
     })();
   }, []);
 
@@ -1806,7 +1825,7 @@ function CursosEHS() {
                   </td>
                   <td style={{ color: efectivo === "Vencido" ? T.red : T.inkSoft, fontWeight: efectivo === "Vencido" ? 700 : 500 }}>{venc || "—"}</td>
                   <td>
-                    {canEditCurso ? (
+                    {canEditEstadoCurso ? (
                       efectivo === "Vencido" ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
                           <Badge color={T.red} soft={`${T.red}1A`}><Dot color={T.red} /> Vencido</Badge>

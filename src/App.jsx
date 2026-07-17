@@ -1267,6 +1267,53 @@ function odColor(str) {
   return PALETA_OD[Math.abs(h)];
 }
 
+/* ---------------------------------------------------------
+   INTEGRACION: Google Calendar (solo lectura, calendarios
+   públicos) — trae las visitas agendadas en Google Calendar
+   de Inspecciones y Proyectos para mostrarlas junto a las
+   propias de la app. No escribe nada de vuelta a Google.
+   --------------------------------------------------------- */
+const GOOGLE_CALENDAR_IDS = {
+  inspecciones: import.meta.env.VITE_GOOGLE_CALENDAR_ID_INSPECCIONES || "",
+  proyectos: import.meta.env.VITE_GOOGLE_CALENDAR_ID_PROYECTOS || "",
+};
+const GOOGLE_CALENDAR_API_KEY = import.meta.env.VITE_GOOGLE_CALENDAR_API_KEY || "";
+
+async function fetchGoogleCalendarEventos(area, timeMinISO, timeMaxISO) {
+  const calendarId = GOOGLE_CALENDAR_IDS[area];
+  if (!calendarId || !GOOGLE_CALENDAR_API_KEY) return [];
+  try {
+    const params = new URLSearchParams({
+      key: GOOGLE_CALENDAR_API_KEY,
+      timeMin: new Date(timeMinISO + "T00:00:00").toISOString(),
+      timeMax: new Date(timeMaxISO + "T23:59:59").toISOString(),
+      singleEvents: "true",
+      orderBy: "startTime",
+      maxResults: "250",
+    });
+    const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`);
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    return (data.items || []).map((e) => {
+      const fecha = e.start?.date || (e.start?.dateTime ? e.start.dateTime.slice(0, 10) : "");
+      const hora = e.start?.dateTime ? e.start.dateTime.slice(11, 16) : "";
+      return {
+        id: `gcal-${e.id}`,
+        area,
+        tipo: "Google Calendar",
+        od: e.summary || "(Sin título)",
+        personas: e.location || "",
+        fecha,
+        hora,
+        _google: true,
+      };
+    }).filter((e) => e.fecha);
+  } catch (err) {
+    console.error("Error cargando Google Calendar:", err);
+    return [];
+  }
+}
+
 function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
@@ -1282,6 +1329,8 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
     tipo: tipoLabel[0], od: "", personas: "", hora: "08:00",
     fechaInicio: todayISO(), fechaFin: todayISO(),
   });
+
+  const [eventosGoogle, setEventosGoogle] = useState([]);
 
   useEffect(() => {
     (async () => {
@@ -1309,6 +1358,17 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
     d.setDate(d.getDate() + i);
     return d;
   });
+
+  useEffect(() => {
+    if (!GOOGLE_CALENDAR_IDS[area]) { setEventosGoogle([]); return; }
+    (async () => {
+      const desde = isoDate(gridDays[0]);
+      const hasta = isoDate(gridDays[gridDays.length - 1]);
+      const eventosG = await fetchGoogleCalendarEventos(area, desde, hasta);
+      setEventosGoogle(eventosG);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [area, cursor.getMonth(), cursor.getFullYear()]);
 
   const addEvento = async () => {
     if (!form.od || !form.fecha) return;
@@ -1347,13 +1407,16 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
     setFormRango((f) => ({ ...f, od: "", personas: "" }));
   };
 
-  const eventosDelDia = (d) => eventos.filter((e) => e.fecha === isoDate(d));
+  const eventosDelDia = (d) => {
+    const iso = isoDate(d);
+    return [...eventos.filter((e) => e.fecha === iso), ...eventosGoogle.filter((e) => e.fecha === iso)];
+  };
 
   // Color consistente por OD (cada OD siempre se ve del mismo color en
   // todo el calendario, como en Google Calendar por "calendario"/cliente).
   const hashColor = odColor;
 
-  const eventosDelDiaSeleccionado = eventos
+  const eventosDelDiaSeleccionado = [...eventos, ...eventosGoogle]
     .filter((e) => e.fecha === diaSeleccionado)
     .sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
 
@@ -1403,14 +1466,14 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
                   {eventosDia.slice(0, CALENDARIO_MAX_VISIBLE).map((e) => (
                     <div
                       key={e.id}
-                      title={`${e.tipo} · ${e.od} · ${e.personas} · ${e.hora}`}
+                      title={`${e._google ? "Desde Google Calendar · " : ""}${e.tipo} · ${e.od} · ${e.personas} · ${e.hora}`}
                       style={{
-                        background: hashColor(e.od), color: "#fff", fontSize: 10, fontWeight: 600,
+                        background: e._google ? "#4285F4" : hashColor(e.od), color: "#fff", fontSize: 10, fontWeight: 600,
                         borderRadius: 5, padding: "2px 5px", overflow: "hidden",
                         textOverflow: "ellipsis", whiteSpace: "nowrap",
                       }}
                     >
-                      {e.od}{e.personas ? ` // ${e.personas}` : ""}
+                      {e._google ? "G· " : ""}{e.od}{e.personas ? ` // ${e.personas}` : ""}
                     </div>
                   ))}
                   {eventosDia.length > CALENDARIO_MAX_VISIBLE && (
@@ -1433,16 +1496,18 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 320, overflowY: "auto" }}>
               {eventosDelDiaSeleccionado.map((e) => (
                 <div key={e.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", borderBottom: `1px dashed ${T.line}`, paddingBottom: 8 }}>
-                  <div style={{ marginTop: 4, width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: hashColor(e.od) }} />
+                  <div style={{ marginTop: 4, width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: e._google ? "#4285F4" : hashColor(e.od) }} />
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: T.ink }}>{e.hora} · {e.tipo}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: T.ink }}>{e.hora} · {e.tipo}{e._google && <span style={{ color: "#4285F4", fontWeight: 600 }}> · Google Calendar</span>}</div>
                     <div style={{ fontSize: 12, color: T.inkSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {e.od} — {e.personas}
                     </div>
                   </div>
-                  <button onClick={() => delEvento(e.id)} style={{ background: "transparent", border: "none", color: T.gray, cursor: "pointer", padding: 2, flexShrink: 0 }} title="Borrar">
-                    <X size={13} />
-                  </button>
+                  {!e._google && (
+                    <button onClick={() => delEvento(e.id)} style={{ background: "transparent", border: "none", color: T.gray, cursor: "pointer", padding: 2, flexShrink: 0 }} title="Borrar">
+                      <X size={13} />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -2693,6 +2758,7 @@ function Administrativo() {
    --------------------------------------------------------- */
 function CalendarioGlobal() {
   const [eventos, setEventos] = useState([]);
+  const [eventosGoogle, setEventosGoogle] = useState([]);
   const [filtroArea, setFiltroArea] = useState("Todos");
   const [vista, setVista] = useState("agenda");
   const [cursor, setCursor] = useState(new Date());
@@ -2702,6 +2768,19 @@ function CalendarioGlobal() {
       if (data) setEventos(data);
     })();
   }, []);
+
+  useEffect(() => {
+    (async () => {
+      const desde = new Date(cursor.getFullYear(), cursor.getMonth() - 2, 1);
+      const hasta = new Date(cursor.getFullYear(), cursor.getMonth() + 3, 0);
+      const [gInsp, gProy] = await Promise.all([
+        fetchGoogleCalendarEventos("inspecciones", isoDate(desde), isoDate(hasta)),
+        fetchGoogleCalendarEventos("proyectos", isoDate(desde), isoDate(hasta)),
+      ]);
+      setEventosGoogle([...gInsp, ...gProy]);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cursor.getMonth(), cursor.getFullYear()]);
 
   const AREA_INFO = {
     inspecciones: { label: "Inspecciones", color: T.turquoise, soft: T.turquoiseSoft },
@@ -2715,9 +2794,9 @@ function CalendarioGlobal() {
     { id: "dia", label: "Día" },
     { id: "agenda", label: "Agenda" },
   ];
-  const colorDe = (e) => AREA_INFO[e.area]?.color || T.gray;
+  const colorDe = (e) => (e._google ? "#4285F4" : (AREA_INFO[e.area]?.color || T.gray));
 
-  const eventosFiltrados = eventos.filter((e) => {
+  const eventosFiltrados = [...eventos, ...eventosGoogle].filter((e) => {
     if (filtroArea === "Todos") return true;
     return (AREA_INFO[e.area]?.label || e.area) === filtroArea;
   });
@@ -2764,14 +2843,14 @@ function CalendarioGlobal() {
   const renderPill = (e) => (
     <div
       key={e.id}
-      title={`${AREA_INFO[e.area]?.label || e.area} · ${e.tipo} · ${e.hora} · ${e.personas}`}
+      title={`${e._google ? "Desde Google Calendar · " : ""}${AREA_INFO[e.area]?.label || e.area} · ${e.tipo} · ${e.hora} · ${e.personas}`}
       style={{
         background: colorDe(e), color: "#fff", fontWeight: 600, fontSize: 10.5,
         borderRadius: 5, padding: "2px 6px", overflow: "hidden",
         textOverflow: "ellipsis", whiteSpace: "nowrap",
       }}
     >
-      {e.od}{e.personas ? ` // ${e.personas}` : ""}
+      {e._google ? "G· " : ""}{e.od}{e.personas ? ` // ${e.personas}` : ""}
     </div>
   );
 

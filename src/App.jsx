@@ -1449,12 +1449,18 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
 
   useEffect(() => {
     if (!GOOGLE_CALENDAR_IDS[area]) { setEventosGoogle([]); return; }
-    (async () => {
+    let activo = true;
+    const cargar = async () => {
       const desde = isoDate(gridDays[0]);
       const hasta = isoDate(gridDays[gridDays.length - 1]);
       const eventosG = await fetchGoogleCalendarEventos(area, desde, hasta);
-      setEventosGoogle(eventosG);
-    })();
+      if (activo) setEventosGoogle(eventosG);
+    };
+    cargar();
+    // Vuelve a consultar Google Calendar cada 60 segundos mientras esta
+    // vista esté abierta, para que las visitas nuevas aparezcan solas.
+    const intervalo = setInterval(cargar, 60000);
+    return () => { activo = false; clearInterval(intervalo); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [area, cursor.getMonth(), cursor.getFullYear()]);
 
@@ -3025,15 +3031,21 @@ function CalendarioGlobal() {
   }, []);
 
   useEffect(() => {
-    (async () => {
+    let activo = true;
+    const cargar = async () => {
       const desde = new Date(cursor.getFullYear(), cursor.getMonth() - 2, 1);
       const hasta = new Date(cursor.getFullYear(), cursor.getMonth() + 3, 0);
       const [gInsp, gProy] = await Promise.all([
         fetchGoogleCalendarEventos("inspecciones", isoDate(desde), isoDate(hasta)),
         fetchGoogleCalendarEventos("proyectos", isoDate(desde), isoDate(hasta)),
       ]);
-      setEventosGoogle([...gInsp, ...gProy]);
-    })();
+      if (activo) setEventosGoogle([...gInsp, ...gProy]);
+    };
+    cargar();
+    // Vuelve a consultar Google Calendar cada 60 segundos mientras esta
+    // vista esté abierta, para que las visitas nuevas aparezcan solas.
+    const intervalo = setInterval(cargar, 60000);
+    return () => { activo = false; clearInterval(intervalo); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cursor.getMonth(), cursor.getFullYear()]);
 

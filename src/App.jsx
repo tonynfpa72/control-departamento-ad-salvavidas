@@ -5,6 +5,7 @@ import {
 } from "recharts";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
+import { Workbook } from "exceljs";
 import {
   LogOut, Plus, Download, Check, X, Clock, ClipboardList,
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
@@ -1920,6 +1921,8 @@ function ClientesPorPersona({ area, color }) {
 function HorasExtrasQuincenales({ area, color }) {
   const [filas, setFilas] = useState([]);
   const [reales, setReales] = useState([]);
+  const [ventana, setVentana] = useState(0);
+  const VENTANA_QUINCENAS = 12;
 
   useEffect(() => {
     (async () => {
@@ -1955,7 +1958,7 @@ function HorasExtrasQuincenales({ area, color }) {
   soloAuto.sort((a, b) => (fechaPorQuincenaAuto[a] || "").localeCompare(fechaPorQuincenaAuto[b] || ""));
   quincenasOrdenadas.push(...soloAuto);
 
-  const data = quincenasOrdenadas.map((q) => {
+  const dataCompleta = quincenasOrdenadas.map((q) => {
     const tieneManual = filas.some((f) => f.quincena === q);
     return {
       quincena: q,
@@ -1964,9 +1967,22 @@ function HorasExtrasQuincenales({ area, color }) {
         : Math.round((autoPorQuincena[q] || 0) * 100) / 100,
     };
   });
+  const totalVentanas = Math.max(1, Math.ceil(dataCompleta.length / VENTANA_QUINCENAS));
+  const ventanaActual = Math.min(ventana, totalVentanas - 1);
+  const finVentana = dataCompleta.length - ventanaActual * VENTANA_QUINCENAS;
+  const inicioVentana = Math.max(0, finVentana - VENTANA_QUINCENAS);
+  const data = dataCompleta.slice(inicioVentana, finVentana);
 
   return (
-    <Card title="Estadística de horas extras">
+    <Card
+      title="Estadística de horas extras"
+      action={
+        <div style={{ display: "flex", gap: 6 }}>
+          <Btn small variant="ghost" onClick={() => setVentana((v) => Math.min(v + 1, totalVentanas - 1))} disabled={ventanaActual >= totalVentanas - 1}><ChevronLeft size={14} /></Btn>
+          <Btn small variant="ghost" onClick={() => setVentana((v) => Math.max(v - 1, 0))} disabled={ventanaActual <= 0}><ChevronRight size={14} /></Btn>
+        </div>
+      }
+    >
       {data.length === 0 ? (
         <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay quincenas cargadas (se editan desde Administrativo).</div>
       ) : (
@@ -2021,14 +2037,19 @@ function AreaOperativa({ area, color }) {
    AREA: ADMINISTRATIVO (tabs internas: resumen / usuarios)
    --------------------------------------------------------- */
 function ResumenEjecutivo() {
+  const currentUser = useContext(CurrentUserContext);
+  const isAdmin = currentUser?.categoria === "admin";
   const confirmar = useContext(ConfirmContext);
   const [facturas, setFacturas] = useState([]);
   const [nuevoMes, setNuevoMes] = useState({ mes: "", monto: "" });
   const [horasManual, setHorasManual] = useState([]);
   const [horasReales, setHorasReales] = useState([]);
+  const [ventanaHoras, setVentanaHoras] = useState(0); // 0 = ventana más reciente
+  const graficoRef = React.useRef(null);
   const { clientes } = useContext(ClientesContext);
   const PUNTO_EQUILIBRIO = 120000;
   const PUNTO_EQUILIBRIO_HORAS = 150;
+  const VENTANA_QUINCENAS = 12;
 
   useEffect(() => {
     (async () => {
@@ -2128,7 +2149,7 @@ function ResumenEjecutivo() {
   quincenasSoloAuto.sort((a, b) => (fechaPorQuincenaAuto[a] || "").localeCompare(fechaPorQuincenaAuto[b] || ""));
   quincenasOrdenadas.push(...quincenasSoloAuto);
 
-  const horasQuincenalesData = quincenasOrdenadas.map((q) => {
+  const horasQuincenalesDataCompleta = quincenasOrdenadas.map((q) => {
     const tieneManualInsp = horasManual.some((f) => f.quincena === q && f.area === "inspecciones");
     const tieneManualProy = horasManual.some((f) => f.quincena === q && f.area === "proyectos");
     return {
@@ -2141,6 +2162,183 @@ function ResumenEjecutivo() {
         : Math.round((horasAutoPorQuincena[q]?.proyectos || 0) * 100) / 100,
     };
   });
+
+  // Ventana deslizante de 12 quincenas (para no perder tamaño de letra),
+  // navegable con flechas hacia atrás/adelante.
+  const totalVentanas = Math.max(1, Math.ceil(horasQuincenalesDataCompleta.length / VENTANA_QUINCENAS));
+  const ventanaActual = Math.min(ventanaHoras, totalVentanas - 1);
+  const finVentana = horasQuincenalesDataCompleta.length - ventanaActual * VENTANA_QUINCENAS;
+  const inicioVentana = Math.max(0, finVentana - VENTANA_QUINCENAS);
+  const horasQuincenalesData = horasQuincenalesDataCompleta.slice(inicioVentana, finVentana);
+
+  const promedio = (arr) => arr.length ? Math.round((arr.reduce((s, v) => s + v, 0) / arr.length) * 100) / 100 : 0;
+  const totalInspHoras = horasQuincenalesDataCompleta.reduce((s, d) => s + d.Inspecciones, 0);
+  const totalProyHoras = horasQuincenalesDataCompleta.reduce((s, d) => s + d.Proyectos, 0);
+  const promedioInspHoras = promedio(horasQuincenalesDataCompleta.map((d) => d.Inspecciones));
+  const promedioProyHoras = promedio(horasQuincenalesDataCompleta.map((d) => d.Proyectos));
+  const quincenasSobreInsp = horasQuincenalesDataCompleta.filter((d) => d.Inspecciones > PUNTO_EQUILIBRIO_HORAS).length;
+  const quincenasSobreProy = horasQuincenalesDataCompleta.filter((d) => d.Proyectos > PUNTO_EQUILIBRIO_HORAS).length;
+
+  const capturarGraficoComoPNG = async (contenedorRef, escala = 2) => {
+    const svg = contenedorRef.current?.querySelector("svg");
+    if (!svg) return null;
+    const rect = svg.getBoundingClientRect();
+    const ancho = rect.width || 720;
+    const alto = rect.height || 280;
+    const xml = new XMLSerializer().serializeToString(svg);
+    const svgBlob = new Blob([xml], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(svgBlob);
+    try {
+      const base64 = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          canvas.width = ancho * escala;
+          canvas.height = alto * escala;
+          const ctx = canvas.getContext("2d");
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL("image/png").split(",")[1]);
+        };
+        img.onerror = reject;
+        img.src = url;
+      });
+      return { base64, ancho, alto };
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  };
+
+  const COLOR_HEADER = "FF1F3A5F";
+  const COLOR_ACCENT = "FFE86A2C";
+  const bordeFino = { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } };
+  const estiloEncabezado = (celda, color = COLOR_HEADER) => {
+    celda.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    celda.fill = { type: "pattern", pattern: "solid", fgColor: { argb: color } };
+    celda.border = bordeFino;
+    celda.alignment = { vertical: "middle" };
+  };
+
+  const descargarReporteEjecutivo = async () => {
+    const imagen = await capturarGraficoComoPNG(graficoRef);
+    const workbook = new Workbook();
+
+    // ---- Hoja: Resumen Ejecutivo ----
+    const wsResumen = workbook.addWorksheet("Resumen Ejecutivo");
+    wsResumen.mergeCells("A1:F1");
+    const titulo = wsResumen.getCell("A1");
+    titulo.value = "Departamento A&D Salvavidas";
+    titulo.font = { bold: true, size: 16, color: { argb: "FFFFFFFF" } };
+    titulo.fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLOR_HEADER } };
+    titulo.alignment = { horizontal: "center", vertical: "middle" };
+    wsResumen.getRow(1).height = 30;
+
+    wsResumen.mergeCells("A2:F2");
+    const subtitulo = wsResumen.getCell("A2");
+    subtitulo.value = `Reporte Ejecutivo — Horas Extras · Generado el ${new Date().toLocaleDateString("es-CR", { day: "numeric", month: "long", year: "numeric" })}`;
+    subtitulo.font = { italic: true, size: 11, color: { argb: "FF5B6572" } };
+    subtitulo.alignment = { horizontal: "center" };
+    wsResumen.getRow(2).height = 20;
+
+    let fila = 4;
+    if (imagen) {
+      const anchoImgPx = 680;
+      const altoImgPx = Math.round(anchoImgPx * (imagen.alto / imagen.ancho));
+      const imageId = workbook.addImage({ base64: imagen.base64, extension: "png" });
+      wsResumen.addImage(imageId, { tl: { col: 0.1, row: fila - 1 }, ext: { width: anchoImgPx, height: altoImgPx } });
+      fila += Math.ceil(altoImgPx / 20) + 2;
+    }
+
+    wsResumen.getCell(`A${fila}`).value = "Indicador";
+    wsResumen.getCell(`B${fila}`).value = "Valor";
+    estiloEncabezado(wsResumen.getCell(`A${fila}`), COLOR_ACCENT);
+    estiloEncabezado(wsResumen.getCell(`B${fila}`), COLOR_ACCENT);
+    fila++;
+
+    const indicadores = [
+      ["Total horas Inspecciones", totalInspHoras],
+      ["Total horas Proyectos", totalProyHoras],
+      ["Promedio quincenal Inspecciones", promedioInspHoras],
+      ["Promedio quincenal Proyectos", promedioProyHoras],
+      ["Quincenas sobre 150h — Inspecciones", quincenasSobreInsp],
+      ["Quincenas sobre 150h — Proyectos", quincenasSobreProy],
+      ["Total facturado", fmtMoney(totalFacturado)],
+      ["Promedio mensual facturado", fmtMoney(Math.round(avgFactura))],
+    ];
+    indicadores.forEach(([nombre, valor], i) => {
+      const filaActual = fila + i;
+      wsResumen.getCell(`A${filaActual}`).value = nombre;
+      wsResumen.getCell(`B${filaActual}`).value = valor;
+      wsResumen.getCell(`A${filaActual}`).border = bordeFino;
+      wsResumen.getCell(`B${filaActual}`).border = bordeFino;
+      if (i % 2 === 1) {
+        wsResumen.getCell(`A${filaActual}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F5F7" } };
+        wsResumen.getCell(`B${filaActual}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F5F7" } };
+      }
+    });
+    wsResumen.getColumn(1).width = 36;
+    wsResumen.getColumn(2).width = 20;
+    wsResumen.getColumn(3).width = 14;
+    wsResumen.getColumn(4).width = 14;
+    wsResumen.getColumn(5).width = 14;
+    wsResumen.getColumn(6).width = 14;
+
+    // ---- Hoja: Horas por quincena ----
+    const wsDatos = workbook.addWorksheet("Horas por quincena");
+    ["Quincena", "Horas Inspecciones", "Horas Proyectos", "Total"].forEach((h, i) => {
+      const celda = wsDatos.getCell(1, i + 1);
+      celda.value = h;
+      estiloEncabezado(celda);
+    });
+    horasQuincenalesDataCompleta.forEach((d, i) => {
+      const f = i + 2;
+      wsDatos.getCell(f, 1).value = d.quincena;
+      wsDatos.getCell(f, 2).value = d.Inspecciones;
+      wsDatos.getCell(f, 3).value = d.Proyectos;
+      wsDatos.getCell(f, 4).value = d.Inspecciones + d.Proyectos;
+      for (let c = 1; c <= 4; c++) wsDatos.getCell(f, c).border = bordeFino;
+    });
+    wsDatos.columns = [{ width: 16 }, { width: 20 }, { width: 18 }, { width: 12 }];
+
+    // ---- Hoja: Facturación ----
+    const wsFact = workbook.addWorksheet("Facturación");
+    ["Mes", "Monto"].forEach((h, i) => {
+      const celda = wsFact.getCell(1, i + 1);
+      celda.value = h;
+      estiloEncabezado(celda, "FF2E7D5B");
+    });
+    facturas.forEach((f, i) => {
+      const fl = i + 2;
+      wsFact.getCell(fl, 1).value = f.mes;
+      wsFact.getCell(fl, 2).value = f.monto;
+      wsFact.getCell(fl, 1).border = bordeFino;
+      wsFact.getCell(fl, 2).border = bordeFino;
+    });
+    wsFact.columns = [{ width: 14 }, { width: 16 }];
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `reporte_ejecutivo_${todayISO()}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const reiniciarAnioHoras = async () => {
+    if (!(await confirmar(
+      "¿Está seguro que desea reiniciar el histórico de horas extra quincenales? Esto borra TODOS los datos cargados a mano para empezar de cero (para un año nuevo). Esta acción no se puede deshacer.",
+      { confirmLabel: "Sí, reiniciar", variant: "danger" }
+    ))) return;
+    const ids = horasManual.map((f) => f.id);
+    setHorasManual([]);
+    setVentanaHoras(0);
+    ids.forEach((id) => supabase.from("horas_extras_manual").delete().eq("id", id).then());
+  };
 
   const totalFacturado = facturas.reduce((s, f) => s + f.monto, 0);
   const avgFactura = totalFacturado / (facturas.length || 1);
@@ -2275,10 +2473,21 @@ function ResumenEjecutivo() {
         )}
       </Card>
 
-      <Card title="Estadística de horas extras — Inspecciones vs. Proyectos">
+      <Card
+        title="Estadística de horas extras — Inspecciones vs. Proyectos"
+        action={
+          <div style={{ display: "flex", gap: 6 }}>
+            <Btn small variant="ghost" onClick={() => setVentanaHoras((v) => Math.min(v + 1, totalVentanas - 1))} disabled={ventanaActual >= totalVentanas - 1}><ChevronLeft size={14} /></Btn>
+            <Btn small variant="ghost" onClick={() => setVentanaHoras((v) => Math.max(v - 1, 0))} disabled={ventanaActual <= 0}><ChevronRight size={14} /></Btn>
+            <Btn small variant="ghost" onClick={descargarReporteEjecutivo}><Download size={13} /> Reporte Ejecutivo</Btn>
+            {isAdmin && <Btn small variant="danger" onClick={reiniciarAnioHoras}><X size={13} /> Reiniciar año</Btn>}
+          </div>
+        }
+      >
         {horasQuincenalesData.length === 0 ? (
           <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay quincenas cargadas.</div>
         ) : (
+          <div ref={graficoRef}>
           <ResponsiveContainer width="100%" height={260}>
             <LineChart data={horasQuincenalesData} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
@@ -2291,6 +2500,7 @@ function ResumenEjecutivo() {
               <Line type="monotone" dataKey="Proyectos" stroke={T.green} strokeWidth={3} dot={{ r: 4 }} />
             </LineChart>
           </ResponsiveContainer>
+          </div>
         )}
       </Card>
     </div>

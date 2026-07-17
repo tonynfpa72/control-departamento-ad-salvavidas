@@ -930,6 +930,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const canEditFechaControl = isAdmin;
   const canEditEstado = isAdmin || currentUser?.categoria === "asistente";
   const canMoverTipo = isAdmin || currentUser?.categoria === "asistente";
+  const canEditProgreso = isAdmin || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
   const isInspecciones = area === "inspecciones";
   const isProyectos = area === "proyectos";
@@ -1211,7 +1212,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                         <Badge color={(r.progreso || "Pendiente") === "Completado" ? T.green : T.amber} soft={(r.progreso || "Pendiente") === "Completado" ? T.greenSoft : T.amberSoft}>
                           {r.progreso || "Pendiente"}
                         </Badge>
-                        {(r.progreso || "Pendiente") !== "Completado" && (
+                        {canEditProgreso && (r.progreso || "Pendiente") !== "Completado" && (
                           <Btn small variant="ghost" onClick={() => setProgreso(r.id, "Completado")}>Marcar completado</Btn>
                         )}
                       </div>
@@ -1332,9 +1333,9 @@ const GOOGLE_CALENDAR_API_KEY = import.meta.env.VITE_GOOGLE_CALENDAR_API_KEY || 
 // Paleta estándar de colores de evento de Google Calendar (colorId → hex),
 // para conservar el color que la persona le puso a cada evento en Google.
 const GOOGLE_EVENT_COLORS = {
-  "1": "#7986CB", "2": "#33B679", "3": "#8E24AA", "4": "#E67C73",
-  "5": "#F6BF26", "6": "#F4511E", "7": "#039BE5", "8": "#616161",
-  "9": "#3F51B5", "10": "#0B8043", "11": "#D50000",
+  "1": "#A4BDFC", "2": "#7AE7BF", "3": "#DBADFF", "4": "#FF887C",
+  "5": "#FBD75B", "6": "#FFB878", "7": "#46D6DB", "8": "#E1E1E1",
+  "9": "#5484ED", "10": "#51B749", "11": "#DC2127",
 };
 
 async function fetchGoogleCalendarEventos(area, timeMinISO, timeMaxISO) {

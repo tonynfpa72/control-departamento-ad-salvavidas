@@ -1919,18 +1919,54 @@ function ClientesPorPersona({ area, color }) {
    --------------------------------------------------------- */
 function HorasExtrasQuincenales({ area, color }) {
   const [filas, setFilas] = useState([]);
+  const [reales, setReales] = useState([]);
 
   useEffect(() => {
     (async () => {
       const { data } = await supabase.from("horas_extras_manual").select("*").eq("area", area).order("created_at", { ascending: true });
       if (data) setFilas(data);
     })();
+    (async () => {
+      const { data } = await supabase.from("horas_extras").select("*").eq("area", area).in("estado", ["Aprobada", "Cerrada"]);
+      if (data) setReales(data);
+    })();
   }, [area]);
 
-  const data = filas.map((f) => ({ quincena: f.quincena, horas: Number(f.horas) || 0 }));
+  const MESES_CORTOS_QNA = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"];
+  function etiquetaQuincenaCorta(fechaISO) {
+    const [anio, mes, dia] = fechaISO.split("-").map(Number);
+    const nombreMes = MESES_CORTOS_QNA[mes - 1];
+    if (dia <= 15) return `1-15 ${nombreMes}`;
+    const ultimoDia = new Date(anio, mes, 0).getDate();
+    return `16-${ultimoDia} ${nombreMes}`;
+  }
+  const autoPorQuincena = {};
+  const fechaPorQuincenaAuto = {};
+  reales.forEach((h) => {
+    const fechaRef = h.fecha_ejecucion || h.fecha;
+    if (!fechaRef) return;
+    const etiqueta = etiquetaQuincenaCorta(fechaRef);
+    autoPorQuincena[etiqueta] = (autoPorQuincena[etiqueta] || 0) + (Number(h.horas) || 0);
+    if (!fechaPorQuincenaAuto[etiqueta] || fechaRef < fechaPorQuincenaAuto[etiqueta]) fechaPorQuincenaAuto[etiqueta] = fechaRef;
+  });
+  const quincenasOrdenadas = [];
+  filas.forEach((f) => { if (!quincenasOrdenadas.includes(f.quincena)) quincenasOrdenadas.push(f.quincena); });
+  const soloAuto = Object.keys(autoPorQuincena).filter((q) => !quincenasOrdenadas.includes(q));
+  soloAuto.sort((a, b) => (fechaPorQuincenaAuto[a] || "").localeCompare(fechaPorQuincenaAuto[b] || ""));
+  quincenasOrdenadas.push(...soloAuto);
+
+  const data = quincenasOrdenadas.map((q) => {
+    const tieneManual = filas.some((f) => f.quincena === q);
+    return {
+      quincena: q,
+      horas: tieneManual
+        ? filas.filter((f) => f.quincena === q).reduce((s, f) => s + Number(f.horas || 0), 0)
+        : Math.round((autoPorQuincena[q] || 0) * 100) / 100,
+    };
+  });
 
   return (
-    <Card title="Horas extras quincenales">
+    <Card title="Estadística de horas extras">
       {data.length === 0 ? (
         <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay quincenas cargadas (se editan desde Administrativo).</div>
       ) : (
@@ -1938,8 +1974,9 @@ function HorasExtrasQuincenales({ area, color }) {
           <LineChart data={data} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
             <XAxis dataKey="quincena" tick={{ fontSize: 11 }} />
-            <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
+            <YAxis tick={{ fontSize: 12 }} allowDecimals={false} domain={[0, (dataMax) => Math.max(180, Math.ceil(dataMax * 1.15))]} />
             <Tooltip formatter={(v) => `${v} h`} />
+            <ReferenceLine y={150} stroke={T.accent} strokeDasharray="6 4" label={{ value: "Límite 150h", fill: T.accent, fontSize: 11, position: "insideTopRight" }} />
             <Line type="monotone" dataKey="horas" stroke={color || T.steel} strokeWidth={3} dot={{ r: 4 }}>
               <LabelList dataKey="horas" position="top" formatter={(v) => `${v}h`} style={{ fontSize: 11.5, fontWeight: 700, fill: T.ink }} />
             </Line>
@@ -1955,7 +1992,7 @@ function AreaOperativa({ area, color }) {
   const tecnicoLabel = area === "proyectos" ? "Encargado" : "Técnico";
   const tabs = [
     { id: "horas", label: "Horas extras", icon: Clock },
-    { id: "horas_quincenales", label: "Horas Extras Quincenales", icon: LayoutDashboard },
+    { id: "horas_quincenales", label: "Estadística de Horas Extras", icon: LayoutDashboard },
     { id: "od", label: area === "inspecciones" ? "OD IPM" : "OD Proyectos", icon: ClipboardList },
     { id: "od_correctivos", label: "OD Correctivos", icon: AlertCircle },
     { id: "calendario", label: "Calendario", icon: CalendarDays },
@@ -1988,9 +2025,10 @@ function ResumenEjecutivo() {
   const [facturas, setFacturas] = useState([]);
   const [nuevoMes, setNuevoMes] = useState({ mes: "", monto: "" });
   const [horasManual, setHorasManual] = useState([]);
-  const [nuevaQuincena, setNuevaQuincena] = useState({ area: "inspecciones", quincena: "", horas: "" });
+  const [horasReales, setHorasReales] = useState([]);
   const { clientes } = useContext(ClientesContext);
   const PUNTO_EQUILIBRIO = 120000;
+  const PUNTO_EQUILIBRIO_HORAS = 150;
 
   useEffect(() => {
     (async () => {
@@ -2001,25 +2039,11 @@ function ResumenEjecutivo() {
       const { data } = await supabase.from("horas_extras_manual").select("*").order("created_at", { ascending: true });
       if (data) setHorasManual(data);
     })();
+    (async () => {
+      const { data } = await supabase.from("horas_extras").select("*").in("area", ["inspecciones", "proyectos"]).in("estado", ["Aprobada", "Cerrada"]);
+      if (data) setHorasReales(data);
+    })();
   }, []);
-
-  const agregarQuincena = async () => {
-    if (!nuevaQuincena.quincena || !nuevaQuincena.horas) return;
-    const payload = { area: nuevaQuincena.area, quincena: nuevaQuincena.quincena, horas: Number(nuevaQuincena.horas) };
-    setNuevaQuincena({ area: nuevaQuincena.area, quincena: "", horas: "" });
-    const { data, error } = await supabase.from("horas_extras_manual").insert(payload).select().single();
-    if (!error && data) setHorasManual((prev) => [...prev, data]);
-  };
-  const editarQuincena = (id, horas) => {
-    const valor = Number(horas) || 0;
-    setHorasManual((prev) => prev.map((f) => f.id === id ? { ...f, horas: valor } : f));
-    supabase.from("horas_extras_manual").update({ horas: valor }).eq("id", id).then();
-  };
-  const eliminarQuincena = async (id) => {
-    if (!(await confirmar("¿Está seguro que desea eliminar esta quincena?"))) return;
-    setHorasManual((prev) => prev.filter((f) => f.id !== id));
-    supabase.from("horas_extras_manual").delete().eq("id", id).then();
-  };
 
   const addFactura = async () => {
     if (!nuevoMes.mes || !nuevoMes.monto) return;
@@ -2074,16 +2098,49 @@ function ResumenEjecutivo() {
     .map(([nombre, cantidad]) => ({ nombre, cantidad }))
     .sort((a, b) => b.cantidad - a.cantidad);
 
-  // Horas extras quincenales — Inspecciones vs Proyectos: esto ya NO se
-  // calcula solo desde las solicitudes; el admin lo carga a mano (igual que
-  // Facturación), guardado en la tabla horas_extras_manual.
+  // Horas extras quincenales — Inspecciones vs Proyectos: el histórico
+  // cargado a mano (tabla horas_extras_manual) se conserva tal cual, y a
+  // partir de ahí, cualquier quincena nueva se calcula sola sumando las
+  // solicitudes de horas extra ya Aprobadas/Cerradas — así ya no hace
+  // falta seguir cargando esto a mano hacia adelante.
+  const MESES_CORTOS_QNA = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"];
+  function etiquetaQuincenaCorta(fechaISO) {
+    const [anio, mes, dia] = fechaISO.split("-").map(Number);
+    const nombreMes = MESES_CORTOS_QNA[mes - 1];
+    if (dia <= 15) return `1-15 ${nombreMes}`;
+    const ultimoDia = new Date(anio, mes, 0).getDate();
+    return `16-${ultimoDia} ${nombreMes}`;
+  }
+  const horasAutoPorQuincena = {};
+  const fechaPorQuincenaAuto = {};
+  horasReales.forEach((h) => {
+    const fechaRef = h.fecha_ejecucion || h.fecha;
+    if (!fechaRef) return;
+    const etiqueta = etiquetaQuincenaCorta(fechaRef);
+    horasAutoPorQuincena[etiqueta] = horasAutoPorQuincena[etiqueta] || { inspecciones: 0, proyectos: 0 };
+    horasAutoPorQuincena[etiqueta][h.area] = (horasAutoPorQuincena[etiqueta][h.area] || 0) + (Number(h.horas) || 0);
+    if (!fechaPorQuincenaAuto[etiqueta] || fechaRef < fechaPorQuincenaAuto[etiqueta]) fechaPorQuincenaAuto[etiqueta] = fechaRef;
+  });
+
   const quincenasOrdenadas = [];
   horasManual.forEach((f) => { if (!quincenasOrdenadas.includes(f.quincena)) quincenasOrdenadas.push(f.quincena); });
-  const horasQuincenalesData = quincenasOrdenadas.map((q) => ({
-    quincena: q,
-    Inspecciones: horasManual.filter((f) => f.quincena === q && f.area === "inspecciones").reduce((s, f) => s + Number(f.horas || 0), 0),
-    Proyectos: horasManual.filter((f) => f.quincena === q && f.area === "proyectos").reduce((s, f) => s + Number(f.horas || 0), 0),
-  }));
+  const quincenasSoloAuto = Object.keys(horasAutoPorQuincena).filter((q) => !quincenasOrdenadas.includes(q));
+  quincenasSoloAuto.sort((a, b) => (fechaPorQuincenaAuto[a] || "").localeCompare(fechaPorQuincenaAuto[b] || ""));
+  quincenasOrdenadas.push(...quincenasSoloAuto);
+
+  const horasQuincenalesData = quincenasOrdenadas.map((q) => {
+    const tieneManualInsp = horasManual.some((f) => f.quincena === q && f.area === "inspecciones");
+    const tieneManualProy = horasManual.some((f) => f.quincena === q && f.area === "proyectos");
+    return {
+      quincena: q,
+      Inspecciones: tieneManualInsp
+        ? horasManual.filter((f) => f.quincena === q && f.area === "inspecciones").reduce((s, f) => s + Number(f.horas || 0), 0)
+        : Math.round((horasAutoPorQuincena[q]?.inspecciones || 0) * 100) / 100,
+      Proyectos: tieneManualProy
+        ? horasManual.filter((f) => f.quincena === q && f.area === "proyectos").reduce((s, f) => s + Number(f.horas || 0), 0)
+        : Math.round((horasAutoPorQuincena[q]?.proyectos || 0) * 100) / 100,
+    };
+  });
 
   const totalFacturado = facturas.reduce((s, f) => s + f.monto, 0);
   const avgFactura = totalFacturado / (facturas.length || 1);
@@ -2218,7 +2275,7 @@ function ResumenEjecutivo() {
         )}
       </Card>
 
-      <Card title="Horas extras quincenales — Inspecciones vs. Proyectos">
+      <Card title="Estadística de horas extras — Inspecciones vs. Proyectos">
         {horasQuincenalesData.length === 0 ? (
           <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay quincenas cargadas.</div>
         ) : (
@@ -2226,46 +2283,15 @@ function ResumenEjecutivo() {
             <LineChart data={horasQuincenalesData} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
               <XAxis dataKey="quincena" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
+              <YAxis tick={{ fontSize: 12 }} allowDecimals={false} domain={[0, (dataMax) => Math.max(180, Math.ceil(dataMax * 1.15))]} />
               <Tooltip formatter={(v) => `${v} h`} />
               <Legend />
+              <ReferenceLine y={PUNTO_EQUILIBRIO_HORAS} stroke={T.accent} strokeDasharray="6 4" label={{ value: "Límite 150h", fill: T.accent, fontSize: 11, position: "insideTopRight" }} />
               <Line type="monotone" dataKey="Inspecciones" stroke={T.turquoise} strokeWidth={3} dot={{ r: 4 }} />
               <Line type="monotone" dataKey="Proyectos" stroke={T.green} strokeWidth={3} dot={{ r: 4 }} />
             </LineChart>
           </ResponsiveContainer>
         )}
-
-        <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, margin: "16px 0 8px" }}>Editar horas por quincena y área</div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
-          {horasManual.map((f) => (
-            <div key={f.id} style={{ display: "flex", flexDirection: "column", gap: 3, background: T.graySoft, borderRadius: 8, padding: "6px 10px" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                <span style={{ fontSize: 10.5, color: T.inkSoft, fontWeight: 700 }}>
-                  {f.quincena} · {f.area === "inspecciones" ? "Insp." : "Proy."}
-                </span>
-                <button onClick={() => eliminarQuincena(f.id)} title="Borrar" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}>×</button>
-              </div>
-              <input
-                type="number"
-                value={f.horas}
-                onChange={(e) => editarQuincena(f.id, e.target.value)}
-                style={{ ...inputStyle, width: 100, padding: "4px 6px", fontSize: 12.5, border: `1px solid ${T.line}` }}
-              />
-            </div>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
-          <Field label="Área">
-            <select style={inputStyle} value={nuevaQuincena.area} onChange={(e) => setNuevaQuincena({ ...nuevaQuincena, area: e.target.value })}>
-              <option value="inspecciones">Inspecciones</option>
-              <option value="proyectos">Proyectos</option>
-            </select>
-          </Field>
-          <Field label="Quincena"><input style={inputStyle} value={nuevaQuincena.quincena} onChange={(e) => setNuevaQuincena({ ...nuevaQuincena, quincena: e.target.value })} placeholder="1-15 Jul" /></Field>
-          <Field label="Horas"><input style={inputStyle} type="number" value={nuevaQuincena.horas} onChange={(e) => setNuevaQuincena({ ...nuevaQuincena, horas: e.target.value })} placeholder="45" /></Field>
-          <Btn variant="accent" onClick={agregarQuincena}><Plus size={14} /> Agregar</Btn>
-        </div>
       </Card>
     </div>
   );

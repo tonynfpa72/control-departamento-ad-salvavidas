@@ -616,9 +616,11 @@ function cotRowFromDb(r) {
     equipos: r.equipos || "",
     dispositivos: r.dispositivos || "",
     numCot: r.num_cot || "",
-    estado: r.estado || "Abierto",
+    estado: r.estado || "Solicitud",
     actividad: r.actividad || "Seguimiento",
     tipo: r.tipo || "Inspecciones",
+    frecuencia: r.frecuencia || "",
+    observaciones: r.observaciones || "",
   };
 }
 
@@ -1278,10 +1280,18 @@ const GOOGLE_CALENDAR_IDS = {
   proyectos: import.meta.env.VITE_GOOGLE_CALENDAR_ID_PROYECTOS || "",
 };
 const GOOGLE_CALENDAR_API_KEY = import.meta.env.VITE_GOOGLE_CALENDAR_API_KEY || "";
+// Paleta estándar de colores de evento de Google Calendar (colorId → hex),
+// para conservar el color que la persona le puso a cada evento en Google.
+const GOOGLE_EVENT_COLORS = {
+  "1": "#7986CB", "2": "#33B679", "3": "#8E24AA", "4": "#E67C73",
+  "5": "#F6BF26", "6": "#F4511E", "7": "#039BE5", "8": "#616161",
+  "9": "#3F51B5", "10": "#0B8043", "11": "#D50000",
+};
 
 async function fetchGoogleCalendarEventos(area, timeMinISO, timeMaxISO) {
   const calendarId = GOOGLE_CALENDAR_IDS[area];
   if (!calendarId || !GOOGLE_CALENDAR_API_KEY) return [];
+
   try {
     const params = new URLSearchParams({
       key: GOOGLE_CALENDAR_API_KEY,
@@ -1306,6 +1316,7 @@ async function fetchGoogleCalendarEventos(area, timeMinISO, timeMaxISO) {
         fecha,
         hora,
         _google: true,
+        _color: GOOGLE_EVENT_COLORS[e.colorId] || "#4285F4",
       };
     }).filter((e) => e.fecha);
   } catch (err) {
@@ -1319,6 +1330,7 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
   const isAdmin = currentUser?.categoria === "admin";
   const confirmar = useContext(ConfirmContext);
   const [cursor, setCursor] = useState(new Date());
+  const [vista, setVista] = useState("mes");
   const [diaSeleccionado, setDiaSeleccionado] = useState(todayISO());
   const [eventos, setEventos] = useState([]);
   const [errorMsg, setErrorMsg] = useState("");
@@ -1358,6 +1370,32 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
     d.setDate(d.getDate() + i);
     return d;
   });
+
+  const inicioSemana = new Date(cursor);
+  inicioSemana.setDate(cursor.getDate() - cursor.getDay());
+  inicioSemana.setHours(0, 0, 0, 0);
+  const diasSemana = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(inicioSemana);
+    d.setDate(d.getDate() + i);
+    return d;
+  });
+  const rangoSemanaLabel = `${diasSemana[0].toLocaleDateString("es-CR", { day: "numeric", month: "short" })} – ${diasSemana[6].toLocaleDateString("es-CR", { day: "numeric", month: "short", year: "numeric" })}`;
+  const diaLabel = cursor.toLocaleDateString("es-CR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+
+  const navegar = (delta) => {
+    if (vista === "mes") setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + delta, 1));
+    else if (vista === "semana") setCursor(new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + delta * 7));
+    else if (vista === "dia") setCursor(new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + delta));
+  };
+  const irAHoy = () => { setCursor(new Date()); setDiaSeleccionado(todayISO()); };
+
+  const VISTAS = [
+    { id: "mes", label: "Mes" },
+    { id: "semana", label: "Semana" },
+    { id: "dia", label: "Día" },
+    { id: "agenda", label: "Agenda" },
+  ];
+  const tituloVista = vista === "mes" ? monthLabel : vista === "semana" ? rangoSemanaLabel : vista === "dia" ? diaLabel : "Agenda completa";
 
   useEffect(() => {
     if (!GOOGLE_CALENDAR_IDS[area]) { setEventosGoogle([]); return; }
@@ -1420,73 +1458,202 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
     .filter((e) => e.fecha === diaSeleccionado)
     .sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
 
+  const renderPill = (e) => (
+    <div
+      key={e.id}
+      title={`${e._google ? "Desde Google Calendar · " : ""}${e.tipo} · ${e.od} · ${e.personas} · ${e.hora}`}
+      style={{
+        background: e._google ? (e._color || "#4285F4") : hashColor(e.od), color: "#fff", fontSize: 10.5, fontWeight: 600,
+        borderRadius: 5, padding: "2px 6px", overflow: "hidden",
+        textOverflow: "ellipsis", whiteSpace: "nowrap",
+      }}
+    >
+      {e._google ? "G· " : ""}{e.od}{e.personas ? ` // ${e.personas}` : ""}
+    </div>
+  );
+
+  // ---- datos para vista Agenda ----
+  const todosLosEventos = [...eventos, ...eventosGoogle];
+  const gruposAgenda = {};
+  todosLosEventos.forEach((e) => {
+    if (!e.fecha) return;
+    (gruposAgenda[e.fecha] = gruposAgenda[e.fecha] || []).push(e);
+  });
+  const fechasAgenda = Object.keys(gruposAgenda).sort();
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16 }}>
-      <Card
-        title={monthLabel}
-        action={
-          <div style={{ display: "flex", gap: 6 }}>
-            <Btn small variant="ghost" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}><ChevronLeft size={14} /></Btn>
-            <Btn small variant="ghost" onClick={() => { setCursor(new Date()); setDiaSeleccionado(todayISO()); }}>Hoy</Btn>
-            <Btn small variant="ghost" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}><ChevronRight size={14} /></Btn>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <Card>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 6 }}>
+              {VISTAS.map((v) => (
+                <Btn key={v.id} small variant={vista === v.id ? "accent" : "ghost"} onClick={() => setVista(v.id)}>{v.label}</Btn>
+              ))}
+            </div>
             <Btn small variant="ghost" onClick={() => exportExcel(eventos.map(({ tipo, od, personas, fecha, hora }) => ({ Tipo: tipo, OD: od, "Personas asignadas": personas, Fecha: fecha, Hora: hora })), `agenda_${area}.xlsx`)}><Download size={13} /> Excel</Btn>
           </div>
-        }
-      >
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4, marginBottom: 6 }}>
-          {DIAS_SEMANA_CORTO.map((d) => (
-            <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, padding: "2px 0" }}>{d}</div>
-          ))}
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
-          {gridDays.map((d) => {
-            const iso = isoDate(d);
-            const esMesActual = d.getMonth() === cursor.getMonth();
-            const esHoy = iso === todayISO();
-            const esSeleccionado = iso === diaSeleccionado;
-            const eventosDia = eventosDelDia(d);
-            return (
-              <div
-                key={iso}
-                onClick={() => setDiaSeleccionado(iso)}
-                style={{
-                  minHeight: 104, border: `1px solid ${esSeleccionado ? color : T.line}`,
-                  borderWidth: esSeleccionado ? 2 : 1,
-                  borderRadius: 8, padding: 5, cursor: "pointer",
-                  background: esMesActual ? T.panel : T.bg,
-                  display: "flex", flexDirection: "column", gap: 3,
-                }}
-              >
-                <div style={{
-                  fontSize: 11.5, fontWeight: esHoy ? 800 : 600, color: esMesActual ? (esHoy ? "#fff" : T.ink) : T.gray,
-                  background: esHoy ? color : "transparent", width: 20, height: 20, lineHeight: "20px",
-                  textAlign: "center", borderRadius: "50%",
-                }}>{d.getDate()}</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 2, overflow: "hidden" }}>
-                  {eventosDia.slice(0, CALENDARIO_MAX_VISIBLE).map((e) => (
-                    <div
-                      key={e.id}
-                      title={`${e._google ? "Desde Google Calendar · " : ""}${e.tipo} · ${e.od} · ${e.personas} · ${e.hora}`}
-                      style={{
-                        background: e._google ? "#4285F4" : hashColor(e.od), color: "#fff", fontSize: 10, fontWeight: 600,
-                        borderRadius: 5, padding: "2px 5px", overflow: "hidden",
-                        textOverflow: "ellipsis", whiteSpace: "nowrap",
-                      }}
-                    >
-                      {e._google ? "G· " : ""}{e.od}{e.personas ? ` // ${e.personas}` : ""}
-                    </div>
-                  ))}
-                  {eventosDia.length > CALENDARIO_MAX_VISIBLE && (
-                    <div style={{ fontSize: 9.5, color: T.gray, fontWeight: 700, paddingLeft: 3 }}>
-                      +{eventosDia.length - CALENDARIO_MAX_VISIBLE} más
-                    </div>
-                  )}
-                </div>
+        </Card>
+
+        {vista === "mes" && (
+          <Card
+            title={tituloVista}
+            action={
+              <div style={{ display: "flex", gap: 6 }}>
+                <Btn small variant="ghost" onClick={() => navegar(-1)}><ChevronLeft size={14} /></Btn>
+                <Btn small variant="ghost" onClick={irAHoy}>Hoy</Btn>
+                <Btn small variant="ghost" onClick={() => navegar(1)}><ChevronRight size={14} /></Btn>
               </div>
-            );
-          })}
-        </div>
-      </Card>
+            }
+          >
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4, marginBottom: 6 }}>
+              {DIAS_SEMANA_CORTO.map((d) => (
+                <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, padding: "2px 0" }}>{d}</div>
+              ))}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
+              {gridDays.map((d) => {
+                const iso = isoDate(d);
+                const esMesActual = d.getMonth() === cursor.getMonth();
+                const esHoy = iso === todayISO();
+                const esSeleccionado = iso === diaSeleccionado;
+                const eventosDia = eventosDelDia(d);
+                return (
+                  <div
+                    key={iso}
+                    onClick={() => setDiaSeleccionado(iso)}
+                    style={{
+                      minHeight: 104, border: `1px solid ${esSeleccionado ? color : T.line}`,
+                      borderWidth: esSeleccionado ? 2 : 1,
+                      borderRadius: 8, padding: 5, cursor: "pointer",
+                      background: esMesActual ? T.panel : T.bg,
+                      display: "flex", flexDirection: "column", gap: 3,
+                    }}
+                  >
+                    <div style={{
+                      fontSize: 11.5, fontWeight: esHoy ? 800 : 600, color: esMesActual ? (esHoy ? "#fff" : T.ink) : T.gray,
+                      background: esHoy ? color : "transparent", width: 20, height: 20, lineHeight: "20px",
+                      textAlign: "center", borderRadius: "50%",
+                    }}>{d.getDate()}</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2, overflow: "hidden" }}>
+                      {eventosDia.slice(0, CALENDARIO_MAX_VISIBLE).map(renderPill)}
+                      {eventosDia.length > CALENDARIO_MAX_VISIBLE && (
+                        <div style={{ fontSize: 9.5, color: T.gray, fontWeight: 700, paddingLeft: 3 }}>
+                          +{eventosDia.length - CALENDARIO_MAX_VISIBLE} más
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        )}
+
+        {vista === "semana" && (
+          <Card
+            title={tituloVista}
+            action={
+              <div style={{ display: "flex", gap: 6 }}>
+                <Btn small variant="ghost" onClick={() => navegar(-1)}><ChevronLeft size={14} /></Btn>
+                <Btn small variant="ghost" onClick={irAHoy}>Hoy</Btn>
+                <Btn small variant="ghost" onClick={() => navegar(1)}><ChevronRight size={14} /></Btn>
+              </div>
+            }
+          >
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 6 }}>
+              {diasSemana.map((d) => {
+                const iso = isoDate(d);
+                const esHoy = iso === todayISO();
+                const esSeleccionado = iso === diaSeleccionado;
+                const eventosDia = eventosDelDia(d);
+                return (
+                  <div
+                    key={iso}
+                    onClick={() => setDiaSeleccionado(iso)}
+                    style={{ minHeight: 220, border: `1px solid ${esSeleccionado ? color : T.line}`, borderWidth: esSeleccionado ? 2 : 1, borderRadius: 8, padding: 6, cursor: "pointer", display: "flex", flexDirection: "column", gap: 4 }}
+                  >
+                    <div style={{ textAlign: "center", marginBottom: 2 }}>
+                      <div style={{ fontSize: 10, color: T.gray, fontWeight: 800, textTransform: "uppercase" }}>{d.toLocaleDateString("es-CR", { weekday: "short" })}</div>
+                      <div style={{
+                        fontSize: 13, fontWeight: 800, color: esHoy ? "#fff" : T.ink,
+                        background: esHoy ? color : "transparent", width: 24, height: 24, lineHeight: "24px",
+                        borderRadius: "50%", margin: "2px auto 0",
+                      }}>{d.getDate()}</div>
+                    </div>
+                    {eventosDia.map(renderPill)}
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        )}
+
+        {vista === "dia" && (
+          <Card
+            title={tituloVista}
+            action={
+              <div style={{ display: "flex", gap: 6 }}>
+                <Btn small variant="ghost" onClick={() => navegar(-1)}><ChevronLeft size={14} /></Btn>
+                <Btn small variant="ghost" onClick={irAHoy}>Hoy</Btn>
+                <Btn small variant="ghost" onClick={() => navegar(1)}><ChevronRight size={14} /></Btn>
+              </div>
+            }
+          >
+            {eventosDelDia(cursor).length === 0 ? (
+              <div style={{ color: T.gray, fontSize: 13 }}>Sin visitas agendadas este día.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {eventosDelDia(cursor).map((e) => (
+                  <div key={e.id} style={{ background: e._google ? (e._color || "#4285F4") : hashColor(e.od), color: "#fff", borderRadius: 10, padding: "12px 14px" }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.9 }}>{e._google ? "Google Calendar" : e.tipo} · {e.hora}</div>
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>{e._google ? "G· " : ""}{e.od}{e.personas ? ` // ${e.personas}` : ""}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        )}
+
+        {vista === "agenda" && (
+          <>
+            {fechasAgenda.length === 0 && (
+              <Card><div style={{ color: T.gray, fontSize: 13 }}>No hay visitas agendadas todavía.</div></Card>
+            )}
+            <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 14, overflow: "hidden" }}>
+              {fechasAgenda.map((fecha, idx) => {
+                const fechaObj = new Date(fecha + "T00:00:00");
+                const eventosDia = gruposAgenda[fecha].sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
+                return (
+                  <div key={fecha} style={{ display: "flex", borderTop: idx === 0 ? "none" : `1px solid ${T.line}` }}>
+                    <div style={{ width: 64, flexShrink: 0, padding: "16px 8px", textAlign: "center" }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: T.inkSoft, textTransform: "lowercase" }}>
+                        {fechaObj.toLocaleDateString("es-CR", { weekday: "short" })}
+                      </div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: T.ink }}>{fechaObj.getDate()}</div>
+                    </div>
+                    <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6, padding: "14px 14px 14px 0" }}>
+                      {eventosDia.map((e) => (
+                        <div
+                          key={e.id}
+                          title={`${e._google ? "Desde Google Calendar · " : ""}${e.tipo} · ${e.od} · ${e.personas} · ${e.hora}`}
+                          style={{
+                            background: e._google ? (e._color || "#4285F4") : hashColor(e.od), color: "#fff", fontWeight: 700, fontSize: 13,
+                            borderRadius: 10, padding: "10px 14px", overflow: "hidden",
+                            textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          }}
+                        >
+                          {e._google ? "G· " : ""}{e.od}{e.personas ? ` // ${e.personas}` : ""}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <Card title={`Visitas — ${new Date(diaSeleccionado + "T00:00:00").toLocaleDateString("es-CR", { weekday: "long", day: "numeric", month: "short" })}`}>
@@ -1496,9 +1663,9 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 320, overflowY: "auto" }}>
               {eventosDelDiaSeleccionado.map((e) => (
                 <div key={e.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", borderBottom: `1px dashed ${T.line}`, paddingBottom: 8 }}>
-                  <div style={{ marginTop: 4, width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: e._google ? "#4285F4" : hashColor(e.od) }} />
+                  <div style={{ marginTop: 4, width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: e._google ? (e._color || "#4285F4") : hashColor(e.od) }} />
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: T.ink }}>{e.hora} · {e.tipo}{e._google && <span style={{ color: "#4285F4", fontWeight: 600 }}> · Google Calendar</span>}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: T.ink }}>{e.hora} · {e.tipo}{e._google && <span style={{ color: e._color || "#4285F4", fontWeight: 600 }}> · Google Calendar</span>}</div>
                     <div style={{ fontSize: 12, color: T.inkSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {e.od} — {e.personas}
                     </div>
@@ -1612,10 +1779,12 @@ function CotizacionPrintView({ r, onClose }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <tbody>
               {row("Días de implementación", r.dias)}
+              {row("Frecuencia", r.frecuencia)}
               {row("Descripción del trabajo", r.descripcion)}
               {row("Personal y puesto", r.personal)}
-              {row("Equipos requeridos", r.equipos)}
+              {row("Equipos de elevación requeridos", r.equipos)}
               {row("Lista de dispositivos", r.dispositivos)}
+              {row("Observaciones", r.observaciones)}
             </tbody>
           </table>
 
@@ -1642,10 +1811,12 @@ function Cotizaciones() {
   const [rows, setRows] = useState([]);
   const [open, setOpen] = useState(false);
   const [printRow, setPrintRow] = useState(null);
+  const [subTab, setSubTab] = useState("Todas");
+  const [avisoForm, setAvisoForm] = useState("");
   const [form, setForm] = useState({
     solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "",
-    dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Abierto",
-    actividad: "Seguimiento", tipo: "Inspecciones",
+    dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Solicitud",
+    actividad: "Seguimiento", tipo: "Inspecciones", frecuencia: "", observaciones: "",
   });
 
   useEffect(() => {
@@ -1659,15 +1830,20 @@ function Cotizaciones() {
   const nextConsecutivo = String(maxNumero + 1).padStart(5, "0");
 
   const submit = async () => {
-    if (!form.solicitante || !form.cliente) return;
+    if (!form.cliente || !form.email) {
+      setAvisoForm("Falta completar Cliente y/o Email — ambos son obligatorios para guardar la solicitud.");
+      return;
+    }
+    setAvisoForm("");
     const payload = {
       numero: maxNumero + 1,
       solicitante: form.solicitante, cliente: form.cliente, contacto: form.contacto, email: form.email,
       telefono: form.telefono, provincia: form.provincia, dias: form.dias || null, personal: form.personal,
       descripcion: form.descripcion, equipos: form.equipos, dispositivos: form.dispositivos,
       num_cot: form.numCot, estado: form.estado, actividad: form.actividad, tipo: form.tipo,
+      frecuencia: form.frecuencia, observaciones: form.observaciones,
     };
-    setForm({ solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "", dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Abierto", actividad: "Seguimiento", tipo: "Inspecciones" });
+    setForm({ solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "", dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Solicitud", actividad: "Seguimiento", tipo: "Inspecciones", frecuencia: "", observaciones: "" });
     setOpen(false);
     const { data, error } = await supabase.from("cotizaciones").insert(payload).select().single();
     if (!error && data) setRows((prev) => [cotRowFromDb(data), ...prev]);
@@ -1688,13 +1864,18 @@ function Cotizaciones() {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, numCot } : r));
     supabase.from("cotizaciones").update({ num_cot: numCot }).eq("id", id).then();
   };
+  const setObservaciones = (id, observaciones) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, observaciones } : r));
+    supabase.from("cotizaciones").update({ observaciones }).eq("id", id).then();
+  };
   const del = async (id) => {
     if (!(await confirmar("¿Está seguro que desea eliminar esta cotización? Esta acción no se puede deshacer."))) return;
     setRows((prev) => prev.filter((r) => r.id !== id));
     supabase.from("cotizaciones").delete().eq("id", id).then();
   };
 
-  const estadoColor = { Abierto: [T.amber, T.amberSoft], "En espera": [T.steelSoft, T.graySoft], Enviada: [T.green, T.greenSoft], Cancelado: [T.red, T.redSoft] };
+  const ESTADOS_COT = ["Solicitud", "Enviado", "Abierto", "Comparado"];
+  const estadoColor = { Solicitud: [T.amber, T.amberSoft], Enviado: [T.blue, T.blueSoft], Abierto: [T.steel, T.steelSoft], Comparado: [T.green, T.greenSoft] };
   const actividadColor = { Seguimiento: [T.blue, T.blueSoft], Cancelado: [T.red, T.redSoft], "Con OC": [T.green, T.greenSoft] };
   const TIPO_OFERTA_OPCIONES = ["Inspecciones", "Proyectos", "Inspecciones y Proyectos"];
 
@@ -1704,24 +1885,30 @@ function Cotizaciones() {
       <Card
         title={`Historial de solicitudes — próximo consecutivo #${nextConsecutivo}`}
         action={<div style={{ display: "flex", gap: 8 }}>
-          <Btn small variant="ghost" onClick={() => exportExcel(rows.map(r => ({ Consecutivo: r.consecutivo, Solicitante: r.solicitante, Cliente: r.cliente, "Nombre del contacto": r.contacto, Email: r.email, Telefono: r.telefono, Provincia: r.provincia, Dias: r.dias, Personal: r.personal, "Descripción del trabajo": r.descripcion, Equipos: r.equipos, "Lista de dispositivos": r.dispositivos, "N° Cotización": r.numCot, Tipo: r.tipo, Estado: r.estado, Actividad: r.actividad })), "cotizaciones.xlsx")}><Download size={13} /> Excel</Btn>
+          <Btn small variant="ghost" onClick={() => exportExcel(rows.map(r => ({ Consecutivo: r.consecutivo, Solicitante: r.solicitante, Cliente: r.cliente, "Nombre del contacto": r.contacto, Email: r.email, Telefono: r.telefono, Provincia: r.provincia, Dias: r.dias, Personal: r.personal, "Descripción del trabajo": r.descripcion, "Equipos de elevación": r.equipos, "Lista de dispositivos": r.dispositivos, "N° Cotización": r.numCot, Tipo: r.tipo, Estado: r.estado, Actividad: r.actividad, Frecuencia: r.frecuencia, Observaciones: r.observaciones })), "cotizaciones.xlsx")}><Download size={13} /> Excel</Btn>
           <Btn small variant="accent" onClick={() => setOpen(!open)}><Plus size={13} /> Nueva solicitud</Btn>
         </div>}
       >
         {open && (
           <div style={{ background: T.graySoft, borderRadius: 10, padding: 16, marginBottom: 16, display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
+            {avisoForm && (
+              <div style={{ gridColumn: "1 / -1", color: T.red, fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", background: T.redSoft, padding: "8px 10px", borderRadius: 8 }}>
+                <AlertCircle size={14} style={{ flexShrink: 0 }} />{avisoForm}
+              </div>
+            )}
             <Field label="Nombre del solicitante"><input style={inputStyle} value={form.solicitante} onChange={(e) => setForm({ ...form, solicitante: e.target.value })} /></Field>
-            <Field label="Cliente"><input style={inputStyle} value={form.cliente} onChange={(e) => setForm({ ...form, cliente: e.target.value })} /></Field>
+            <Field label="Cliente *"><input style={inputStyle} value={form.cliente} onChange={(e) => setForm({ ...form, cliente: e.target.value })} /></Field>
             <Field label="Nombre del contacto"><input style={inputStyle} value={form.contacto} onChange={(e) => setForm({ ...form, contacto: e.target.value })} /></Field>
-            <Field label="Email"><input style={inputStyle} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
+            <Field label="Email *"><input style={inputStyle} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
             <Field label="Teléfono"><input style={inputStyle} value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })} /></Field>
             <Field label="Provincia"><input style={inputStyle} value={form.provincia} onChange={(e) => setForm({ ...form, provincia: e.target.value })} /></Field>
             <Field label="Días de implementación"><input style={inputStyle} type="number" value={form.dias} onChange={(e) => setForm({ ...form, dias: e.target.value })} /></Field>
             <Field label="Personal y puesto"><input style={inputStyle} value={form.personal} onChange={(e) => setForm({ ...form, personal: e.target.value })} placeholder="2 técnicos, 1 supervisor" /></Field>
+            <Field label="Frecuencia"><input style={inputStyle} value={form.frecuencia} onChange={(e) => setForm({ ...form, frecuencia: e.target.value })} placeholder="Única vez, Mensual, Anual..." /></Field>
             <div style={{ gridColumn: "1 / -1" }}>
               <Field label="Descripción del trabajo"><input style={inputStyle} value={form.descripcion} onChange={(e) => setForm({ ...form, descripcion: e.target.value })} placeholder="Detalle del trabajo a realizar..." /></Field>
             </div>
-            <Field label="Equipos (cant./tipo/marca/modelo)"><input style={inputStyle} value={form.equipos} onChange={(e) => setForm({ ...form, equipos: e.target.value })} placeholder="1x Grúa / Terex / AC55" /></Field>
+            <Field label="Equipos de elevación (cant./tipo/marca/modelo)"><input style={inputStyle} value={form.equipos} onChange={(e) => setForm({ ...form, equipos: e.target.value })} placeholder="1x Grúa / Terex / AC55" /></Field>
             <Field label="Lista de dispositivos"><input style={inputStyle} value={form.dispositivos} onChange={(e) => setForm({ ...form, dispositivos: e.target.value })} placeholder="Materiales y/o equipos..." /></Field>
             <Field label="N° de cotización (si aplica)"><input style={inputStyle} value={form.numCot} onChange={(e) => setForm({ ...form, numCot: e.target.value })} /></Field>
             <Field label="Tipo de oferta">
@@ -1729,6 +1916,9 @@ function Cotizaciones() {
                 {TIPO_OFERTA_OPCIONES.map((t) => <option key={t}>{t}</option>)}
               </select>
             </Field>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <Field label="Observaciones"><input style={inputStyle} value={form.observaciones} onChange={(e) => setForm({ ...form, observaciones: e.target.value })} placeholder="Notas adicionales..." /></Field>
+            </div>
             <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end", gap: 8 }}>
               <Btn variant="ghost" onClick={() => setOpen(false)}>Cancelar</Btn>
               <Btn variant="accent" onClick={submit}>Guardar solicitud</Btn>
@@ -1736,14 +1926,21 @@ function Cotizaciones() {
           </div>
         )}
 
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+          <Btn small variant={subTab === "Todas" ? "accent" : "ghost"} onClick={() => setSubTab("Todas")}>Todas ({rows.length})</Btn>
+          {ESTADOS_COT.map((e) => (
+            <Btn key={e} small variant={subTab === e ? "accent" : "ghost"} onClick={() => setSubTab(e)}>{e} ({rows.filter((r) => r.estado === e).length})</Btn>
+          ))}
+        </div>
+
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
-              <th style={{ padding: "6px 8px" }}>#</th><th>Solicitante</th><th>Cliente</th><th>Provincia</th><th>Días</th><th>N° Cotización</th><th>Tipo</th><th>Estado</th><th>Actividad</th><th></th><th></th>
+              <th style={{ padding: "6px 8px" }}>#</th><th>Solicitante</th><th>Cliente</th><th>Provincia</th><th>Días</th><th style={{ minWidth: 150 }}>N° Cotización</th><th>Tipo</th><th>Estado</th><th>Actividad</th><th style={{ minWidth: 180 }}>Observaciones</th><th></th><th></th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {rows.filter((r) => subTab === "Todas" || r.estado === subTab).map((r) => (
               <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
                 <td style={{ padding: "9px 8px", fontWeight: 700 }}>{r.consecutivo}</td>
                 <td>{r.solicitante}</td>
@@ -1752,7 +1949,7 @@ function Cotizaciones() {
                 <td>{r.dias}</td>
                 <td>
                   {canEditEstadoCot ? (
-                    <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 100 }} value={r.numCot} onChange={(e) => setNumCot(r.id, e.target.value)} placeholder="COT-000" />
+                    <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }} value={r.numCot} onChange={(e) => setNumCot(r.id, e.target.value)} placeholder="COT-000" />
                   ) : (r.numCot || "—")}
                 </td>
                 <td>
@@ -1779,6 +1976,14 @@ function Cotizaciones() {
                   ) : (
                     <Badge color={(actividadColor[r.actividad] || [T.gray, T.graySoft])[0]} soft={(actividadColor[r.actividad] || [T.gray, T.graySoft])[1]}>{r.actividad}</Badge>
                   )}
+                </td>
+                <td>
+                  <input
+                    style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 180 }}
+                    value={r.observaciones}
+                    onChange={(e) => setObservaciones(r.id, e.target.value)}
+                    placeholder="Notas..."
+                  />
                 </td>
                 <td>
                   <Btn small variant="ghost" onClick={() => setPrintRow(r)}><Download size={12} /> PDF</Btn>
@@ -2794,7 +2999,7 @@ function CalendarioGlobal() {
     { id: "dia", label: "Día" },
     { id: "agenda", label: "Agenda" },
   ];
-  const colorDe = (e) => (e._google ? "#4285F4" : (AREA_INFO[e.area]?.color || T.gray));
+  const colorDe = (e) => (e._google ? (e._color || "#4285F4") : (AREA_INFO[e.area]?.color || T.gray));
 
   const eventosFiltrados = [...eventos, ...eventosGoogle].filter((e) => {
     if (filtroArea === "Todos") return true;

@@ -1347,7 +1347,7 @@ const GOOGLE_CALENDAR_IDS = {
   proyectos: import.meta.env.VITE_GOOGLE_CALENDAR_ID_PROYECTOS || "",
 };
 const GOOGLE_CALENDAR_API_KEY = import.meta.env.VITE_GOOGLE_CALENDAR_API_KEY || "";
-async function fetchGoogleCalendarEventos(area, timeMinISO, timeMaxISO) {
+async function fetchGoogleCalendarEventos(area, timeMinISO, timeMaxISO, intento = 1) {
   const calendarId = GOOGLE_CALENDAR_IDS[area];
   if (!calendarId || !GOOGLE_CALENDAR_API_KEY) return [];
 
@@ -1361,7 +1361,15 @@ async function fetchGoogleCalendarEventos(area, timeMinISO, timeMaxISO) {
       maxResults: "250",
     });
     const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`);
-    if (!resp.ok) return null; // null = la consulta falló (ej. límite de Google); distinto de "no hay eventos"
+    if (!resp.ok) {
+      // Reintenta una vez tras un fallo pasajero (ej. límite de Google al
+      // navegar rápido entre meses) antes de darse por vencido.
+      if (intento < 3) {
+        await new Promise((r) => setTimeout(r, 500 * intento));
+        return fetchGoogleCalendarEventos(area, timeMinISO, timeMaxISO, intento + 1);
+      }
+      return null; // null = la consulta falló definitivamente; distinto de "no hay eventos"
+    }
     const data = await resp.json();
     return (data.items || []).flatMap((e) => {
       const base = {
@@ -1388,6 +1396,10 @@ async function fetchGoogleCalendarEventos(area, timeMinISO, timeMaxISO) {
       return [{ ...base, id: `gcal-${e.id}`, fecha, hora }];
     });
   } catch (err) {
+    if (intento < 3) {
+      await new Promise((r) => setTimeout(r, 500 * intento));
+      return fetchGoogleCalendarEventos(area, timeMinISO, timeMaxISO, intento + 1);
+    }
     console.error("Error cargando Google Calendar:", err);
     return null;
   }
@@ -1568,10 +1580,11 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <Card>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-            <div style={{ display: "flex", gap: 6 }}>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               {VISTAS.map((v) => (
                 <Btn key={v.id} small variant={vista === v.id ? "accent" : "ghost"} onClick={() => setVista(v.id)}>{v.label}</Btn>
               ))}
+              <input type="date" onChange={(e) => irAFecha(e.target.value)} style={{ ...inputStyle, width: 150 }} title="Ir a una fecha" />
             </div>
             <Btn small variant="ghost" onClick={() => exportExcel(eventos.map(({ tipo, od, personas, fecha, hora }) => ({ Tipo: tipo, OD: od, "Personas asignadas": personas, Fecha: fecha, Hora: hora })), `agenda_${area}.xlsx`)}><Download size={13} /> Excel</Btn>
           </div>
@@ -3126,10 +3139,8 @@ function CalendarioGlobal() {
     const cargar = async () => {
       const desde = new Date(cursor.getFullYear(), cursor.getMonth() - 2, 1);
       const hasta = new Date(cursor.getFullYear(), cursor.getMonth() + 3, 0);
-      const [gInsp, gProy] = await Promise.all([
-        fetchGoogleCalendarEventos("inspecciones", isoDate(desde), isoDate(hasta)),
-        fetchGoogleCalendarEventos("proyectos", isoDate(desde), isoDate(hasta)),
-      ]);
+      const gInsp = await fetchGoogleCalendarEventos("inspecciones", isoDate(desde), isoDate(hasta));
+      const gProy = await fetchGoogleCalendarEventos("proyectos", isoDate(desde), isoDate(hasta));
       if (!activo) return;
       // Si una consulta falla (ej. límite de Google), conserva los datos
       // que ya había en pantalla para esa área en vez de dejarla en blanco.
@@ -3233,21 +3244,13 @@ function CalendarioGlobal() {
             <select style={{ ...inputStyle, width: 200 }} value={filtroArea} onChange={(e) => setFiltroArea(e.target.value)}>
               {FILTRO_OPCIONES.map((op) => <option key={op} value={op}>{op}</option>)}
             </select>
+            <input type="date" onChange={(e) => irAFecha(e.target.value)} style={{ ...inputStyle, width: 150 }} title="Ir a una fecha" />
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             {VISTAS.map((v) => (
               <Btn key={v.id} small variant={vista === v.id ? "accent" : "ghost"} onClick={() => setVista(v.id)}>{v.label}</Btn>
             ))}
           </div>
-        </div>
-        <div style={{ marginTop: 10, fontSize: 11.5, color: T.gray, background: T.graySoft, borderRadius: 8, padding: "8px 10px" }}>
-          Diagnóstico: {eventos.filter((e) => e.area === "inspecciones").length} propios + {eventosGoogle.filter((e) => e.area === "inspecciones").length} Google en Inspecciones ·{" "}
-          {eventos.filter((e) => e.area === "proyectos").length} propios + {eventosGoogle.filter((e) => e.area === "proyectos").length} Google en Proyectos ·{" "}
-          Mostrando mes de {cursor.toLocaleDateString("es-CR", { month: "long", year: "numeric" })}
-          <br />
-          Muestra de fechas Google Inspecciones: {JSON.stringify(eventosGoogle.filter((e) => e.area === "inspecciones").slice(0, 5).map((e) => e.fecha))}
-          <br />
-          Ejemplo de fecha que espera la cuadrícula (hoy): {isoDate(new Date())}
         </div>
       </Card>
 

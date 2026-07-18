@@ -2268,7 +2268,7 @@ function ClientesPorPersona({ area, color }) {
   const [filtroTipo, setFiltroTipo] = useState("Todos");
   const isProyectos = area === "proyectos";
   const label = isProyectos ? "Encargado" : "Técnico";
-  const rowsFiltradas = rows.filter((r) => filtroTipo === "Todos" || (r.tipoOD || "Normal") === filtroTipo);
+  const rowsFiltradas = rows.filter((r) => (filtroTipo === "Todos" || (r.tipoOD || "Normal") === filtroTipo) && r.estado === "Activo");
   const counts = {};
   rowsFiltradas.forEach((r) => {
     const key = r.tecnico?.trim() || "Sin asignar";
@@ -2278,7 +2278,7 @@ function ClientesPorPersona({ area, color }) {
 
   return (
     <Card
-      title={`Cantidad de clientes por ${label.toLowerCase()}`}
+      title={`Cantidad de clientes activos por ${label.toLowerCase()}`}
       action={
         <div style={{ display: "flex", gap: 6 }}>
           <Btn small variant={filtroTipo === "Todos" ? "accent" : "ghost"} onClick={() => setFiltroTipo("Todos")}>Todos</Btn>

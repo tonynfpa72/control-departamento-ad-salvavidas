@@ -1361,7 +1361,7 @@ async function fetchGoogleCalendarEventos(area, timeMinISO, timeMaxISO) {
       maxResults: "250",
     });
     const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`);
-    if (!resp.ok) return [];
+    if (!resp.ok) return null; // null = la consulta falló (ej. límite de Google); distinto de "no hay eventos"
     const data = await resp.json();
     return (data.items || []).flatMap((e) => {
       const base = {
@@ -1389,7 +1389,7 @@ async function fetchGoogleCalendarEventos(area, timeMinISO, timeMaxISO) {
     });
   } catch (err) {
     console.error("Error cargando Google Calendar:", err);
-    return [];
+    return null;
   }
 }
 
@@ -1472,7 +1472,9 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
       const desde = isoDate(gridDays[0]);
       const hasta = isoDate(gridDays[gridDays.length - 1]);
       const eventosG = await fetchGoogleCalendarEventos(area, desde, hasta);
-      if (activo) setEventosGoogle(eventosG);
+      // Si falla (ej. límite de Google), conserva lo que ya había en
+      // pantalla en vez de dejarla en blanco.
+      if (activo && eventosG !== null) setEventosGoogle(eventosG);
     };
     cargar();
     // Vuelve a consultar Google Calendar cada 60 segundos mientras esta
@@ -3119,7 +3121,14 @@ function CalendarioGlobal() {
         fetchGoogleCalendarEventos("inspecciones", isoDate(desde), isoDate(hasta)),
         fetchGoogleCalendarEventos("proyectos", isoDate(desde), isoDate(hasta)),
       ]);
-      if (activo) setEventosGoogle([...gInsp, ...gProy]);
+      if (!activo) return;
+      // Si una consulta falla (ej. límite de Google), conserva los datos
+      // que ya había en pantalla para esa área en vez de dejarla en blanco.
+      setEventosGoogle((prev) => {
+        const inspFinal = gInsp !== null ? gInsp : prev.filter((e) => e.area === "inspecciones");
+        const proyFinal = gProy !== null ? gProy : prev.filter((e) => e.area === "proyectos");
+        return [...inspFinal, ...proyFinal];
+      });
     };
     cargar();
     // Vuelve a consultar Google Calendar cada 60 segundos mientras esta

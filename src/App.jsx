@@ -3221,6 +3221,10 @@ function CalendarioGlobal() {
           Diagnóstico: {eventos.filter((e) => e.area === "inspecciones").length} propios + {eventosGoogle.filter((e) => e.area === "inspecciones").length} Google en Inspecciones ·{" "}
           {eventos.filter((e) => e.area === "proyectos").length} propios + {eventosGoogle.filter((e) => e.area === "proyectos").length} Google en Proyectos ·{" "}
           Mostrando mes de {cursor.toLocaleDateString("es-CR", { month: "long", year: "numeric" })}
+          <br />
+          Muestra de fechas Google Inspecciones: {JSON.stringify(eventosGoogle.filter((e) => e.area === "inspecciones").slice(0, 5).map((e) => e.fecha))}
+          <br />
+          Ejemplo de fecha que espera la cuadrícula (hoy): {isoDate(new Date())}
         </div>
       </Card>
 

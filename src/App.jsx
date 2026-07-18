@@ -1456,6 +1456,12 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
     else if (vista === "dia") setCursor(new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + delta));
   };
   const irAHoy = () => { setCursor(new Date()); setDiaSeleccionado(todayISO()); };
+  const irAFecha = (valor) => {
+    if (!valor) return;
+    const [anio, mes, dia] = valor.split("-").map(Number);
+    setCursor(new Date(anio, mes - 1, dia));
+    setDiaSeleccionado(valor);
+  };
 
   const VISTAS = [
     { id: "mes", label: "Mes" },
@@ -1579,6 +1585,7 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
                 <Btn small variant="ghost" onClick={() => navegar(-1)}><ChevronLeft size={14} /></Btn>
                 <Btn small variant="ghost" onClick={irAHoy}>Hoy</Btn>
                 <Btn small variant="ghost" onClick={() => navegar(1)}><ChevronRight size={14} /></Btn>
+                <input type="date" onChange={(e) => irAFecha(e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }} title="Ir a una fecha" />
               </div>
             }
           >
@@ -1635,6 +1642,7 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
                 <Btn small variant="ghost" onClick={() => navegar(-1)}><ChevronLeft size={14} /></Btn>
                 <Btn small variant="ghost" onClick={irAHoy}>Hoy</Btn>
                 <Btn small variant="ghost" onClick={() => navegar(1)}><ChevronRight size={14} /></Btn>
+                <input type="date" onChange={(e) => irAFecha(e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }} title="Ir a una fecha" />
               </div>
             }
           >
@@ -1674,6 +1682,7 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
                 <Btn small variant="ghost" onClick={() => navegar(-1)}><ChevronLeft size={14} /></Btn>
                 <Btn small variant="ghost" onClick={irAHoy}>Hoy</Btn>
                 <Btn small variant="ghost" onClick={() => navegar(1)}><ChevronRight size={14} /></Btn>
+                <input type="date" onChange={(e) => irAFecha(e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }} title="Ir a una fecha" />
               </div>
             }
           >
@@ -3195,6 +3204,11 @@ function CalendarioGlobal() {
     else if (vista === "semana") setCursor(new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + delta * 7));
     else if (vista === "dia") setCursor(new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + delta));
   };
+  const irAFecha = (valor) => {
+    if (!valor) return;
+    const [anio, mes, dia] = valor.split("-").map(Number);
+    setCursor(new Date(anio, mes - 1, dia));
+  };
 
   const renderPill = (e) => (
     <div
@@ -3243,6 +3257,7 @@ function CalendarioGlobal() {
             <Btn small variant="ghost" onClick={() => navegar(-1)}><ChevronLeft size={14} /></Btn>
             <Btn small variant="ghost" onClick={() => setCursor(new Date())}>Hoy</Btn>
             <Btn small variant="ghost" onClick={() => navegar(1)}><ChevronRight size={14} /></Btn>
+            <input type="date" onChange={(e) => irAFecha(e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }} title="Ir a una fecha" />
           </div>
         }>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 8, marginBottom: 10 }}>
@@ -3285,6 +3300,7 @@ function CalendarioGlobal() {
             <Btn small variant="ghost" onClick={() => navegar(-1)}><ChevronLeft size={14} /></Btn>
             <Btn small variant="ghost" onClick={() => setCursor(new Date())}>Hoy</Btn>
             <Btn small variant="ghost" onClick={() => navegar(1)}><ChevronRight size={14} /></Btn>
+            <input type="date" onChange={(e) => irAFecha(e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }} title="Ir a una fecha" />
           </div>
         }>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 6 }}>
@@ -3316,6 +3332,7 @@ function CalendarioGlobal() {
             <Btn small variant="ghost" onClick={() => navegar(-1)}><ChevronLeft size={14} /></Btn>
             <Btn small variant="ghost" onClick={() => setCursor(new Date())}>Hoy</Btn>
             <Btn small variant="ghost" onClick={() => navegar(1)}><ChevronRight size={14} /></Btn>
+            <input type="date" onChange={(e) => irAFecha(e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }} title="Ir a una fecha" />
           </div>
         }>
           {eventosDiaUnico.length === 0 ? (

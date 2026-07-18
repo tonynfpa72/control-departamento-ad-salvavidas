@@ -587,14 +587,16 @@ function odRowFromDb(r) {
     frecuencia: r.frecuencia || "",
     fechaInicio: r.fecha_inicio || "",
     fechaEntrega: r.fecha_entrega || "",
+    fechaAprobacion: r.fecha_aprobacion || "",
     accion: r.accion || "",
     tipoOD: r.tipo_od || "Normal",
     progreso: r.progreso || "Pendiente",
     facturado: r.facturado || "Sin facturar",
     area: r.area,
+    created_at: r.created_at,
   };
 }
-const ODFIELD_TO_DB = { fechaInicio: "fecha_inicio", fechaEntrega: "fecha_entrega", tipoOD: "tipo_od" };
+const ODFIELD_TO_DB = { fechaInicio: "fecha_inicio", fechaEntrega: "fecha_entrega", fechaAprobacion: "fecha_aprobacion", tipoOD: "tipo_od" };
 function odPatchToDb(patch) {
   const out = {};
   for (const k in patch) out[ODFIELD_TO_DB[k] || k] = patch[k] === "" ? null : patch[k];
@@ -988,6 +990,10 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, vencimiento } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ vencimiento })).eq("id", id).then();
   };
+  const setFechaAprobacion = (id, fechaAprobacion) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, fechaAprobacion } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ fechaAprobacion })).eq("id", id).then();
+  };
   const setFrecuencia = (id, frecuencia) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, frecuencia } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ frecuencia })).eq("id", id).then();
@@ -1070,6 +1076,10 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     const matchEstado = filtroEstado === "Todos" || r.estado === filtroEstado || efectivoFiltro === filtroEstado;
     const matchProgreso = !esCorrectivo || (subTabCorrectivo === "Pendientes" ? (r.progreso || "Pendiente") !== "Completado" : (r.progreso || "Pendiente") === "Completado");
     return matchTexto && matchEstado && matchProgreso;
+  }).sort((a, b) => {
+    if (!esCorrectivo) return 0;
+    // OD Correctivos: del más antiguo al más nuevo.
+    return (a.created_at || "").localeCompare(b.created_at || "");
   });
   const estadoOpciones = isProyectos ? ["Todos", "Activo", "No Activo", "Entregado", "Vencido"] : ["Todos", "Activo", "No Activo", "Vencido"];
   const pendientesCorrectivoCount = rows.filter((r) => (r.progreso || "Pendiente") !== "Completado").length;
@@ -1112,10 +1122,11 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
             <thead>
               <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
                 <th style={{ padding: "6px 8px" }}>OD</th><th style={{ minWidth: 190 }}>Cliente</th><th>Estado</th><th>{tecnicoLabel}</th>
-                {isInspecciones && <th>Fecha de Vencimiento</th>}
-                {isInspecciones && <th>Frecuencia</th>}
-                {isProyectos && <th>Fecha de Inicio</th>}
-                {isProyectos && <th>Fecha de Entrega</th>}
+                {esCorrectivo && <th>Fecha de Aprobación</th>}
+                {!esCorrectivo && isInspecciones && <th>Fecha de Vencimiento</th>}
+                {!esCorrectivo && isInspecciones && <th>Frecuencia</th>}
+                {!esCorrectivo && isProyectos && <th>Fecha de Inicio</th>}
+                {!esCorrectivo && isProyectos && <th>Fecha de Entrega</th>}
                 <th>Acción</th>
                 {esCorrectivo && <th>Progreso</th>}
                 {esCorrectivo && <th>Facturado</th>}
@@ -1169,14 +1180,21 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                       <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 110 }} value={r.tecnico} onChange={(e) => setTecnico(r.id, e.target.value)} />
                     ) : (r.tecnico || "—")}
                   </td>
-                  {isInspecciones && (
+                  {esCorrectivo && (
+                    <td>
+                      {canEditFechas ? (
+                        <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 130 }} value={r.fechaAprobacion || ""} onChange={(e) => setFechaAprobacion(r.id, e.target.value)} />
+                      ) : (r.fechaAprobacion || "—")}
+                    </td>
+                  )}
+                  {!esCorrectivo && isInspecciones && (
                     <td>
                       {canEditFechaControl ? (
                         <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 130 }} value={r.vencimiento || ""} onChange={(e) => setVencimiento(r.id, e.target.value)} />
                       ) : (r.vencimiento || "—")}
                     </td>
                   )}
-                  {isInspecciones && (
+                  {!esCorrectivo && isInspecciones && (
                     <td>
                       {isAdmin ? (
                         <select style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }} value={r.frecuencia || ""} onChange={(e) => setFrecuencia(r.id, e.target.value)}>
@@ -1186,14 +1204,14 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                       ) : (r.frecuencia || "—")}
                     </td>
                   )}
-                  {isProyectos && (
+                  {!esCorrectivo && isProyectos && (
                     <td>
                       {canEditFechas ? (
                         <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 130 }} value={r.fechaInicio || ""} onChange={(e) => setFechaInicio(r.id, e.target.value)} />
                       ) : (r.fechaInicio || "—")}
                     </td>
                   )}
-                  {isProyectos && (
+                  {!esCorrectivo && isProyectos && (
                     <td>
                       {canEditFechaControl ? (
                         <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 130 }} value={r.fechaEntrega || ""} onChange={(e) => setFechaEntrega(r.id, e.target.value)} />
@@ -1219,7 +1237,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                   )}
                   {esCorrectivo && (
                     <td>
-                      {isAdmin ? (
+                      {canEditEstado ? (
                         <select value={r.facturado || "Sin facturar"} onChange={(e) => setFacturado(r.id, e.target.value)} style={{ border: "none", background: (r.facturado === "Facturado") ? T.greenSoft : T.redSoft, color: (r.facturado === "Facturado") ? T.green : T.red, borderRadius: 999, fontSize: 12, fontWeight: 600, padding: "4px 10px" }}>
                           <option>Sin facturar</option>
                           <option>Facturado</option>

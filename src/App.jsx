@@ -3217,6 +3217,11 @@ function CalendarioGlobal() {
             ))}
           </div>
         </div>
+        <div style={{ marginTop: 10, fontSize: 11.5, color: T.gray, background: T.graySoft, borderRadius: 8, padding: "8px 10px" }}>
+          Diagnóstico: {eventos.filter((e) => e.area === "inspecciones").length} propios + {eventosGoogle.filter((e) => e.area === "inspecciones").length} Google en Inspecciones ·{" "}
+          {eventos.filter((e) => e.area === "proyectos").length} propios + {eventosGoogle.filter((e) => e.area === "proyectos").length} Google en Proyectos ·{" "}
+          Mostrando mes de {cursor.toLocaleDateString("es-CR", { month: "long", year: "numeric" })}
+        </div>
       </Card>
 
       {vista === "mes" && (

@@ -2501,15 +2501,16 @@ function ResumenEjecutivo() {
   const totalActivos = insp.activos + proj.activos;
 
   // OD Correctivos: resumen general (ambas áreas), para saber cuántos
-  // entran y quién hace más.
-  const correctivosInsp = inspRows.filter((r) => (r.tipoOD || "Normal") === "Correctivo");
-  const correctivosProj = projRows.filter((r) => (r.tipoOD || "Normal") === "Correctivo");
+  // entran y quién hace más. Solo se cuentan los Activos (nada Cerrado/No
+  // Activo) en ninguna de las 3 categorías.
+  const correctivosInsp = inspRows.filter((r) => (r.tipoOD || "Normal") === "Correctivo" && r.estado === "Activo");
+  const correctivosProj = projRows.filter((r) => (r.tipoOD || "Normal") === "Correctivo" && r.estado === "Activo");
   const totalCorrectivos = correctivosInsp.length + correctivosProj.length;
   // Al seleccionar "Inspecciones" o "Proyectos" en las cajitas, el gráfico
   // de personal cambia de fuente: ya no muestra Correctivos, sino el OD
   // normal de esa área (OD IPM u OD Proyectos respectivamente).
-  const normalInsp = inspRows.filter((r) => (r.tipoOD || "Normal") === "Normal");
-  const normalProj = projRows.filter((r) => (r.tipoOD || "Normal") === "Normal");
+  const normalInsp = inspRows.filter((r) => (r.tipoOD || "Normal") === "Normal" && r.estado === "Activo");
+  const normalProj = projRows.filter((r) => (r.tipoOD || "Normal") === "Normal" && r.estado === "Activo");
   const correctivosSeleccionados = filtroCorrectivos === "Inspecciones" ? normalInsp : filtroCorrectivos === "Proyectos" ? normalProj : [...correctivosInsp, ...correctivosProj];
   const colorGraficoCorrectivos = filtroCorrectivos === "Inspecciones" ? T.blue : filtroCorrectivos === "Proyectos" ? T.green : T.amber;
   const correctivosPorTecnico = {};

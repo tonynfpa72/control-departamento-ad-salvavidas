@@ -153,7 +153,6 @@ const AREAS = [
   { id: "cotizaciones", label: "Cotizaciones", icon: FileText, color: T.amber },
   { id: "salud", label: "Salud Ocupacional", icon: CalendarDays, color: T.red },
   { id: "apertura", label: "Apertura de OD", icon: Building2, color: T.blue },
-  { id: "calendario_global", label: "Calendario General", icon: CalendarDays, color: T.accent },
   { id: "facturacion_publica", label: "Facturación", icon: LayoutDashboard, color: T.green },
   { id: "planilla", label: "Planilla", icon: Wallet, color: T.amber },
   { id: "admin", label: "Administrativo", icon: LayoutDashboard, color: T.steelSoft },
@@ -3829,7 +3828,6 @@ function AppInner() {
         {tab === "cotizaciones" && <Cotizaciones />}
         {tab === "salud" && <SaludOcupacional />}
         {tab === "apertura" && <AperturaOD />}
-        {tab === "calendario_global" && <CalendarioGlobal />}
         {tab === "facturacion_publica" && <FacturacionPublica />}
         {tab === "planilla" && <Planilla />}
         {tab === "admin" && <Administrativo />}

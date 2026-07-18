@@ -3704,6 +3704,14 @@ function AppInner() {
 
   if (!user) return <Login onLogin={iniciarSesion} />;
 
+  if (user.categoria === "tecnico") {
+    return (
+      <CurrentUserContext.Provider value={user}>
+        <VistaMovilTecnico user={user} onLogout={cerrarSesion} />
+      </CurrentUserContext.Provider>
+    );
+  }
+
   const current = AREAS.find((a) => a.id === tab);
 
   return (
@@ -3772,6 +3780,275 @@ function AppInner() {
       </div>
     </div>
     </CurrentUserContext.Provider>
+  );
+}
+
+/* ---------------------------------------------------------
+   VISTA MOVIL — pensada para técnicos en campo (celular).
+   Solo 4 secciones esenciales, tarjetas grandes, sin tablas.
+   --------------------------------------------------------- */
+function VistaMovilTecnico({ user, onLogout }) {
+  const [tab, setTab] = useState("od");
+  const confirmar = useContext(ConfirmContext);
+  const { clientes } = useContext(ClientesContext);
+  const nombre = (user.name || "").trim().toLowerCase();
+
+  const TABS = [
+    { id: "od", label: "Mis OD", icon: ClipboardList },
+    { id: "horas", label: "Horas Extras", icon: Clock },
+    { id: "ehs", label: "Cursos EHS", icon: HardHat },
+    { id: "calendario", label: "Calendario", icon: CalendarDays },
+  ];
+
+  const cardStyle = { background: T.panel, borderRadius: 14, padding: 16, marginBottom: 12, boxShadow: "0 1px 4px rgba(16,24,38,0.08)" };
+  const labelStyle = { fontSize: 12.5, fontWeight: 700, color: T.inkSoft, marginBottom: 5, display: "block" };
+  const bigInputStyle = { width: "100%", padding: "12px 14px", fontSize: 15.5, borderRadius: 10, border: `1px solid ${T.line}`, background: "#fff", boxSizing: "border-box" };
+
+  return (
+    <div style={{ minHeight: "100%", background: T.bg, fontFamily: "'Inter', -apple-system, sans-serif", color: T.ink, display: "flex", flexDirection: "column" }}>
+      <div style={{ background: T.steel, color: "#fff", padding: "18px 18px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 800 }}>{user.name}</div>
+          <div style={{ fontSize: 12.5, opacity: 0.8 }}>Técnico</div>
+        </div>
+        <button onClick={onLogout} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", borderRadius: 10, padding: "9px 12px", display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+          <LogOut size={15} /> Salir
+        </button>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", padding: "16px 14px 90px" }}>
+        {tab === "od" && <MovilMisOD nombre={nombre} clientes={clientes} cardStyle={cardStyle} />}
+        {tab === "horas" && <MovilHorasExtras nombre={nombre} user={user} cardStyle={cardStyle} labelStyle={labelStyle} bigInputStyle={bigInputStyle} />}
+        {tab === "ehs" && <MovilCursosEHS nombre={nombre} cardStyle={cardStyle} bigInputStyle={bigInputStyle} />}
+        {tab === "calendario" && <MovilCalendario cardStyle={cardStyle} />}
+      </div>
+
+      <div style={{
+        position: "fixed", bottom: 0, left: 0, right: 0, background: T.panel,
+        borderTop: `1px solid ${T.line}`, display: "flex", boxShadow: "0 -2px 10px rgba(16,24,38,0.08)",
+        paddingBottom: "env(safe-area-inset-bottom, 0px)",
+      }}>
+        {TABS.map((t) => {
+          const Icon = t.icon;
+          const activo = tab === t.id;
+          return (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              style={{
+                flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
+                padding: "10px 4px 8px", background: "transparent", border: "none",
+                color: activo ? T.accent : T.gray, cursor: "pointer",
+              }}
+            >
+              <Icon size={20} />
+              <span style={{ fontSize: 10.5, fontWeight: 700 }}>{t.label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function MovilMisOD({ nombre, clientes, cardStyle }) {
+  const [filtroArea, setFiltroArea] = useState("Todos");
+  const inspRows = clientes.inspecciones || [];
+  const projRows = clientes.proyectos || [];
+  const misOD = [...inspRows.map((r) => ({ ...r, area: "inspecciones" })), ...projRows.map((r) => ({ ...r, area: "proyectos" }))]
+    .filter((r) => (r.tecnico || "").trim().toLowerCase() === nombre)
+    .filter((r) => filtroArea === "Todos" || r.area === filtroArea);
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <Btn small variant={filtroArea === "Todos" ? "accent" : "ghost"} onClick={() => setFiltroArea("Todos")}>Todos ({inspRows.filter((r) => (r.tecnico || "").trim().toLowerCase() === nombre).length + projRows.filter((r) => (r.tecnico || "").trim().toLowerCase() === nombre).length})</Btn>
+        <Btn small variant={filtroArea === "inspecciones" ? "accent" : "ghost"} onClick={() => setFiltroArea("inspecciones")}>Inspecciones</Btn>
+        <Btn small variant={filtroArea === "proyectos" ? "accent" : "ghost"} onClick={() => setFiltroArea("proyectos")}>Proyectos</Btn>
+      </div>
+      {misOD.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 14, textAlign: "center", padding: "30px 10px" }}>No tienes OD asignadas todavía.</div>
+      ) : misOD.map((r) => (
+        <div key={r.id} style={cardStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+            <div style={{ fontSize: 16, fontWeight: 800 }}>{r.od}</div>
+            <Badge color={r.estado === "Activo" ? T.green : T.red} soft={r.estado === "Activo" ? T.greenSoft : T.redSoft}>{r.estado}</Badge>
+          </div>
+          <div style={{ fontSize: 14.5, color: T.ink, marginBottom: 4 }}>{r.cliente}</div>
+          <div style={{ fontSize: 12.5, color: T.inkSoft }}>
+            {area_label(r.area)}{r.tipoOD === "Correctivo" ? " · Correctivo" : ""}
+            {r.vencimiento ? ` · Vence: ${r.vencimiento}` : ""}
+            {r.fechaEntrega ? ` · Entrega: ${r.fechaEntrega}` : ""}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+function area_label(area) { return area === "inspecciones" ? "Inspecciones" : "Proyectos"; }
+
+function MovilHorasExtras({ nombre, user, cardStyle, labelStyle, bigInputStyle }) {
+  const [rows, setRows] = useState([]);
+  const [form, setForm] = useState({ area: "inspecciones", od: "", fechaEjecucion: "", horaInicio: "07:00", horaFin: "15:00" });
+  const [aviso, setAviso] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("horas_extras").select("*").order("created_at", { ascending: false });
+      if (data) setRows(data.filter((r) => (r.personal || "").trim().toLowerCase() === nombre));
+    })();
+  }, [nombre]);
+
+  const horas = calcularHorasRango(form.horaInicio, form.horaFin);
+
+  const enviar = async () => {
+    if (!form.od || !horas) { setAviso("Completa el OD y las horas."); return; }
+    setAviso("");
+    const payload = {
+      area: form.area, fecha: todayISO(), fecha_ejecucion: form.fechaEjecucion || null, od: form.od,
+      personal: user.name, hora_inicio: form.horaInicio, hora_fin: form.horaFin, horas, estado: "Pendiente",
+    };
+    const { data, error } = await supabase.from("horas_extras").insert(payload).select().single();
+    if (!error && data) {
+      setRows((prev) => [data, ...prev]);
+      setForm({ area: form.area, od: "", fechaEjecucion: "", horaInicio: "07:00", horaFin: "15:00" });
+    }
+  };
+
+  const estadoColor = { Pendiente: [T.amber, T.amberSoft], Aprobada: [T.green, T.greenSoft], Rechazada: [T.red, T.redSoft], Cerrada: [T.steel, T.graySoft] };
+
+  return (
+    <div>
+      <div style={cardStyle}>
+        <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 12 }}>Nueva solicitud</div>
+        {aviso && <div style={{ color: T.red, fontSize: 13, marginBottom: 10 }}>{aviso}</div>}
+        <label style={labelStyle}>Área</label>
+        <select style={{ ...bigInputStyle, marginBottom: 12 }} value={form.area} onChange={(e) => setForm({ ...form, area: e.target.value })}>
+          <option value="inspecciones">Inspecciones</option>
+          <option value="proyectos">Proyectos</option>
+        </select>
+        <label style={labelStyle}>OD</label>
+        <input style={{ ...bigInputStyle, marginBottom: 12 }} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })} placeholder="OD-1005" />
+        <label style={labelStyle}>Fecha en que se ejecutarán</label>
+        <input style={{ ...bigInputStyle, marginBottom: 12 }} type="date" value={form.fechaEjecucion} onChange={(e) => setForm({ ...form, fechaEjecucion: e.target.value })} />
+        <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+          <div style={{ flex: 1 }}>
+            <label style={labelStyle}>Desde</label>
+            <input style={bigInputStyle} type="time" value={form.horaInicio} onChange={(e) => setForm({ ...form, horaInicio: e.target.value })} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={labelStyle}>Hasta</label>
+            <input style={bigInputStyle} type="time" value={form.horaFin} onChange={(e) => setForm({ ...form, horaFin: e.target.value })} />
+          </div>
+        </div>
+        <div style={{ fontSize: 13, color: T.inkSoft, marginBottom: 12 }}>Total: <b>{horas || 0}h</b> (se resta 1h de almuerzo si cruza mediodía)</div>
+        <Btn variant="accent" onClick={enviar} style={{ justifyContent: "center", width: "100%", padding: "14px 0", fontSize: 15 }}><Plus size={16} /> Solicitar</Btn>
+      </div>
+
+      <div style={{ fontSize: 15, fontWeight: 800, margin: "18px 4px 10px" }}>Mis solicitudes</div>
+      {rows.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 14, textAlign: "center", padding: "20px 10px" }}>Todavía no has solicitado horas extra.</div>
+      ) : rows.map((r) => (
+        <div key={r.id} style={cardStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <div style={{ fontSize: 15, fontWeight: 800 }}>{r.od}</div>
+            <Badge color={(estadoColor[r.estado] || [T.gray, T.graySoft])[0]} soft={(estadoColor[r.estado] || [T.gray, T.graySoft])[1]}>{r.estado}</Badge>
+          </div>
+          <div style={{ fontSize: 13, color: T.inkSoft }}>{r.fecha_ejecucion || r.fecha} · {r.hora_inicio}–{r.hora_fin} · {r.horas}h</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MovilCursosEHS({ nombre, cardStyle, bigInputStyle }) {
+  const [rows, setRows] = useState([]);
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("cursos_ehs").select("*").order("created_at", { ascending: false });
+      if (data) setRows(data.filter((r) => (r.personal || "").toLowerCase().includes(nombre)));
+    })();
+  }, [nombre]);
+
+  const setFecha = (id, fecha) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, fecha } : r));
+    supabase.from("cursos_ehs").update({ fecha: fecha || null }).eq("id", id).then();
+  };
+  const setEstado = (id, estado) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado } : r));
+    supabase.from("cursos_ehs").update({ estado }).eq("id", id).then();
+  };
+
+  if (rows.length === 0) {
+    return <div style={{ color: T.gray, fontSize: 14, textAlign: "center", padding: "30px 10px" }}>No tienes cursos EHS asignados todavía.</div>;
+  }
+
+  return (
+    <div>
+      {rows.map((r) => {
+        const efectivo = estadoEfectivoCurso(r);
+        const venc = vencimientoCalculado(r.fecha);
+        return (
+          <div key={r.id} style={cardStyle}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+              <div style={{ fontSize: 15.5, fontWeight: 800 }}>{r.tipo}</div>
+              <Dot color={SEMAFORO[efectivo]} />
+            </div>
+            <div style={{ fontSize: 13, color: T.inkSoft, marginBottom: 10 }}>{r.lugar || "—"}{venc ? ` · Vence: ${venc}` : ""}</div>
+            <label style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, display: "block", marginBottom: 4 }}>Fecha del curso</label>
+            <input type="date" style={{ ...bigInputStyle, marginBottom: 10 }} value={r.fecha || ""} onChange={(e) => setFecha(r.id, e.target.value)} />
+            <select value={r.estado} onChange={(e) => setEstado(r.id, e.target.value)} style={{ ...bigInputStyle, background: `${SEMAFORO[efectivo]}1A`, color: SEMAFORO[efectivo], fontWeight: 700 }}>
+              {["Pendiente", "Coordinado", "Cancelado", "Realizado"].map((s) => <option key={s}>{s}</option>)}
+            </select>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function MovilCalendario({ cardStyle }) {
+  const [eventos, setEventos] = useState([]);
+  useEffect(() => {
+    (async () => {
+      const desde = todayISO();
+      const hasta = new Date(); hasta.setDate(hasta.getDate() + 30);
+      const { data } = await supabase.from("calendario_eventos").select("*").gte("fecha", desde).lte("fecha", hasta.toISOString().slice(0, 10)).order("fecha", { ascending: true });
+      if (data) setEventos(data);
+    })();
+  }, []);
+
+  const AREA_LABEL = { inspecciones: "Inspecciones", proyectos: "Proyectos", salud: "Salud Ocupacional" };
+  const AREA_COLOR = { inspecciones: T.turquoise, proyectos: T.green, salud: T.red };
+
+  const grupos = {};
+  eventos.forEach((e) => { (grupos[e.fecha] = grupos[e.fecha] || []).push(e); });
+  const fechas = Object.keys(grupos).sort();
+
+  if (fechas.length === 0) {
+    return <div style={{ color: T.gray, fontSize: 14, textAlign: "center", padding: "30px 10px" }}>No hay visitas agendadas en los próximos 30 días.</div>;
+  }
+
+  return (
+    <div>
+      {fechas.map((fecha) => {
+        const fechaObj = new Date(fecha + "T00:00:00");
+        return (
+          <div key={fecha} style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 800, color: T.inkSoft, marginBottom: 8, textTransform: "capitalize" }}>
+              {fechaObj.toLocaleDateString("es-CR", { weekday: "long", day: "numeric", month: "short" })}
+            </div>
+            {grupos[fecha].sort((a, b) => (a.hora || "").localeCompare(b.hora || "")).map((e) => (
+              <div key={e.id} style={{ ...cardStyle, borderLeft: `5px solid ${AREA_COLOR[e.area] || T.gray}` }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: AREA_COLOR[e.area] || T.gray, marginBottom: 4 }}>{AREA_LABEL[e.area] || e.area} · {e.hora}</div>
+                <div style={{ fontSize: 14.5, fontWeight: 700 }}>{e.od}</div>
+                {e.personas && <div style={{ fontSize: 13, color: T.inkSoft }}>{e.personas}</div>}
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

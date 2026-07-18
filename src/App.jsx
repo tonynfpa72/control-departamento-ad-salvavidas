@@ -2439,6 +2439,7 @@ function ResumenEjecutivo() {
   const [ventanaHoras, setVentanaHoras] = useState(0); // 0 = ventana más reciente
   const graficoRef = React.useRef(null);
   const [ventanaFactura, setVentanaFactura] = useState(0);
+  const [filtroCorrectivos, setFiltroCorrectivos] = useState("Todos");
   const VENTANA_MESES = 12;
   const { clientes } = useContext(ClientesContext);
   const PUNTO_EQUILIBRIO = 120000;
@@ -2504,8 +2505,9 @@ function ResumenEjecutivo() {
   const correctivosInsp = inspRows.filter((r) => (r.tipoOD || "Normal") === "Correctivo");
   const correctivosProj = projRows.filter((r) => (r.tipoOD || "Normal") === "Correctivo");
   const totalCorrectivos = correctivosInsp.length + correctivosProj.length;
+  const correctivosSeleccionados = filtroCorrectivos === "Inspecciones" ? correctivosInsp : filtroCorrectivos === "Proyectos" ? correctivosProj : [...correctivosInsp, ...correctivosProj];
   const correctivosPorTecnico = {};
-  [...correctivosInsp, ...correctivosProj].forEach((r) => {
+  correctivosSeleccionados.forEach((r) => {
     const key = r.tecnico?.trim() || "Sin asignar";
     correctivosPorTecnico[key] = (correctivosPorTecnico[key] || 0) + 1;
   });
@@ -2864,18 +2866,30 @@ function ResumenEjecutivo() {
 
       <Card title="OD Correctivos — resumen general">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 16 }}>
-          <div style={{ background: T.amberSoft, borderRadius: 10, padding: 14 }}>
+          <div
+            onClick={() => setFiltroCorrectivos("Todos")}
+            style={{ background: T.amberSoft, borderRadius: 10, padding: 14, cursor: "pointer", outline: filtroCorrectivos === "Todos" ? `2px solid ${T.amber}` : "none" }}
+          >
             <div style={{ fontSize: 22, fontWeight: 800, color: T.amber }}>{totalCorrectivos}</div>
             <div style={{ fontSize: 12, color: T.inkSoft }}>Total Correctivos</div>
           </div>
-          <div style={{ background: T.graySoft, borderRadius: 10, padding: 14 }}>
+          <div
+            onClick={() => setFiltroCorrectivos("Inspecciones")}
+            style={{ background: T.graySoft, borderRadius: 10, padding: 14, cursor: "pointer", outline: filtroCorrectivos === "Inspecciones" ? `2px solid ${T.steel}` : "none" }}
+          >
             <div style={{ fontSize: 22, fontWeight: 800, color: T.steel }}>{correctivosInsp.length}</div>
             <div style={{ fontSize: 12, color: T.inkSoft }}>En Inspecciones</div>
           </div>
-          <div style={{ background: T.graySoft, borderRadius: 10, padding: 14 }}>
+          <div
+            onClick={() => setFiltroCorrectivos("Proyectos")}
+            style={{ background: T.graySoft, borderRadius: 10, padding: 14, cursor: "pointer", outline: filtroCorrectivos === "Proyectos" ? `2px solid ${T.green}` : "none" }}
+          >
             <div style={{ fontSize: 22, fontWeight: 800, color: T.green }}>{correctivosProj.length}</div>
             <div style={{ fontSize: 12, color: T.inkSoft }}>En Proyectos</div>
           </div>
+        </div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, marginBottom: 8 }}>
+          Personal — {filtroCorrectivos === "Todos" ? "Inspecciones y Proyectos" : filtroCorrectivos}
         </div>
         {correctivosPorTecnicoData.length === 0 ? (
           <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay OD Correctivos cargados.</div>

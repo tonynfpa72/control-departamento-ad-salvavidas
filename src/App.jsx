@@ -2505,7 +2505,13 @@ function ResumenEjecutivo() {
   const correctivosInsp = inspRows.filter((r) => (r.tipoOD || "Normal") === "Correctivo");
   const correctivosProj = projRows.filter((r) => (r.tipoOD || "Normal") === "Correctivo");
   const totalCorrectivos = correctivosInsp.length + correctivosProj.length;
-  const correctivosSeleccionados = filtroCorrectivos === "Inspecciones" ? correctivosInsp : filtroCorrectivos === "Proyectos" ? correctivosProj : [...correctivosInsp, ...correctivosProj];
+  // Al seleccionar "Inspecciones" o "Proyectos" en las cajitas, el gráfico
+  // de personal cambia de fuente: ya no muestra Correctivos, sino el OD
+  // normal de esa área (OD IPM u OD Proyectos respectivamente).
+  const normalInsp = inspRows.filter((r) => (r.tipoOD || "Normal") === "Normal");
+  const normalProj = projRows.filter((r) => (r.tipoOD || "Normal") === "Normal");
+  const correctivosSeleccionados = filtroCorrectivos === "Inspecciones" ? normalInsp : filtroCorrectivos === "Proyectos" ? normalProj : [...correctivosInsp, ...correctivosProj];
+  const colorGraficoCorrectivos = filtroCorrectivos === "Inspecciones" ? T.blue : filtroCorrectivos === "Proyectos" ? T.green : T.amber;
   const correctivosPorTecnico = {};
   correctivosSeleccionados.forEach((r) => {
     const key = r.tecnico?.trim() || "Sin asignar";
@@ -2889,10 +2895,10 @@ function ResumenEjecutivo() {
           </div>
         </div>
         <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, marginBottom: 8 }}>
-          Personal — {filtroCorrectivos === "Todos" ? "Inspecciones y Proyectos" : filtroCorrectivos}
+          Personal — {filtroCorrectivos === "Todos" ? "OD Correctivos (Inspecciones y Proyectos)" : filtroCorrectivos === "Inspecciones" ? "OD IPM" : "OD Proyectos"}
         </div>
         {correctivosPorTecnicoData.length === 0 ? (
-          <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay OD Correctivos cargados.</div>
+          <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay datos cargados en esta selección.</div>
         ) : (
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={correctivosPorTecnicoData} margin={{ top: 24, right: 20, left: 0, bottom: 10 }}>
@@ -2900,7 +2906,7 @@ function ResumenEjecutivo() {
               <XAxis dataKey="nombre" tick={{ fontSize: 12 }} interval={0} angle={-15} textAnchor="end" height={60} />
               <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
               <Tooltip />
-              <Bar dataKey="cantidad" fill={T.amber} radius={[4, 4, 0, 0]}>
+              <Bar dataKey="cantidad" fill={colorGraficoCorrectivos} radius={[4, 4, 0, 0]}>
                 <LabelList dataKey="cantidad" position="top" style={{ fontSize: 12, fontWeight: 700, fill: T.ink }} />
               </Bar>
             </BarChart>

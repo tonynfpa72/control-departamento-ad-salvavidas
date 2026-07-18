@@ -1306,7 +1306,7 @@ function startOfMonthGrid(d) {
 }
 
 const DIAS_SEMANA_CORTO = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
-const CALENDARIO_MAX_VISIBLE = 4;
+const CALENDARIO_MAX_VISIBLE = 5;
 
 // Color consistente por OD, compartido entre el Calendario de cada área y
 // el Calendario General, para que un mismo OD siempre se vea del mismo color.
@@ -1329,14 +1329,6 @@ const GOOGLE_CALENDAR_IDS = {
   proyectos: import.meta.env.VITE_GOOGLE_CALENDAR_ID_PROYECTOS || "",
 };
 const GOOGLE_CALENDAR_API_KEY = import.meta.env.VITE_GOOGLE_CALENDAR_API_KEY || "";
-// Paleta estándar de colores de evento de Google Calendar (colorId → hex),
-// para conservar el color que la persona le puso a cada evento en Google.
-const GOOGLE_EVENT_COLORS = {
-  "1": "#A4BDFC", "2": "#7AE7BF", "3": "#DBADFF", "4": "#FF887C",
-  "5": "#FBD75B", "6": "#FFB878", "7": "#46D6DB", "8": "#E1E1E1",
-  "9": "#5484ED", "10": "#51B749", "11": "#DC2127",
-};
-
 async function fetchGoogleCalendarEventos(area, timeMinISO, timeMaxISO) {
   const calendarId = GOOGLE_CALENDAR_IDS[area];
   if (!calendarId || !GOOGLE_CALENDAR_API_KEY) return [];
@@ -1356,7 +1348,7 @@ async function fetchGoogleCalendarEventos(area, timeMinISO, timeMaxISO) {
     return (data.items || []).flatMap((e) => {
       const base = {
         area, tipo: "Google Calendar", od: e.summary || "(Sin título)", personas: e.location || "",
-        _google: true, _color: GOOGLE_EVENT_COLORS[e.colorId] || "#4285F4", _colorIdCruda: e.colorId || "ninguno",
+        _google: true,
       };
       if (e.start?.date && e.end?.date) {
         // Evento de "todo el día" — puede durar varios días seguidos.
@@ -1525,11 +1517,11 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
   const renderPill = (e) => (
     <div
       key={e.id}
-      title={`${e._google ? `Desde Google Calendar (colorId: ${e._colorIdCruda}) · ` : ""}${e.tipo} · ${e.od} · ${e.personas} · ${e.hora}`}
+      title={`${e._google ? "Desde Google Calendar · " : ""}${e.tipo} · ${e.od} · ${e.personas} · ${e.hora}`}
       style={{
-        background: e._google ? (e._color || "#4285F4") : hashColor(e.od), color: "#fff", fontSize: 10.5, fontWeight: 600,
-        borderRadius: 5, padding: "2px 6px", overflow: "hidden",
-        textOverflow: "ellipsis", whiteSpace: "nowrap",
+        background: hashColor(e.od), color: "#fff", fontSize: 11, fontWeight: 600,
+        borderRadius: 6, padding: "3px 8px", overflow: "hidden",
+        textOverflow: "ellipsis", whiteSpace: "nowrap", boxShadow: "0 1px 2px rgba(16,24,38,0.12)",
       }}
     >
       {e._google ? "G· " : ""}{e.od}{e.personas ? ` // ${e.personas}` : ""}
@@ -1570,12 +1562,12 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
               </div>
             }
           >
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4, marginBottom: 6 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 8, marginBottom: 10 }}>
               {DIAS_SEMANA_CORTO.map((d) => (
-                <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, padding: "2px 0" }}>{d}</div>
+                <div key={d} style={{ textAlign: "center", fontSize: 12, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.5, padding: "4px 0" }}>{d}</div>
               ))}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 8 }}>
               {gridDays.map((d) => {
                 const iso = isoDate(d);
                 const esMesActual = d.getMonth() === cursor.getMonth();
@@ -1587,22 +1579,23 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
                     key={iso}
                     onClick={() => setDiaSeleccionado(iso)}
                     style={{
-                      minHeight: 104, border: `1px solid ${esSeleccionado ? color : T.line}`,
+                      minHeight: 140, border: `1px solid ${esSeleccionado ? color : T.line}`,
                       borderWidth: esSeleccionado ? 2 : 1,
-                      borderRadius: 8, padding: 5, cursor: "pointer",
+                      borderRadius: 10, padding: 8, cursor: "pointer",
                       background: esMesActual ? T.panel : T.bg,
-                      display: "flex", flexDirection: "column", gap: 3,
+                      display: "flex", flexDirection: "column", gap: 5,
+                      transition: "border-color 0.15s ease",
                     }}
                   >
                     <div style={{
-                      fontSize: 11.5, fontWeight: esHoy ? 800 : 600, color: esMesActual ? (esHoy ? "#fff" : T.ink) : T.gray,
-                      background: esHoy ? color : "transparent", width: 20, height: 20, lineHeight: "20px",
+                      fontSize: 12.5, fontWeight: esHoy ? 800 : 600, color: esMesActual ? (esHoy ? "#fff" : T.ink) : T.gray,
+                      background: esHoy ? color : "transparent", width: 24, height: 24, lineHeight: "24px",
                       textAlign: "center", borderRadius: "50%",
                     }}>{d.getDate()}</div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 2, overflow: "hidden" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, overflow: "hidden" }}>
                       {eventosDia.slice(0, CALENDARIO_MAX_VISIBLE).map(renderPill)}
                       {eventosDia.length > CALENDARIO_MAX_VISIBLE && (
-                        <div style={{ fontSize: 9.5, color: T.gray, fontWeight: 700, paddingLeft: 3 }}>
+                        <div style={{ fontSize: 10.5, color: T.gray, fontWeight: 700, paddingLeft: 4 }}>
                           +{eventosDia.length - CALENDARIO_MAX_VISIBLE} más
                         </div>
                       )}
@@ -1635,7 +1628,7 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
                   <div
                     key={iso}
                     onClick={() => setDiaSeleccionado(iso)}
-                    style={{ minHeight: 220, border: `1px solid ${esSeleccionado ? color : T.line}`, borderWidth: esSeleccionado ? 2 : 1, borderRadius: 8, padding: 6, cursor: "pointer", display: "flex", flexDirection: "column", gap: 4 }}
+                    style={{ minHeight: 280, border: `1px solid ${esSeleccionado ? color : T.line}`, borderWidth: esSeleccionado ? 2 : 1, borderRadius: 10, padding: 10, cursor: "pointer", display: "flex", flexDirection: "column", gap: 6 }}
                   >
                     <div style={{ textAlign: "center", marginBottom: 2 }}>
                       <div style={{ fontSize: 10, color: T.gray, fontWeight: 800, textTransform: "uppercase" }}>{d.toLocaleDateString("es-CR", { weekday: "short" })}</div>
@@ -1669,7 +1662,7 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {eventosDelDia(cursor).map((e) => (
-                  <div key={e.id} style={{ background: e._google ? (e._color || "#4285F4") : hashColor(e.od), color: "#fff", borderRadius: 10, padding: "12px 14px" }}>
+                  <div key={e.id} style={{ background: hashColor(e.od), color: "#fff", borderRadius: 10, padding: "12px 14px" }}>
                     <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.9 }}>{e._google ? "Google Calendar" : e.tipo} · {e.hora}</div>
                     <div style={{ fontSize: 14, fontWeight: 700 }}>{e._google ? "G· " : ""}{e.od}{e.personas ? ` // ${e.personas}` : ""}</div>
                   </div>
@@ -1690,20 +1683,20 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
                 const eventosDia = gruposAgenda[fecha].sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
                 return (
                   <div key={fecha} style={{ display: "flex", borderTop: idx === 0 ? "none" : `1px solid ${T.line}` }}>
-                    <div style={{ width: 64, flexShrink: 0, padding: "16px 8px", textAlign: "center" }}>
+                    <div style={{ width: 76, flexShrink: 0, padding: "18px 10px", textAlign: "center" }}>
                       <div style={{ fontSize: 11, fontWeight: 700, color: T.inkSoft, textTransform: "lowercase" }}>
                         {fechaObj.toLocaleDateString("es-CR", { weekday: "short" })}
                       </div>
                       <div style={{ fontSize: 22, fontWeight: 800, color: T.ink }}>{fechaObj.getDate()}</div>
                     </div>
-                    <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6, padding: "14px 14px 14px 0" }}>
+                    <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8, padding: "16px 16px 16px 0" }}>
                       {eventosDia.map((e) => (
                         <div
                           key={e.id}
-                          title={`${e._google ? `Desde Google Calendar (colorId: ${e._colorIdCruda}) · ` : ""}${e.tipo} · ${e.od} · ${e.personas} · ${e.hora}`}
+                          title={`${e._google ? "Desde Google Calendar · " : ""}${e.tipo} · ${e.od} · ${e.personas} · ${e.hora}`}
                           style={{
-                            background: e._google ? (e._color || "#4285F4") : hashColor(e.od), color: "#fff", fontWeight: 700, fontSize: 13,
-                            borderRadius: 10, padding: "10px 14px", overflow: "hidden",
+                            background: hashColor(e.od), color: "#fff", fontWeight: 700, fontSize: 13,
+                            borderRadius: 10, padding: "12px 16px", overflow: "hidden",
                             textOverflow: "ellipsis", whiteSpace: "nowrap",
                           }}
                         >
@@ -1727,9 +1720,9 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 320, overflowY: "auto" }}>
               {eventosDelDiaSeleccionado.map((e) => (
                 <div key={e.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", borderBottom: `1px dashed ${T.line}`, paddingBottom: 8 }}>
-                  <div style={{ marginTop: 4, width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: e._google ? (e._color || "#4285F4") : hashColor(e.od) }} />
+                  <div style={{ marginTop: 4, width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: hashColor(e.od) }} />
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: T.ink }}>{e.hora} · {e.tipo}{e._google && <span style={{ color: e._color || "#4285F4", fontWeight: 600 }}> · Google Calendar</span>}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: T.ink }}>{e.hora} · {e.tipo}{e._google && <span style={{ color: T.gray, fontWeight: 600 }}> · Google Calendar</span>}</div>
                     <div style={{ fontSize: 12, color: T.inkSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {e.od} — {e.personas}
                     </div>
@@ -3130,7 +3123,7 @@ function CalendarioGlobal() {
     { id: "dia", label: "Día" },
     { id: "agenda", label: "Agenda" },
   ];
-  const colorDe = (e) => (e._google ? (e._color || "#4285F4") : (AREA_INFO[e.area]?.color || T.gray));
+  const colorDe = (e) => AREA_INFO[e.area]?.color || T.gray;
 
   const eventosFiltrados = [...eventos, ...eventosGoogle].filter((e) => {
     if (filtroArea === "Todos") return true;
@@ -3179,11 +3172,11 @@ function CalendarioGlobal() {
   const renderPill = (e) => (
     <div
       key={e.id}
-      title={`${e._google ? `Desde Google Calendar (colorId: ${e._colorIdCruda}) · ` : ""}${AREA_INFO[e.area]?.label || e.area} · ${e.tipo} · ${e.hora} · ${e.personas}`}
+      title={`${e._google ? "Desde Google Calendar · " : ""}${AREA_INFO[e.area]?.label || e.area} · ${e.tipo} · ${e.hora} · ${e.personas}`}
       style={{
-        background: colorDe(e), color: "#fff", fontWeight: 600, fontSize: 10.5,
-        borderRadius: 5, padding: "2px 6px", overflow: "hidden",
-        textOverflow: "ellipsis", whiteSpace: "nowrap",
+        background: colorDe(e), color: "#fff", fontWeight: 600, fontSize: 11,
+        borderRadius: 6, padding: "3px 8px", overflow: "hidden",
+        textOverflow: "ellipsis", whiteSpace: "nowrap", boxShadow: "0 1px 2px rgba(16,24,38,0.12)",
       }}
     >
       {e._google ? "G· " : ""}{e.od}{e.personas ? ` // ${e.personas}` : ""}
@@ -3216,12 +3209,12 @@ function CalendarioGlobal() {
             <Btn small variant="ghost" onClick={() => navegar(1)}><ChevronRight size={14} /></Btn>
           </div>
         }>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4, marginBottom: 6 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 8, marginBottom: 10 }}>
             {DIAS_SEMANA_CORTO.map((d) => (
-              <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, padding: "2px 0" }}>{d}</div>
+              <div key={d} style={{ textAlign: "center", fontSize: 12, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.5, padding: "4px 0" }}>{d}</div>
             ))}
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 8 }}>
             {gridDaysMes.map((d) => {
               const iso = isoDate(d);
               const esMesActual = d.getMonth() === cursor.getMonth();
@@ -3229,18 +3222,18 @@ function CalendarioGlobal() {
               const eventosDia = eventosDelDia(iso);
               return (
                 <div key={iso} style={{
-                  minHeight: 100, border: `1px solid ${T.line}`, borderRadius: 8, padding: 5,
-                  background: esMesActual ? T.panel : T.bg, display: "flex", flexDirection: "column", gap: 3,
+                  minHeight: 140, border: `1px solid ${T.line}`, borderRadius: 10, padding: 8,
+                  background: esMesActual ? T.panel : T.bg, display: "flex", flexDirection: "column", gap: 5,
                 }}>
                   <div style={{
-                    fontSize: 11.5, fontWeight: esHoy ? 800 : 600, color: esMesActual ? (esHoy ? "#fff" : T.ink) : T.gray,
-                    background: esHoy ? T.accent : "transparent", width: 20, height: 20, lineHeight: "20px",
+                    fontSize: 12.5, fontWeight: esHoy ? 800 : 600, color: esMesActual ? (esHoy ? "#fff" : T.ink) : T.gray,
+                    background: esHoy ? T.accent : "transparent", width: 24, height: 24, lineHeight: "24px",
                     textAlign: "center", borderRadius: "50%",
                   }}>{d.getDate()}</div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 2, overflow: "hidden" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, overflow: "hidden" }}>
                     {eventosDia.slice(0, CALENDARIO_MAX_VISIBLE).map(renderPill)}
                     {eventosDia.length > CALENDARIO_MAX_VISIBLE && (
-                      <div style={{ fontSize: 9.5, color: T.gray, fontWeight: 700, paddingLeft: 3 }}>+{eventosDia.length - CALENDARIO_MAX_VISIBLE} más</div>
+                      <div style={{ fontSize: 10.5, color: T.gray, fontWeight: 700, paddingLeft: 4 }}>+{eventosDia.length - CALENDARIO_MAX_VISIBLE} más</div>
                     )}
                   </div>
                 </div>
@@ -3264,7 +3257,7 @@ function CalendarioGlobal() {
               const esHoy = iso === todayISO();
               const eventosDia = eventosDelDia(iso);
               return (
-                <div key={iso} style={{ minHeight: 220, border: `1px solid ${T.line}`, borderRadius: 8, padding: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+                <div key={iso} style={{ minHeight: 280, border: `1px solid ${T.line}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
                   <div style={{ textAlign: "center", marginBottom: 2 }}>
                     <div style={{ fontSize: 10, color: T.gray, fontWeight: 800, textTransform: "uppercase" }}>{d.toLocaleDateString("es-CR", { weekday: "short" })}</div>
                     <div style={{
@@ -3315,20 +3308,20 @@ function CalendarioGlobal() {
               const eventosDia = grupos[fecha].sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
               return (
                 <div key={fecha} style={{ display: "flex", borderTop: idx === 0 ? "none" : `1px solid ${T.line}` }}>
-                  <div style={{ width: 64, flexShrink: 0, padding: "16px 8px", textAlign: "center" }}>
+                  <div style={{ width: 76, flexShrink: 0, padding: "18px 10px", textAlign: "center" }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: T.inkSoft, textTransform: "lowercase" }}>
                       {fechaObj.toLocaleDateString("es-CR", { weekday: "short" })}
                     </div>
                     <div style={{ fontSize: 22, fontWeight: 800, color: T.ink }}>{fechaObj.getDate()}</div>
                   </div>
-                  <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6, padding: "14px 14px 14px 0" }}>
+                  <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8, padding: "16px 16px 16px 0" }}>
                     {eventosDia.map((e) => (
                       <div
                         key={e.id}
                         title={`${AREA_INFO[e.area]?.label || e.area} · ${e.tipo} · ${e.hora} · ${e.personas}`}
                         style={{
                           background: colorDe(e), color: "#fff", fontWeight: 700, fontSize: 13,
-                          borderRadius: 10, padding: "10px 14px", overflow: "hidden",
+                          borderRadius: 10, padding: "12px 16px", overflow: "hidden",
                           textOverflow: "ellipsis", whiteSpace: "nowrap",
                         }}
                       >

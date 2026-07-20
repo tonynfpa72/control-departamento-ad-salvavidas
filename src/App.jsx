@@ -375,6 +375,34 @@ function reporte2NombreQuincena(clave) {
   return q === "Q1" ? `1-15${nombreMes}${anio}` : `16-fin${nombreMes}${anio}`;
 }
 
+// Etiqueta corta de quincena compartida (ej. "1-15 Jul", "16-31 Jul"),
+// usada tanto para el gráfico de Administrativo como para conservar el
+// dato al borrar una solicitud de horas extra ya aprobada/cerrada.
+const MESES_CORTOS_QNA = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"];
+function etiquetaQuincenaCorta(fechaISO) {
+  const [anio, mes, dia] = fechaISO.split("-").map(Number);
+  const nombreMes = MESES_CORTOS_QNA[mes - 1];
+  if (dia <= 15) return `1-15 ${nombreMes}`;
+  const ultimoDia = new Date(anio, mes, 0).getDate();
+  return `16-${ultimoDia} ${nombreMes}`;
+}
+
+// Si una solicitud de horas extra ya Aprobada/Cerrada se borra, esto suma
+// sus horas a la tabla manual (horas_extras_manual) para esa quincena y
+// área, así el dato ya contado en la gráfica no se pierde.
+async function preservarHorasEnGrafica(area, fila) {
+  const fechaRef = fila.fecha_ejecucion || fila.fecha;
+  const horas = Number(fila.horas) || 0;
+  if (!fechaRef || !horas) return;
+  const quincena = etiquetaQuincenaCorta(fechaRef);
+  const { data: existente } = await supabase.from("horas_extras_manual").select("*").eq("area", area).eq("quincena", quincena).maybeSingle();
+  if (existente) {
+    await supabase.from("horas_extras_manual").update({ horas: Number(existente.horas || 0) + horas }).eq("id", existente.id);
+  } else {
+    await supabase.from("horas_extras_manual").insert({ area, quincena, horas });
+  }
+}
+
 function reporte2FechaASerial(fecha) {
   const base = Date.UTC(1899, 11, 30);
   return Math.round((Date.UTC(fecha.getFullYear(), fecha.getMonth(), fecha.getDate()) - base) / 86400000);
@@ -694,6 +722,7 @@ function HorasExtras({ area, color }) {
   const canCerrar = isAdmin || currentUser?.categoria === "asistente";
   const canBorrar = isAdmin || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
+  const [odsDelArea] = useClientesArea(area);
   const [disponible, setDisponibleState] = useState(150);
   const [rows, setRows] = useState([]);
   const [empleados, setEmpleados] = useState([]);
@@ -756,15 +785,20 @@ function HorasExtras({ area, color }) {
   };
   const del = async (id) => {
     if (!(await confirmar("¿Está seguro que desea eliminar esta solicitud de horas extra? Esta acción no se puede deshacer."))) return;
+    const fila = rows.find((r) => r.id === id);
     setRows((prev) => prev.filter((r) => r.id !== id));
+    if (fila && (fila.estado === "Aprobada" || fila.estado === "Cerrada")) await preservarHorasEnGrafica(area, fila);
     supabase.from("horas_extras").delete().eq("id", id).then();
   };
   const vaciarPestana = async (estadoObjetivo, etiqueta) => {
-    const idsAEliminar = rows.filter((r) => r.estado === estadoObjetivo).map((r) => r.id);
-    if (idsAEliminar.length === 0) return;
-    if (!(await confirmar(`¿Está seguro que desea eliminar las ${idsAEliminar.length} solicitudes de "${etiqueta}"? Esta acción no se puede deshacer.`))) return;
+    const filasAEliminar = rows.filter((r) => r.estado === estadoObjetivo);
+    if (filasAEliminar.length === 0) return;
+    if (!(await confirmar(`¿Está seguro que desea eliminar las ${filasAEliminar.length} solicitudes de "${etiqueta}"? Esta acción no se puede deshacer.`))) return;
     setRows((prev) => prev.filter((r) => r.estado !== estadoObjetivo));
-    idsAEliminar.forEach((id) => supabase.from("horas_extras").delete().eq("id", id).then());
+    if (estadoObjetivo === "Cerrada" || estadoObjetivo === "Aprobada") {
+      for (const fila of filasAEliminar) await preservarHorasEnGrafica(area, fila);
+    }
+    filasAEliminar.forEach((r) => supabase.from("horas_extras").delete().eq("id", r.id).then());
   };
 
   const rowsSolicitud = rows.filter((r) => r.estado === "Pendiente" || r.estado === "Aprobada");
@@ -791,7 +825,16 @@ function HorasExtras({ area, color }) {
         </Card>
         <Card title="Nueva solicitud">
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <Field label="OD del proyecto"><input style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })} placeholder="OD-1004" /></Field>
+            <Field label="OD del proyecto">
+              {odsDelArea.length === 0 ? (
+                <input style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })} placeholder="OD-1004" />
+              ) : (
+                <select style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })}>
+                  <option value="">Selecciona un OD…</option>
+                  {odsDelArea.map((o) => <option key={o.id} value={o.od}>{o.od} — {o.cliente}</option>)}
+                </select>
+              )}
+            </Field>
             <Field label="Persona que solicita">
               {empleados.length === 0 ? (
                 <div style={{ fontSize: 11.5, color: T.gray }}>Aún no hay personal cargado. Agrégalo desde Planilla.</div>
@@ -942,6 +985,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const [filtroTexto, setFiltroTexto] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("Todos");
   const [subTabCorrectivo, setSubTabCorrectivo] = useState("Pendientes");
+  const [editandoId, setEditandoId] = useState(null);
   const fileInputRef = React.useRef(null);
 
   const add = async () => {
@@ -984,6 +1028,14 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const setTecnico = (id, tecnico) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, tecnico } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ tecnico })).eq("id", id).then();
+  };
+  const setOD = (id, od) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, od } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ od })).eq("id", id).then();
+  };
+  const setClienteOD = (id, cliente) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, cliente } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ cliente })).eq("id", id).then();
   };
   const setVencimiento = (id, vencimiento) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, vencimiento } : r));
@@ -1138,8 +1190,16 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                 const vencidoAuto = efectivo === "Vencido";
                 return (
                 <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
-                  <td style={{ padding: "9px 8px", fontWeight: 600 }}>{r.od}</td>
-                  <td>{r.cliente}</td>
+                  <td style={{ padding: "9px 8px", fontWeight: 600 }}>
+                    {editandoId === r.id ? (
+                      <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 100 }} value={r.od} onChange={(e) => setOD(r.id, e.target.value)} />
+                    ) : r.od}
+                  </td>
+                  <td>
+                    {editandoId === r.id ? (
+                      <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 170 }} value={r.cliente} onChange={(e) => setClienteOD(r.id, e.target.value)} />
+                    ) : r.cliente}
+                  </td>
                   <td>
                     {isProyectos ? (
                       vencidoAuto ? (
@@ -1175,7 +1235,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                     )}
                   </td>
                   <td>
-                    {isAdmin ? (
+                    {canEditEstado ? (
                       <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 110 }} value={r.tecnico} onChange={(e) => setTecnico(r.id, e.target.value)} />
                     ) : (r.tecnico || "—")}
                   </td>
@@ -1253,6 +1313,11 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                       </Btn>
                     )}
                     {isAdmin && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}
+                    {canEditEstado && (
+                      <Btn small variant={editandoId === r.id ? "accent" : "ghost"} onClick={() => setEditandoId(editandoId === r.id ? null : r.id)}>
+                        {editandoId === r.id ? "Listo" : "Editar"}
+                      </Btn>
+                    )}
                   </td>
                 </tr>
               );})}
@@ -1972,8 +2037,8 @@ function Cotizaciones() {
     supabase.from("cotizaciones").delete().eq("id", id).then();
   };
 
-  const ESTADOS_COT = ["Solicitud", "Enviado", "Abierto", "Comparado"];
-  const estadoColor = { Solicitud: [T.amber, T.amberSoft], Enviado: [T.blue, T.blueSoft], Abierto: [T.steel, T.steelSoft], Comparado: [T.green, T.greenSoft] };
+  const ESTADOS_COT = ["Solicitud", "En proceso", "Enviado", "Comparado"];
+  const estadoColor = { Solicitud: [T.amber, T.amberSoft], "En proceso": [T.steel, T.steelSoft], Enviado: [T.blue, T.blueSoft], Comparado: [T.green, T.greenSoft] };
   const actividadColor = { Seguimiento: [T.blue, T.blueSoft], Cancelado: [T.red, T.redSoft], "Con OC": [T.green, T.greenSoft] };
   const TIPO_OFERTA_OPCIONES = ["Inspecciones", "Proyectos", "Inspecciones y Proyectos"];
 
@@ -2361,14 +2426,6 @@ function HorasExtrasQuincenales({ area, color }) {
     })();
   }, [area]);
 
-  const MESES_CORTOS_QNA = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"];
-  function etiquetaQuincenaCorta(fechaISO) {
-    const [anio, mes, dia] = fechaISO.split("-").map(Number);
-    const nombreMes = MESES_CORTOS_QNA[mes - 1];
-    if (dia <= 15) return `1-15 ${nombreMes}`;
-    const ultimoDia = new Date(anio, mes, 0).getDate();
-    return `16-${ultimoDia} ${nombreMes}`;
-  }
   const autoPorQuincena = {};
   const fechaPorQuincenaAuto = {};
   reales.forEach((h) => {
@@ -2561,14 +2618,6 @@ function ResumenEjecutivo() {
   // partir de ahí, cualquier quincena nueva se calcula sola sumando las
   // solicitudes de horas extra ya Aprobadas/Cerradas — así ya no hace
   // falta seguir cargando esto a mano hacia adelante.
-  const MESES_CORTOS_QNA = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"];
-  function etiquetaQuincenaCorta(fechaISO) {
-    const [anio, mes, dia] = fechaISO.split("-").map(Number);
-    const nombreMes = MESES_CORTOS_QNA[mes - 1];
-    if (dia <= 15) return `1-15 ${nombreMes}`;
-    const ultimoDia = new Date(anio, mes, 0).getDate();
-    return `16-${ultimoDia} ${nombreMes}`;
-  }
   const horasAutoPorQuincena = {};
   const fechaPorQuincenaAuto = {};
   horasReales.forEach((h) => {
@@ -3733,6 +3782,13 @@ function AppInner() {
   });
   const [tab, setTab] = useState(null);
   const { logo } = useContext(LogoContext);
+  const [esPantallaAngosta, setEsPantallaAngosta] = useState(() => typeof window !== "undefined" && window.innerWidth < 820);
+
+  useEffect(() => {
+    const revisar = () => setEsPantallaAngosta(window.innerWidth < 820);
+    window.addEventListener("resize", revisar);
+    return () => window.removeEventListener("resize", revisar);
+  }, []);
 
   const iniciarSesion = (u) => {
     setUser(u);
@@ -3849,6 +3905,7 @@ function VistaMovilTecnico({ user, onLogout }) {
 
   const TABS = [
     { id: "od", label: "Mis OD", icon: ClipboardList },
+    { id: "correctivos", label: "Correctivos", icon: AlertCircle },
     { id: "horas", label: "Horas Extras", icon: Clock },
     { id: "ehs", label: "Cursos EHS", icon: HardHat },
     { id: "calendario", label: "Calendario", icon: CalendarDays },
@@ -3872,8 +3929,9 @@ function VistaMovilTecnico({ user, onLogout }) {
 
       <div style={{ flex: 1, overflowY: "auto", padding: "16px 14px 90px" }}>
         {tab === "od" && <MovilMisOD nombre={nombre} clientes={clientes} cardStyle={cardStyle} />}
+        {tab === "correctivos" && <MovilCorrectivos nombre={nombre} clientes={clientes} cardStyle={cardStyle} />}
         {tab === "horas" && <MovilHorasExtras nombre={nombre} user={user} cardStyle={cardStyle} labelStyle={labelStyle} bigInputStyle={bigInputStyle} />}
-        {tab === "ehs" && <MovilCursosEHS nombre={nombre} cardStyle={cardStyle} bigInputStyle={bigInputStyle} />}
+        {tab === "ehs" && <MovilCursosEHS cardStyle={cardStyle} bigInputStyle={bigInputStyle} />}
         {tab === "calendario" && <MovilCalendario cardStyle={cardStyle} />}
       </div>
 
@@ -3910,13 +3968,13 @@ function MovilMisOD({ nombre, clientes, cardStyle }) {
   const inspRows = clientes.inspecciones || [];
   const projRows = clientes.proyectos || [];
   const misOD = [...inspRows.map((r) => ({ ...r, area: "inspecciones" })), ...projRows.map((r) => ({ ...r, area: "proyectos" }))]
-    .filter((r) => (r.tecnico || "").trim().toLowerCase() === nombre)
+    .filter((r) => (r.tecnico || "").trim().toLowerCase() === nombre && (r.tipoOD || "Normal") !== "Correctivo")
     .filter((r) => filtroArea === "Todos" || r.area === filtroArea);
 
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-        <Btn small variant={filtroArea === "Todos" ? "accent" : "ghost"} onClick={() => setFiltroArea("Todos")}>Todos ({inspRows.filter((r) => (r.tecnico || "").trim().toLowerCase() === nombre).length + projRows.filter((r) => (r.tecnico || "").trim().toLowerCase() === nombre).length})</Btn>
+        <Btn small variant={filtroArea === "Todos" ? "accent" : "ghost"} onClick={() => setFiltroArea("Todos")}>Todos ({inspRows.filter((r) => (r.tecnico || "").trim().toLowerCase() === nombre && (r.tipoOD || "Normal") !== "Correctivo").length + projRows.filter((r) => (r.tecnico || "").trim().toLowerCase() === nombre && (r.tipoOD || "Normal") !== "Correctivo").length})</Btn>
         <Btn small variant={filtroArea === "inspecciones" ? "accent" : "ghost"} onClick={() => setFiltroArea("inspecciones")}>Inspecciones</Btn>
         <Btn small variant={filtroArea === "proyectos" ? "accent" : "ghost"} onClick={() => setFiltroArea("proyectos")}>Proyectos</Btn>
       </div>
@@ -3930,7 +3988,7 @@ function MovilMisOD({ nombre, clientes, cardStyle }) {
           </div>
           <div style={{ fontSize: 14.5, color: T.ink, marginBottom: 4 }}>{r.cliente}</div>
           <div style={{ fontSize: 12.5, color: T.inkSoft }}>
-            {area_label(r.area)}{r.tipoOD === "Correctivo" ? " · Correctivo" : ""}
+            {area_label(r.area)}
             {r.vencimiento ? ` · Vence: ${r.vencimiento}` : ""}
             {r.fechaEntrega ? ` · Entrega: ${r.fechaEntrega}` : ""}
           </div>
@@ -3940,6 +3998,39 @@ function MovilMisOD({ nombre, clientes, cardStyle }) {
   );
 }
 function area_label(area) { return area === "inspecciones" ? "Inspecciones" : "Proyectos"; }
+
+function MovilCorrectivos({ nombre, clientes, cardStyle }) {
+  const [filtroArea, setFiltroArea] = useState("Todos");
+  const inspRows = clientes.inspecciones || [];
+  const projRows = clientes.proyectos || [];
+  const misCorrectivos = [...inspRows.map((r) => ({ ...r, area: "inspecciones" })), ...projRows.map((r) => ({ ...r, area: "proyectos" }))]
+    .filter((r) => (r.tecnico || "").trim().toLowerCase() === nombre && (r.tipoOD || "Normal") === "Correctivo")
+    .filter((r) => filtroArea === "Todos" || r.area === filtroArea);
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <Btn small variant={filtroArea === "Todos" ? "accent" : "ghost"} onClick={() => setFiltroArea("Todos")}>Todos</Btn>
+        <Btn small variant={filtroArea === "inspecciones" ? "accent" : "ghost"} onClick={() => setFiltroArea("inspecciones")}>Inspecciones</Btn>
+        <Btn small variant={filtroArea === "proyectos" ? "accent" : "ghost"} onClick={() => setFiltroArea("proyectos")}>Proyectos</Btn>
+      </div>
+      {misCorrectivos.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 14, textAlign: "center", padding: "30px 10px" }}>No tienes OD Correctivos asignadas todavía.</div>
+      ) : misCorrectivos.map((r) => (
+        <div key={r.id} style={cardStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+            <div style={{ fontSize: 16, fontWeight: 800 }}>{r.od}</div>
+            <Badge color={(r.progreso || "Pendiente") === "Completado" ? T.green : T.amber} soft={(r.progreso || "Pendiente") === "Completado" ? T.greenSoft : T.amberSoft}>{r.progreso || "Pendiente"}</Badge>
+          </div>
+          <div style={{ fontSize: 14.5, color: T.ink, marginBottom: 4 }}>{r.cliente}</div>
+          <div style={{ fontSize: 12.5, color: T.inkSoft }}>
+            {area_label(r.area)}{r.fechaAprobacion ? ` · Aprobado: ${r.fechaAprobacion}` : ""}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function MovilHorasExtras({ nombre, user, cardStyle, labelStyle, bigInputStyle }) {
   const [rows, setRows] = useState([]);
@@ -4015,14 +4106,14 @@ function MovilHorasExtras({ nombre, user, cardStyle, labelStyle, bigInputStyle }
   );
 }
 
-function MovilCursosEHS({ nombre, cardStyle, bigInputStyle }) {
+function MovilCursosEHS({ cardStyle, bigInputStyle }) {
   const [rows, setRows] = useState([]);
   useEffect(() => {
     (async () => {
       const { data } = await supabase.from("cursos_ehs").select("*").order("created_at", { ascending: false });
-      if (data) setRows(data.filter((r) => (r.personal || "").toLowerCase().includes(nombre)));
+      if (data) setRows(data);
     })();
-  }, [nombre]);
+  }, []);
 
   const setFecha = (id, fecha) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, fecha } : r));
@@ -4034,7 +4125,7 @@ function MovilCursosEHS({ nombre, cardStyle, bigInputStyle }) {
   };
 
   if (rows.length === 0) {
-    return <div style={{ color: T.gray, fontSize: 14, textAlign: "center", padding: "30px 10px" }}>No tienes cursos EHS asignados todavía.</div>;
+    return <div style={{ color: T.gray, fontSize: 14, textAlign: "center", padding: "30px 10px" }}>Todavía no hay cursos EHS cargados.</div>;
   }
 
   return (
@@ -4048,6 +4139,7 @@ function MovilCursosEHS({ nombre, cardStyle, bigInputStyle }) {
               <div style={{ fontSize: 15.5, fontWeight: 800 }}>{r.tipo}</div>
               <Dot color={SEMAFORO[efectivo]} />
             </div>
+            <div style={{ fontSize: 13, color: T.inkSoft, marginBottom: 2 }}>{r.personal || "Sin asignar"}</div>
             <div style={{ fontSize: 13, color: T.inkSoft, marginBottom: 10 }}>{r.lugar || "—"}{venc ? ` · Vence: ${venc}` : ""}</div>
             <label style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, display: "block", marginBottom: 4 }}>Fecha del curso</label>
             <input type="date" style={{ ...bigInputStyle, marginBottom: 10 }} value={r.fecha || ""} onChange={(e) => setFecha(r.id, e.target.value)} />

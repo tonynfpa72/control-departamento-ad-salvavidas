@@ -973,7 +973,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const canEditFechaControl = isAdmin;
   const canEditEstado = isAdmin || currentUser?.categoria === "asistente";
   const canMoverTipo = isAdmin || currentUser?.categoria === "asistente";
-  const canEditProgreso = isAdmin || currentUser?.categoria === "asistente";
+  const canEditProgreso = isAdmin || currentUser?.categoria === "asistente" || currentUser?.categoria === "tecnico";
   const confirmar = useContext(ConfirmContext);
   const isInspecciones = area === "inspecciones";
   const isProyectos = area === "proyectos";
@@ -3802,10 +3802,11 @@ function AppInner() {
 
   const visibleAreas = useMemo(() => {
     if (!user) return [];
-    // Todos los usuarios ven las 4 áreas operativas; Administrativo
+    // Todos los usuarios ven las áreas operativas; Administrativo
     // (incluyendo Gestión de Usuarios) queda reservado solo para la
-    // categoría "admin".
+    // categoría "admin". Los técnicos, además, no ven Proyectos ni Planilla.
     if (user.categoria === "admin") return AREAS;
+    if (user.categoria === "tecnico") return AREAS.filter((a) => a.id !== "admin" && a.id !== "proyectos" && a.id !== "planilla");
     return AREAS.filter((a) => a.id !== "admin");
   }, [user]);
 

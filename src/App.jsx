@@ -3815,14 +3815,6 @@ function AppInner() {
 
   if (!user) return <Login onLogin={iniciarSesion} />;
 
-  if (user.categoria === "tecnico") {
-    return (
-      <CurrentUserContext.Provider value={user}>
-        <VistaMovilTecnico user={user} onLogout={cerrarSesion} />
-      </CurrentUserContext.Provider>
-    );
-  }
-
   const current = AREAS.find((a) => a.id === tab);
 
   return (

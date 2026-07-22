@@ -549,6 +549,7 @@ async function reporte2Descargar(area) {
   }
 
   try {
+    let totalGenerados = 0;
     for (const od of odsConDatos) {
       for (const quincena of Object.keys(grupos[od])) {
         const semanas = Object.keys(grupos[od][quincena]).sort();
@@ -561,8 +562,15 @@ async function reporte2Descargar(area) {
           const nombreOd = String(od).replace(/[^a-zA-Z0-9-]/g, "");
           const nombreArchivo = `SolicitudHoras_${nombreArea}_${nombreOd}_${reporte2NombreQuincena(quincena)}${sufijoSemana}.xlsx`;
           reporte2Descargar_disparar(buffer, nombreArchivo);
+          totalGenerados++;
+          // Los navegadores bloquean/ignoran descargas disparadas muy rápido
+          // seguidas; una pequeña pausa entre cada una evita que se pierdan.
+          await new Promise((resolve) => setTimeout(resolve, 400));
         }
       }
+    }
+    if (totalGenerados > 5) {
+      alert(`Se generaron ${totalGenerados} reportes. Si tu navegador preguntó "¿Permitir varias descargas?", asegúrate de darle clic a "Permitir" para recibirlos todos.`);
     }
   } catch (err) {
     alert("No se pudo generar el Reporte: " + (err.message || "error desconocido al armar el Excel."));
@@ -728,7 +736,20 @@ function HorasExtras({ area, color }) {
   const [empleados, setEmpleados] = useState([]);
   const [form, setForm] = useState({ od: "", personalCodigo: "", horaInicio: "07:00", horaFin: "15:00", fechaEjecucion: "" });
   const [subTab, setSubTab] = useState("solicitud");
-  const used = rows.reduce((s, r) => s + ((r.estado === "Pendiente" || r.estado === "Aprobada") ? Number(r.horas) : 0), 0);
+  const enQuincenaActual = (fechaISO) => {
+    if (!fechaISO) return false;
+    const [anioA, mesA, diaA] = fechaISO.split("-").map(Number);
+    const hoy = new Date();
+    if (anioA !== hoy.getFullYear() || mesA !== hoy.getMonth() + 1) return false;
+    const qA = diaA <= 15 ? 1 : 2;
+    const qHoy = hoy.getDate() <= 15 ? 1 : 2;
+    return qA === qHoy;
+  };
+  const used = rows.reduce((s, r) => {
+    if (r.estado !== "Pendiente" && r.estado !== "Aprobada") return s;
+    if (!enQuincenaActual(r.fecha_ejecucion || r.fecha)) return s;
+    return s + (Number(r.horas) || 0);
+  }, 0);
   const saldo = disponible - used;
   const horasCalculadas = calcularHorasRango(form.horaInicio, form.horaFin);
 
@@ -811,7 +832,7 @@ function HorasExtras({ area, color }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <Card title="Disponible quincenal">
           <div style={{ fontSize: 30, fontWeight: 800, color }}>{saldo}h</div>
-          <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 12 }}>de {disponible}h asignadas · {used}h usadas</div>
+          <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 12 }}>de {disponible}h asignadas · {used}h usadas en esta quincena</div>
           <div style={{ height: 8, background: T.graySoft, borderRadius: 99, overflow: "hidden", marginBottom: 12 }}>
             <div style={{ height: "100%", width: `${Math.min(100, (used / disponible) * 100)}%`, background: used > disponible ? T.red : color }} />
           </div>
@@ -877,7 +898,7 @@ function HorasExtras({ area, color }) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
-              <th style={{ padding: "6px 8px" }}>Fecha</th><th>Fecha ejecución</th><th>OD</th><th>Personal</th><th>Rango</th><th>Horas</th><th>Estado</th><th></th>
+              <th style={{ padding: "6px 8px" }}>Fecha</th><th>Fecha ejecución</th><th style={{ minWidth: 220 }}>OD</th><th>Personal</th><th>Rango</th><th>Horas</th><th>Estado</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -891,8 +912,12 @@ function HorasExtras({ area, color }) {
                 </td>
                 <td>
                   {isAdmin ? (
-                    <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }} value={r.od} onChange={(e) => setOd(r.id, e.target.value)} />
+                    <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 200 }} value={r.od} onChange={(e) => setOd(r.id, e.target.value)} />
                   ) : (r.od)}
+                  {(() => {
+                    const clienteOD = odsDelArea.find((o) => o.od === r.od)?.cliente;
+                    return clienteOD ? <div style={{ fontSize: 11, color: T.gray, marginTop: 2 }}>{clienteOD}</div> : null;
+                  })()}
                 </td>
                 <td>
                   {isAdmin ? (
@@ -2239,18 +2264,32 @@ function CursosEHS() {
     supabase.from("cursos_ehs").delete().eq("id", id).then();
   };
 
+  const [filtroTipoEHS, setFiltroTipoEHS] = useState("Todos");
+  const [filtroPersonalEHS, setFiltroPersonalEHS] = useState("");
   const rowsVencidos = rows.filter((r) => estadoEfectivoCurso(r) === "Vencido");
   const rowsRealizados = rows.filter((r) => r.estado === "Realizado" && estadoEfectivoCurso(r) !== "Vencido");
   const rowsActivos = rows.filter((r) => r.estado !== "Realizado" && estadoEfectivoCurso(r) !== "Vencido");
-  const rowsMostrados = subTab === "activos" ? rowsActivos : subTab === "vencidos" ? rowsVencidos : rowsRealizados;
+  const rowsMostradosPorTab = subTab === "activos" ? rowsActivos : subTab === "vencidos" ? rowsVencidos : rowsRealizados;
+  const rowsMostrados = rowsMostradosPorTab.filter((r) => {
+    const matchTipo = filtroTipoEHS === "Todos" || r.tipo === filtroTipoEHS;
+    const matchPersonal = !filtroPersonalEHS.trim() || (r.personal || "").toLowerCase().includes(filtroPersonalEHS.trim().toLowerCase());
+    return matchTipo && matchPersonal;
+  });
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
       <Card title="Solicitudes de curso" action={<Btn small variant="ghost" onClick={() => exportExcel(rowsMostrados.map(r => ({ Solicitante: r.solicitante, Personal: r.personal, Lugar: r.lugar, Tipo: r.tipo, Estado: r.estado, Fecha: r.fecha, Vencimiento: vencimientoCalculado(r.fecha) || "" })), "cursos_ehs.xlsx")}><Download size={13} /> Excel</Btn>}>
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
           <Btn small variant={subTab === "activos" ? "accent" : "ghost"} onClick={() => setSubTab("activos")}>Activos ({rowsActivos.length})</Btn>
           <Btn small variant={subTab === "vencidos" ? "accent" : "ghost"} onClick={() => setSubTab("vencidos")}>Vencidos ({rowsVencidos.length})</Btn>
           <Btn small variant={subTab === "realizados" ? "accent" : "ghost"} onClick={() => setSubTab("realizados")}>Realizados ({rowsRealizados.length})</Btn>
+        </div>
+        <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+          <select style={{ ...inputStyle, width: 180 }} value={filtroTipoEHS} onChange={(e) => setFiltroTipoEHS(e.target.value)}>
+            <option value="Todos">Todos los tipos</option>
+            {CURSO_TIPOS.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <input style={{ ...inputStyle, width: 200 }} value={filtroPersonalEHS} onChange={(e) => setFiltroPersonalEHS(e.target.value)} placeholder="Buscar por persona..." />
         </div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
@@ -2475,7 +2514,7 @@ function HorasExtrasQuincenales({ area, color }) {
             <XAxis dataKey="quincena" tick={{ fontSize: 11 }} />
             <YAxis tick={{ fontSize: 12 }} allowDecimals={false} domain={[0, (dataMax) => Math.max(180, Math.ceil(dataMax * 1.15))]} />
             <Tooltip formatter={(v) => `${v} h`} />
-            <ReferenceLine y={150} stroke={T.accent} strokeDasharray="6 4" label={{ value: "Límite 150h", fill: T.accent, fontSize: 11, position: "insideTopRight" }} />
+            <ReferenceLine y={156} stroke={T.accent} strokeDasharray="6 4" label={{ value: "Límite 156h", fill: T.accent, fontSize: 11, position: "insideTopRight" }} />
             <Line type="monotone" dataKey="horas" stroke={color || T.steel} strokeWidth={3} dot={{ r: 4 }}>
               <LabelList dataKey="horas" position="top" formatter={(v) => `${v}h`} style={{ fontSize: 11.5, fontWeight: 700, fill: T.ink }} />
             </Line>
@@ -2534,7 +2573,7 @@ function ResumenEjecutivo() {
   const VENTANA_MESES = 12;
   const { clientes } = useContext(ClientesContext);
   const PUNTO_EQUILIBRIO = 120000;
-  const PUNTO_EQUILIBRIO_HORAS = 150;
+  const PUNTO_EQUILIBRIO_HORAS = 156;
   const VENTANA_QUINCENAS = 12;
 
   useEffect(() => {
@@ -2748,8 +2787,8 @@ function ResumenEjecutivo() {
       ["Total horas Proyectos", totalProyHoras],
       ["Promedio quincenal Inspecciones", promedioInspHoras],
       ["Promedio quincenal Proyectos", promedioProyHoras],
-      ["Quincenas sobre 150h — Inspecciones", quincenasSobreInsp],
-      ["Quincenas sobre 150h — Proyectos", quincenasSobreProy],
+      ["Quincenas sobre 156h — Inspecciones", quincenasSobreInsp],
+      ["Quincenas sobre 156h — Proyectos", quincenasSobreProy],
       ["Total facturado", fmtMoney(totalFacturado)],
       ["Promedio mensual facturado", fmtMoney(Math.round(avgFactura))],
     ];
@@ -3020,7 +3059,7 @@ function ResumenEjecutivo() {
               <YAxis tick={{ fontSize: 12 }} allowDecimals={false} domain={[0, (dataMax) => Math.max(180, Math.ceil(dataMax * 1.15))]} />
               <Tooltip formatter={(v) => `${v} h`} />
               <Legend />
-              <ReferenceLine y={PUNTO_EQUILIBRIO_HORAS} stroke={T.accent} strokeDasharray="6 4" label={{ value: "Límite 150h", fill: T.accent, fontSize: 11, position: "insideTopRight" }} />
+              <ReferenceLine y={PUNTO_EQUILIBRIO_HORAS} stroke={T.accent} strokeDasharray="6 4" label={{ value: "Límite 156h", fill: T.accent, fontSize: 11, position: "insideTopRight" }} />
               <Line type="monotone" dataKey="Inspecciones" stroke={T.turquoise} strokeWidth={3} dot={{ r: 4 }} />
               <Line type="monotone" dataKey="Proyectos" stroke={T.green} strokeWidth={3} dot={{ r: 4 }} />
             </LineChart>

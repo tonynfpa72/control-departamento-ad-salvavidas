@@ -387,19 +387,20 @@ function etiquetaQuincenaCorta(fechaISO) {
   return `16-${ultimoDia} ${nombreMes}`;
 }
 
-// Si una solicitud de horas extra ya Aprobada/Cerrada se borra, esto suma
-// sus horas a la tabla manual (horas_extras_manual) para esa quincena y
-// área, así el dato ya contado en la gráfica no se pierde.
-async function preservarHorasEnGrafica(area, fila) {
+// Si una solicitud de horas extra ya Aprobada/Cerrada se borra, y esa
+// quincena ya tenía un número manual fijo (horas_extras_manual), le resta
+// esas horas para que la gráfica sí refleje el borrado. Si la quincena no
+// tiene número manual, no hace falta hacer nada: el cálculo automático ya
+// se recalcula solo con lo que quede en la base de datos.
+async function descontarHorasDeGrafica(area, fila) {
   const fechaRef = fila.fecha_ejecucion || fila.fecha;
   const horas = Number(fila.horas) || 0;
   if (!fechaRef || !horas) return;
   const quincena = etiquetaQuincenaCorta(fechaRef);
   const { data: existente } = await supabase.from("horas_extras_manual").select("*").eq("area", area).eq("quincena", quincena).maybeSingle();
   if (existente) {
-    await supabase.from("horas_extras_manual").update({ horas: Number(existente.horas || 0) + horas }).eq("id", existente.id);
-  } else {
-    await supabase.from("horas_extras_manual").insert({ area, quincena, horas });
+    const nuevoValor = Math.max(0, Number(existente.horas || 0) - horas);
+    await supabase.from("horas_extras_manual").update({ horas: nuevoValor }).eq("id", existente.id);
   }
 }
 
@@ -808,7 +809,7 @@ function HorasExtras({ area, color }) {
     if (!(await confirmar("¿Está seguro que desea eliminar esta solicitud de horas extra? Esta acción no se puede deshacer."))) return;
     const fila = rows.find((r) => r.id === id);
     setRows((prev) => prev.filter((r) => r.id !== id));
-    if (fila && (fila.estado === "Aprobada" || fila.estado === "Cerrada")) await preservarHorasEnGrafica(area, fila);
+    if (fila && (fila.estado === "Aprobada" || fila.estado === "Cerrada")) await descontarHorasDeGrafica(area, fila);
     supabase.from("horas_extras").delete().eq("id", id).then();
   };
   const vaciarPestana = async (estadoObjetivo, etiqueta) => {
@@ -817,7 +818,7 @@ function HorasExtras({ area, color }) {
     if (!(await confirmar(`¿Está seguro que desea eliminar las ${filasAEliminar.length} solicitudes de "${etiqueta}"? Esta acción no se puede deshacer.`))) return;
     setRows((prev) => prev.filter((r) => r.estado !== estadoObjetivo));
     if (estadoObjetivo === "Cerrada" || estadoObjetivo === "Aprobada") {
-      for (const fila of filasAEliminar) await preservarHorasEnGrafica(area, fila);
+      for (const fila of filasAEliminar) await descontarHorasDeGrafica(area, fila);
     }
     filasAEliminar.forEach((r) => supabase.from("horas_extras").delete().eq("id", r.id).then());
   };

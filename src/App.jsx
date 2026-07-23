@@ -379,6 +379,29 @@ function reporte2NombreQuincena(clave) {
 // usada tanto para el gráfico de Administrativo como para conservar el
 // dato al borrar una solicitud de horas extra ya aprobada/cerrada.
 const MESES_CORTOS_QNA = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"];
+// Reconoce cualquier forma en que se haya escrito un mes (completo,
+// abreviado, con o sin tilde, incluso truncado como "En") y lo devuelve
+// siempre en la misma forma corta ("Ene", "Feb", ...) para poder comparar
+// fechas de facturación sin importar cómo se haya escrito el mes.
+const MES_ALIAS = {
+  ene: "Ene", enero: "Ene", en: "Ene",
+  feb: "Feb", febrero: "Feb",
+  mar: "Mar", marzo: "Mar",
+  abr: "Abr", abril: "Abr",
+  may: "May", mayo: "May",
+  jun: "Jun", junio: "Jun",
+  jul: "Jul", julio: "Jul",
+  ago: "Ago", agosto: "Ago",
+  set: "Set", sep: "Set", sept: "Set", septiembre: "Set", setiembre: "Set",
+  oct: "Oct", octubre: "Oct",
+  nov: "Nov", noviembre: "Nov",
+  dic: "Dic", diciembre: "Dic",
+};
+function normalizarMesCorto(mes) {
+  const clave = String(mes || "").trim().toLowerCase();
+  return MES_ALIAS[clave] || String(mes || "").trim();
+}
+
 function etiquetaQuincenaCorta(fechaISO) {
   const [anio, mes, dia] = fechaISO.split("-").map(Number);
   const nombreMes = MESES_CORTOS_QNA[mes - 1];
@@ -3164,8 +3187,8 @@ function ResumenEjecutivo() {
           const ORDEN_MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"];
           const dataComparacion = ORDEN_MESES.map((mes) => ({
             mes,
-            [String(anioActual)]: facturasConAnio.find((f) => f.mes === mes && f.anio === anioActual)?.monto || null,
-            ...(anioAnterior ? { [String(anioAnterior)]: facturasConAnio.find((f) => f.mes === mes && f.anio === anioAnterior)?.monto || null } : {}),
+            [String(anioActual)]: facturasConAnio.find((f) => normalizarMesCorto(f.mes) === mes && f.anio === anioActual)?.monto || null,
+            ...(anioAnterior ? { [String(anioAnterior)]: facturasConAnio.find((f) => normalizarMesCorto(f.mes) === mes && f.anio === anioAnterior)?.monto || null } : {}),
           }));
           return (
             <>

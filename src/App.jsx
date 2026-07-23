@@ -387,16 +387,46 @@ function etiquetaQuincenaCorta(fechaISO) {
   return `16-${ultimoDia} ${nombreMes}`;
 }
 
+// Dada una lista ORDENADA (ascendente) de fechas de corte "YYYY-MM-DD",
+// arma la etiqueta del periodo al que pertenece una fecha (el periodo va
+// del día después del corte anterior, hasta el corte que sigue).
+// Devuelve null si la fecha cae después del último corte cargado (aún no
+// se sabe dónde termina ese periodo).
+function etiquetaPeriodoDeCorte(fechaISO, fechasCorte) {
+  if (!fechaISO || !fechasCorte || fechasCorte.length === 0) return null;
+  const fin = fechasCorte.find((f) => f >= fechaISO);
+  if (!fin) return null;
+  const idx = fechasCorte.indexOf(fin);
+  const anteriorISO = idx > 0 ? fechasCorte[idx - 1] : null;
+  const df = (iso) => {
+    const d = new Date(iso + "T00:00:00");
+    return `${d.getDate()} ${MESES_CORTOS_QNA[d.getMonth()]}`;
+  };
+  if (!anteriorISO) return `Hasta ${df(fin)}`;
+  const dInicio = new Date(anteriorISO + "T00:00:00");
+  dInicio.setDate(dInicio.getDate() + 1);
+  return `${df(isoDate(dInicio))} – ${df(fin)}`;
+}
+
+// Punto único que usan las gráficas y el contador de "Disponible": si ya
+// hay fechas de corte configuradas y la fecha cae dentro de un periodo ya
+// cerrado por un corte, usa esa etiqueta; si no, respalda con la quincena
+// fija 1-15/16-31 para que nada se rompa mientras no se configuren cortes.
+function etiquetaPeriodo(fechaISO, fechasCorte) {
+  const porCorte = etiquetaPeriodoDeCorte(fechaISO, fechasCorte);
+  return porCorte || etiquetaQuincenaCorta(fechaISO);
+}
+
 // Si una solicitud de horas extra ya Aprobada/Cerrada se borra, y esa
 // quincena ya tenía un número manual fijo (horas_extras_manual), le resta
 // esas horas para que la gráfica sí refleje el borrado. Si la quincena no
 // tiene número manual, no hace falta hacer nada: el cálculo automático ya
 // se recalcula solo con lo que quede en la base de datos.
-async function descontarHorasDeGrafica(area, fila) {
+async function descontarHorasDeGrafica(area, fila, fechasCorte) {
   const fechaRef = fila.fecha_ejecucion || fila.fecha;
   const horas = Number(fila.horas) || 0;
   if (!fechaRef || !horas) return;
-  const quincena = etiquetaQuincenaCorta(fechaRef);
+  const quincena = etiquetaPeriodo(fechaRef, fechasCorte || []);
   const { data: existente } = await supabase.from("horas_extras_manual").select("*").eq("area", area).eq("quincena", quincena).maybeSingle();
   if (existente) {
     const nuevoValor = Math.max(0, Number(existente.horas || 0) - horas);
@@ -731,24 +761,20 @@ function HorasExtras({ area, color }) {
   const canCerrar = isAdmin || currentUser?.categoria === "asistente";
   const canBorrar = isAdmin || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
+  const { fechasCorte } = useContext(FechasCorteContext);
   const [odsDelArea] = useClientesArea(area);
   const [disponible, setDisponibleState] = useState(150);
   const [rows, setRows] = useState([]);
   const [empleados, setEmpleados] = useState([]);
   const [form, setForm] = useState({ od: "", personalCodigo: "", horaInicio: "07:00", horaFin: "15:00", fechaEjecucion: "" });
   const [subTab, setSubTab] = useState("solicitud");
-  const enQuincenaActual = (fechaISO) => {
+  const mismoPeriodo = (fechaISO) => {
     if (!fechaISO) return false;
-    const [anioA, mesA, diaA] = fechaISO.split("-").map(Number);
-    const hoy = new Date();
-    if (anioA !== hoy.getFullYear() || mesA !== hoy.getMonth() + 1) return false;
-    const qA = diaA <= 15 ? 1 : 2;
-    const qHoy = hoy.getDate() <= 15 ? 1 : 2;
-    return qA === qHoy;
+    return etiquetaPeriodo(fechaISO, fechasCorte) === etiquetaPeriodo(todayISO(), fechasCorte);
   };
   const used = rows.reduce((s, r) => {
     if (r.estado !== "Pendiente" && r.estado !== "Aprobada") return s;
-    if (!enQuincenaActual(r.fecha_ejecucion || r.fecha)) return s;
+    if (!mismoPeriodo(r.fecha_ejecucion || r.fecha)) return s;
     return s + (Number(r.horas) || 0);
   }, 0);
   const saldo = disponible - used;
@@ -849,7 +875,7 @@ function HorasExtras({ area, color }) {
     if (!(await confirmar("¿Está seguro que desea eliminar esta solicitud de horas extra? Esta acción no se puede deshacer."))) return;
     const fila = rows.find((r) => r.id === id);
     setRows((prev) => prev.filter((r) => r.id !== id));
-    if (fila && (fila.estado === "Aprobada" || fila.estado === "Cerrada")) await descontarHorasDeGrafica(area, fila);
+    if (fila && (fila.estado === "Aprobada" || fila.estado === "Cerrada")) await descontarHorasDeGrafica(area, fila, fechasCorte);
     supabase.from("horas_extras").delete().eq("id", id).then();
   };
   const vaciarPestana = async (estadoObjetivo, etiqueta) => {
@@ -858,7 +884,7 @@ function HorasExtras({ area, color }) {
     if (!(await confirmar(`¿Está seguro que desea eliminar las ${filasAEliminar.length} solicitudes de "${etiqueta}"? Esta acción no se puede deshacer.`))) return;
     setRows((prev) => prev.filter((r) => r.estado !== estadoObjetivo));
     if (estadoObjetivo === "Cerrada" || estadoObjetivo === "Aprobada") {
-      for (const fila of filasAEliminar) await descontarHorasDeGrafica(area, fila);
+      for (const fila of filasAEliminar) await descontarHorasDeGrafica(area, fila, fechasCorte);
     }
     filasAEliminar.forEach((r) => supabase.from("horas_extras").delete().eq("id", r.id).then());
   };
@@ -1023,6 +1049,7 @@ function HorasExtras({ area, color }) {
 /* Contexto compartido: datos reales de OD/clientes de Inspecciones y
    Proyectos, para que el dashboard Administrativo pueda reflejarlos. */
 const ClientesContext = createContext(null);
+const FechasCorteContext = createContext([]);
 
 function useClientesArea(area) {
   const { clientes, setClientes } = useContext(ClientesContext);
@@ -2496,6 +2523,7 @@ function ClientesPorPersona({ area, color }) {
    Administrativo (o aquí mismo, solo admin), y todos la pueden ver.
    --------------------------------------------------------- */
 function HorasExtrasQuincenales({ area, color }) {
+  const { fechasCorte } = useContext(FechasCorteContext);
   const [filas, setFilas] = useState([]);
   const [reales, setReales] = useState([]);
   const [ventana, setVentana] = useState(0);
@@ -2517,7 +2545,7 @@ function HorasExtrasQuincenales({ area, color }) {
   reales.forEach((h) => {
     const fechaRef = h.fecha_ejecucion || h.fecha;
     if (!fechaRef) return;
-    const etiqueta = etiquetaQuincenaCorta(fechaRef);
+    const etiqueta = etiquetaPeriodo(fechaRef, fechasCorte);
     autoPorQuincena[etiqueta] = (autoPorQuincena[etiqueta] || 0) + (Number(h.horas) || 0);
     if (!fechaPorQuincenaAuto[etiqueta] || fechaRef < fechaPorQuincenaAuto[etiqueta]) fechaPorQuincenaAuto[etiqueta] = fechaRef;
   });
@@ -2609,6 +2637,7 @@ function ResumenEjecutivo() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
   const confirmar = useContext(ConfirmContext);
+  const { fechasCorte } = useContext(FechasCorteContext);
   const [facturas, setFacturas] = useState([]);
   const [nuevoMes, setNuevoMes] = useState({ mes: "", monto: "" });
   const [horasManual, setHorasManual] = useState([]);
@@ -2709,7 +2738,7 @@ function ResumenEjecutivo() {
   horasReales.forEach((h) => {
     const fechaRef = h.fecha_ejecucion || h.fecha;
     if (!fechaRef) return;
-    const etiqueta = etiquetaQuincenaCorta(fechaRef);
+    const etiqueta = etiquetaPeriodo(fechaRef, fechasCorte);
     horasAutoPorQuincena[etiqueta] = horasAutoPorQuincena[etiqueta] || { inspecciones: 0, proyectos: 0 };
     horasAutoPorQuincena[etiqueta][h.area] = (horasAutoPorQuincena[etiqueta][h.area] || 0) + (Number(h.horas) || 0);
     if (!fechaPorQuincenaAuto[etiqueta] || fechaRef < fechaPorQuincenaAuto[etiqueta]) fechaPorQuincenaAuto[etiqueta] = fechaRef;
@@ -3706,6 +3735,124 @@ function FacturacionPublica() {
 /* ---------------------------------------------------------
    PLANILLA (placeholder — pendiente de definir alcance)
    --------------------------------------------------------- */
+function FechasDeCorte({ isAdmin, confirmar }) {
+  const { fechasCorte, refetchFechasCorte } = useContext(FechasCorteContext);
+  const [rows, setRows] = useState([]);
+  const [nuevaFecha, setNuevaFecha] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("fechas_corte").select("*").order("fecha", { ascending: true });
+      if (data) setRows(data);
+    })();
+  }, []);
+
+  const agregar = async () => {
+    if (!nuevaFecha) return;
+    const { data, error } = await supabase.from("fechas_corte").insert({ fecha: nuevaFecha }).select().single();
+    if (!error && data) {
+      setRows((prev) => [...prev, data].sort((a, b) => a.fecha.localeCompare(b.fecha)));
+      setNuevaFecha("");
+      refetchFechasCorte();
+    }
+  };
+  const eliminar = async (id) => {
+    if (!(await confirmar("¿Está seguro que desea eliminar esta fecha de corte?"))) return;
+    setRows((prev) => prev.filter((f) => f.id !== id));
+    await supabase.from("fechas_corte").delete().eq("id", id);
+    refetchFechasCorte();
+  };
+
+  const [reorganizando, setReorganizando] = useState(false);
+  const fechaAproximadaDeQuincena = (quincena, anio) => {
+    const partes = String(quincena || "").trim().split(" ");
+    if (partes.length < 2) return null;
+    const rango = partes[0];
+    const nombreMes = partes[1];
+    const mesIdx = MESES_CORTOS_QNA.indexOf(nombreMes);
+    if (mesIdx === -1) return null;
+    const diaInicio = parseInt(rango.split("-")[0], 10);
+    if (!diaInicio) return null;
+    return `${anio}-${String(mesIdx + 1).padStart(2, "0")}-${String(diaInicio).padStart(2, "0")}`;
+  };
+  const reorganizarQuincenas = async () => {
+    if (rows.length === 0) return;
+    if (!(await confirmar(
+      "Esto va a reorganizar TODAS las quincenas manuales que ya tienes cargadas (2026) según tus nuevas fechas de corte, sumando las que caigan en el mismo periodo. Esta acción no se puede deshacer. ¿Continuar?"
+    ))) return;
+    setReorganizando(true);
+    try {
+      const { data: manuales } = await supabase.from("horas_extras_manual").select("*");
+      if (!manuales || manuales.length === 0) { setReorganizando(false); return; }
+      const fechasCorteOrdenadas = rows.map((r) => r.fecha);
+      const consolidado = {};
+      manuales.forEach((m) => {
+        const fechaAprox = fechaAproximadaDeQuincena(m.quincena, 2026);
+        if (!fechaAprox) return;
+        const nuevaEtiqueta = etiquetaPeriodo(fechaAprox, fechasCorteOrdenadas);
+        const key = `${m.area}|||${nuevaEtiqueta}`;
+        consolidado[key] = (consolidado[key] || 0) + (Number(m.horas) || 0);
+      });
+      const idsViejos = manuales.map((m) => m.id);
+      await supabase.from("horas_extras_manual").delete().in("id", idsViejos);
+      const filasNuevas = Object.entries(consolidado).map(([key, horas]) => {
+        const [area, quincena] = key.split("|||");
+        return { area, quincena, horas };
+      });
+      if (filasNuevas.length > 0) await supabase.from("horas_extras_manual").insert(filasNuevas);
+      alert(`Listo: se reorganizaron ${manuales.length} registros en ${filasNuevas.length} periodos nuevos.`);
+    } finally {
+      setReorganizando(false);
+    }
+  };
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <Card title="Fechas de corte">
+        <div style={{ fontSize: 13, color: T.inkSoft, marginBottom: 14 }}>
+          Las gráficas y el contador de "Disponible" de Horas Extras agrupan las horas por el periodo entre
+          una fecha de corte y la siguiente (como el corte de una tarjeta de crédito), en vez de la quincena fija 1-15/16-31.
+          Aplica igual para Inspecciones y Proyectos. Mientras no agregues fechas de corte, todo sigue funcionando con la quincena fija de siempre.
+        </div>
+        {isAdmin && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+            <input type="date" style={inputStyle} value={nuevaFecha} onChange={(e) => setNuevaFecha(e.target.value)} />
+            <Btn variant="accent" onClick={agregar}><Plus size={14} /> Agregar corte</Btn>
+            {rows.length > 0 && (
+              <Btn variant="ghost" onClick={reorganizarQuincenas} disabled={reorganizando}>
+                {reorganizando ? "Reorganizando..." : "Reorganizar quincenas 2026"}
+              </Btn>
+            )}
+          </div>
+        )}
+        {rows.length === 0 ? (
+          <div style={{ color: T.gray, fontSize: 13 }}>Todavía no has agregado ninguna fecha de corte.</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                <th style={{ padding: "6px 8px" }}>Fecha de corte</th><th>Periodo que cierra</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((f, i) => {
+                const anterior = i > 0 ? rows[i - 1].fecha : null;
+                return (
+                  <tr key={f.id} style={{ borderTop: `1px solid ${T.line}` }}>
+                    <td style={{ padding: "9px 8px", fontWeight: 700 }}>{f.fecha}</td>
+                    <td style={{ color: T.inkSoft }}>{etiquetaPeriodoDeCorte(f.fecha, rows.map((r) => r.fecha))}{anterior ? "" : " (desde el inicio)"}</td>
+                    <td>{isAdmin && <Btn small variant="danger" onClick={() => eliminar(f.id)}><X size={12} /></Btn>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 function Planilla() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
@@ -3776,7 +3923,10 @@ function Planilla() {
         <Btn variant={tab === "personal" ? "accent" : "ghost"} small onClick={() => setTab("personal")}>Personal</Btn>
         <Btn variant={tab === "reporte1" ? "accent" : "ghost"} small onClick={() => setTab("reporte1")}>Reporte 1</Btn>
         <Btn variant={tab === "reporte2" ? "accent" : "ghost"} small onClick={() => setTab("reporte2")}>Reporte Horas Extras</Btn>
+        <Btn variant={tab === "cortes" ? "accent" : "ghost"} small onClick={() => setTab("cortes")}>Fechas de Corte</Btn>
       </div>
+
+      {tab === "cortes" && <FechasDeCorte isAdmin={isAdmin} confirmar={confirmar} />}
 
       {tab === "personal" && (
         <div style={{ display: "grid", gridTemplateColumns: isAdmin ? "1.4fr 1fr" : "1fr", gap: 16 }}>
@@ -4285,6 +4435,7 @@ export default function App() {
   };
   const [users, setUsers] = useState([]);
   const [clientes, setClientes] = useState({ inspecciones: [], proyectos: [] });
+  const [fechasCorte, setFechasCorte] = useState([]);
 
   const refetchUsers = async () => {
     const { data, error } = await supabase.rpc("listar_usuarios");
@@ -4304,6 +4455,11 @@ export default function App() {
     }
   };
 
+  const refetchFechasCorte = async () => {
+    const { data, error } = await supabase.from("fechas_corte").select("*").order("fecha", { ascending: true });
+    if (!error && data) setFechasCorte(data.map((f) => f.fecha));
+  };
+
   const refetchLogo = async () => {
     const { data } = await supabase.from("app_config").select("value").eq("key", "logo").maybeSingle();
     if (data?.value) setLogoState(data.value);
@@ -4313,15 +4469,18 @@ export default function App() {
     refetchUsers();
     refetchClientes();
     refetchLogo();
+    refetchFechasCorte();
   }, []);
 
   return (
     <LogoContext.Provider value={{ logo, setLogo }}>
       <UsersContext.Provider value={{ users, refetchUsers }}>
         <ClientesContext.Provider value={{ clientes, setClientes }}>
-          <ConfirmProvider>
-            <AppInner />
-          </ConfirmProvider>
+          <FechasCorteContext.Provider value={{ fechasCorte, refetchFechasCorte }}>
+            <ConfirmProvider>
+              <AppInner />
+            </ConfirmProvider>
+          </FechasCorteContext.Provider>
         </ClientesContext.Provider>
       </UsersContext.Provider>
     </LogoContext.Provider>

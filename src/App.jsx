@@ -2564,16 +2564,185 @@ function CursosEHS() {
 /* ---------------------------------------------------------
    AREA: SALUD OCUPACIONAL (tabs internas: cursos / calendario)
    --------------------------------------------------------- */
+const EPP_TIPOS = [
+  "Chaleco reflectivo", "Zapatos de seguridad", "Guantes", "Casco",
+  "Lentes de seguridad", "Protección auditiva", "Mascarilla / Respirador",
+  "Arnés de seguridad", "Impermeable", "Faja de protección lumbar",
+];
+
+function EquipoSeguridad() {
+  const currentUser = useContext(CurrentUserContext);
+  const isAdmin = currentUser?.categoria === "admin";
+  const canGestionar = isAdmin || currentUser?.categoria === "asistente" || currentUser?.categoria === "tecnico";
+  const confirmar = useContext(ConfirmContext);
+  const [rows, setRows] = useState([]);
+  const [empleados, setEmpleados] = useState([]);
+  const [subTab, setSubTab] = useState("solicitado");
+  const [filtroTipo, setFiltroTipo] = useState("Todos");
+  const [filtroPersonal, setFiltroPersonal] = useState("");
+  const [form, setForm] = useState({ solicitante: "", personalCodigo: "", tipo: EPP_TIPOS[0], cantidad: 1, talla: "" });
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("epp_registros").select("*").order("created_at", { ascending: false });
+      if (data) setRows(data);
+    })();
+    (async () => {
+      const { data } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
+      if (data) setEmpleados(data);
+    })();
+  }, []);
+
+  const add = async () => {
+    const empleado = empleados.find((e) => e.codigo === form.personalCodigo);
+    if (!empleado || !form.tipo || !form.cantidad) return;
+    const payload = {
+      solicitante: form.solicitante || null,
+      personal_codigo: form.personalCodigo, personal_nombre: empleado.nombre, tipo: form.tipo,
+      cantidad: Number(form.cantidad) || 1, talla: form.talla || null,
+      fecha_solicitud: todayISO(), fecha_entrega: null, estado: "Solicitado",
+    };
+    setForm({ solicitante: "", personalCodigo: "", tipo: EPP_TIPOS[0], cantidad: 1, talla: "" });
+    const { data, error } = await supabase.from("epp_registros").insert(payload).select().single();
+    if (!error && data) setRows((prev) => [data, ...prev]);
+  };
+  const marcarEntregado = (id) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado: "Entregado", fecha_entrega: todayISO() } : r));
+    supabase.from("epp_registros").update({ estado: "Entregado", fecha_entrega: todayISO() }).eq("id", id).then();
+  };
+  const del = async (id) => {
+    if (!(await confirmar("¿Está seguro que desea eliminar este registro? Esta acción no se puede deshacer."))) return;
+    setRows((prev) => prev.filter((r) => r.id !== id));
+    supabase.from("epp_registros").delete().eq("id", id).then();
+  };
+
+  const rowsSolicitado = rows.filter((r) => r.estado === "Solicitado");
+  const rowsEntregado = rows.filter((r) => r.estado === "Entregado");
+  const rowsMostradosPorTab = subTab === "solicitado" ? rowsSolicitado : rowsEntregado;
+  const rowsMostrados = rowsMostradosPorTab.filter((r) => {
+    const matchTipo = filtroTipo === "Todos" || r.tipo === filtroTipo;
+    const matchPersonal = !filtroPersonal || r.personal_nombre === filtroPersonal;
+    return matchTipo && matchPersonal;
+  });
+
+  // Control de cuántos equipos se le han entregado a cada persona.
+  const totalPorPersona = {};
+  rowsEntregado.forEach((r) => {
+    totalPorPersona[r.personal_nombre] = (totalPorPersona[r.personal_nombre] || 0) + (Number(r.cantidad) || 0);
+  });
+  const resumenPersonas = Object.entries(totalPorPersona).sort((a, b) => b[1] - a[1]);
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <Card
+          title="Equipo de Protección Personal (EPP)"
+          action={<Btn small variant="ghost" onClick={() => exportExcel(rowsMostrados.map(r => ({ Solicitante: r.solicitante, Destinatario: r.personal_nombre, Tipo: r.tipo, Cantidad: r.cantidad, Talla: r.talla, "Fecha solicitud": r.fecha_solicitud, "Fecha entrega": r.fecha_entrega, Estado: r.estado })), "epp.xlsx")}><Download size={13} /> Excel</Btn>}
+        >
+          <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+            <Btn small variant={subTab === "solicitado" ? "accent" : "ghost"} onClick={() => setSubTab("solicitado")}>Solicitado ({rowsSolicitado.length})</Btn>
+            <Btn small variant={subTab === "entregado" ? "accent" : "ghost"} onClick={() => setSubTab("entregado")}>Entregado ({rowsEntregado.length})</Btn>
+          </div>
+          <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+            <select style={{ ...inputStyle, width: 200 }} value={filtroTipo} onChange={(e) => setFiltroTipo(e.target.value)}>
+              <option value="Todos">Todos los tipos</option>
+              {EPP_TIPOS.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <select style={{ ...inputStyle, width: 200 }} value={filtroPersonal} onChange={(e) => setFiltroPersonal(e.target.value)}>
+              <option value="">Todo el personal</option>
+              {empleados.map((emp) => <option key={emp.codigo} value={emp.nombre}>{emp.nombre}</option>)}
+            </select>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                <th style={{ padding: "6px 8px" }}>Solicitante</th><th>Destinatario</th><th>Tipo</th><th>Cant.</th><th>Talla</th><th>Fecha solicitud</th>
+                {subTab === "entregado" && <th>Fecha entrega</th>}
+                <th></th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rowsMostrados.length === 0 ? (
+                <tr><td colSpan={9} style={{ padding: "10px 8px", color: T.gray }}>No hay registros en esta pestaña.</td></tr>
+              ) : rowsMostrados.map((r) => (
+                <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
+                  <td style={{ padding: "8px" }}>{r.solicitante || "—"}</td>
+                  <td>{r.personal_nombre}</td>
+                  <td>{r.tipo}</td>
+                  <td>{r.cantidad}</td>
+                  <td>{r.talla || "—"}</td>
+                  <td>{r.fecha_solicitud}</td>
+                  {subTab === "entregado" && <td>{r.fecha_entrega}</td>}
+                  <td>
+                    {subTab === "solicitado" && canGestionar && (
+                      <Btn small variant="accent" onClick={() => marcarEntregado(r.id)}>Marcar entregado</Btn>
+                    )}
+                  </td>
+                  <td>{canGestionar && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <Card title="Nueva solicitud de EPP">
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <Field label="Solicitante (quien pide el equipo)"><input style={inputStyle} value={form.solicitante} onChange={(e) => setForm({ ...form, solicitante: e.target.value })} placeholder="Nombre del solicitante" /></Field>
+            <Field label="Destinatario (quien recibe el equipo)">
+              {empleados.length === 0 ? (
+                <div style={{ fontSize: 11.5, color: T.gray }}>Aún no hay personal cargado. Agrégalo desde Planilla.</div>
+              ) : (
+                <select style={inputStyle} value={form.personalCodigo} onChange={(e) => setForm({ ...form, personalCodigo: e.target.value })}>
+                  <option value="">Selecciona una persona…</option>
+                  {empleados.map((emp) => <option key={emp.codigo} value={emp.codigo}>{emp.nombre}</option>)}
+                </select>
+              )}
+              <div style={{ fontSize: 10.5, color: T.gray, marginTop: 4 }}>Esta lista se administra desde Planilla.</div>
+            </Field>
+            <Field label="Tipo de EPP">
+              <select style={inputStyle} value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
+                {EPP_TIPOS.map((t) => <option key={t}>{t}</option>)}
+              </select>
+            </Field>
+            <Field label="Cantidad"><input style={inputStyle} type="number" min="1" value={form.cantidad} onChange={(e) => setForm({ ...form, cantidad: e.target.value })} /></Field>
+            <Field label="Talla (opcional)"><input style={inputStyle} value={form.talla} onChange={(e) => setForm({ ...form, talla: e.target.value })} placeholder="M, L, 42..." /></Field>
+            <Btn variant="accent" onClick={add} style={{ justifyContent: "center" }}><Plus size={14} /> Solicitar EPP</Btn>
+          </div>
+        </Card>
+
+        <Card title="Total entregado por persona">
+          {resumenPersonas.length === 0 ? (
+            <div style={{ color: T.gray, fontSize: 13 }}>Todavía no se ha marcado ninguna entrega.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {resumenPersonas.map(([nombre, total]) => (
+                <div key={nombre} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px dashed ${T.line}`, paddingBottom: 6 }}>
+                  <span style={{ fontSize: 12.5 }}>{nombre}</span>
+                  <Badge color={T.green} soft={T.greenSoft}>{total} artículos</Badge>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 function SaludOcupacional() {
   const [tab, setTab] = useState("cursos");
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <Btn variant={tab === "cursos" ? "accent" : "ghost"} small onClick={() => setTab("cursos")}>Cursos EHS</Btn>
+        <Btn variant={tab === "epp" ? "accent" : "ghost"} small onClick={() => setTab("epp")}>Equipo de Seguridad (EPP)</Btn>
         <Btn variant={tab === "horas" ? "accent" : "ghost"} small onClick={() => setTab("horas")}>Horas extras</Btn>
         <Btn variant={tab === "calendario" ? "accent" : "ghost"} small onClick={() => setTab("calendario")}>Agenda de visitas a Proyectos/Inspecciones</Btn>
       </div>
       {tab === "cursos" && <CursosEHS />}
+      {tab === "epp" && <EquipoSeguridad />}
       {tab === "horas" && <HorasExtras area="salud" color={T.red} />}
       {tab === "calendario" && <Calendario area="salud" color={T.red} tipoLabel={["Inspección", "Proyecto"]} />}
     </div>
@@ -2747,7 +2916,7 @@ function ResumenEjecutivo() {
   const confirmar = useContext(ConfirmContext);
   const { fechasCorte } = useContext(FechasCorteContext);
   const [facturas, setFacturas] = useState([]);
-  const [nuevoMes, setNuevoMes] = useState({ mes: "", anio: new Date().getFullYear(), monto: "" });
+  const [nuevoMesCombinado, setNuevoMesCombinado] = useState({ mes: "", montoActual: "", montoAnterior: "" });
   const [horasManual, setHorasManual] = useState([]);
   const [horasReales, setHorasReales] = useState([]);
   const [ventanaHoras, setVentanaHoras] = useState(0); // 0 = ventana más reciente
@@ -2775,12 +2944,15 @@ function ResumenEjecutivo() {
     })();
   }, []);
 
-  const addFactura = async () => {
-    if (!nuevoMes.mes || !nuevoMes.monto) return;
-    const payload = { mes: nuevoMes.mes, anio: Number(nuevoMes.anio) || new Date().getFullYear(), monto: Number(nuevoMes.monto) };
-    setNuevoMes({ mes: "", anio: nuevoMes.anio, monto: "" });
-    const { data, error } = await supabase.from("facturacion").insert(payload).select().single();
-    if (!error && data) setFacturas((prev) => [...prev, data]);
+  const agregarMesCombinado = async () => {
+    if (!nuevoMesCombinado.mes) return;
+    const inserts = [];
+    if (nuevoMesCombinado.montoActual) inserts.push({ mes: nuevoMesCombinado.mes, anio: anioMasReciente, monto: Number(nuevoMesCombinado.montoActual) });
+    if (nuevoMesCombinado.montoAnterior) inserts.push({ mes: nuevoMesCombinado.mes, anio: anioMasReciente - 1, monto: Number(nuevoMesCombinado.montoAnterior) });
+    if (inserts.length === 0) return;
+    setNuevoMesCombinado({ mes: "", montoActual: "", montoAnterior: "" });
+    const { data, error } = await supabase.from("facturacion").insert(inserts).select();
+    if (!error && data) setFacturas((prev) => [...prev, ...data]);
   };
   const editarMonto = (id, monto) => {
     const valor = Number(monto) || 0;
@@ -3053,15 +3225,22 @@ function ResumenEjecutivo() {
     ids.forEach((id) => supabase.from("horas_extras_manual").delete().eq("id", id).then());
   };
 
-  const totalFacturado = facturas.reduce((s, f) => s + f.monto, 0);
-  const avgFactura = totalFacturado / (facturas.length || 1);
-  const mesesSobre = facturas.filter((f) => f.monto >= PUNTO_EQUILIBRIO).length;
+  // La gráfica principal y los KPI de arriba solo muestran el año más
+  // reciente cargado (el "año en curso"); los años anteriores (ej. 2025)
+  // quedan reservados únicamente para la gráfica de comparación de abajo.
+  const anioMasReciente = facturas.reduce((max, f) => (f.anio && f.anio > max ? f.anio : max), new Date().getFullYear());
+  const facturasAnioActual = facturas.filter((f) => !f.anio || f.anio === anioMasReciente);
+  const facturasAnioAnterior = facturas.filter((f) => f.anio === anioMasReciente - 1);
 
-  const totalVentanasFactura = Math.max(1, Math.ceil(facturas.length / VENTANA_MESES));
+  const totalFacturado = facturasAnioActual.reduce((s, f) => s + f.monto, 0);
+  const avgFactura = totalFacturado / (facturasAnioActual.length || 1);
+  const mesesSobre = facturasAnioActual.filter((f) => f.monto >= PUNTO_EQUILIBRIO).length;
+
+  const totalVentanasFactura = Math.max(1, Math.ceil(facturasAnioActual.length / VENTANA_MESES));
   const ventanaFacturaActual = Math.min(ventanaFactura, totalVentanasFactura - 1);
-  const finVentanaFactura = facturas.length - ventanaFacturaActual * VENTANA_MESES;
+  const finVentanaFactura = facturasAnioActual.length - ventanaFacturaActual * VENTANA_MESES;
   const inicioVentanaFactura = Math.max(0, finVentanaFactura - VENTANA_MESES);
-  const facturasVentana = facturas.slice(inicioVentanaFactura, finVentanaFactura);
+  const facturasVentana = facturasAnioActual.slice(inicioVentanaFactura, finVentanaFactura);
 
   const reiniciarAnioFacturacion = async () => {
     if (!(await confirmar(
@@ -3102,7 +3281,7 @@ function ResumenEjecutivo() {
         </Card>
         <Card style={{ padding: 16 }}>
           <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase" }}>Meses sobre el punto</div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: T.green }}>{mesesSobre} / {facturas.length}</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: T.green }}>{mesesSobre} / {facturasAnioActual.length}</div>
         </Card>
         <Card style={{ padding: 16 }}>
           <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase" }}>OD activos (total)</div>
@@ -3119,95 +3298,81 @@ function ResumenEjecutivo() {
         title="Facturación mensual vs. punto de equilibrio ($120,000)"
         action={
           <div className="no-print" style={{ display: "flex", gap: 6 }}>
-            <Btn small variant="ghost" onClick={() => setVentanaFactura((v) => Math.min(v + 1, totalVentanasFactura - 1))} disabled={ventanaFacturaActual >= totalVentanasFactura - 1}><ChevronLeft size={14} /></Btn>
-            <Btn small variant="ghost" onClick={() => setVentanaFactura((v) => Math.max(v - 1, 0))} disabled={ventanaFacturaActual <= 0}><ChevronRight size={14} /></Btn>
             {isAdmin && <Btn small variant="danger" onClick={reiniciarAnioFacturacion}><X size={13} /> Reiniciar año</Btn>}
           </div>
         }
       >
-        <ResponsiveContainer width="100%" height={260}>
-          <LineChart data={facturasVentana} margin={{ top: 26, right: 20, left: 0, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
-            <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
-            <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${v / 1000}k`} />
-            <Tooltip formatter={(v) => fmtMoney(v)} />
-            <ReferenceLine y={PUNTO_EQUILIBRIO} stroke={T.accent} strokeDasharray="6 4" label={{ value: "Punto de equilibrio", fill: T.accent, fontSize: 11, position: "insideTopRight" }} />
-            <Line type="monotone" dataKey="monto" stroke={T.steel} strokeWidth={3} dot={{ r: 4 }}>
-              <LabelList
-                dataKey="monto"
-                position="top"
-                offset={12}
-                formatter={(v) => fmtMoney(v)}
-                style={{ fontSize: 11.5, fontWeight: 700, fill: T.ink }}
-              />
-            </Line>
-          </LineChart>
-        </ResponsiveContainer>
-
-        <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, margin: "16px 0 8px" }}>Editar monto por mes</div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
-          {facturas.map((f) => (
-            <div key={f.id} style={{ display: "flex", flexDirection: "column", gap: 3, background: T.graySoft, borderRadius: 8, padding: "6px 10px" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                <span style={{ fontSize: 10.5, color: T.inkSoft, fontWeight: 700 }}>{f.mes}</span>
-                <button onClick={() => eliminarMes(f.id)} title="Borrar mes" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}>×</button>
-              </div>
-              <input
-                type="number"
-                value={f.monto}
-                onChange={(e) => editarMonto(f.id, e.target.value)}
-                style={{ ...inputStyle, width: 100, padding: "4px 6px", fontSize: 12.5, border: `1px solid ${T.line}` }}
-              />
-            </div>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
-          <Field label="Mes nuevo"><input style={inputStyle} value={nuevoMes.mes} onChange={(e) => setNuevoMes({ ...nuevoMes, mes: e.target.value })} placeholder="Jul" /></Field>
-          <Field label="Año"><input style={{ ...inputStyle, width: 100 }} type="number" value={nuevoMes.anio} onChange={(e) => setNuevoMes({ ...nuevoMes, anio: e.target.value })} /></Field>
-          <Field label="Monto facturado (USD)"><input style={inputStyle} type="number" value={nuevoMes.monto} onChange={(e) => setNuevoMes({ ...nuevoMes, monto: e.target.value })} placeholder="125000" /></Field>
-          <Btn variant="accent" onClick={addFactura}><Plus size={14} /> Agregar mes</Btn>
-        </div>
-      </Card>
-
-      <Card title="Comparación año actual vs. año anterior">
         {(() => {
-          const anioHoy = new Date().getFullYear();
-          // Los registros viejos (de antes de que existiera el campo Año)
-          // no tienen año asignado — se cuentan como si fueran del año en
-          // curso, para que aparezcan en esta comparación sin tener que
-          // volver a cargarlos a mano.
-          const facturasConAnio = facturas.map((f) => ({ ...f, anio: f.anio || anioHoy }));
-          const anios = [...new Set(facturasConAnio.map((f) => f.anio))].sort((a, b) => b - a);
-          if (anios.length === 0) {
-            return <div style={{ color: T.gray, fontSize: 13 }}>Todavía no has cargado ningún mes de facturación.</div>;
-          }
-          const anioActual = anios[0];
-          const anioAnterior = anios[1];
           const ORDEN_MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"];
-          const dataComparacion = ORDEN_MESES.map((mes) => ({
+          const dataGrafica = ORDEN_MESES.map((mes) => ({
             mes,
-            [String(anioActual)]: facturasConAnio.find((f) => normalizarMesCorto(f.mes) === mes && f.anio === anioActual)?.monto || null,
-            ...(anioAnterior ? { [String(anioAnterior)]: facturasConAnio.find((f) => normalizarMesCorto(f.mes) === mes && f.anio === anioAnterior)?.monto || null } : {}),
+            [String(anioMasReciente)]: facturasAnioActual.find((f) => normalizarMesCorto(f.mes) === mes)?.monto ?? null,
+            [String(anioMasReciente - 1)]: facturasAnioAnterior.find((f) => normalizarMesCorto(f.mes) === mes)?.monto ?? null,
           }));
+          const mesesConDatos = ORDEN_MESES.filter((mes) =>
+            facturasAnioActual.some((f) => normalizarMesCorto(f.mes) === mes) || facturasAnioAnterior.some((f) => normalizarMesCorto(f.mes) === mes)
+          );
           return (
             <>
-              {!anioAnterior && (
-                <div style={{ color: T.gray, fontSize: 12.5, marginBottom: 10 }}>
-                  Solo hay datos de {anioActual} por ahora — agrega un mes con año {anioActual - 1} para ver las 2 líneas comparadas.
-                </div>
-              )}
-              <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={dataComparacion} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
+              <ResponsiveContainer width="100%" height={280}>
+                <LineChart data={dataGrafica} margin={{ top: 26, right: 20, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
                   <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${(v / 1000)}k`} />
+                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${v / 1000}k`} />
                   <Tooltip formatter={(v) => fmtMoney(v)} />
                   <Legend />
-                  {anioAnterior && <Line type="monotone" dataKey={String(anioAnterior)} stroke={T.gray} strokeWidth={2.5} strokeDasharray="5 3" dot={{ r: 3 }} connectNulls />}
-                  <Line type="monotone" dataKey={String(anioActual)} stroke={T.accent} strokeWidth={3} dot={{ r: 4 }} connectNulls />
+                  <ReferenceLine y={PUNTO_EQUILIBRIO} stroke={T.red} strokeDasharray="6 4" label={{ value: "Punto de equilibrio", fill: T.red, fontSize: 11, position: "insideTopRight" }} />
+                  <Line type="monotone" dataKey={String(anioMasReciente - 1)} stroke={T.gray} strokeWidth={2.5} strokeDasharray="5 3" dot={{ r: 3 }} connectNulls />
+                  <Line type="monotone" dataKey={String(anioMasReciente)} stroke={T.accent} strokeWidth={3} dot={{ r: 4 }} connectNulls />
                 </LineChart>
               </ResponsiveContainer>
+
+              <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, margin: "16px 0 8px" }}>Editar montos por mes (el mes se escribe una sola vez, comparte fila entre los 2 años)</div>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, marginBottom: 16 }}>
+                <thead>
+                  <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                    <th style={{ padding: "6px 8px" }}>Mes</th>
+                    <th>{anioMasReciente} (actual)</th>
+                    <th>{anioMasReciente - 1} (anterior)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mesesConDatos.length === 0 ? (
+                    <tr><td colSpan={3} style={{ padding: "10px 8px", color: T.gray }}>Todavía no hay meses cargados.</td></tr>
+                  ) : mesesConDatos.map((mes) => {
+                    const filaActual = facturasAnioActual.find((f) => normalizarMesCorto(f.mes) === mes);
+                    const filaAnterior = facturasAnioAnterior.find((f) => normalizarMesCorto(f.mes) === mes);
+                    return (
+                      <tr key={mes} style={{ borderTop: `1px solid ${T.line}` }}>
+                        <td style={{ padding: "8px", fontWeight: 700 }}>{mes}</td>
+                        <td>
+                          {filaActual ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <input type="number" value={filaActual.monto} onChange={(e) => editarMonto(filaActual.id, e.target.value)} style={{ ...inputStyle, width: 100, padding: "5px 8px", fontSize: 12.5 }} />
+                              <button onClick={() => eliminarMes(filaActual.id)} title="Borrar" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 14 }}>×</button>
+                            </div>
+                          ) : <span style={{ color: T.gray }}>—</span>}
+                        </td>
+                        <td>
+                          {filaAnterior ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <input type="number" value={filaAnterior.monto} onChange={(e) => editarMonto(filaAnterior.id, e.target.value)} style={{ ...inputStyle, width: 100, padding: "5px 8px", fontSize: 12.5 }} />
+                              <button onClick={() => eliminarMes(filaAnterior.id)} title="Borrar" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 14 }}>×</button>
+                            </div>
+                          ) : <span style={{ color: T.gray }}>—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+
+              <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
+                <Field label="Mes nuevo"><input style={inputStyle} value={nuevoMesCombinado.mes} onChange={(e) => setNuevoMesCombinado({ ...nuevoMesCombinado, mes: e.target.value })} placeholder="Jul" /></Field>
+                <Field label={`Monto ${anioMasReciente}`}><input style={inputStyle} type="number" value={nuevoMesCombinado.montoActual} onChange={(e) => setNuevoMesCombinado({ ...nuevoMesCombinado, montoActual: e.target.value })} placeholder="125000" /></Field>
+                <Field label={`Monto ${anioMasReciente - 1}`}><input style={inputStyle} type="number" value={nuevoMesCombinado.montoAnterior} onChange={(e) => setNuevoMesCombinado({ ...nuevoMesCombinado, montoAnterior: e.target.value })} placeholder="(opcional)" /></Field>
+                <Btn variant="accent" onClick={agregarMesCombinado}><Plus size={14} /> Agregar mes</Btn>
+              </div>
             </>
           );
         })()}

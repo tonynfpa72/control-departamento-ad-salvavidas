@@ -678,6 +678,7 @@ function odRowFromDb(r) {
     fechaInicio: r.fecha_inicio || "",
     fechaEntrega: r.fecha_entrega || "",
     fechaAprobacion: r.fecha_aprobacion || "",
+    equiposCorrectivo: r.equipos_correctivo || "",
     accion: r.accion || "",
     tipoOD: r.tipo_od || "Normal",
     progreso: r.progreso || "Pendiente",
@@ -686,7 +687,7 @@ function odRowFromDb(r) {
     created_at: r.created_at,
   };
 }
-const ODFIELD_TO_DB = { fechaInicio: "fecha_inicio", fechaEntrega: "fecha_entrega", fechaAprobacion: "fecha_aprobacion", tipoOD: "tipo_od" };
+const ODFIELD_TO_DB = { fechaInicio: "fecha_inicio", fechaEntrega: "fecha_entrega", fechaAprobacion: "fecha_aprobacion", equiposCorrectivo: "equipos_correctivo", tipoOD: "tipo_od" };
 function odPatchToDb(patch) {
   const out = {};
   for (const k in patch) out[ODFIELD_TO_DB[k] || k] = patch[k] === "" ? null : patch[k];
@@ -1187,6 +1188,10 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, fechaAprobacion } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ fechaAprobacion })).eq("id", id).then();
   };
+  const setEquiposCorrectivo = (id, equiposCorrectivo) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, equiposCorrectivo } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ equiposCorrectivo })).eq("id", id).then();
+  };
   const setFrecuencia = (id, frecuencia) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, frecuencia } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ frecuencia })).eq("id", id).then();
@@ -1316,6 +1321,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
               <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
                 <th style={{ padding: "6px 8px" }}>OD</th><th style={{ minWidth: 190 }}>Cliente</th><th>Estado</th><th>{tecnicoLabel}</th>
                 {esCorrectivo && <th>Fecha de Aprobación</th>}
+                {esCorrectivo && <th style={{ minWidth: 200 }}>Equipos que lleva</th>}
                 {!esCorrectivo && isInspecciones && <th>Fecha de Vencimiento</th>}
                 {!esCorrectivo && isInspecciones && <th>Frecuencia</th>}
                 {!esCorrectivo && isProyectos && <th>Fecha de Inicio</th>}
@@ -1386,6 +1392,13 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                       {canEditFechas ? (
                         <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 130 }} value={r.fechaAprobacion || ""} onChange={(e) => setFechaAprobacion(r.id, e.target.value)} />
                       ) : (r.fechaAprobacion || "—")}
+                    </td>
+                  )}
+                  {esCorrectivo && (
+                    <td>
+                      {canEditProgreso ? (
+                        <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 190 }} value={r.equiposCorrectivo || ""} onChange={(e) => setEquiposCorrectivo(r.id, e.target.value)} placeholder="Ej. escalera, taladro, cinta..." />
+                      ) : (r.equiposCorrectivo || "—")}
                     </td>
                   )}
                   {!esCorrectivo && isInspecciones && (

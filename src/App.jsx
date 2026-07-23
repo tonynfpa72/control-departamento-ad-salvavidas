@@ -690,6 +690,7 @@ function cotRowFromDb(r) {
     tipo: r.tipo || "Inspecciones",
     frecuencia: r.frecuencia || "",
     observaciones: r.observaciones || "",
+    monto: r.monto || 0,
   };
 }
 
@@ -2065,6 +2066,40 @@ function CotizacionPrintView({ r, onClose }) {
   );
 }
 
+function ResumenCotizacionesCard() {
+  const [rows, setRows] = useState([]);
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("cotizaciones").select("actividad, monto");
+      if (data) setRows(data);
+    })();
+  }, []);
+  const total = rows.length;
+  const conOC = rows.filter((r) => r.actividad === "Con OC").length;
+  const tasaConversion = total > 0 ? Math.round((conOC / total) * 1000) / 10 : 0;
+  const pipelineAbierto = rows.filter((r) => r.actividad === "Seguimiento").reduce((s, r) => s + (Number(r.monto) || 0), 0);
+  const valorGanado = rows.filter((r) => r.actividad === "Con OC").reduce((s, r) => s + (Number(r.monto) || 0), 0);
+
+  return (
+    <Card title="Cotizaciones — conversión y pipeline">
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
+        <div style={{ background: T.blueSoft, borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 22, fontWeight: 800, color: T.blue }}>{tasaConversion}%</div>
+          <div style={{ fontSize: 12, color: T.inkSoft }}>Tasa de conversión ({conOC} de {total} → Con OC)</div>
+        </div>
+        <div style={{ background: T.amberSoft, borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 22, fontWeight: 800, color: T.amber }}>{fmtMoney(pipelineAbierto)}</div>
+          <div style={{ fontSize: 12, color: T.inkSoft }}>Valor del pipeline abierto (en Seguimiento)</div>
+        </div>
+        <div style={{ background: T.greenSoft, borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 22, fontWeight: 800, color: T.green }}>{fmtMoney(valorGanado)}</div>
+          <div style={{ fontSize: 12, color: T.inkSoft }}>Valor ganado (Con OC)</div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function Cotizaciones() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
@@ -2078,7 +2113,7 @@ function Cotizaciones() {
   const [form, setForm] = useState({
     solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "",
     dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Solicitud",
-    actividad: "Seguimiento", tipo: "Inspecciones", frecuencia: "", observaciones: "",
+    actividad: "Seguimiento", tipo: "Inspecciones", frecuencia: "", observaciones: "", monto: "",
   });
 
   useEffect(() => {
@@ -2103,9 +2138,9 @@ function Cotizaciones() {
       telefono: form.telefono, provincia: form.provincia, dias: form.dias || null, personal: form.personal,
       descripcion: form.descripcion, equipos: form.equipos, dispositivos: form.dispositivos,
       num_cot: form.numCot, estado: form.estado, actividad: form.actividad, tipo: form.tipo,
-      frecuencia: form.frecuencia, observaciones: form.observaciones,
+      frecuencia: form.frecuencia, observaciones: form.observaciones, monto: Number(form.monto) || 0,
     };
-    setForm({ solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "", dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Solicitud", actividad: "Seguimiento", tipo: "Inspecciones", frecuencia: "", observaciones: "" });
+    setForm({ solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "", dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Solicitud", actividad: "Seguimiento", tipo: "Inspecciones", frecuencia: "", observaciones: "", monto: "" });
     setOpen(false);
     const { data, error } = await supabase.from("cotizaciones").insert(payload).select().single();
     if (!error && data) setRows((prev) => [cotRowFromDb(data), ...prev]);
@@ -2130,6 +2165,10 @@ function Cotizaciones() {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, observaciones } : r));
     supabase.from("cotizaciones").update({ observaciones }).eq("id", id).then();
   };
+  const setMonto = (id, monto) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, monto } : r));
+    supabase.from("cotizaciones").update({ monto: Number(monto) || 0 }).eq("id", id).then();
+  };
   const del = async (id) => {
     if (!(await confirmar("¿Está seguro que desea eliminar esta cotización? Esta acción no se puede deshacer."))) return;
     setRows((prev) => prev.filter((r) => r.id !== id));
@@ -2143,11 +2182,12 @@ function Cotizaciones() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <ResumenCotizacionesCard />
       <CotizacionPrintView r={printRow} onClose={() => setPrintRow(null)} />
       <Card
         title={`Historial de solicitudes — próximo consecutivo #${nextConsecutivo}`}
         action={<div style={{ display: "flex", gap: 8 }}>
-          <Btn small variant="ghost" onClick={() => exportExcel(rows.map(r => ({ Consecutivo: r.consecutivo, Solicitante: r.solicitante, Cliente: r.cliente, "Nombre del contacto": r.contacto, Email: r.email, Telefono: r.telefono, Provincia: r.provincia, Dias: r.dias, Personal: r.personal, "Descripción del trabajo": r.descripcion, "Equipos de elevación": r.equipos, "Lista de dispositivos": r.dispositivos, "N° Cotización": r.numCot, Tipo: r.tipo, Estado: r.estado, Actividad: r.actividad, Frecuencia: r.frecuencia, Observaciones: r.observaciones })), "cotizaciones.xlsx")}><Download size={13} /> Excel</Btn>
+          <Btn small variant="ghost" onClick={() => exportExcel(rows.map(r => ({ Consecutivo: r.consecutivo, Solicitante: r.solicitante, Cliente: r.cliente, "Nombre del contacto": r.contacto, Email: r.email, Telefono: r.telefono, Provincia: r.provincia, Dias: r.dias, Personal: r.personal, "Descripción del trabajo": r.descripcion, "Equipos de elevación": r.equipos, "Lista de dispositivos": r.dispositivos, "N° Cotización": r.numCot, Tipo: r.tipo, Monto: r.monto, Estado: r.estado, Actividad: r.actividad, Frecuencia: r.frecuencia, Observaciones: r.observaciones })), "cotizaciones.xlsx")}><Download size={13} /> Excel</Btn>
           <Btn small variant="accent" onClick={() => setOpen(!open)}><Plus size={13} /> Nueva solicitud</Btn>
         </div>}
       >
@@ -2178,6 +2218,7 @@ function Cotizaciones() {
                 {TIPO_OFERTA_OPCIONES.map((t) => <option key={t}>{t}</option>)}
               </select>
             </Field>
+            <Field label="Monto estimado ($)"><input style={inputStyle} type="number" value={form.monto} onChange={(e) => setForm({ ...form, monto: e.target.value })} placeholder="0.00" /></Field>
             <div style={{ gridColumn: "1 / -1" }}>
               <Field label="Observaciones"><input style={inputStyle} value={form.observaciones} onChange={(e) => setForm({ ...form, observaciones: e.target.value })} placeholder="Notas adicionales..." /></Field>
             </div>
@@ -2198,7 +2239,7 @@ function Cotizaciones() {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
-              <th style={{ padding: "6px 8px" }}>#</th><th>Solicitante</th><th>Cliente</th><th>Provincia</th><th>Días</th><th style={{ minWidth: 150 }}>N° Cotización</th><th>Tipo</th><th>Estado</th><th>Actividad</th><th style={{ minWidth: 180 }}>Observaciones</th><th></th><th></th>
+              <th style={{ padding: "6px 8px" }}>#</th><th>Solicitante</th><th>Cliente</th><th>Provincia</th><th>Días</th><th style={{ minWidth: 150 }}>N° Cotización</th><th>Tipo</th><th>Monto</th><th>Estado</th><th>Actividad</th><th style={{ minWidth: 180 }}>Observaciones</th><th></th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -2220,6 +2261,11 @@ function Cotizaciones() {
                       {TIPO_OFERTA_OPCIONES.map((t) => <option key={t}>{t}</option>)}
                     </select>
                   ) : (r.tipo || "—")}
+                </td>
+                <td>
+                  {canEditEstadoCot ? (
+                    <input type="number" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 100 }} value={r.monto || ""} onChange={(e) => setMonto(r.id, e.target.value)} placeholder="0.00" />
+                  ) : (fmtMoney(r.monto))}
                 </td>
                 <td>
                   {canEditEstadoCot ? (
@@ -2265,6 +2311,39 @@ function Cotizaciones() {
 /* ---------------------------------------------------------
    MODULO: CURSOS EHS
    --------------------------------------------------------- */
+function ResumenEHSCard() {
+  const [rows, setRows] = useState([]);
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("cursos_ehs").select("fecha, estado");
+      if (data) setRows(data);
+    })();
+  }, []);
+  const total = rows.length;
+  const alDia = rows.filter((r) => estadoEfectivoCurso(r) !== "Vencido").length;
+  const pctAlDia = total > 0 ? Math.round((alDia / total) * 1000) / 10 : 100;
+  const vencidos = total - alDia;
+
+  return (
+    <Card title="Cursos EHS — cumplimiento">
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
+        <div style={{ background: pctAlDia >= 90 ? T.greenSoft : pctAlDia >= 70 ? T.amberSoft : T.redSoft, borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 22, fontWeight: 800, color: pctAlDia >= 90 ? T.green : pctAlDia >= 70 ? T.amber : T.red }}>{pctAlDia}%</div>
+          <div style={{ fontSize: 12, color: T.inkSoft }}>Cursos al día</div>
+        </div>
+        <div style={{ background: T.graySoft, borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 22, fontWeight: 800, color: T.steel }}>{total}</div>
+          <div style={{ fontSize: 12, color: T.inkSoft }}>Total de cursos cargados</div>
+        </div>
+        <div style={{ background: T.redSoft, borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 22, fontWeight: 800, color: T.red }}>{vencidos}</div>
+          <div style={{ fontSize: 12, color: T.inkSoft }}>Vencidos</div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function CursosEHS() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
@@ -2351,7 +2430,9 @@ function CursosEHS() {
   });
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <ResumenEHSCard />
+      <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
       <Card title="Solicitudes de curso" action={<Btn small variant="ghost" onClick={() => exportExcel(rowsMostrados.map(r => ({ Solicitante: r.solicitante, Personal: r.personal, Lugar: r.lugar, Tipo: r.tipo, Estado: r.estado, Fecha: r.fecha, Vencimiento: vencimientoCalculado(r.fecha) || "" })), "cursos_ehs.xlsx")}><Download size={13} /> Excel</Btn>}>
         <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
           <Btn small variant={subTab === "activos" ? "accent" : "ghost"} onClick={() => setSubTab("activos")}>Activos ({rowsActivos.length})</Btn>
@@ -2449,6 +2530,7 @@ function CursosEHS() {
           <Btn variant="accent" onClick={add} style={{ justifyContent: "center" }}><Plus size={14} /> Solicitar curso</Btn>
         </div>
       </Card>
+      </div>
     </div>
   );
 }
@@ -2639,7 +2721,7 @@ function ResumenEjecutivo() {
   const confirmar = useContext(ConfirmContext);
   const { fechasCorte } = useContext(FechasCorteContext);
   const [facturas, setFacturas] = useState([]);
-  const [nuevoMes, setNuevoMes] = useState({ mes: "", monto: "" });
+  const [nuevoMes, setNuevoMes] = useState({ mes: "", anio: new Date().getFullYear(), monto: "" });
   const [horasManual, setHorasManual] = useState([]);
   const [horasReales, setHorasReales] = useState([]);
   const [ventanaHoras, setVentanaHoras] = useState(0); // 0 = ventana más reciente
@@ -2669,8 +2751,8 @@ function ResumenEjecutivo() {
 
   const addFactura = async () => {
     if (!nuevoMes.mes || !nuevoMes.monto) return;
-    const payload = { mes: nuevoMes.mes, monto: Number(nuevoMes.monto) };
-    setNuevoMes({ mes: "", monto: "" });
+    const payload = { mes: nuevoMes.mes, anio: Number(nuevoMes.anio) || new Date().getFullYear(), monto: Number(nuevoMes.monto) };
+    setNuevoMes({ mes: "", anio: new Date().getFullYear(), monto: "" });
     const { data, error } = await supabase.from("facturacion").insert(payload).select().single();
     if (!error && data) setFacturas((prev) => [...prev, data]);
   };
@@ -2753,14 +2835,17 @@ function ResumenEjecutivo() {
   const horasQuincenalesDataCompleta = quincenasOrdenadas.map((q) => {
     const tieneManualInsp = horasManual.some((f) => f.quincena === q && f.area === "inspecciones");
     const tieneManualProy = horasManual.some((f) => f.quincena === q && f.area === "proyectos");
+    const insp = tieneManualInsp
+      ? horasManual.filter((f) => f.quincena === q && f.area === "inspecciones").reduce((s, f) => s + Number(f.horas || 0), 0)
+      : Math.round((horasAutoPorQuincena[q]?.inspecciones || 0) * 100) / 100;
+    const proy = tieneManualProy
+      ? horasManual.filter((f) => f.quincena === q && f.area === "proyectos").reduce((s, f) => s + Number(f.horas || 0), 0)
+      : Math.round((horasAutoPorQuincena[q]?.proyectos || 0) * 100) / 100;
     return {
       quincena: q,
-      Inspecciones: tieneManualInsp
-        ? horasManual.filter((f) => f.quincena === q && f.area === "inspecciones").reduce((s, f) => s + Number(f.horas || 0), 0)
-        : Math.round((horasAutoPorQuincena[q]?.inspecciones || 0) * 100) / 100,
-      Proyectos: tieneManualProy
-        ? horasManual.filter((f) => f.quincena === q && f.area === "proyectos").reduce((s, f) => s + Number(f.horas || 0), 0)
-        : Math.round((horasAutoPorQuincena[q]?.proyectos || 0) * 100) / 100,
+      Inspecciones: insp,
+      Proyectos: proy,
+      Total: Math.round((insp + proy) * 100) / 100,
     };
   });
 
@@ -2964,7 +3049,18 @@ function ResumenEjecutivo() {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }} id="reporte-ejecutivo-print">
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #reporte-ejecutivo-print, #reporte-ejecutivo-print * { visibility: visible; }
+          #reporte-ejecutivo-print { position: absolute; top: 0; left: 0; width: 100%; }
+          .no-print { display: none !important; }
+        }
+      `}</style>
+      <div className="no-print" style={{ display: "flex", justifyContent: "flex-end" }}>
+        <Btn variant="accent" onClick={() => window.print()}><Download size={14} /> Descargar PDF</Btn>
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 14 }}>
         <Card style={{ padding: 16 }}>
           <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase" }}>Total facturado</div>
@@ -2988,10 +3084,15 @@ function ResumenEjecutivo() {
         </Card>
       </div>
 
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <ResumenCotizacionesCard />
+        <ResumenEHSCard />
+      </div>
+
       <Card
         title="Facturación mensual vs. punto de equilibrio ($120,000)"
         action={
-          <div style={{ display: "flex", gap: 6 }}>
+          <div className="no-print" style={{ display: "flex", gap: 6 }}>
             <Btn small variant="ghost" onClick={() => setVentanaFactura((v) => Math.min(v + 1, totalVentanasFactura - 1))} disabled={ventanaFacturaActual >= totalVentanasFactura - 1}><ChevronLeft size={14} /></Btn>
             <Btn small variant="ghost" onClick={() => setVentanaFactura((v) => Math.max(v - 1, 0))} disabled={ventanaFacturaActual <= 0}><ChevronRight size={14} /></Btn>
             {isAdmin && <Btn small variant="danger" onClick={reiniciarAnioFacturacion}><X size={13} /> Reiniciar año</Btn>}
@@ -3037,9 +3138,40 @@ function ResumenEjecutivo() {
 
         <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
           <Field label="Mes nuevo"><input style={inputStyle} value={nuevoMes.mes} onChange={(e) => setNuevoMes({ ...nuevoMes, mes: e.target.value })} placeholder="Jul" /></Field>
+          <Field label="Año"><input style={{ ...inputStyle, width: 100 }} type="number" value={nuevoMes.anio} onChange={(e) => setNuevoMes({ ...nuevoMes, anio: e.target.value })} /></Field>
           <Field label="Monto facturado (USD)"><input style={inputStyle} type="number" value={nuevoMes.monto} onChange={(e) => setNuevoMes({ ...nuevoMes, monto: e.target.value })} placeholder="125000" /></Field>
           <Btn variant="accent" onClick={addFactura}><Plus size={14} /> Agregar mes</Btn>
         </div>
+      </Card>
+
+      <Card title="Comparación año actual vs. año anterior">
+        {(() => {
+          const anios = [...new Set(facturas.map((f) => f.anio).filter(Boolean))].sort((a, b) => b - a);
+          if (anios.length === 0) {
+            return <div style={{ color: T.gray, fontSize: 13 }}>Agrega el año a tus facturaciones para ver esta comparación (las que ya tenías cargadas antes no tienen año asignado todavía).</div>;
+          }
+          const anioActual = anios[0];
+          const anioAnterior = anios[1];
+          const ORDEN_MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"];
+          const dataComparacion = ORDEN_MESES.map((mes) => ({
+            mes,
+            [String(anioActual)]: facturas.find((f) => f.mes === mes && f.anio === anioActual)?.monto || null,
+            ...(anioAnterior ? { [String(anioAnterior)]: facturas.find((f) => f.mes === mes && f.anio === anioAnterior)?.monto || null } : {}),
+          }));
+          return (
+            <ResponsiveContainer width="100%" height={260}>
+              <LineChart data={dataComparacion} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
+                <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
+                <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${(v / 1000)}k`} />
+                <Tooltip formatter={(v) => fmtMoney(v)} />
+                <Legend />
+                {anioAnterior && <Line type="monotone" dataKey={String(anioAnterior)} stroke={T.gray} strokeWidth={2.5} strokeDasharray="5 3" dot={{ r: 3 }} connectNulls />}
+                <Line type="monotone" dataKey={String(anioActual)} stroke={T.accent} strokeWidth={3} dot={{ r: 4 }} connectNulls />
+              </LineChart>
+            </ResponsiveContainer>
+          );
+        })()}
       </Card>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
@@ -3116,7 +3248,7 @@ function ResumenEjecutivo() {
       <Card
         title="Estadística de horas extras — Inspecciones vs. Proyectos"
         action={
-          <div style={{ display: "flex", gap: 6 }}>
+          <div className="no-print" style={{ display: "flex", gap: 6 }}>
             <Btn small variant="ghost" onClick={() => setVentanaHoras((v) => Math.min(v + 1, totalVentanas - 1))} disabled={ventanaActual >= totalVentanas - 1}><ChevronLeft size={14} /></Btn>
             <Btn small variant="ghost" onClick={() => setVentanaHoras((v) => Math.max(v - 1, 0))} disabled={ventanaActual <= 0}><ChevronRight size={14} /></Btn>
             <Btn small variant="ghost" onClick={descargarReporteEjecutivo}><Download size={13} /> Reporte Ejecutivo</Btn>
@@ -3138,6 +3270,7 @@ function ResumenEjecutivo() {
               <ReferenceLine y={PUNTO_EQUILIBRIO_HORAS} stroke={T.accent} strokeDasharray="6 4" label={{ value: "Límite 156h", fill: T.accent, fontSize: 11, position: "insideTopRight" }} />
               <Line type="monotone" dataKey="Inspecciones" stroke={T.turquoise} strokeWidth={3} dot={{ r: 4 }} />
               <Line type="monotone" dataKey="Proyectos" stroke={T.green} strokeWidth={3} dot={{ r: 4 }} />
+              <Line type="monotone" dataKey="Total" stroke={T.steel} strokeWidth={2.5} strokeDasharray="5 3" dot={{ r: 3 }} />
             </LineChart>
           </ResponsiveContainer>
           </div>

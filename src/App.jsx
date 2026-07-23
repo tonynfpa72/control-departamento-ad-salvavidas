@@ -2580,7 +2580,9 @@ function EquipoSeguridad() {
   const [subTab, setSubTab] = useState("solicitado");
   const [filtroTipo, setFiltroTipo] = useState("Todos");
   const [filtroPersonal, setFiltroPersonal] = useState("");
-  const [form, setForm] = useState({ solicitante: "", personalCodigo: "", tipo: EPP_TIPOS[0], cantidad: 1, talla: "" });
+  const [form, setForm] = useState({ solicitante: "", personalCodigo: "" });
+  const [itemActual, setItemActual] = useState({ tipo: EPP_TIPOS[0], cantidad: 1, talla: "" });
+  const [carrito, setCarrito] = useState([]);
 
   useEffect(() => {
     (async () => {
@@ -2593,18 +2595,28 @@ function EquipoSeguridad() {
     })();
   }, []);
 
-  const add = async () => {
+  const agregarAlCarrito = () => {
+    if (!itemActual.tipo || !itemActual.cantidad) return;
+    setCarrito((prev) => [...prev, { ...itemActual, cantidad: Number(itemActual.cantidad) || 1 }]);
+    setItemActual({ tipo: EPP_TIPOS[0], cantidad: 1, talla: "" });
+  };
+  const quitarDelCarrito = (idx) => {
+    setCarrito((prev) => prev.filter((_, i) => i !== idx));
+  };
+  const guardarPedido = async () => {
     const empleado = empleados.find((e) => e.codigo === form.personalCodigo);
-    if (!empleado || !form.tipo || !form.cantidad) return;
-    const payload = {
+    if (!empleado || carrito.length === 0) return;
+    const fecha = todayISO();
+    const payloads = carrito.map((item) => ({
       solicitante: form.solicitante || null,
-      personal_codigo: form.personalCodigo, personal_nombre: empleado.nombre, tipo: form.tipo,
-      cantidad: Number(form.cantidad) || 1, talla: form.talla || null,
-      fecha_solicitud: todayISO(), fecha_entrega: null, estado: "Solicitado",
-    };
-    setForm({ solicitante: "", personalCodigo: "", tipo: EPP_TIPOS[0], cantidad: 1, talla: "" });
-    const { data, error } = await supabase.from("epp_registros").insert(payload).select().single();
-    if (!error && data) setRows((prev) => [data, ...prev]);
+      personal_codigo: form.personalCodigo, personal_nombre: empleado.nombre, tipo: item.tipo,
+      cantidad: item.cantidad, talla: item.talla || null,
+      fecha_solicitud: fecha, fecha_entrega: null, estado: "Solicitado",
+    }));
+    setCarrito([]);
+    setForm({ solicitante: "", personalCodigo: "" });
+    const { data, error } = await supabase.from("epp_registros").insert(payloads).select();
+    if (!error && data) setRows((prev) => [...data, ...prev]);
   };
   const marcarEntregado = (id) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado: "Entregado", fecha_entrega: todayISO() } : r));
@@ -2701,14 +2713,33 @@ function EquipoSeguridad() {
               )}
               <div style={{ fontSize: 10.5, color: T.gray, marginTop: 4 }}>Esta lista se administra desde Planilla.</div>
             </Field>
+
+            <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 10, fontSize: 12, fontWeight: 700, color: T.inkSoft }}>Artículos del pedido</div>
             <Field label="Tipo de EPP">
-              <select style={inputStyle} value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
+              <select style={inputStyle} value={itemActual.tipo} onChange={(e) => setItemActual({ ...itemActual, tipo: e.target.value })}>
                 {EPP_TIPOS.map((t) => <option key={t}>{t}</option>)}
               </select>
             </Field>
-            <Field label="Cantidad"><input style={inputStyle} type="number" min="1" value={form.cantidad} onChange={(e) => setForm({ ...form, cantidad: e.target.value })} /></Field>
-            <Field label="Talla (opcional)"><input style={inputStyle} value={form.talla} onChange={(e) => setForm({ ...form, talla: e.target.value })} placeholder="M, L, 42..." /></Field>
-            <Btn variant="accent" onClick={add} style={{ justifyContent: "center" }}><Plus size={14} /> Solicitar EPP</Btn>
+            <div style={{ display: "flex", gap: 10 }}>
+              <Field label="Cantidad"><input style={inputStyle} type="number" min="1" value={itemActual.cantidad} onChange={(e) => setItemActual({ ...itemActual, cantidad: e.target.value })} /></Field>
+              <Field label="Talla (opcional)"><input style={inputStyle} value={itemActual.talla} onChange={(e) => setItemActual({ ...itemActual, talla: e.target.value })} placeholder="M, L, 42..." /></Field>
+            </div>
+            <Btn variant="ghost" onClick={agregarAlCarrito} style={{ justifyContent: "center" }}><Plus size={14} /> Agregar artículo al pedido</Btn>
+
+            {carrito.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, background: T.graySoft, borderRadius: 8, padding: 10 }}>
+                {carrito.map((item, idx) => (
+                  <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5 }}>
+                    <span>{item.tipo} × {item.cantidad}{item.talla ? ` (talla ${item.talla})` : ""}</span>
+                    <button onClick={() => quitarDelCarrito(idx)} style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 14 }}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <Btn variant="accent" onClick={guardarPedido} disabled={carrito.length === 0 || !form.personalCodigo} style={{ justifyContent: "center" }}>
+              <Plus size={14} /> Guardar pedido ({carrito.length} artículo{carrito.length === 1 ? "" : "s"})
+            </Btn>
           </div>
         </Card>
 

@@ -2419,6 +2419,7 @@ function CursosEHS() {
 
   const [filtroTipoEHS, setFiltroTipoEHS] = useState("Todos");
   const [filtroPersonalEHS, setFiltroPersonalEHS] = useState("");
+  const [filtroLugarEHS, setFiltroLugarEHS] = useState("");
   const rowsVencidos = rows.filter((r) => estadoEfectivoCurso(r) === "Vencido");
   const rowsRealizados = rows.filter((r) => r.estado === "Realizado" && estadoEfectivoCurso(r) !== "Vencido");
   const rowsActivos = rows.filter((r) => r.estado !== "Realizado" && estadoEfectivoCurso(r) !== "Vencido");
@@ -2426,7 +2427,8 @@ function CursosEHS() {
   const rowsMostrados = rowsMostradosPorTab.filter((r) => {
     const matchTipo = filtroTipoEHS === "Todos" || r.tipo === filtroTipoEHS;
     const matchPersonal = !filtroPersonalEHS.trim() || (r.personal || "").toLowerCase().includes(filtroPersonalEHS.trim().toLowerCase());
-    return matchTipo && matchPersonal;
+    const matchLugar = !filtroLugarEHS.trim() || (r.lugar || "").toLowerCase().includes(filtroLugarEHS.trim().toLowerCase());
+    return matchTipo && matchPersonal && matchLugar;
   });
 
   return (
@@ -2445,6 +2447,7 @@ function CursosEHS() {
             {CURSO_TIPOS.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
           <input style={{ ...inputStyle, width: 200 }} value={filtroPersonalEHS} onChange={(e) => setFiltroPersonalEHS(e.target.value)} placeholder="Buscar por persona..." />
+          <input style={{ ...inputStyle, width: 200 }} value={filtroLugarEHS} onChange={(e) => setFiltroLugarEHS(e.target.value)} placeholder="Buscar por lugar..." />
         </div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
@@ -2752,7 +2755,7 @@ function ResumenEjecutivo() {
   const addFactura = async () => {
     if (!nuevoMes.mes || !nuevoMes.monto) return;
     const payload = { mes: nuevoMes.mes, anio: Number(nuevoMes.anio) || new Date().getFullYear(), monto: Number(nuevoMes.monto) };
-    setNuevoMes({ mes: "", anio: new Date().getFullYear(), monto: "" });
+    setNuevoMes({ mes: "", anio: nuevoMes.anio, monto: "" });
     const { data, error } = await supabase.from("facturacion").insert(payload).select().single();
     if (!error && data) setFacturas((prev) => [...prev, data]);
   };
@@ -3146,30 +3149,43 @@ function ResumenEjecutivo() {
 
       <Card title="Comparación año actual vs. año anterior">
         {(() => {
-          const anios = [...new Set(facturas.map((f) => f.anio).filter(Boolean))].sort((a, b) => b - a);
+          const anioHoy = new Date().getFullYear();
+          // Los registros viejos (de antes de que existiera el campo Año)
+          // no tienen año asignado — se cuentan como si fueran del año en
+          // curso, para que aparezcan en esta comparación sin tener que
+          // volver a cargarlos a mano.
+          const facturasConAnio = facturas.map((f) => ({ ...f, anio: f.anio || anioHoy }));
+          const anios = [...new Set(facturasConAnio.map((f) => f.anio))].sort((a, b) => b - a);
           if (anios.length === 0) {
-            return <div style={{ color: T.gray, fontSize: 13 }}>Agrega el año a tus facturaciones para ver esta comparación (las que ya tenías cargadas antes no tienen año asignado todavía).</div>;
+            return <div style={{ color: T.gray, fontSize: 13 }}>Todavía no has cargado ningún mes de facturación.</div>;
           }
           const anioActual = anios[0];
           const anioAnterior = anios[1];
           const ORDEN_MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"];
           const dataComparacion = ORDEN_MESES.map((mes) => ({
             mes,
-            [String(anioActual)]: facturas.find((f) => f.mes === mes && f.anio === anioActual)?.monto || null,
-            ...(anioAnterior ? { [String(anioAnterior)]: facturas.find((f) => f.mes === mes && f.anio === anioAnterior)?.monto || null } : {}),
+            [String(anioActual)]: facturasConAnio.find((f) => f.mes === mes && f.anio === anioActual)?.monto || null,
+            ...(anioAnterior ? { [String(anioAnterior)]: facturasConAnio.find((f) => f.mes === mes && f.anio === anioAnterior)?.monto || null } : {}),
           }));
           return (
-            <ResponsiveContainer width="100%" height={260}>
-              <LineChart data={dataComparacion} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
-                <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
-                <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${(v / 1000)}k`} />
-                <Tooltip formatter={(v) => fmtMoney(v)} />
-                <Legend />
-                {anioAnterior && <Line type="monotone" dataKey={String(anioAnterior)} stroke={T.gray} strokeWidth={2.5} strokeDasharray="5 3" dot={{ r: 3 }} connectNulls />}
-                <Line type="monotone" dataKey={String(anioActual)} stroke={T.accent} strokeWidth={3} dot={{ r: 4 }} connectNulls />
-              </LineChart>
-            </ResponsiveContainer>
+            <>
+              {!anioAnterior && (
+                <div style={{ color: T.gray, fontSize: 12.5, marginBottom: 10 }}>
+                  Solo hay datos de {anioActual} por ahora — agrega un mes con año {anioActual - 1} para ver las 2 líneas comparadas.
+                </div>
+              )}
+              <ResponsiveContainer width="100%" height={260}>
+                <LineChart data={dataComparacion} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
+                  <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
+                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${(v / 1000)}k`} />
+                  <Tooltip formatter={(v) => fmtMoney(v)} />
+                  <Legend />
+                  {anioAnterior && <Line type="monotone" dataKey={String(anioAnterior)} stroke={T.gray} strokeWidth={2.5} strokeDasharray="5 3" dot={{ r: 3 }} connectNulls />}
+                  <Line type="monotone" dataKey={String(anioActual)} stroke={T.accent} strokeWidth={3} dot={{ r: 4 }} connectNulls />
+                </LineChart>
+              </ResponsiveContainer>
+            </>
           );
         })()}
       </Card>
@@ -3897,6 +3913,7 @@ function FechasDeCorte({ isAdmin, confirmar }) {
   };
 
   const [reorganizando, setReorganizando] = useState(false);
+  const [anioReorganizar, setAnioReorganizar] = useState(new Date().getFullYear());
   const fechaAproximadaDeQuincena = (quincena, anio) => {
     const partes = String(quincena || "").trim().split(" ");
     if (partes.length < 2) return null;
@@ -3910,8 +3927,9 @@ function FechasDeCorte({ isAdmin, confirmar }) {
   };
   const reorganizarQuincenas = async () => {
     if (rows.length === 0) return;
+    const anio = Number(anioReorganizar) || new Date().getFullYear();
     if (!(await confirmar(
-      "Esto va a reorganizar TODAS las quincenas manuales que ya tienes cargadas (2026) según tus nuevas fechas de corte, sumando las que caigan en el mismo periodo. Esta acción no se puede deshacer. ¿Continuar?"
+      `Esto va a reorganizar TODAS las quincenas manuales que ya tienes cargadas (${anio}) según tus nuevas fechas de corte, sumando las que caigan en el mismo periodo. Esta acción no se puede deshacer. ¿Continuar?`
     ))) return;
     setReorganizando(true);
     try {
@@ -3920,7 +3938,7 @@ function FechasDeCorte({ isAdmin, confirmar }) {
       const fechasCorteOrdenadas = rows.map((r) => r.fecha);
       const consolidado = {};
       manuales.forEach((m) => {
-        const fechaAprox = fechaAproximadaDeQuincena(m.quincena, 2026);
+        const fechaAprox = fechaAproximadaDeQuincena(m.quincena, anio);
         if (!fechaAprox) return;
         const nuevaEtiqueta = etiquetaPeriodo(fechaAprox, fechasCorteOrdenadas);
         const key = `${m.area}|||${nuevaEtiqueta}`;
@@ -3942,19 +3960,17 @@ function FechasDeCorte({ isAdmin, confirmar }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
       <Card title="Fechas de corte">
-        <div style={{ fontSize: 13, color: T.inkSoft, marginBottom: 14 }}>
-          Las gráficas y el contador de "Disponible" de Horas Extras agrupan las horas por el periodo entre
-          una fecha de corte y la siguiente (como el corte de una tarjeta de crédito), en vez de la quincena fija 1-15/16-31.
-          Aplica igual para Inspecciones y Proyectos. Mientras no agregues fechas de corte, todo sigue funcionando con la quincena fija de siempre.
-        </div>
         {isAdmin && (
-          <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
             <input type="date" style={inputStyle} value={nuevaFecha} onChange={(e) => setNuevaFecha(e.target.value)} />
             <Btn variant="accent" onClick={agregar}><Plus size={14} /> Agregar corte</Btn>
             {rows.length > 0 && (
-              <Btn variant="ghost" onClick={reorganizarQuincenas} disabled={reorganizando}>
-                {reorganizando ? "Reorganizando..." : "Reorganizar quincenas 2026"}
-              </Btn>
+              <>
+                <input type="number" style={{ ...inputStyle, width: 90 }} value={anioReorganizar} onChange={(e) => setAnioReorganizar(e.target.value)} title="Año de las quincenas a reorganizar" />
+                <Btn variant="ghost" onClick={reorganizarQuincenas} disabled={reorganizando}>
+                  {reorganizando ? "Reorganizando..." : `Reorganizar quincenas ${anioReorganizar}`}
+                </Btn>
+              </>
             )}
           </div>
         )}

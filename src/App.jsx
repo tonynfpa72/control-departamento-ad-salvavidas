@@ -4065,22 +4065,26 @@ function FacturacionPublica() {
       if (data) setFacturas(data);
     })();
   }, []);
-  const totalVentanas = Math.max(1, Math.ceil(facturas.length / VENTANA_MESES));
+  // Solo se muestra el año más reciente cargado; los años anteriores
+  // quedan reservados para la gráfica de comparación de Administrativo.
+  const anioMasReciente = facturas.reduce((max, f) => (f.anio && f.anio > max ? f.anio : max), new Date().getFullYear());
+  const facturasAnioActual = facturas.filter((f) => !f.anio || f.anio === anioMasReciente);
+  const totalVentanas = Math.max(1, Math.ceil(facturasAnioActual.length / VENTANA_MESES));
   const ventanaActual = Math.min(ventana, totalVentanas - 1);
-  const finVentana = facturas.length - ventanaActual * VENTANA_MESES;
+  const finVentana = facturasAnioActual.length - ventanaActual * VENTANA_MESES;
   const inicioVentana = Math.max(0, finVentana - VENTANA_MESES);
-  const facturasVentana = facturas.slice(inicioVentana, finVentana);
+  const facturasVentana = facturasAnioActual.slice(inicioVentana, finVentana);
   return (
     <Card
       title="Facturación mensual vs. punto de equilibrio ($120,000)"
-      action={facturas.length > 0 && (
+      action={facturasAnioActual.length > 0 && (
         <div style={{ display: "flex", gap: 6 }}>
           <Btn small variant="ghost" onClick={() => setVentana((v) => Math.min(v + 1, totalVentanas - 1))} disabled={ventanaActual >= totalVentanas - 1}><ChevronLeft size={14} /></Btn>
           <Btn small variant="ghost" onClick={() => setVentana((v) => Math.max(v - 1, 0))} disabled={ventanaActual <= 0}><ChevronRight size={14} /></Btn>
         </div>
       )}
     >
-      {facturas.length === 0 ? (
+      {facturasAnioActual.length === 0 ? (
         <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay datos de facturación cargados.</div>
       ) : (
         <ResponsiveContainer width="100%" height={320}>

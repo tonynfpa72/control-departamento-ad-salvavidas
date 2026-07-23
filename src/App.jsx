@@ -163,6 +163,7 @@ const CATEGORIAS_USUARIO = [
   { id: "admin", label: "Admin" },
   { id: "asistente", label: "Asistente" },
   { id: "tecnico", label: "Técnico" },
+  { id: "ehs", label: "EHS" },
 ];
 
 // Los usuarios ya NO viven aquí: se guardan en Supabase (tabla "usuarios").
@@ -782,8 +783,9 @@ function Login({ onLogin }) {
 function HorasExtras({ area, color }) {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
-  const canCerrar = isAdmin || currentUser?.categoria === "asistente";
-  const canBorrar = isAdmin || currentUser?.categoria === "asistente";
+  const puedeAdminAqui = isAdmin || (currentUser?.categoria === "ehs" && area === "salud");
+  const canCerrar = puedeAdminAqui || currentUser?.categoria === "asistente";
+  const canBorrar = puedeAdminAqui || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
   const { fechasCorte } = useContext(FechasCorteContext);
   const [odsDelArea] = useClientesArea(area);
@@ -913,10 +915,19 @@ function HorasExtras({ area, color }) {
     filasAEliminar.forEach((r) => supabase.from("horas_extras").delete().eq("id", r.id).then());
   };
 
+  const [filtroPersonalHoras, setFiltroPersonalHoras] = useState("");
+  const [filtroOdHoras, setFiltroOdHoras] = useState("");
+  const [filtroFechaEjecHoras, setFiltroFechaEjecHoras] = useState("");
+
   const rowsSolicitud = rows.filter((r) => r.estado === "Pendiente" || r.estado === "Aprobada");
   const rowsDenegadas = rows.filter((r) => r.estado === "Rechazada");
   const rowsCerradas = rows.filter((r) => r.estado === "Cerrada");
-  const rowsMostradas = subTab === "solicitud" ? rowsSolicitud : subTab === "denegadas" ? rowsDenegadas : rowsCerradas;
+  const rowsMostradas = (subTab === "solicitud" ? rowsSolicitud : subTab === "denegadas" ? rowsDenegadas : rowsCerradas).filter((r) => {
+    const matchPersonal = !filtroPersonalHoras.trim() || (r.personal || "").toLowerCase().includes(filtroPersonalHoras.trim().toLowerCase());
+    const matchOd = !filtroOdHoras.trim() || (r.od || "").toLowerCase().includes(filtroOdHoras.trim().toLowerCase());
+    const matchFecha = !filtroFechaEjecHoras || r.fecha_ejecucion === filtroFechaEjecHoras;
+    return matchPersonal && matchOd && matchFecha;
+  });
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16 }}>
@@ -927,7 +938,7 @@ function HorasExtras({ area, color }) {
           <div style={{ height: 8, background: T.graySoft, borderRadius: 99, overflow: "hidden", marginBottom: 12 }}>
             <div style={{ height: "100%", width: `${Math.min(100, (used / disponible) * 100)}%`, background: used > disponible ? T.red : color }} />
           </div>
-          {isAdmin ? (
+          {puedeAdminAqui ? (
             <Field label="Editar disponible (solo Administrativo)">
               <input style={inputStyle} type="number" value={disponible} onChange={(e) => setDisponible(Number(e.target.value))} />
             </Field>
@@ -985,11 +996,19 @@ function HorasExtras({ area, color }) {
           <Btn small variant={subTab === "solicitud" ? "accent" : "ghost"} onClick={() => setSubTab("solicitud")}>Solicitud ({rowsSolicitud.length})</Btn>
           <Btn small variant={subTab === "denegadas" ? "accent" : "ghost"} onClick={() => setSubTab("denegadas")}>Denegadas ({rowsDenegadas.length})</Btn>
           <Btn small variant={subTab === "cerradas" ? "accent" : "ghost"} onClick={() => setSubTab("cerradas")}>Cerradas ({rowsCerradas.length})</Btn>
-          {isAdmin && subTab === "denegadas" && rowsDenegadas.length > 0 && (
+          {puedeAdminAqui && subTab === "denegadas" && rowsDenegadas.length > 0 && (
             <Btn small variant="danger" onClick={() => vaciarPestana("Rechazada", "Denegadas")}><X size={12} /> Eliminar Denegadas</Btn>
           )}
-          {isAdmin && subTab === "cerradas" && rowsCerradas.length > 0 && (
+          {puedeAdminAqui && subTab === "cerradas" && rowsCerradas.length > 0 && (
             <Btn small variant="danger" onClick={() => vaciarPestana("Cerrada", "Cerradas")}><X size={12} /> Eliminar Cerradas</Btn>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+          <input style={{ ...inputStyle, width: 180 }} value={filtroPersonalHoras} onChange={(e) => setFiltroPersonalHoras(e.target.value)} placeholder="Filtrar por personal..." />
+          <input style={{ ...inputStyle, width: 150 }} value={filtroOdHoras} onChange={(e) => setFiltroOdHoras(e.target.value)} placeholder="Filtrar por OD..." />
+          <input style={{ ...inputStyle, width: 160 }} type="date" value={filtroFechaEjecHoras} onChange={(e) => setFiltroFechaEjecHoras(e.target.value)} title="Filtrar por fecha de ejecución" />
+          {(filtroPersonalHoras || filtroOdHoras || filtroFechaEjecHoras) && (
+            <Btn small variant="ghost" onClick={() => { setFiltroPersonalHoras(""); setFiltroOdHoras(""); setFiltroFechaEjecHoras(""); }}>Limpiar filtros</Btn>
           )}
         </div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -1003,12 +1022,12 @@ function HorasExtras({ area, color }) {
               <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
                 <td style={{ padding: "9px 8px" }}>{r.fecha}</td>
                 <td>
-                  {isAdmin ? (
+                  {puedeAdminAqui ? (
                     <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 130 }} value={r.fecha_ejecucion || ""} onChange={(e) => setFechaEjecucion(r.id, e.target.value)} />
                   ) : (r.fecha_ejecucion || "—")}
                 </td>
                 <td>
-                  {isAdmin ? (
+                  {puedeAdminAqui ? (
                     <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 200 }} value={r.od} onChange={(e) => setOd(r.id, e.target.value)} />
                   ) : (r.od)}
                   {(() => {
@@ -1017,7 +1036,7 @@ function HorasExtras({ area, color }) {
                   })()}
                 </td>
                 <td>
-                  {isAdmin ? (
+                  {puedeAdminAqui ? (
                     <select style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 150 }} value={r.personal_codigos?.[0] || ""} onChange={(e) => setPersonalCodigo(r.id, e.target.value)}>
                       <option value="">Selecciona…</option>
                       {empleados.map((emp) => <option key={emp.codigo} value={emp.codigo}>{emp.nombre}</option>)}
@@ -1025,7 +1044,7 @@ function HorasExtras({ area, color }) {
                   ) : (r.personal || "—")}
                 </td>
                 <td style={{ fontSize: 12, whiteSpace: "nowrap" }}>
-                  {isAdmin ? (
+                  {puedeAdminAqui ? (
                     <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                       <input type="time" style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: 90 }} value={r.hora_inicio || ""} onChange={(e) => setRango(r.id, e.target.value, r.hora_fin)} />
                       <span>–</span>
@@ -1035,7 +1054,7 @@ function HorasExtras({ area, color }) {
                 </td>
                 <td>{r.horas}h</td>
                 <td>
-                  {isAdmin ? (
+                  {puedeAdminAqui ? (
                     <select value={r.estado} onChange={(e) => setEstado(r.id, e.target.value)} style={{ border: "none", background: r.estado === "Aprobada" ? T.greenSoft : r.estado === "Rechazada" ? T.redSoft : r.estado === "Cerrada" ? T.graySoft : T.amberSoft, color: r.estado === "Aprobada" ? T.green : r.estado === "Rechazada" ? T.red : r.estado === "Cerrada" ? T.steel : T.amber, borderRadius: 999, fontSize: 12, fontWeight: 600, padding: "4px 10px" }}>
                       {["Pendiente", "Aprobada", "Rechazada", "Cerrada"].map((s) => <option key={s}>{s}</option>)}
                     </select>
@@ -1049,7 +1068,7 @@ function HorasExtras({ area, color }) {
                   )}
                 </td>
                 <td style={{ display: "flex", gap: 6, padding: "9px 8px" }}>
-                  {isAdmin && r.estado === "Pendiente" && <>
+                  {puedeAdminAqui && r.estado === "Pendiente" && <>
                     <Btn small variant="success" onClick={() => setEstado(r.id, "Aprobada")}><Check size={12} /></Btn>
                     <Btn small variant="danger" onClick={() => setEstado(r.id, "Rechazada")}><X size={12} /></Btn>
                   </>}
@@ -2133,6 +2152,12 @@ function Cotizaciones() {
   const [printRow, setPrintRow] = useState(null);
   const [subTab, setSubTab] = useState("Todas");
   const [avisoForm, setAvisoForm] = useState("");
+  const [filtroSolicitante, setFiltroSolicitante] = useState("");
+  const [filtroCliente, setFiltroCliente] = useState("");
+  const [filtroProvincia, setFiltroProvincia] = useState("");
+  const [filtroDias, setFiltroDias] = useState("");
+  const [filtroNumCot, setFiltroNumCot] = useState("");
+  const [filtroTipoCot, setFiltroTipoCot] = useState("Todos");
   const [form, setForm] = useState({
     solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "",
     dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Solicitud",
@@ -2203,6 +2228,17 @@ function Cotizaciones() {
   const actividadColor = { Seguimiento: [T.blue, T.blueSoft], Cancelado: [T.red, T.redSoft], "Con OC": [T.green, T.greenSoft] };
   const TIPO_OFERTA_OPCIONES = ["Inspecciones", "Proyectos", "Inspecciones y Proyectos"];
 
+  const rowsFiltradas = rows.filter((r) => {
+    const matchTab = subTab === "Todas" || r.estado === subTab;
+    const matchSolicitante = !filtroSolicitante.trim() || (r.solicitante || "").toLowerCase().includes(filtroSolicitante.trim().toLowerCase());
+    const matchCliente = !filtroCliente.trim() || (r.cliente || "").toLowerCase().includes(filtroCliente.trim().toLowerCase());
+    const matchProvincia = !filtroProvincia.trim() || (r.provincia || "").toLowerCase().includes(filtroProvincia.trim().toLowerCase());
+    const matchDias = !filtroDias.trim() || String(r.dias || "").includes(filtroDias.trim());
+    const matchNumCot = !filtroNumCot.trim() || (r.numCot || "").toLowerCase().includes(filtroNumCot.trim().toLowerCase());
+    const matchTipo = filtroTipoCot === "Todos" || r.tipo === filtroTipoCot;
+    return matchTab && matchSolicitante && matchCliente && matchProvincia && matchDias && matchNumCot && matchTipo;
+  });
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <ResumenCotizacionesCard />
@@ -2210,7 +2246,7 @@ function Cotizaciones() {
       <Card
         title={`Historial de solicitudes — próximo consecutivo #${nextConsecutivo}`}
         action={<div style={{ display: "flex", gap: 8 }}>
-          <Btn small variant="ghost" onClick={() => exportExcel(rows.map(r => ({ Consecutivo: r.consecutivo, Solicitante: r.solicitante, Cliente: r.cliente, "Nombre del contacto": r.contacto, Email: r.email, Telefono: r.telefono, Provincia: r.provincia, Dias: r.dias, Personal: r.personal, "Descripción del trabajo": r.descripcion, "Equipos de elevación": r.equipos, "Lista de dispositivos": r.dispositivos, "N° Cotización": r.numCot, Tipo: r.tipo, Monto: r.monto, Estado: r.estado, Actividad: r.actividad, Frecuencia: r.frecuencia, Observaciones: r.observaciones })), "cotizaciones.xlsx")}><Download size={13} /> Excel</Btn>
+          <Btn small variant="ghost" onClick={() => exportExcel(rowsFiltradas.map(r => ({ Consecutivo: r.consecutivo, Solicitante: r.solicitante, Cliente: r.cliente, "Nombre del contacto": r.contacto, Email: r.email, Telefono: r.telefono, Provincia: r.provincia, Dias: r.dias, Personal: r.personal, "Descripción del trabajo": r.descripcion, "Equipos de elevación": r.equipos, "Lista de dispositivos": r.dispositivos, "N° Cotización": r.numCot, Tipo: r.tipo, Monto: r.monto, Estado: r.estado, Actividad: r.actividad, Frecuencia: r.frecuencia, Observaciones: r.observaciones })), "cotizaciones.xlsx")}><Download size={13} /> Excel</Btn>
           <Btn small variant="accent" onClick={() => setOpen(!open)}><Plus size={13} /> Nueva solicitud</Btn>
         </div>}
       >
@@ -2259,6 +2295,21 @@ function Cotizaciones() {
           ))}
         </div>
 
+        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+          <input style={{ ...inputStyle, width: 150 }} value={filtroSolicitante} onChange={(e) => setFiltroSolicitante(e.target.value)} placeholder="Solicitante..." />
+          <input style={{ ...inputStyle, width: 150 }} value={filtroCliente} onChange={(e) => setFiltroCliente(e.target.value)} placeholder="Cliente..." />
+          <input style={{ ...inputStyle, width: 140 }} value={filtroProvincia} onChange={(e) => setFiltroProvincia(e.target.value)} placeholder="Provincia..." />
+          <input style={{ ...inputStyle, width: 100 }} value={filtroDias} onChange={(e) => setFiltroDias(e.target.value)} placeholder="Días..." />
+          <input style={{ ...inputStyle, width: 140 }} value={filtroNumCot} onChange={(e) => setFiltroNumCot(e.target.value)} placeholder="N° Cotización..." />
+          <select style={{ ...inputStyle, width: 180 }} value={filtroTipoCot} onChange={(e) => setFiltroTipoCot(e.target.value)}>
+            <option value="Todos">Todos los tipos</option>
+            {TIPO_OFERTA_OPCIONES.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          {(filtroSolicitante || filtroCliente || filtroProvincia || filtroDias || filtroNumCot || filtroTipoCot !== "Todos") && (
+            <Btn small variant="ghost" onClick={() => { setFiltroSolicitante(""); setFiltroCliente(""); setFiltroProvincia(""); setFiltroDias(""); setFiltroNumCot(""); setFiltroTipoCot("Todos"); }}>Limpiar filtros</Btn>
+          )}
+        </div>
+
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
@@ -2266,7 +2317,7 @@ function Cotizaciones() {
             </tr>
           </thead>
           <tbody>
-            {rows.filter((r) => subTab === "Todas" || r.estado === subTab).map((r) => (
+            {rowsFiltradas.map((r) => (
               <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
                 <td style={{ padding: "9px 8px", fontWeight: 700 }}>{r.consecutivo}</td>
                 <td>{r.solicitante}</td>
@@ -2370,10 +2421,11 @@ function ResumenEHSCard() {
 function CursosEHS() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
-  const canEditCurso = isAdmin || currentUser?.categoria === "tecnico";
-  const canEditEstadoCurso = isAdmin || currentUser?.categoria === "tecnico" || currentUser?.categoria === "asistente";
-  const canEditLugar = isAdmin || currentUser?.categoria === "asistente";
-  const canBorrarCurso = isAdmin || currentUser?.categoria === "asistente";
+  const isEHS = currentUser?.categoria === "ehs";
+  const canEditCurso = isAdmin || isEHS || currentUser?.categoria === "tecnico";
+  const canEditEstadoCurso = isAdmin || isEHS || currentUser?.categoria === "tecnico" || currentUser?.categoria === "asistente";
+  const canEditLugar = isAdmin || isEHS || currentUser?.categoria === "asistente";
+  const canBorrarCurso = isAdmin || isEHS || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
   const [rows, setRows] = useState([]);
   const [empleados, setEmpleados] = useState([]);
@@ -2573,10 +2625,14 @@ const EPP_TIPOS = [
 function EquipoSeguridad() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
-  const canGestionar = isAdmin || currentUser?.categoria === "asistente" || currentUser?.categoria === "tecnico";
+  const isEHS = currentUser?.categoria === "ehs";
+  const canGestionar = isAdmin || isEHS || currentUser?.categoria === "asistente" || currentUser?.categoria === "tecnico";
   const confirmar = useContext(ConfirmContext);
+  const canAdminTipos = isAdmin || isEHS;
   const [rows, setRows] = useState([]);
   const [empleados, setEmpleados] = useState([]);
+  const [tiposEPP, setTiposEPP] = useState(EPP_TIPOS);
+  const [nuevoTipoEPP, setNuevoTipoEPP] = useState("");
   const [subTab, setSubTab] = useState("solicitado");
   const [filtroTipo, setFiltroTipo] = useState("Todos");
   const [filtroPersonal, setFiltroPersonal] = useState("");
@@ -2593,7 +2649,19 @@ function EquipoSeguridad() {
       const { data } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
       if (data) setEmpleados(data);
     })();
+    (async () => {
+      const { data } = await supabase.from("epp_tipos").select("*").order("nombre", { ascending: true });
+      if (data && data.length > 0) setTiposEPP(data.map((t) => t.nombre));
+    })();
   }, []);
+
+  const agregarTipoEPP = async () => {
+    const nombre = nuevoTipoEPP.trim();
+    if (!nombre || tiposEPP.includes(nombre)) return;
+    setNuevoTipoEPP("");
+    const { error } = await supabase.from("epp_tipos").insert({ nombre });
+    if (!error) setTiposEPP((prev) => [...prev, nombre].sort());
+  };
 
   const agregarAlCarrito = () => {
     if (!itemActual.tipo || !itemActual.cantidad) return;
@@ -2658,13 +2726,19 @@ function EquipoSeguridad() {
           <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
             <select style={{ ...inputStyle, width: 200 }} value={filtroTipo} onChange={(e) => setFiltroTipo(e.target.value)}>
               <option value="Todos">Todos los tipos</option>
-              {EPP_TIPOS.map((t) => <option key={t} value={t}>{t}</option>)}
+              {tiposEPP.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
             <select style={{ ...inputStyle, width: 200 }} value={filtroPersonal} onChange={(e) => setFiltroPersonal(e.target.value)}>
               <option value="">Todo el personal</option>
               {empleados.map((emp) => <option key={emp.codigo} value={emp.nombre}>{emp.nombre}</option>)}
             </select>
           </div>
+          {canAdminTipos && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 14, alignItems: "center" }}>
+              <input style={{ ...inputStyle, width: 220 }} value={nuevoTipoEPP} onChange={(e) => setNuevoTipoEPP(e.target.value)} placeholder="Nuevo tipo de EPP (ej. Protector facial)" />
+              <Btn small variant="ghost" onClick={agregarTipoEPP}><Plus size={13} /> Agregar tipo a la lista</Btn>
+            </div>
+          )}
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
             <thead>
               <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
@@ -2717,7 +2791,7 @@ function EquipoSeguridad() {
             <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 10, fontSize: 12, fontWeight: 700, color: T.inkSoft }}>Artículos del pedido</div>
             <Field label="Tipo de EPP">
               <select style={inputStyle} value={itemActual.tipo} onChange={(e) => setItemActual({ ...itemActual, tipo: e.target.value })}>
-                {EPP_TIPOS.map((t) => <option key={t}>{t}</option>)}
+                {tiposEPP.map((t) => <option key={t}>{t}</option>)}
               </select>
             </Field>
             <div style={{ display: "flex", gap: 10 }}>

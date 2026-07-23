@@ -783,6 +783,46 @@ function HorasExtras({ area, color }) {
     const { data, error } = await supabase.from("horas_extras").insert(payload).select().single();
     if (!error && data) setRows((prev) => [data, ...prev]);
   };
+  const fileInputRefHoras = React.useRef(null);
+  const handleImportHoras = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const data = new Uint8Array(evt.target.result);
+        const wb = XLSX.read(data, { type: "array", cellDates: true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(ws);
+        const nuevas = json.map((row) => {
+          const nombrePersonal = String(row["Personal"] ?? row["personal"] ?? "").trim();
+          const empleadoMatch = empleados.find((emp) => emp.nombre.toLowerCase() === nombrePersonal.toLowerCase());
+          const horaInicio = String(row["Hora Inicio"] ?? row["hora_inicio"] ?? "").trim();
+          const horaFin = String(row["Hora Fin"] ?? row["hora_fin"] ?? "").trim();
+          const horasCalculadas = horaInicio && horaFin ? calcularHorasRango(horaInicio, horaFin) : null;
+          return {
+            area,
+            fecha: todayISO(),
+            fecha_ejecucion: excelValueToISODate(row["Fecha Ejecución"] ?? row["Fecha de Ejecución"] ?? row["fecha_ejecucion"] ?? "") || null,
+            od: row["OD"] ?? row["od"] ?? "",
+            personal: empleadoMatch?.nombre || nombrePersonal,
+            personal_codigos: empleadoMatch ? [empleadoMatch.codigo] : [],
+            hora_inicio: horaInicio || null,
+            hora_fin: horaFin || null,
+            horas: horasCalculadas ?? (Number(row["Horas"] ?? row["horas"]) || 0),
+            estado: row["Estado"] ?? row["estado"] ?? "Pendiente",
+          };
+        }).filter((r) => r.od && r.personal && r.horas);
+        if (nuevas.length === 0) return;
+        const { data: inserted, error } = await supabase.from("horas_extras").insert(nuevas).select();
+        if (!error && inserted) setRows((prev) => [...inserted, ...prev]);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  };
   const setEstado = (id, estado) => {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, estado } : r)));
     supabase.from("horas_extras").update({ estado }).eq("id", id).then();
@@ -884,7 +924,13 @@ function HorasExtras({ area, color }) {
         </Card>
       </div>
 
-      <Card title="Solicitudes" action={<Btn small variant="ghost" onClick={() => exportExcel(rowsMostradas.map(({ fecha, fecha_ejecucion, od, personal, hora_inicio, hora_fin, horas, estado }) => ({ Fecha: fecha, "Fecha Ejecución": fecha_ejecucion, OD: od, Personal: personal, "Hora Inicio": hora_inicio, "Hora Fin": hora_fin, Horas: horas, Estado: estado })), `horas_${area}.xlsx`)}><Download size={13} /> Excel</Btn>}>
+      <Card title="Solicitudes" action={
+        <div style={{ display: "flex", gap: 8 }}>
+          <input ref={fileInputRefHoras} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleImportHoras} />
+          <Btn small variant="ghost" onClick={() => fileInputRefHoras.current?.click()}><Upload size={13} /> Importar Excel</Btn>
+          <Btn small variant="ghost" onClick={() => exportExcel(rowsMostradas.map(({ fecha, fecha_ejecucion, od, personal, hora_inicio, hora_fin, horas, estado }) => ({ Fecha: fecha, "Fecha Ejecución": fecha_ejecucion, OD: od, Personal: personal, "Hora Inicio": hora_inicio, "Hora Fin": hora_fin, Horas: horas, Estado: estado })), `horas_${area}.xlsx`)}><Download size={13} /> Excel</Btn>
+        </div>
+      }>
         <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
           <Btn small variant={subTab === "solicitud" ? "accent" : "ghost"} onClick={() => setSubTab("solicitud")}>Solicitud ({rowsSolicitud.length})</Btn>
           <Btn small variant={subTab === "denegadas" ? "accent" : "ghost"} onClick={() => setSubTab("denegadas")}>Denegadas ({rowsDenegadas.length})</Btn>

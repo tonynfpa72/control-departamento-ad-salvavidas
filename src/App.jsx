@@ -7,7 +7,7 @@ import * as XLSX from "xlsx";
 import {
   LogOut, Plus, Download, Check, X, Clock, ClipboardList,
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
-  ChevronLeft, ChevronRight, AlertCircle, Upload, Flame, Wallet
+  ChevronLeft, ChevronRight, AlertCircle, Upload, Flame, Wallet, CreditCard
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -154,6 +154,7 @@ const AREAS = [
   { id: "salud", label: "Salud Ocupacional", icon: CalendarDays, color: T.red },
   { id: "apertura", label: "Apertura de OD", icon: Building2, color: T.blue },
   { id: "facturacion_publica", label: "Facturación", icon: LayoutDashboard, color: T.green },
+  { id: "gastos_tarjeta", label: "Gastos de Tarjeta", icon: CreditCard, color: T.red },
   { id: "planilla", label: "Planilla", icon: Wallet, color: T.amber },
   { id: "admin", label: "Administrativo", icon: LayoutDashboard, color: T.steelSoft },
 ];
@@ -3412,6 +3413,8 @@ function ResumenEjecutivo() {
         <ResumenEHSCard />
       </div>
 
+      <ResumenGastosCard />
+
       <Card
         title="Facturación mensual vs. punto de equilibrio ($120,000)"
         action={
@@ -4312,6 +4315,220 @@ function FechasDeCorte({ isAdmin, confirmar }) {
   );
 }
 
+const GASTO_CATEGORIAS_DEFECTO = ["Herramientas", "Restaurantes", "Equipo de oficina", "EPP", "Hospedaje"];
+
+function ResumenGastosCard() {
+  const [rows, setRows] = useState([]);
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("gastos_tarjeta").select("personal_nombre, categoria, monto");
+      if (data) setRows(data);
+    })();
+  }, []);
+
+  const totalGastado = rows.reduce((s, r) => s + (Number(r.monto) || 0), 0);
+  const porPersona = {};
+  rows.forEach((r) => { porPersona[r.personal_nombre] = (porPersona[r.personal_nombre] || 0) + (Number(r.monto) || 0); });
+  const dataPersona = Object.entries(porPersona).map(([nombre, monto]) => ({ nombre, monto })).sort((a, b) => b.monto - a.monto).slice(0, 8);
+
+  const porCategoria = {};
+  rows.forEach((r) => { porCategoria[r.categoria] = (porCategoria[r.categoria] || 0) + (Number(r.monto) || 0); });
+  const dataCategoria = Object.entries(porCategoria).map(([nombre, monto]) => ({ nombre, monto })).sort((a, b) => b.monto - a.monto);
+
+  return (
+    <Card title={`Gastos de Tarjeta de Crédito — Total: ${fmtMoney(totalGastado)}`}>
+      {rows.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay gastos cargados.</div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, marginBottom: 8 }}>Quién gasta más</div>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={dataPersona} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
+                <XAxis dataKey="nombre" tick={{ fontSize: 10.5 }} interval={0} angle={-20} textAnchor="end" height={50} />
+                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${v}`} />
+                <Tooltip formatter={(v) => fmtMoney(v)} />
+                <Bar dataKey="monto" fill={T.accent} radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, marginBottom: 8 }}>En qué se gasta más</div>
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie data={dataCategoria} dataKey="monto" nameKey="nombre" cx="50%" cy="50%" outerRadius={75} label={({ nombre }) => nombre}>
+                  {dataCategoria.map((_, i) => <Cell key={i} fill={PALETA_OD[i % PALETA_OD.length]} />)}
+                </Pie>
+                <Tooltip formatter={(v) => fmtMoney(v)} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function GastosTarjeta() {
+  const currentUser = useContext(CurrentUserContext);
+  const isAdmin = currentUser?.categoria === "admin";
+  const canGestionar = isAdmin || currentUser?.categoria === "asistente";
+  const canAdminCategorias = isAdmin || currentUser?.categoria === "asistente";
+  const confirmar = useContext(ConfirmContext);
+  const { clientes } = useContext(ClientesContext);
+  const [rows, setRows] = useState([]);
+  const [empleados, setEmpleados] = useState([]);
+  const [categorias, setCategorias] = useState(GASTO_CATEGORIAS_DEFECTO);
+  const [nuevaCategoria, setNuevaCategoria] = useState("");
+  const [filtroPersonal, setFiltroPersonal] = useState("");
+  const [filtroCategoria, setFiltroCategoria] = useState("Todas");
+  const [filtroOd, setFiltroOd] = useState("");
+  const [form, setForm] = useState({
+    personalCodigo: "", fecha: todayISO(), monto: "", numeroFactura: "",
+    categoria: GASTO_CATEGORIAS_DEFECTO[0], od: "", observaciones: "",
+  });
+
+  const odsCombinados = [...(clientes.inspecciones || []), ...(clientes.proyectos || [])];
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("gastos_tarjeta").select("*").order("fecha", { ascending: false });
+      if (data) setRows(data);
+    })();
+    (async () => {
+      const { data } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
+      if (data) setEmpleados(data);
+    })();
+    (async () => {
+      const { data } = await supabase.from("gastos_categorias").select("*").order("nombre", { ascending: true });
+      if (data && data.length > 0) setCategorias(data.map((c) => c.nombre));
+    })();
+  }, []);
+
+  const add = async () => {
+    const empleado = empleados.find((e) => e.codigo === form.personalCodigo);
+    if (!empleado || !form.monto || !form.categoria) return;
+    const payload = {
+      personal_codigo: form.personalCodigo, personal_nombre: empleado.nombre,
+      fecha: form.fecha || todayISO(), monto: Number(form.monto) || 0,
+      numero_factura: form.numeroFactura || null, categoria: form.categoria,
+      od: form.od || null, observaciones: form.observaciones || null,
+    };
+    setForm({ personalCodigo: form.personalCodigo, fecha: todayISO(), monto: "", numeroFactura: "", categoria: form.categoria, od: "", observaciones: "" });
+    const { data, error } = await supabase.from("gastos_tarjeta").insert(payload).select().single();
+    if (!error && data) setRows((prev) => [data, ...prev]);
+  };
+  const del = async (id) => {
+    if (!(await confirmar("¿Está seguro que desea eliminar este gasto? Esta acción no se puede deshacer."))) return;
+    setRows((prev) => prev.filter((r) => r.id !== id));
+    supabase.from("gastos_tarjeta").delete().eq("id", id).then();
+  };
+  const agregarCategoria = async () => {
+    const nombre = nuevaCategoria.trim();
+    if (!nombre || categorias.includes(nombre)) return;
+    setNuevaCategoria("");
+    const { error } = await supabase.from("gastos_categorias").insert({ nombre });
+    if (!error) setCategorias((prev) => [...prev, nombre].sort());
+  };
+
+  const rowsFiltradas = rows.filter((r) => {
+    const matchPersonal = !filtroPersonal || r.personal_nombre === filtroPersonal;
+    const matchCategoria = filtroCategoria === "Todas" || r.categoria === filtroCategoria;
+    const matchOd = !filtroOd.trim() || (r.od || "").toLowerCase().includes(filtroOd.trim().toLowerCase());
+    return matchPersonal && matchCategoria && matchOd;
+  });
+  const totalFiltrado = rowsFiltradas.reduce((s, r) => s + (Number(r.monto) || 0), 0);
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <ResumenGastosCard />
+        <Card
+          title={`Gastos registrados — Total filtrado: ${fmtMoney(totalFiltrado)}`}
+          action={<Btn small variant="ghost" onClick={() => exportExcel(rowsFiltradas.map(r => ({ Fecha: r.fecha, Personal: r.personal_nombre, Monto: r.monto, "N° Factura": r.numero_factura, Categoría: r.categoria, OD: r.od, Observaciones: r.observaciones })), "gastos_tarjeta.xlsx")}><Download size={13} /> Excel</Btn>}
+        >
+          <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+            <select style={{ ...inputStyle, width: 190 }} value={filtroPersonal} onChange={(e) => setFiltroPersonal(e.target.value)}>
+              <option value="">Todo el personal</option>
+              {empleados.map((emp) => <option key={emp.codigo} value={emp.nombre}>{emp.nombre}</option>)}
+            </select>
+            <select style={{ ...inputStyle, width: 180 }} value={filtroCategoria} onChange={(e) => setFiltroCategoria(e.target.value)}>
+              <option value="Todas">Todas las categorías</option>
+              {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <input style={{ ...inputStyle, width: 140 }} value={filtroOd} onChange={(e) => setFiltroOd(e.target.value)} placeholder="Filtrar por OD..." />
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                <th style={{ padding: "6px 8px" }}>Fecha</th><th>Personal</th><th>Monto</th><th>N° Factura</th><th>Categoría</th><th>OD</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rowsFiltradas.length === 0 ? (
+                <tr><td colSpan={7} style={{ padding: "10px 8px", color: T.gray }}>No hay gastos que coincidan con estos filtros.</td></tr>
+              ) : rowsFiltradas.map((r) => (
+                <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
+                  <td style={{ padding: "8px" }}>{r.fecha}</td>
+                  <td>{r.personal_nombre}</td>
+                  <td style={{ fontWeight: 700 }}>{fmtMoney(r.monto)}</td>
+                  <td>{r.numero_factura || "—"}</td>
+                  <td>{r.categoria}</td>
+                  <td>{r.od || "—"}</td>
+                  <td>{canGestionar && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <Card title="Registrar gasto de tarjeta">
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <Field label="Persona que gastó">
+              {empleados.length === 0 ? (
+                <div style={{ fontSize: 11.5, color: T.gray }}>Aún no hay personal cargado. Agrégalo desde Planilla.</div>
+              ) : (
+                <select style={inputStyle} value={form.personalCodigo} onChange={(e) => setForm({ ...form, personalCodigo: e.target.value })}>
+                  <option value="">Selecciona una persona…</option>
+                  {empleados.map((emp) => <option key={emp.codigo} value={emp.codigo}>{emp.nombre}</option>)}
+                </select>
+              )}
+            </Field>
+            <Field label="Fecha del gasto"><input style={inputStyle} type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} /></Field>
+            <Field label="Monto ($)"><input style={inputStyle} type="number" value={form.monto} onChange={(e) => setForm({ ...form, monto: e.target.value })} placeholder="0.00" /></Field>
+            <Field label="N° de factura"><input style={inputStyle} value={form.numeroFactura} onChange={(e) => setForm({ ...form, numeroFactura: e.target.value })} placeholder="FAC-00123" /></Field>
+            <Field label="Clasificación del gasto">
+              <select style={inputStyle} value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
+                {categorias.map((c) => <option key={c}>{c}</option>)}
+              </select>
+            </Field>
+            <Field label="OD al que se carga (opcional)">
+              <select style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })}>
+                <option value="">No aplica</option>
+                {odsCombinados.map((o) => <option key={o.id} value={o.od}>{o.od} — {o.cliente}</option>)}
+              </select>
+            </Field>
+            <Field label="Observaciones (opcional)"><input style={inputStyle} value={form.observaciones} onChange={(e) => setForm({ ...form, observaciones: e.target.value })} placeholder="Notas adicionales..." /></Field>
+            <Btn variant="accent" onClick={add} style={{ justifyContent: "center" }}><Plus size={14} /> Registrar gasto</Btn>
+          </div>
+        </Card>
+
+        {canAdminCategorias && (
+          <Card title="Agregar clasificación nueva">
+            <div style={{ display: "flex", gap: 8 }}>
+              <input style={inputStyle} value={nuevaCategoria} onChange={(e) => setNuevaCategoria(e.target.value)} placeholder="Ej. Combustible" />
+              <Btn variant="ghost" onClick={agregarCategoria}><Plus size={14} /></Btn>
+            </div>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Planilla() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
@@ -4573,6 +4790,7 @@ function AppInner() {
         {tab === "salud" && <SaludOcupacional />}
         {tab === "apertura" && <AperturaOD />}
         {tab === "facturacion_publica" && <FacturacionPublica />}
+        {tab === "gastos_tarjeta" && <GastosTarjeta />}
         {tab === "planilla" && <Planilla />}
         {tab === "admin" && <Administrativo />}
       </div>

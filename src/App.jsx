@@ -4315,7 +4315,11 @@ function FechasDeCorte({ isAdmin, confirmar }) {
   );
 }
 
-const GASTO_CATEGORIAS_DEFECTO = ["Herramientas", "Restaurantes", "Equipo de oficina", "EPP", "Hospedaje"];
+const GASTO_CATEGORIAS_DEFECTO = [
+  "Herramientas", "Restaurantes", "Equipo de oficina", "EPP", "Hospedaje",
+  "Boletos de avión", "Hogar", "Supermercados", "Electrónicos",
+  "Equipos de alarmas", "Baterías", "Gasolina", "Automotriz",
+];
 
 function ResumenGastosCard() {
   const [rows, setRows] = useState([]);
@@ -4387,6 +4391,8 @@ function GastosTarjeta() {
   const [form, setForm] = useState({
     personalCodigo: "", fecha: todayISO(), monto: "", numeroFactura: "",
     categoria: GASTO_CATEGORIAS_DEFECTO[0], od: "", observaciones: "",
+    moneda: "Colones", estadoTransaccion: "Aprobada", nombreTarjeta: "", numeroTarjeta: "",
+    detalle: "", tipoTransaccion: "C", pais: "Costa Rica", departamento: "",
   });
 
   const odsCombinados = [...(clientes.inspecciones || []), ...(clientes.proyectos || [])];
@@ -4414,8 +4420,17 @@ function GastosTarjeta() {
       fecha: form.fecha || todayISO(), monto: Number(form.monto) || 0,
       numero_factura: form.numeroFactura || null, categoria: form.categoria,
       od: form.od || null, observaciones: form.observaciones || null,
+      moneda: form.moneda, estado_transaccion: form.estadoTransaccion,
+      nombre_tarjeta: form.nombreTarjeta || null, numero_tarjeta: form.numeroTarjeta || null,
+      detalle: form.detalle || null, tipo_transaccion: form.tipoTransaccion,
+      pais: form.pais || null, departamento: form.departamento || null,
     };
-    setForm({ personalCodigo: form.personalCodigo, fecha: todayISO(), monto: "", numeroFactura: "", categoria: form.categoria, od: "", observaciones: "" });
+    setForm({
+      personalCodigo: form.personalCodigo, fecha: todayISO(), monto: "", numeroFactura: "",
+      categoria: form.categoria, od: "", observaciones: "",
+      moneda: form.moneda, estadoTransaccion: "Aprobada", nombreTarjeta: form.nombreTarjeta, numeroTarjeta: form.numeroTarjeta,
+      detalle: "", tipoTransaccion: form.tipoTransaccion, pais: form.pais, departamento: form.departamento,
+    });
     const { data, error } = await supabase.from("gastos_tarjeta").insert(payload).select().single();
     if (!error && data) setRows((prev) => [data, ...prev]);
   };
@@ -4440,13 +4455,41 @@ function GastosTarjeta() {
   });
   const totalFiltrado = rowsFiltradas.reduce((s, r) => s + (Number(r.monto) || 0), 0);
 
+  const descargarInformeBanco = () => {
+    const filas = rowsFiltradas.map((r) => ({
+      "FECHA DE LA TRANSACCIÓN": r.fecha,
+      "MONTO DE LA TRANSACCIÓN": r.monto,
+      "DESCRIPCIÓN DE MONEDA DE LA TRANSACCIÓN": r.moneda || "",
+      "NOMBRE DE LA CATEGORÍA DE COMERCIO": r.categoria || "",
+      "DESCRIPCIÓN": r.observaciones || "",
+      "ESTADO": r.estado_transaccion || "",
+      "CÓDIGO ALPHA DE LA MONEDA DE LA TRANSACCIÓN": r.moneda === "Dólares" ? "USD" : "CRC",
+      "NOMBRE TARJETA": r.nombre_tarjeta || "",
+      "NÚMERO DE TARJETA ENMASCARADO": r.numero_tarjeta || "",
+      "DETALLE": r.detalle || "",
+      "TIPO DE TRANSACCIÓN (D DÉBITO, C CRÉDITO)": r.tipo_transaccion || "",
+      "PAIS": r.pais || "",
+      "DEPARTAMENTO": r.departamento || "",
+      "OD": r.od || "",
+    }));
+    const ws = XLSX.utils.json_to_sheet(filas);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Report");
+    XLSX.writeFile(wb, "Report.xlsx");
+  };
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <ResumenGastosCard />
         <Card
           title={`Gastos registrados — Total filtrado: ${fmtMoney(totalFiltrado)}`}
-          action={<Btn small variant="ghost" onClick={() => exportExcel(rowsFiltradas.map(r => ({ Fecha: r.fecha, Personal: r.personal_nombre, Monto: r.monto, "N° Factura": r.numero_factura, Categoría: r.categoria, OD: r.od, Observaciones: r.observaciones })), "gastos_tarjeta.xlsx")}><Download size={13} /> Excel</Btn>}
+          action={
+            <div style={{ display: "flex", gap: 8 }}>
+              <Btn small variant="ghost" onClick={() => exportExcel(rowsFiltradas.map(r => ({ Fecha: r.fecha, Personal: r.personal_nombre, Monto: r.monto, "N° Factura": r.numero_factura, Categoría: r.categoria, OD: r.od, Observaciones: r.observaciones })), "gastos_tarjeta.xlsx")}><Download size={13} /> Excel</Btn>
+              <Btn small variant="ghost" onClick={descargarInformeBanco}><Download size={13} /> Informe (formato banco)</Btn>
+            </div>
+          }
         >
           <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
             <select style={{ ...inputStyle, width: 190 }} value={filtroPersonal} onChange={(e) => setFiltroPersonal(e.target.value)}>
@@ -4497,10 +4540,16 @@ function GastosTarjeta() {
                 </select>
               )}
             </Field>
-            <Field label="Fecha del gasto"><input style={inputStyle} type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} /></Field>
             <Field label="Monto ($)"><input style={inputStyle} type="number" value={form.monto} onChange={(e) => setForm({ ...form, monto: e.target.value })} placeholder="0.00" /></Field>
+            <Field label="Fecha del gasto"><input style={inputStyle} type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} /></Field>
+            <Field label="Moneda">
+              <select style={inputStyle} value={form.moneda} onChange={(e) => setForm({ ...form, moneda: e.target.value })}>
+                <option>Colones</option>
+                <option>Dólares</option>
+              </select>
+            </Field>
             <Field label="N° de factura"><input style={inputStyle} value={form.numeroFactura} onChange={(e) => setForm({ ...form, numeroFactura: e.target.value })} placeholder="FAC-00123" /></Field>
-            <Field label="Clasificación del gasto">
+            <Field label="Clasificación del gasto (categoría de comercio)">
               <select style={inputStyle} value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
                 {categorias.map((c) => <option key={c}>{c}</option>)}
               </select>
@@ -4511,7 +4560,25 @@ function GastosTarjeta() {
                 {odsCombinados.map((o) => <option key={o.id} value={o.od}>{o.od} — {o.cliente}</option>)}
               </select>
             </Field>
-            <Field label="Observaciones (opcional)"><input style={inputStyle} value={form.observaciones} onChange={(e) => setForm({ ...form, observaciones: e.target.value })} placeholder="Notas adicionales..." /></Field>
+            <Field label="Descripción (opcional)"><input style={inputStyle} value={form.observaciones} onChange={(e) => setForm({ ...form, observaciones: e.target.value })} placeholder="Notas adicionales..." /></Field>
+            <Field label="Estado de la transacción">
+              <select style={inputStyle} value={form.estadoTransaccion} onChange={(e) => setForm({ ...form, estadoTransaccion: e.target.value })}>
+                <option>Aprobada</option>
+                <option>Rechazada</option>
+                <option>Pendiente</option>
+              </select>
+            </Field>
+            <Field label="Nombre de la tarjeta"><input style={inputStyle} value={form.nombreTarjeta} onChange={(e) => setForm({ ...form, nombreTarjeta: e.target.value })} placeholder="Visa Corporativa" /></Field>
+            <Field label="N° de tarjeta enmascarado"><input style={inputStyle} value={form.numeroTarjeta} onChange={(e) => setForm({ ...form, numeroTarjeta: e.target.value })} placeholder="**** 4521" /></Field>
+            <Field label="Detalle (opcional)"><input style={inputStyle} value={form.detalle} onChange={(e) => setForm({ ...form, detalle: e.target.value })} placeholder="Detalle del comercio..." /></Field>
+            <Field label="Tipo de transacción">
+              <select style={inputStyle} value={form.tipoTransaccion} onChange={(e) => setForm({ ...form, tipoTransaccion: e.target.value })}>
+                <option value="C">C — Crédito</option>
+                <option value="D">D — Débito</option>
+              </select>
+            </Field>
+            <Field label="País"><input style={inputStyle} value={form.pais} onChange={(e) => setForm({ ...form, pais: e.target.value })} placeholder="Costa Rica" /></Field>
+            <Field label="Departamento / Provincia"><input style={inputStyle} value={form.departamento} onChange={(e) => setForm({ ...form, departamento: e.target.value })} placeholder="San José" /></Field>
             <Btn variant="accent" onClick={add} style={{ justifyContent: "center" }}><Plus size={14} /> Registrar gasto</Btn>
           </div>
         </Card>

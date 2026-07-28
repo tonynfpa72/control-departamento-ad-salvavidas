@@ -665,6 +665,28 @@ function excelValueToISODate(value) {
   return "";
 }
 
+// Convierte un monto que puede venir como número directo, o como texto con
+// distintos formatos de separador de miles/decimales (ej. "5,900.00" o
+// "5.900,00" o con símbolo de moneda), a un número de JavaScript confiable.
+function parsearMontoImportado(valor) {
+  if (typeof valor === "number" && !isNaN(valor)) return valor;
+  let s = String(valor ?? "").trim();
+  if (!s) return 0;
+  s = s.replace(/[₡$€\s]/g, "").replace(/[^\d.,-]/g, "");
+  if (!s) return 0;
+  const lastComma = s.lastIndexOf(",");
+  const lastDot = s.lastIndexOf(".");
+  if (lastComma > -1 && lastDot > -1) {
+    if (lastComma > lastDot) s = s.replace(/\./g, "").replace(",", ".");
+    else s = s.replace(/,/g, "");
+  } else if (lastComma > -1) {
+    const digitosDespues = s.length - lastComma - 1;
+    s = digitosDespues === 2 ? s.replace(",", ".") : s.replace(/,/g, "");
+  }
+  const n = Number(s);
+  return isNaN(n) ? 0 : n;
+}
+
 // Convierte una fila de la tabla "ordenes_trabajo" de Supabase (snake_case)
 // al formato que usa la app (camelCase), y viceversa.
 function odRowFromDb(r) {
@@ -4503,7 +4525,7 @@ function GastosTarjeta() {
             personal_codigo: empleado?.codigo || null,
             personal_nombre: empleado?.nombre || nombreTarjeta || "Sin asignar",
             fecha: excelValueToISODate(row["FECHA DE LA TRANSACCIÓN"]) || todayISO(),
-            monto: Number(row["MONTO DE LA TRANSACCIÓN"]) || 0,
+            monto: parsearMontoImportado(row["MONTO DE LA TRANSACCIÓN"]),
             numero_factura: null,
             categoria: String(row["NOMBRE DE LA CATEGORÍA DE COMERCIO"] || "").trim() || "Otros",
             od: String(row["OD"] || "").trim() || null,
@@ -4519,7 +4541,7 @@ function GastosTarjeta() {
           };
         });
 
-        setDiagnostico(`Se leyeron ${nuevas.length} filas. Primera fila leída → Fecha: ${nuevas[0].fecha}, Monto: ${nuevas[0].monto}, Categoría: ${nuevas[0].categoria}, Personal: ${nuevas[0].personal_nombre}, OD: ${nuevas[0].od || "—"}. Guardando en la base de datos...`);
+        setDiagnostico(`Se leyeron ${nuevas.length} filas. Primera fila leída → Fecha: ${nuevas[0].fecha}, Monto: ${nuevas[0].monto} (valor crudo del Excel: ${JSON.stringify(json[0]["MONTO DE LA TRANSACCIÓN"])}), Categoría: ${nuevas[0].categoria}, Personal: ${nuevas[0].personal_nombre}, OD: ${nuevas[0].od || "—"}. Guardando en la base de datos...`);
 
         const { data: inserted, error } = await supabase.from("gastos_tarjeta").insert(nuevas).select();
         if (error) {

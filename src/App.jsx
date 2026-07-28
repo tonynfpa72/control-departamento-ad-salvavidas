@@ -4396,6 +4396,7 @@ function GastosTarjeta() {
   });
 
   const odsCombinados = [...(clientes.inspecciones || []), ...(clientes.proyectos || [])];
+  const fileInputRefGastos = React.useRef(null);
 
   useEffect(() => {
     (async () => {
@@ -4411,6 +4412,91 @@ function GastosTarjeta() {
       if (data && data.length > 0) setCategorias(data.map((c) => c.nombre));
     })();
   }, []);
+
+  // Compara "NOMBRE TARJETA" (ej. "ADRIAN CASTILLO L.") contra el nombre
+  // real en Planilla, ignorando tildes/mayúsculas y comparando por palabras,
+  // para relacionar el gasto con la persona automáticamente al importar.
+  const normalizarNombre = (s) => (s || "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase().replace(/[.,]/g, "").trim();
+  const buscarEmpleadoPorNombreTarjeta = (nombreTarjeta) => {
+    const objetivo = normalizarNombre(nombreTarjeta);
+    if (!objetivo) return null;
+    const palabrasObjetivo = objetivo.split(/\s+/).filter(Boolean);
+    let mejor = null;
+    let mejorPuntaje = 0;
+    empleados.forEach((emp) => {
+      const palabrasEmp = normalizarNombre(emp.nombre).split(/\s+/).filter(Boolean);
+      const coincidencias = palabrasEmp.filter((p) => palabrasObjetivo.includes(p)).length;
+      if (coincidencias > mejorPuntaje) { mejorPuntaje = coincidencias; mejor = emp; }
+    });
+    return mejorPuntaje >= 2 ? mejor : null; // al menos nombre + apellido coinciden
+  };
+
+  const handleImportGastos = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const data = new Uint8Array(evt.target.result);
+        const wb = XLSX.read(data, { type: "array", cellDates: true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(ws, { defval: "" });
+        if (json.length === 0) return;
+
+        // Categorías nuevas que traiga el archivo y que todavía no existan.
+        const categoriasNuevas = [];
+        json.forEach((row) => {
+          const cat = String(row["NOMBRE DE LA CATEGORÍA DE COMERCIO"] || "").trim();
+          if (cat && !categorias.includes(cat) && !categoriasNuevas.includes(cat)) categoriasNuevas.push(cat);
+        });
+        if (categoriasNuevas.length > 0) {
+          await supabase.from("gastos_categorias").insert(categoriasNuevas.map((nombre) => ({ nombre })));
+          setCategorias((prev) => [...prev, ...categoriasNuevas].sort());
+        }
+
+        let sinRelacionar = 0;
+        const nuevas = json.map((row) => {
+          const nombreTarjeta = String(row["NOMBRE TARJETA"] || "").trim();
+          const empleado = buscarEmpleadoPorNombreTarjeta(nombreTarjeta);
+          if (!empleado) sinRelacionar++;
+          const monedaTexto = String(row["DESCRIPCIÓN DE MONEDA DE LA TRANSACCIÓN"] || "").toLowerCase();
+          return {
+            personal_codigo: empleado?.codigo || null,
+            personal_nombre: empleado?.nombre || nombreTarjeta || "Sin asignar",
+            fecha: excelValueToISODate(row["FECHA DE LA TRANSACCIÓN"]) || todayISO(),
+            monto: Number(row["MONTO DE LA TRANSACCIÓN"]) || 0,
+            numero_factura: null,
+            categoria: String(row["NOMBRE DE LA CATEGORÍA DE COMERCIO"] || "").trim() || "Otros",
+            od: String(row["OD"] || "").trim() || null,
+            observaciones: String(row["DESCRIPCIÓN"] || "").trim() || null,
+            moneda: monedaTexto.includes("dólar") || monedaTexto.includes("dolar") ? "Dólares" : "Colones",
+            estado_transaccion: String(row["ESTADO"] || "").trim() || "Aprobada",
+            nombre_tarjeta: nombreTarjeta || null,
+            numero_tarjeta: String(row["NÚMERO DE TARJETA ENMASCARADO"] || "").trim() || null,
+            detalle: String(row["DETALLE"] || "").trim() || null,
+            tipo_transaccion: String(row["TIPO DE TRANSACCIÓN (D DÉBITO, C CRÉDITO)"] || "C").trim(),
+            pais: String(row["PAIS"] || "").trim() || null,
+            departamento: String(row["DEPARTAMENTO"] || "").trim() || null,
+          };
+        });
+
+        const { data: inserted, error } = await supabase.from("gastos_tarjeta").insert(nuevas).select();
+        if (!error && inserted) {
+          setRows((prev) => [...inserted, ...prev]);
+          alert(`Se importaron ${inserted.length} gastos.${sinRelacionar > 0 ? ` ${sinRelacionar} no se pudieron relacionar automáticamente con Planilla (quedaron con el nombre de la tarjeta); puedes corregirlos desde la tabla.` : ""}`);
+        } else if (error) {
+          alert("No se pudo importar: " + (error.message || "error desconocido."));
+        }
+      } catch (err) {
+        console.error(err);
+        alert("No se pudo leer el archivo. Confirma que sea el formato exacto del banco.");
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  };
 
   const add = async () => {
     const empleado = empleados.find((e) => e.codigo === form.personalCodigo);
@@ -4438,6 +4524,15 @@ function GastosTarjeta() {
     if (!(await confirmar("¿Está seguro que desea eliminar este gasto? Esta acción no se puede deshacer."))) return;
     setRows((prev) => prev.filter((r) => r.id !== id));
     supabase.from("gastos_tarjeta").delete().eq("id", id).then();
+  };
+  const setCampoGasto = (id, campo, valor) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, [campo]: valor } : r));
+    supabase.from("gastos_tarjeta").update({ [campo]: valor }).eq("id", id).then();
+  };
+  const setPersonalGasto = (id, codigo) => {
+    const empleado = empleados.find((e) => e.codigo === codigo);
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, personal_codigo: codigo, personal_nombre: empleado?.nombre || r.personal_nombre } : r));
+    supabase.from("gastos_tarjeta").update({ personal_codigo: codigo, personal_nombre: empleado?.nombre || null }).eq("id", id).then();
   };
   const agregarCategoria = async () => {
     const nombre = nuevaCategoria.trim();
@@ -4486,6 +4581,8 @@ function GastosTarjeta() {
           title={`Gastos registrados — Total filtrado: ${fmtMoney(totalFiltrado)}`}
           action={
             <div style={{ display: "flex", gap: 8 }}>
+              <input ref={fileInputRefGastos} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleImportGastos} />
+              <Btn small variant="accent" onClick={() => fileInputRefGastos.current?.click()}><Upload size={13} /> Importar Excel del banco</Btn>
               <Btn small variant="ghost" onClick={() => exportExcel(rowsFiltradas.map(r => ({ Fecha: r.fecha, Personal: r.personal_nombre, Monto: r.monto, "N° Factura": r.numero_factura, Categoría: r.categoria, OD: r.od, Observaciones: r.observaciones })), "gastos_tarjeta.xlsx")}><Download size={13} /> Excel</Btn>
               <Btn small variant="ghost" onClick={descargarInformeBanco}><Download size={13} /> Informe (formato banco)</Btn>
             </div>
@@ -4513,12 +4610,42 @@ function GastosTarjeta() {
                 <tr><td colSpan={7} style={{ padding: "10px 8px", color: T.gray }}>No hay gastos que coincidan con estos filtros.</td></tr>
               ) : rowsFiltradas.map((r) => (
                 <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
-                  <td style={{ padding: "8px" }}>{r.fecha}</td>
-                  <td>{r.personal_nombre}</td>
-                  <td style={{ fontWeight: 700 }}>{fmtMoney(r.monto)}</td>
-                  <td>{r.numero_factura || "—"}</td>
-                  <td>{r.categoria}</td>
-                  <td>{r.od || "—"}</td>
+                  <td style={{ padding: "8px" }}>
+                    {canGestionar ? (
+                      <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 130 }} value={r.fecha || ""} onChange={(e) => setCampoGasto(r.id, "fecha", e.target.value)} />
+                    ) : r.fecha}
+                  </td>
+                  <td>
+                    {canGestionar ? (
+                      <select style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 160 }} value={r.personal_codigo || ""} onChange={(e) => setPersonalGasto(r.id, e.target.value)}>
+                        <option value="">{r.personal_nombre || "Sin asignar"}</option>
+                        {empleados.map((emp) => <option key={emp.codigo} value={emp.codigo}>{emp.nombre}</option>)}
+                      </select>
+                    ) : (r.personal_nombre || "Sin asignar")}
+                  </td>
+                  <td style={{ fontWeight: 700 }}>
+                    {canGestionar ? (
+                      <input type="number" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 100 }} value={r.monto} onChange={(e) => setCampoGasto(r.id, "monto", Number(e.target.value) || 0)} />
+                    ) : fmtMoney(r.monto)}
+                  </td>
+                  <td>
+                    {canGestionar ? (
+                      <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 110 }} value={r.numero_factura || ""} onChange={(e) => setCampoGasto(r.id, "numero_factura", e.target.value)} />
+                    ) : (r.numero_factura || "—")}
+                  </td>
+                  <td>
+                    {canGestionar ? (
+                      <select style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 150 }} value={r.categoria || ""} onChange={(e) => setCampoGasto(r.id, "categoria", e.target.value)}>
+                        {!categorias.includes(r.categoria) && <option value={r.categoria}>{r.categoria}</option>}
+                        {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    ) : r.categoria}
+                  </td>
+                  <td>
+                    {canGestionar ? (
+                      <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 110 }} value={r.od || ""} onChange={(e) => setCampoGasto(r.id, "od", e.target.value)} />
+                    ) : (r.od || "—")}
+                  </td>
                   <td>{canGestionar && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}</td>
                 </tr>
               ))}

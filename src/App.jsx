@@ -3413,8 +3413,6 @@ function ResumenEjecutivo() {
         <ResumenEHSCard />
       </div>
 
-      <ResumenGastosCard />
-
       <Card
         title="Facturación mensual vs. punto de equilibrio ($120,000)"
         action={
@@ -3601,6 +3599,8 @@ function ResumenEjecutivo() {
           </div>
         )}
       </Card>
+
+      <ResumenGastosCard />
     </div>
   );
 }
@@ -4325,7 +4325,7 @@ function ResumenGastosCard() {
   const [rows, setRows] = useState([]);
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from("gastos_tarjeta").select("personal_nombre, categoria, monto");
+      const { data } = await supabase.from("gastos_tarjeta").select("personal_nombre, categoria, monto, fecha");
       if (data) setRows(data);
     })();
   }, []);
@@ -4339,11 +4339,36 @@ function ResumenGastosCard() {
   rows.forEach((r) => { porCategoria[r.categoria] = (porCategoria[r.categoria] || 0) + (Number(r.monto) || 0); });
   const dataCategoria = Object.entries(porCategoria).map(([nombre, monto]) => ({ nombre, monto })).sort((a, b) => b.monto - a.monto);
 
+  const MESES_CORTOS_GASTOS = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"];
+  const porMes = {};
+  rows.forEach((r) => {
+    if (!r.fecha) return;
+    const [anio, mes] = r.fecha.split("-").map(Number);
+    const clave = `${MESES_CORTOS_GASTOS[mes - 1]} ${anio}`;
+    porMes[clave] = (porMes[clave] || 0) + (Number(r.monto) || 0);
+  });
+  const dataMes = Object.entries(porMes)
+    .map(([mes, monto]) => ({ mes, monto, _orden: mes.split(" ")[1] + String(MESES_CORTOS_GASTOS.indexOf(mes.split(" ")[0])).padStart(2, "0") }))
+    .sort((a, b) => a._orden.localeCompare(b._orden));
+
   return (
     <Card title={`Gastos de Tarjeta de Crédito — Total: ${fmtMoney(totalGastado)}`}>
       {rows.length === 0 ? (
         <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay gastos cargados.</div>
       ) : (
+        <>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, marginBottom: 8 }}>Cuándo se gasta (por mes)</div>
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={dataMes} margin={{ top: 20, right: 20, left: 0, bottom: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
+              <XAxis dataKey="mes" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${v}`} />
+              <Tooltip formatter={(v) => fmtMoney(v)} />
+              <Line type="monotone" dataKey="monto" stroke={T.accent} strokeWidth={3} dot={{ r: 4 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           <div>
             <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, marginBottom: 8 }}>Quién gasta más</div>
@@ -4369,6 +4394,7 @@ function ResumenGastosCard() {
             </ResponsiveContainer>
           </div>
         </div>
+        </>
       )}
     </Card>
   );
@@ -4485,6 +4511,9 @@ function GastosTarjeta() {
         const { data: inserted, error } = await supabase.from("gastos_tarjeta").insert(nuevas).select();
         if (!error && inserted) {
           setRows((prev) => [...inserted, ...prev]);
+          setFiltroPersonal("");
+          setFiltroCategoria("Todas");
+          setFiltroOd("");
           alert(`Se importaron ${inserted.length} gastos.${sinRelacionar > 0 ? ` ${sinRelacionar} no se pudieron relacionar automáticamente con Planilla (quedaron con el nombre de la tarjeta); puedes corregirlos desde la tabla.` : ""}`);
         } else if (error) {
           alert("No se pudo importar: " + (error.message || "error desconocido."));
@@ -4655,58 +4684,13 @@ function GastosTarjeta() {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <Card title="Registrar gasto de tarjeta">
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <Field label="Persona que gastó">
-              {empleados.length === 0 ? (
-                <div style={{ fontSize: 11.5, color: T.gray }}>Aún no hay personal cargado. Agrégalo desde Planilla.</div>
-              ) : (
-                <select style={inputStyle} value={form.personalCodigo} onChange={(e) => setForm({ ...form, personalCodigo: e.target.value })}>
-                  <option value="">Selecciona una persona…</option>
-                  {empleados.map((emp) => <option key={emp.codigo} value={emp.codigo}>{emp.nombre}</option>)}
-                </select>
-              )}
-            </Field>
-            <Field label="Monto ($)"><input style={inputStyle} type="number" value={form.monto} onChange={(e) => setForm({ ...form, monto: e.target.value })} placeholder="0.00" /></Field>
-            <Field label="Fecha del gasto"><input style={inputStyle} type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} /></Field>
-            <Field label="Moneda">
-              <select style={inputStyle} value={form.moneda} onChange={(e) => setForm({ ...form, moneda: e.target.value })}>
-                <option>Colones</option>
-                <option>Dólares</option>
-              </select>
-            </Field>
-            <Field label="N° de factura"><input style={inputStyle} value={form.numeroFactura} onChange={(e) => setForm({ ...form, numeroFactura: e.target.value })} placeholder="FAC-00123" /></Field>
-            <Field label="Clasificación del gasto (categoría de comercio)">
-              <select style={inputStyle} value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
-                {categorias.map((c) => <option key={c}>{c}</option>)}
-              </select>
-            </Field>
-            <Field label="OD al que se carga (opcional)">
-              <select style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })}>
-                <option value="">No aplica</option>
-                {odsCombinados.map((o) => <option key={o.id} value={o.od}>{o.od} — {o.cliente}</option>)}
-              </select>
-            </Field>
-            <Field label="Descripción (opcional)"><input style={inputStyle} value={form.observaciones} onChange={(e) => setForm({ ...form, observaciones: e.target.value })} placeholder="Notas adicionales..." /></Field>
-            <Field label="Estado de la transacción">
-              <select style={inputStyle} value={form.estadoTransaccion} onChange={(e) => setForm({ ...form, estadoTransaccion: e.target.value })}>
-                <option>Aprobada</option>
-                <option>Rechazada</option>
-                <option>Pendiente</option>
-              </select>
-            </Field>
-            <Field label="Nombre de la tarjeta"><input style={inputStyle} value={form.nombreTarjeta} onChange={(e) => setForm({ ...form, nombreTarjeta: e.target.value })} placeholder="Visa Corporativa" /></Field>
-            <Field label="N° de tarjeta enmascarado"><input style={inputStyle} value={form.numeroTarjeta} onChange={(e) => setForm({ ...form, numeroTarjeta: e.target.value })} placeholder="**** 4521" /></Field>
-            <Field label="Detalle (opcional)"><input style={inputStyle} value={form.detalle} onChange={(e) => setForm({ ...form, detalle: e.target.value })} placeholder="Detalle del comercio..." /></Field>
-            <Field label="Tipo de transacción">
-              <select style={inputStyle} value={form.tipoTransaccion} onChange={(e) => setForm({ ...form, tipoTransaccion: e.target.value })}>
-                <option value="C">C — Crédito</option>
-                <option value="D">D — Débito</option>
-              </select>
-            </Field>
-            <Field label="País"><input style={inputStyle} value={form.pais} onChange={(e) => setForm({ ...form, pais: e.target.value })} placeholder="Costa Rica" /></Field>
-            <Field label="Departamento / Provincia"><input style={inputStyle} value={form.departamento} onChange={(e) => setForm({ ...form, departamento: e.target.value })} placeholder="San José" /></Field>
-            <Btn variant="accent" onClick={add} style={{ justifyContent: "center" }}><Plus size={14} /> Registrar gasto</Btn>
+        <Card title="Cómo cargar gastos">
+          <div style={{ fontSize: 13, color: T.inkSoft, lineHeight: 1.6 }}>
+            Este módulo ya no permite escribir gastos a mano — solo se cargan
+            importando el Excel que exporta el banco (con sus columnas ya
+            tituladas: FECHA DE LA TRANSACCIÓN, MONTO, CATEGORÍA, OD, etc.).
+            Usa el botón <b>"Importar Excel del banco"</b> arriba de la tabla.
+            Ya cargados, puedes editar o borrar cualquier dato directo en la tabla.
           </div>
         </Card>
 

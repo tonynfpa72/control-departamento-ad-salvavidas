@@ -4414,6 +4414,7 @@ function GastosTarjeta() {
   const [filtroPersonal, setFiltroPersonal] = useState("");
   const [filtroCategoria, setFiltroCategoria] = useState("Todas");
   const [filtroOd, setFiltroOd] = useState("");
+  const [diagnostico, setDiagnostico] = useState("");
   const [form, setForm] = useState({
     personalCodigo: "", fecha: todayISO(), monto: "", numeroFactura: "",
     categoria: GASTO_CATEGORIAS_DEFECTO[0], od: "", observaciones: "",
@@ -4459,9 +4460,16 @@ function GastosTarjeta() {
     return mejorPuntaje >= 2 ? mejor : null; // al menos nombre + apellido coinciden
   };
 
+  const refetchGastos = async () => {
+    const { data } = await supabase.from("gastos_tarjeta").select("*").order("fecha", { ascending: false });
+    if (data) setRows(data);
+    return data;
+  };
+
   const handleImportGastos = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setDiagnostico("Leyendo archivo...");
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
@@ -4469,7 +4477,10 @@ function GastosTarjeta() {
         const wb = XLSX.read(data, { type: "array", cellDates: true });
         const ws = wb.Sheets[wb.SheetNames[0]];
         const json = XLSX.utils.sheet_to_json(ws, { defval: "" });
-        if (json.length === 0) return;
+        if (json.length === 0) {
+          setDiagnostico("El archivo no tiene filas de datos (solo encabezados, o está vacío).");
+          return;
+        }
 
         // Categorías nuevas que traiga el archivo y que todavía no existan.
         const categoriasNuevas = [];
@@ -4508,23 +4519,36 @@ function GastosTarjeta() {
           };
         });
 
+        setDiagnostico(`Se leyeron ${nuevas.length} filas. Primera fila leída → Fecha: ${nuevas[0].fecha}, Monto: ${nuevas[0].monto}, Categoría: ${nuevas[0].categoria}, Personal: ${nuevas[0].personal_nombre}, OD: ${nuevas[0].od || "—"}. Guardando en la base de datos...`);
+
         const { data: inserted, error } = await supabase.from("gastos_tarjeta").insert(nuevas).select();
-        if (!error && inserted) {
-          setRows((prev) => [...inserted, ...prev]);
-          setFiltroPersonal("");
-          setFiltroCategoria("Todas");
-          setFiltroOd("");
-          alert(`Se importaron ${inserted.length} gastos.${sinRelacionar > 0 ? ` ${sinRelacionar} no se pudieron relacionar automáticamente con Planilla (quedaron con el nombre de la tarjeta); puedes corregirlos desde la tabla.` : ""}`);
-        } else if (error) {
-          alert("No se pudo importar: " + (error.message || "error desconocido."));
+        if (error) {
+          setDiagnostico(`ERROR al guardar: ${error.message} (código: ${error.code || "sin código"}). Es muy probable que falte correr el SQL de 'gastos_tarjeta' en Supabase, o que falten columnas.`);
+          return;
         }
+        // Siempre se vuelve a traer la tabla completa desde la base de datos,
+        // en vez de confiar solo en lo que devolvió la inserción, para que
+        // no haya dudas de que lo que se ve en pantalla es lo que hay guardado.
+        const datosFrescos = await refetchGastos();
+        setFiltroPersonal("");
+        setFiltroCategoria("Todas");
+        setFiltroOd("");
+        setDiagnostico(`Listo: se guardaron ${inserted?.length ?? nuevas.length} gastos. La tabla ahora tiene ${datosFrescos?.length ?? "?"} gastos en total.${sinRelacionar > 0 ? ` ${sinRelacionar} no se pudieron relacionar automáticamente con Planilla.` : ""}`);
       } catch (err) {
         console.error(err);
-        alert("No se pudo leer el archivo. Confirma que sea el formato exacto del banco.");
+        setDiagnostico("No se pudo leer el archivo: " + (err.message || "error desconocido") + ". Confirma que sea el formato exacto del banco.");
       }
     };
     reader.readAsArrayBuffer(file);
     e.target.value = "";
+  };
+
+  const reiniciarGastos = async () => {
+    if (!(await confirmar("¿Está seguro que desea BORRAR TODOS los gastos de tarjeta cargados? Esta acción no se puede deshacer.", { confirmLabel: "Sí, borrar todo", variant: "danger" }))) return;
+    const ids = rows.map((r) => r.id);
+    setRows([]);
+    setDiagnostico("");
+    for (const id of ids) await supabase.from("gastos_tarjeta").delete().eq("id", id);
   };
 
   const add = async () => {
@@ -4614,9 +4638,17 @@ function GastosTarjeta() {
               <Btn small variant="accent" onClick={() => fileInputRefGastos.current?.click()}><Upload size={13} /> Importar Excel del banco</Btn>
               <Btn small variant="ghost" onClick={() => exportExcel(rowsFiltradas.map(r => ({ Fecha: r.fecha, Personal: r.personal_nombre, Monto: r.monto, "N° Factura": r.numero_factura, Categoría: r.categoria, OD: r.od, Observaciones: r.observaciones })), "gastos_tarjeta.xlsx")}><Download size={13} /> Excel</Btn>
               <Btn small variant="ghost" onClick={descargarInformeBanco}><Download size={13} /> Informe (formato banco)</Btn>
+              {canGestionar && rows.length > 0 && (
+                <Btn small variant="danger" onClick={reiniciarGastos}><X size={13} /> Reiniciar (borrar todo)</Btn>
+              )}
             </div>
           }
         >
+          {diagnostico && (
+            <div style={{ background: T.graySoft, border: `1px solid ${T.line}`, borderRadius: 8, padding: "8px 10px", fontSize: 12, color: T.inkSoft, marginBottom: 12 }}>
+              {diagnostico}
+            </div>
+          )}
           <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
             <select style={{ ...inputStyle, width: 190 }} value={filtroPersonal} onChange={(e) => setFiltroPersonal(e.target.value)}>
               <option value="">Todo el personal</option>
@@ -4684,16 +4716,6 @@ function GastosTarjeta() {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <Card title="Cómo cargar gastos">
-          <div style={{ fontSize: 13, color: T.inkSoft, lineHeight: 1.6 }}>
-            Este módulo ya no permite escribir gastos a mano — solo se cargan
-            importando el Excel que exporta el banco (con sus columnas ya
-            tituladas: FECHA DE LA TRANSACCIÓN, MONTO, CATEGORÍA, OD, etc.).
-            Usa el botón <b>"Importar Excel del banco"</b> arriba de la tabla.
-            Ya cargados, puedes editar o borrar cualquier dato directo en la tabla.
-          </div>
-        </Card>
-
         {canAdminCategorias && (
           <Card title="Agregar clasificación nueva">
             <div style={{ display: "flex", gap: 8 }}>

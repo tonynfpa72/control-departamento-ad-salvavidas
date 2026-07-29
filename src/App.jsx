@@ -4777,6 +4777,7 @@ function Vehiculos() {
   const isAdmin = currentUser?.categoria === "admin";
   const canGestionar = isAdmin || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
+  const [areaActiva, setAreaActiva] = useState("inspecciones");
   const [subTab, setSubTab] = useState("flota");
   const [vehiculos, setVehiculos] = useState([]);
   const [registros, setRegistros] = useState([]);
@@ -4810,7 +4811,7 @@ function Vehiculos() {
       placa: formVehiculo.placa, descripcion: formVehiculo.descripcion || null,
       kilometraje_actual: Number(formVehiculo.kilometrajeActual) || 0,
       kilometraje_mantenimiento: Number(formVehiculo.kilometrajeMantenimiento) || 0,
-      activo: true,
+      activo: true, area: areaActiva,
     };
     setFormVehiculo({ placa: "", descripcion: "", kilometrajeActual: "", kilometrajeMantenimiento: "" });
     const { data, error } = await supabase.from("vehiculos").insert(payload).select().single();
@@ -4860,8 +4861,11 @@ function Vehiculos() {
     supabase.from("vehiculos_kilometraje").update({ estado: "Activo" }).eq("id", id).then();
   };
 
-  const registrosActivos = registros.filter((r) => r.estado !== "Cerrado");
-  const registrosCerrados = registros.filter((r) => r.estado === "Cerrado");
+  const vehiculosDelArea = vehiculos.filter((v) => (v.area || "inspecciones") === areaActiva);
+  const placasDelArea = vehiculosDelArea.map((v) => v.placa);
+  const registrosDelArea = registros.filter((r) => placasDelArea.includes(r.placa));
+  const registrosActivos = registrosDelArea.filter((r) => r.estado !== "Cerrado");
+  const registrosCerrados = registrosDelArea.filter((r) => r.estado === "Cerrado");
   const registrosMostrados = (subTab === "cerrados" ? registrosCerrados : registrosActivos).filter((r) => {
     const matchVehiculo = !filtroVehiculo || r.placa === filtroVehiculo;
     const matchPersonal = !filtroPersonalKm || r.personal_nombre === filtroPersonalKm;
@@ -4869,13 +4873,18 @@ function Vehiculos() {
     return matchVehiculo && matchPersonal && matchMes;
   });
 
-  const alertas = vehiculos.filter((v) => {
+  const alertas = vehiculosDelArea.filter((v) => {
     const restante = (v.kilometraje_mantenimiento || 0) - (v.kilometraje_actual || 0);
     return v.kilometraje_mantenimiento > 0 && restante <= ALERTA_KM_MANTENIMIENTO;
   });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", gap: 8 }}>
+        <Btn variant={areaActiva === "inspecciones" ? "accent" : "ghost"} onClick={() => { setAreaActiva("inspecciones"); setFiltroVehiculo(""); }}>Inspecciones</Btn>
+        <Btn variant={areaActiva === "proyectos" ? "accent" : "ghost"} onClick={() => { setAreaActiva("proyectos"); setFiltroVehiculo(""); }}>Proyectos</Btn>
+      </div>
+
       {alertas.length > 0 && (
         <Card style={{ background: T.redSoft, border: `1px solid ${T.red}` }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, color: T.red, fontWeight: 700, fontSize: 13.5 }}>
@@ -4901,9 +4910,9 @@ function Vehiculos() {
                 </tr>
               </thead>
               <tbody>
-                {vehiculos.length === 0 ? (
+                {vehiculosDelArea.length === 0 ? (
                   <tr><td colSpan={6} style={{ padding: "10px 8px", color: T.gray }}>Todavía no hay vehículos cargados.</td></tr>
-                ) : vehiculos.map((v) => {
+                ) : vehiculosDelArea.map((v) => {
                   const restante = (v.kilometraje_mantenimiento || 0) - (v.kilometraje_actual || 0);
                   const enAlerta = v.kilometraje_mantenimiento > 0 && restante <= ALERTA_KM_MANTENIMIENTO;
                   return (
@@ -4958,7 +4967,7 @@ function Vehiculos() {
             <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
               <select style={{ ...inputStyle, width: 160 }} value={filtroVehiculo} onChange={(e) => setFiltroVehiculo(e.target.value)}>
                 <option value="">Todos los vehículos</option>
-                {vehiculos.map((v) => <option key={v.id} value={v.placa}>{v.placa}</option>)}
+                {vehiculosDelArea.map((v) => <option key={v.id} value={v.placa}>{v.placa}</option>)}
               </select>
               <select style={{ ...inputStyle, width: 190 }} value={filtroPersonalKm} onChange={(e) => setFiltroPersonalKm(e.target.value)}>
                 <option value="">Todo el personal</option>
@@ -5002,7 +5011,7 @@ function Vehiculos() {
               <Field label="Vehículo">
                 <select style={inputStyle} value={formRegistro.vehiculoId} onChange={(e) => setFormRegistro({ ...formRegistro, vehiculoId: e.target.value })}>
                   <option value="">Selecciona un vehículo…</option>
-                  {vehiculos.map((v) => <option key={v.id} value={v.id}>{v.placa} — {v.descripcion}</option>)}
+                  {vehiculosDelArea.map((v) => <option key={v.id} value={v.id}>{v.placa} — {v.descripcion}</option>)}
                 </select>
               </Field>
               <Field label="Persona">

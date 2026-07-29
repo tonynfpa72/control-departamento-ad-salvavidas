@@ -7,7 +7,7 @@ import * as XLSX from "xlsx";
 import {
   LogOut, Plus, Download, Check, X, Clock, ClipboardList,
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
-  ChevronLeft, ChevronRight, AlertCircle, Upload, Flame, Wallet, CreditCard
+  ChevronLeft, ChevronRight, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -155,6 +155,7 @@ const AREAS = [
   { id: "apertura", label: "Apertura de OD", icon: Building2, color: T.blue },
   { id: "facturacion_publica", label: "Facturación", icon: LayoutDashboard, color: T.green },
   { id: "gastos_tarjeta", label: "Gastos de Tarjeta", icon: CreditCard, color: T.red },
+  { id: "vehiculos", label: "Vehículos", icon: Truck, color: T.blue },
   { id: "planilla", label: "Planilla", icon: Wallet, color: T.amber },
   { id: "admin", label: "Administrativo", icon: LayoutDashboard, color: T.steelSoft },
 ];
@@ -4769,6 +4770,258 @@ function GastosTarjeta() {
   );
 }
 
+const ALERTA_KM_MANTENIMIENTO = 300;
+
+function Vehiculos() {
+  const currentUser = useContext(CurrentUserContext);
+  const isAdmin = currentUser?.categoria === "admin";
+  const canGestionar = isAdmin || currentUser?.categoria === "asistente";
+  const confirmar = useContext(ConfirmContext);
+  const [subTab, setSubTab] = useState("flota");
+  const [vehiculos, setVehiculos] = useState([]);
+  const [registros, setRegistros] = useState([]);
+  const [empleados, setEmpleados] = useState([]);
+
+  const [formVehiculo, setFormVehiculo] = useState({ placa: "", descripcion: "", kilometrajeActual: "", kilometrajeMantenimiento: "" });
+  const [formRegistro, setFormRegistro] = useState({ vehiculoId: "", personalCodigo: "", fecha: todayISO(), kilometraje: "" });
+
+  const [filtroVehiculo, setFiltroVehiculo] = useState("");
+  const [filtroPersonalKm, setFiltroPersonalKm] = useState("");
+  const [filtroMes, setFiltroMes] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("vehiculos").select("*").order("placa", { ascending: true });
+      if (data) setVehiculos(data);
+    })();
+    (async () => {
+      const { data } = await supabase.from("vehiculos_kilometraje").select("*").order("fecha", { ascending: false });
+      if (data) setRegistros(data);
+    })();
+    (async () => {
+      const { data } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
+      if (data) setEmpleados(data);
+    })();
+  }, []);
+
+  const agregarVehiculo = async () => {
+    if (!formVehiculo.placa) return;
+    const payload = {
+      placa: formVehiculo.placa, descripcion: formVehiculo.descripcion || null,
+      kilometraje_actual: Number(formVehiculo.kilometrajeActual) || 0,
+      kilometraje_mantenimiento: Number(formVehiculo.kilometrajeMantenimiento) || 0,
+      activo: true,
+    };
+    setFormVehiculo({ placa: "", descripcion: "", kilometrajeActual: "", kilometrajeMantenimiento: "" });
+    const { data, error } = await supabase.from("vehiculos").insert(payload).select().single();
+    if (!error && data) setVehiculos((prev) => [...prev, data].sort((a, b) => a.placa.localeCompare(b.placa)));
+  };
+  const editarVehiculoCampo = (id, campo, valor) => {
+    setVehiculos((prev) => prev.map((v) => v.id === id ? { ...v, [campo]: valor } : v));
+    supabase.from("vehiculos").update({ [campo]: valor }).eq("id", id).then();
+  };
+  const borrarVehiculo = async (id) => {
+    if (!(await confirmar("¿Está seguro que desea eliminar este vehículo? Esta acción no se puede deshacer."))) return;
+    setVehiculos((prev) => prev.filter((v) => v.id !== id));
+    supabase.from("vehiculos").delete().eq("id", id).then();
+  };
+
+  const agregarRegistro = async () => {
+    const vehiculo = vehiculos.find((v) => v.id === formRegistro.vehiculoId);
+    const empleado = empleados.find((e) => e.codigo === formRegistro.personalCodigo);
+    if (!vehiculo || !empleado || !formRegistro.kilometraje) return;
+    const km = Number(formRegistro.kilometraje) || 0;
+    const payload = {
+      vehiculo_id: vehiculo.id, placa: vehiculo.placa,
+      personal_codigo: empleado.codigo, personal_nombre: empleado.nombre,
+      fecha: formRegistro.fecha || todayISO(), kilometraje: km, estado: "Activo",
+    };
+    setFormRegistro({ vehiculoId: formRegistro.vehiculoId, personalCodigo: formRegistro.personalCodigo, fecha: todayISO(), kilometraje: "" });
+    const { data, error } = await supabase.from("vehiculos_kilometraje").insert(payload).select().single();
+    if (!error && data) {
+      setRegistros((prev) => [data, ...prev]);
+      // Si este kilometraje es mayor al actual del vehículo, actualiza el vehículo también.
+      if (km > (vehiculo.kilometraje_actual || 0)) {
+        editarVehiculoCampo(vehiculo.id, "kilometraje_actual", km);
+      }
+    }
+  };
+  const borrarRegistro = async (id) => {
+    if (!(await confirmar("¿Está seguro que desea eliminar este registro de kilometraje? Esta acción no se puede deshacer."))) return;
+    setRegistros((prev) => prev.filter((r) => r.id !== id));
+    supabase.from("vehiculos_kilometraje").delete().eq("id", id).then();
+  };
+  const cerrarRegistro = (id) => {
+    setRegistros((prev) => prev.map((r) => r.id === id ? { ...r, estado: "Cerrado" } : r));
+    supabase.from("vehiculos_kilometraje").update({ estado: "Cerrado" }).eq("id", id).then();
+  };
+  const reabrirRegistro = (id) => {
+    setRegistros((prev) => prev.map((r) => r.id === id ? { ...r, estado: "Activo" } : r));
+    supabase.from("vehiculos_kilometraje").update({ estado: "Activo" }).eq("id", id).then();
+  };
+
+  const registrosActivos = registros.filter((r) => r.estado !== "Cerrado");
+  const registrosCerrados = registros.filter((r) => r.estado === "Cerrado");
+  const registrosMostrados = (subTab === "cerrados" ? registrosCerrados : registrosActivos).filter((r) => {
+    const matchVehiculo = !filtroVehiculo || r.placa === filtroVehiculo;
+    const matchPersonal = !filtroPersonalKm || r.personal_nombre === filtroPersonalKm;
+    const matchMes = !filtroMes || (r.fecha || "").startsWith(filtroMes);
+    return matchVehiculo && matchPersonal && matchMes;
+  });
+
+  const alertas = vehiculos.filter((v) => {
+    const restante = (v.kilometraje_mantenimiento || 0) - (v.kilometraje_actual || 0);
+    return v.kilometraje_mantenimiento > 0 && restante <= ALERTA_KM_MANTENIMIENTO;
+  });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {alertas.length > 0 && (
+        <Card style={{ background: T.redSoft, border: `1px solid ${T.red}` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, color: T.red, fontWeight: 700, fontSize: 13.5 }}>
+            <AlertCircle size={18} />
+            {alertas.length} vehículo{alertas.length > 1 ? "s" : ""} a menos de {ALERTA_KM_MANTENIMIENTO} km de su mantenimiento: {alertas.map((v) => v.placa).join(", ")}
+          </div>
+        </Card>
+      )}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <Btn variant={subTab === "flota" ? "accent" : "ghost"} small onClick={() => setSubTab("flota")}>Flota</Btn>
+        <Btn variant={subTab === "registro" ? "accent" : "ghost"} small onClick={() => setSubTab("registro")}>Registro diario ({registrosActivos.length})</Btn>
+        <Btn variant={subTab === "cerrados" ? "accent" : "ghost"} small onClick={() => setSubTab("cerrados")}>Cerrados ({registrosCerrados.length})</Btn>
+      </div>
+
+      {subTab === "flota" && (
+        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
+          <Card title="Flota de vehículos">
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                  <th style={{ padding: "6px 8px" }}>Placa</th><th>Descripción</th><th>Km actual</th><th>Km mantenimiento</th><th>Restante</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {vehiculos.length === 0 ? (
+                  <tr><td colSpan={6} style={{ padding: "10px 8px", color: T.gray }}>Todavía no hay vehículos cargados.</td></tr>
+                ) : vehiculos.map((v) => {
+                  const restante = (v.kilometraje_mantenimiento || 0) - (v.kilometraje_actual || 0);
+                  const enAlerta = v.kilometraje_mantenimiento > 0 && restante <= ALERTA_KM_MANTENIMIENTO;
+                  return (
+                    <tr key={v.id} style={{ borderTop: `1px solid ${T.line}`, background: enAlerta ? T.redSoft : "transparent" }}>
+                      <td style={{ padding: "8px", fontWeight: 700 }}>{v.placa}</td>
+                      <td>
+                        {canGestionar ? (
+                          <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 160 }} value={v.descripcion || ""} onChange={(e) => editarVehiculoCampo(v.id, "descripcion", e.target.value)} />
+                        ) : (v.descripcion || "—")}
+                      </td>
+                      <td>
+                        {canGestionar ? (
+                          <input type="number" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 100 }} value={v.kilometraje_actual || 0} onChange={(e) => editarVehiculoCampo(v.id, "kilometraje_actual", Number(e.target.value) || 0)} />
+                        ) : (v.kilometraje_actual || 0)}
+                      </td>
+                      <td>
+                        {canGestionar ? (
+                          <input type="number" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 100 }} value={v.kilometraje_mantenimiento || 0} onChange={(e) => editarVehiculoCampo(v.id, "kilometraje_mantenimiento", Number(e.target.value) || 0)} />
+                        ) : (v.kilometraje_mantenimiento || 0)}
+                      </td>
+                      <td style={{ color: enAlerta ? T.red : T.inkSoft, fontWeight: enAlerta ? 700 : 400 }}>
+                        {v.kilometraje_mantenimiento > 0 ? restante : "—"}
+                      </td>
+                      <td>{canGestionar && <Btn small variant="danger" onClick={() => borrarVehiculo(v.id)}><X size={12} /></Btn>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Card>
+
+          {canGestionar && (
+            <Card title="Agregar vehículo">
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <Field label="Placa"><input style={inputStyle} value={formVehiculo.placa} onChange={(e) => setFormVehiculo({ ...formVehiculo, placa: e.target.value })} placeholder="ABC-123" /></Field>
+                <Field label="Descripción"><input style={inputStyle} value={formVehiculo.descripcion} onChange={(e) => setFormVehiculo({ ...formVehiculo, descripcion: e.target.value })} placeholder="Toyota Hilux 2022" /></Field>
+                <Field label="Kilometraje actual"><input style={inputStyle} type="number" value={formVehiculo.kilometrajeActual} onChange={(e) => setFormVehiculo({ ...formVehiculo, kilometrajeActual: e.target.value })} placeholder="45000" /></Field>
+                <Field label="Kilometraje de mantenimiento"><input style={inputStyle} type="number" value={formVehiculo.kilometrajeMantenimiento} onChange={(e) => setFormVehiculo({ ...formVehiculo, kilometrajeMantenimiento: e.target.value })} placeholder="50000" /></Field>
+                <Btn variant="accent" onClick={agregarVehiculo} style={{ justifyContent: "center" }}><Plus size={14} /> Agregar vehículo</Btn>
+              </div>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {(subTab === "registro" || subTab === "cerrados") && (
+        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
+          <Card
+            title={subTab === "cerrados" ? "Kilometrajes cerrados" : "Registro diario de kilometraje"}
+            action={<Btn small variant="ghost" onClick={() => exportExcel(registrosMostrados.map(r => ({ Fecha: r.fecha, Placa: r.placa, Personal: r.personal_nombre, Kilometraje: r.kilometraje, Estado: r.estado })), "kilometraje.xlsx")}><Download size={13} /> Excel</Btn>}
+          >
+            <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+              <select style={{ ...inputStyle, width: 160 }} value={filtroVehiculo} onChange={(e) => setFiltroVehiculo(e.target.value)}>
+                <option value="">Todos los vehículos</option>
+                {vehiculos.map((v) => <option key={v.id} value={v.placa}>{v.placa}</option>)}
+              </select>
+              <select style={{ ...inputStyle, width: 190 }} value={filtroPersonalKm} onChange={(e) => setFiltroPersonalKm(e.target.value)}>
+                <option value="">Todo el personal</option>
+                {empleados.map((emp) => <option key={emp.codigo} value={emp.nombre}>{emp.nombre}</option>)}
+              </select>
+              <input style={{ ...inputStyle, width: 150 }} type="month" value={filtroMes} onChange={(e) => setFiltroMes(e.target.value)} />
+              {(filtroVehiculo || filtroPersonalKm || filtroMes) && (
+                <Btn small variant="ghost" onClick={() => { setFiltroVehiculo(""); setFiltroPersonalKm(""); setFiltroMes(""); }}>Limpiar filtros</Btn>
+              )}
+            </div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                  <th style={{ padding: "6px 8px" }}>Fecha</th><th>Placa</th><th>Personal</th><th>Kilometraje</th><th></th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {registrosMostrados.length === 0 ? (
+                  <tr><td colSpan={6} style={{ padding: "10px 8px", color: T.gray }}>No hay registros que coincidan.</td></tr>
+                ) : registrosMostrados.map((r) => (
+                  <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
+                    <td style={{ padding: "8px" }}>{r.fecha}</td>
+                    <td>{r.placa}</td>
+                    <td>{r.personal_nombre}</td>
+                    <td style={{ fontWeight: 700 }}>{r.kilometraje}</td>
+                    <td>
+                      {canGestionar && (subTab === "cerrados"
+                        ? <Btn small variant="ghost" onClick={() => reabrirRegistro(r.id)}>Reabrir</Btn>
+                        : <Btn small variant="ghost" onClick={() => cerrarRegistro(r.id)}>Cerrar</Btn>
+                      )}
+                    </td>
+                    <td>{canGestionar && <Btn small variant="danger" onClick={() => borrarRegistro(r.id)}><X size={12} /></Btn>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+
+          <Card title="Cargar kilometraje de hoy">
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <Field label="Vehículo">
+                <select style={inputStyle} value={formRegistro.vehiculoId} onChange={(e) => setFormRegistro({ ...formRegistro, vehiculoId: e.target.value })}>
+                  <option value="">Selecciona un vehículo…</option>
+                  {vehiculos.map((v) => <option key={v.id} value={v.id}>{v.placa} — {v.descripcion}</option>)}
+                </select>
+              </Field>
+              <Field label="Persona">
+                <select style={inputStyle} value={formRegistro.personalCodigo} onChange={(e) => setFormRegistro({ ...formRegistro, personalCodigo: e.target.value })}>
+                  <option value="">Selecciona una persona…</option>
+                  {empleados.map((emp) => <option key={emp.codigo} value={emp.codigo}>{emp.nombre}</option>)}
+                </select>
+              </Field>
+              <Field label="Fecha"><input style={inputStyle} type="date" value={formRegistro.fecha} onChange={(e) => setFormRegistro({ ...formRegistro, fecha: e.target.value })} /></Field>
+              <Field label="Kilometraje"><input style={inputStyle} type="number" value={formRegistro.kilometraje} onChange={(e) => setFormRegistro({ ...formRegistro, kilometraje: e.target.value })} placeholder="45230" /></Field>
+              <Btn variant="accent" onClick={agregarRegistro} style={{ justifyContent: "center" }}><Plus size={14} /> Registrar kilometraje</Btn>
+            </div>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Planilla() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
@@ -5031,6 +5284,7 @@ function AppInner() {
         {tab === "apertura" && <AperturaOD />}
         {tab === "facturacion_publica" && <FacturacionPublica />}
         {tab === "gastos_tarjeta" && <GastosTarjeta />}
+        {tab === "vehiculos" && <Vehiculos />}
         {tab === "planilla" && <Planilla />}
         {tab === "admin" && <Administrativo />}
       </div>

@@ -2147,10 +2147,13 @@ function CotizacionPrintView({ r, onClose }) {
 function ResumenCotizacionesCard() {
   const [rows, setRows] = useState([]);
   useEffect(() => {
-    (async () => {
+    const cargar = async () => {
       const { data } = await supabase.from("cotizaciones").select("actividad, monto");
       if (data) setRows(data);
-    })();
+    };
+    cargar();
+    const intervalo = setInterval(cargar, 20000); // se refresca sola cada 20s
+    return () => clearInterval(intervalo);
   }, []);
   const total = rows.length;
   const conOC = rows.filter((r) => r.actividad === "Con OC").length;
@@ -2424,10 +2427,13 @@ function Cotizaciones() {
 function ResumenEHSCard() {
   const [rows, setRows] = useState([]);
   useEffect(() => {
-    (async () => {
+    const cargar = async () => {
       const { data } = await supabase.from("cursos_ehs").select("fecha, estado");
       if (data) setRows(data);
-    })();
+    };
+    cargar();
+    const intervalo = setInterval(cargar, 20000);
+    return () => clearInterval(intervalo);
   }, []);
   const total = rows.length;
   const alDia = rows.filter((r) => estadoEfectivoCurso(r) !== "Vencido").length;
@@ -4346,10 +4352,13 @@ const GASTO_CATEGORIAS_DEFECTO = [
 function ResumenGastosCard() {
   const [rows, setRows] = useState([]);
   useEffect(() => {
-    (async () => {
+    const cargar = async () => {
       const { data } = await supabase.from("gastos_tarjeta").select("personal_nombre, categoria, monto, fecha");
       if (data) setRows(data);
-    })();
+    };
+    cargar();
+    const intervalo = setInterval(cargar, 20000);
+    return () => clearInterval(intervalo);
   }, []);
 
   const totalGastado = rows.reduce((s, r) => s + (Number(r.monto) || 0), 0);
@@ -4498,16 +4507,25 @@ function GastosTarjeta() {
         const data = new Uint8Array(evt.target.result);
         const wb = XLSX.read(data, { type: "array", cellDates: true });
         const ws = wb.Sheets[wb.SheetNames[0]];
-        const json = XLSX.utils.sheet_to_json(ws, { defval: "" });
-        if (json.length === 0) {
+        // Se lee por POSICIÓN de columna (A, B, C...) en vez de por el texto
+        // del título, ya que el formato del banco siempre trae las columnas
+        // en el mismo orden exacto — así se evita cualquier problema
+        // invisible de acentos/espacios en el encabezado.
+        const filas = XLSX.utils.sheet_to_json(ws, { header: 1, range: 1, defval: "" });
+        if (filas.length === 0) {
           setDiagnostico("El archivo no tiene filas de datos (solo encabezados, o está vacío).");
           return;
         }
+        const COL = {
+          fecha: 0, monto: 1, monedaDesc: 2, categoria: 3, descripcion: 4, estado: 5,
+          monedaAlpha: 6, nombreTarjeta: 7, numeroTarjeta: 8, detalle: 9,
+          tipoTransaccion: 10, pais: 11, departamento: 12, od: 13,
+        };
 
         // Categorías nuevas que traiga el archivo y que todavía no existan.
         const categoriasNuevas = [];
-        json.forEach((row) => {
-          const cat = String(row["NOMBRE DE LA CATEGORÍA DE COMERCIO"] || "").trim();
+        filas.forEach((fila) => {
+          const cat = String(fila[COL.categoria] || "").trim();
           if (cat && !categorias.includes(cat) && !categoriasNuevas.includes(cat)) categoriasNuevas.push(cat);
         });
         if (categoriasNuevas.length > 0) {
@@ -4516,32 +4534,32 @@ function GastosTarjeta() {
         }
 
         let sinRelacionar = 0;
-        const nuevas = json.map((row) => {
-          const nombreTarjeta = String(row["NOMBRE TARJETA"] || "").trim();
+        const nuevas = filas.map((fila) => {
+          const nombreTarjeta = String(fila[COL.nombreTarjeta] || "").trim();
           const empleado = buscarEmpleadoPorNombreTarjeta(nombreTarjeta);
           if (!empleado) sinRelacionar++;
-          const monedaTexto = String(row["DESCRIPCIÓN DE MONEDA DE LA TRANSACCIÓN"] || "").toLowerCase();
+          const monedaTexto = String(fila[COL.monedaDesc] || "").toLowerCase();
           return {
             personal_codigo: empleado?.codigo || null,
             personal_nombre: empleado?.nombre || nombreTarjeta || "Sin asignar",
-            fecha: excelValueToISODate(row["FECHA DE LA TRANSACCIÓN"]) || todayISO(),
-            monto: parsearMontoImportado(row["MONTO DE LA TRANSACCIÓN"]),
+            fecha: excelValueToISODate(fila[COL.fecha]) || todayISO(),
+            monto: parsearMontoImportado(fila[COL.monto]),
             numero_factura: null,
-            categoria: String(row["NOMBRE DE LA CATEGORÍA DE COMERCIO"] || "").trim() || "Otros",
-            od: String(row["OD"] || "").trim() || null,
-            observaciones: String(row["DESCRIPCIÓN"] || "").trim() || null,
+            categoria: String(fila[COL.categoria] || "").trim() || "Otros",
+            od: String(fila[COL.od] || "").trim() || null,
+            observaciones: String(fila[COL.descripcion] || "").trim() || null,
             moneda: monedaTexto.includes("dólar") || monedaTexto.includes("dolar") ? "Dólares" : "Colones",
-            estado_transaccion: String(row["ESTADO"] || "").trim() || "Aprobada",
+            estado_transaccion: String(fila[COL.estado] || "").trim() || "Aprobada",
             nombre_tarjeta: nombreTarjeta || null,
-            numero_tarjeta: String(row["NÚMERO DE TARJETA ENMASCARADO"] || "").trim() || null,
-            detalle: String(row["DETALLE"] || "").trim() || null,
-            tipo_transaccion: String(row["TIPO DE TRANSACCIÓN (D DÉBITO, C CRÉDITO)"] || "C").trim(),
-            pais: String(row["PAIS"] || "").trim() || null,
-            departamento: String(row["DEPARTAMENTO"] || "").trim() || null,
+            numero_tarjeta: String(fila[COL.numeroTarjeta] || "").trim() || null,
+            detalle: String(fila[COL.detalle] || "").trim() || null,
+            tipo_transaccion: String(fila[COL.tipoTransaccion] || "C").trim(),
+            pais: String(fila[COL.pais] || "").trim() || null,
+            departamento: String(fila[COL.departamento] || "").trim() || null,
           };
         });
 
-        setDiagnostico(`Se leyeron ${nuevas.length} filas. Primera fila leída → Fecha: ${nuevas[0].fecha}, Monto: ${nuevas[0].monto} (valor crudo del Excel: ${JSON.stringify(json[0]["MONTO DE LA TRANSACCIÓN"])}), Categoría: ${nuevas[0].categoria}, Personal: ${nuevas[0].personal_nombre}, OD: ${nuevas[0].od || "—"}. Guardando en la base de datos...`);
+        setDiagnostico(`Se leyeron ${nuevas.length} filas. Primera fila leída → Fecha: ${nuevas[0].fecha}, Monto: ${nuevas[0].monto} (columna B cruda: ${JSON.stringify(filas[0][COL.monto])}), Categoría: ${nuevas[0].categoria}, Personal: ${nuevas[0].personal_nombre}, OD: ${nuevas[0].od || "—"}. Guardando en la base de datos...`);
 
         const { data: inserted, error } = await supabase.from("gastos_tarjeta").insert(nuevas).select();
         if (error) {

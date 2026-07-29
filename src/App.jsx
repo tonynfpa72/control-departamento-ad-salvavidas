@@ -4352,9 +4352,10 @@ const GASTO_CATEGORIAS_DEFECTO = [
 
 function ResumenGastosCard() {
   const [rows, setRows] = useState([]);
+  const [monedaVista, setMonedaVista] = useState("Colones");
   useEffect(() => {
     const cargar = async () => {
-      const { data } = await supabase.from("gastos_tarjeta").select("personal_nombre, categoria, monto, fecha");
+      const { data } = await supabase.from("gastos_tarjeta").select("personal_nombre, categoria, monto, fecha, moneda");
       if (data) setRows(data);
     };
     cargar();
@@ -4362,18 +4363,24 @@ function ResumenGastosCard() {
     return () => clearInterval(intervalo);
   }, []);
 
-  const totalGastado = rows.reduce((s, r) => s + (Number(r.monto) || 0), 0);
+  const fmtEnMoneda = (n, moneda) => (moneda === "Dólares" ? "$" : "₡") + Number(n || 0).toLocaleString("en-US");
+
+  const totalColones = rows.filter((r) => (r.moneda || "Colones") === "Colones").reduce((s, r) => s + (Number(r.monto) || 0), 0);
+  const totalDolares = rows.filter((r) => r.moneda === "Dólares").reduce((s, r) => s + (Number(r.monto) || 0), 0);
+
+  const rowsMoneda = rows.filter((r) => (r.moneda || "Colones") === monedaVista);
+
   const porPersona = {};
-  rows.forEach((r) => { porPersona[r.personal_nombre] = (porPersona[r.personal_nombre] || 0) + (Number(r.monto) || 0); });
+  rowsMoneda.forEach((r) => { porPersona[r.personal_nombre] = (porPersona[r.personal_nombre] || 0) + (Number(r.monto) || 0); });
   const dataPersona = Object.entries(porPersona).map(([nombre, monto]) => ({ nombre, monto })).sort((a, b) => b.monto - a.monto).slice(0, 8);
 
   const porCategoria = {};
-  rows.forEach((r) => { porCategoria[r.categoria] = (porCategoria[r.categoria] || 0) + (Number(r.monto) || 0); });
+  rowsMoneda.forEach((r) => { porCategoria[r.categoria] = (porCategoria[r.categoria] || 0) + (Number(r.monto) || 0); });
   const dataCategoria = Object.entries(porCategoria).map(([nombre, monto]) => ({ nombre, monto })).sort((a, b) => b.monto - a.monto);
 
   const MESES_CORTOS_GASTOS = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"];
   const porMes = {};
-  rows.forEach((r) => {
+  rowsMoneda.forEach((r) => {
     if (!r.fecha) return;
     const [anio, mes] = r.fecha.split("-").map(Number);
     const clave = `${MESES_CORTOS_GASTOS[mes - 1]} ${anio}`;
@@ -4384,19 +4391,35 @@ function ResumenGastosCard() {
     .sort((a, b) => a._orden.localeCompare(b._orden));
 
   return (
-    <Card title={`Gastos de Tarjeta de Crédito — Total: ${fmtMoney(totalGastado)}`}>
+    <Card title="Gastos de Tarjeta de Crédito">
       {rows.length === 0 ? (
         <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay gastos cargados.</div>
       ) : (
         <>
+        <div style={{ display: "flex", gap: 16, marginBottom: 16, flexWrap: "wrap" }}>
+          <div style={{ background: T.blueSoft, borderRadius: 10, padding: "10px 16px" }}>
+            <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase" }}>Total en Colones</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: T.blue }}>₡{totalColones.toLocaleString("en-US")}</div>
+          </div>
+          <div style={{ background: T.greenSoft, borderRadius: 10, padding: "10px 16px" }}>
+            <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase" }}>Total en Dólares</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: T.green }}>${totalDolares.toLocaleString("en-US")}</div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          <Btn small variant={monedaVista === "Colones" ? "accent" : "ghost"} onClick={() => setMonedaVista("Colones")}>Ver gráficas en Colones</Btn>
+          <Btn small variant={monedaVista === "Dólares" ? "accent" : "ghost"} onClick={() => setMonedaVista("Dólares")}>Ver gráficas en Dólares</Btn>
+        </div>
+
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, marginBottom: 8 }}>Cuándo se gasta (por mes)</div>
           <ResponsiveContainer width="100%" height={220}>
             <LineChart data={dataMes} margin={{ top: 20, right: 20, left: 0, bottom: 10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
               <XAxis dataKey="mes" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${v}`} />
-              <Tooltip formatter={(v) => fmtMoney(v)} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <Tooltip formatter={(v) => fmtEnMoneda(v, monedaVista)} />
               <Line type="monotone" dataKey="monto" stroke={T.accent} strokeWidth={3} dot={{ r: 4 }} />
             </LineChart>
           </ResponsiveContainer>
@@ -4408,8 +4431,8 @@ function ResumenGastosCard() {
               <BarChart data={dataPersona} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
                 <XAxis dataKey="nombre" tick={{ fontSize: 10.5 }} interval={0} angle={-20} textAnchor="end" height={50} />
-                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${v}`} />
-                <Tooltip formatter={(v) => fmtMoney(v)} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip formatter={(v) => fmtEnMoneda(v, monedaVista)} />
                 <Bar dataKey="monto" fill={T.accent} radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
@@ -4421,7 +4444,7 @@ function ResumenGastosCard() {
                 <Pie data={dataCategoria} dataKey="monto" nameKey="nombre" cx="50%" cy="50%" outerRadius={75} label={({ nombre }) => nombre}>
                   {dataCategoria.map((_, i) => <Cell key={i} fill={PALETA_OD[i % PALETA_OD.length]} />)}
                 </Pie>
-                <Tooltip formatter={(v) => fmtMoney(v)} />
+                <Tooltip formatter={(v) => fmtEnMoneda(v, monedaVista)} />
               </PieChart>
             </ResponsiveContainer>
           </div>
@@ -4446,6 +4469,7 @@ function GastosTarjeta() {
   const [filtroPersonal, setFiltroPersonal] = useState("");
   const [filtroCategoria, setFiltroCategoria] = useState("Todas");
   const [filtroOd, setFiltroOd] = useState("");
+  const [filtroMoneda, setFiltroMoneda] = useState("Todas");
   const [diagnostico, setDiagnostico] = useState("");
   const [form, setForm] = useState({
     personalCodigo: "", fecha: todayISO(), monto: "", numeroFactura: "",
@@ -4640,9 +4664,11 @@ function GastosTarjeta() {
     const matchPersonal = !filtroPersonal || r.personal_nombre === filtroPersonal;
     const matchCategoria = filtroCategoria === "Todas" || r.categoria === filtroCategoria;
     const matchOd = !filtroOd.trim() || (r.od || "").toLowerCase().includes(filtroOd.trim().toLowerCase());
-    return matchPersonal && matchCategoria && matchOd;
+    const matchMoneda = filtroMoneda === "Todas" || (r.moneda || "Colones") === filtroMoneda;
+    return matchPersonal && matchCategoria && matchOd && matchMoneda;
   });
-  const totalFiltrado = rowsFiltradas.reduce((s, r) => s + (Number(r.monto) || 0), 0);
+  const totalFiltradoColones = rowsFiltradas.filter((r) => (r.moneda || "Colones") === "Colones").reduce((s, r) => s + (Number(r.monto) || 0), 0);
+  const totalFiltradoDolares = rowsFiltradas.filter((r) => r.moneda === "Dólares").reduce((s, r) => s + (Number(r.monto) || 0), 0);
 
   const descargarInformeBanco = () => {
     const filas = rowsFiltradas.map((r) => ({
@@ -4672,7 +4698,7 @@ function GastosTarjeta() {
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <ResumenGastosCard />
         <Card
-          title={`Gastos registrados — Total filtrado: ${fmtMoney(totalFiltrado)}`}
+          title={`Gastos registrados — Total: ₡${totalFiltradoColones.toLocaleString("en-US")} + $${totalFiltradoDolares.toLocaleString("en-US")}`}
           action={
             <div style={{ display: "flex", gap: 8 }}>
               <input ref={fileInputRefGastos} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleImportGastos} />
@@ -4700,6 +4726,11 @@ function GastosTarjeta() {
               {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
             <input style={{ ...inputStyle, width: 140 }} value={filtroOd} onChange={(e) => setFiltroOd(e.target.value)} placeholder="Filtrar por OD..." />
+            <select style={{ ...inputStyle, width: 150 }} value={filtroMoneda} onChange={(e) => setFiltroMoneda(e.target.value)}>
+              <option value="Todas">Colones y Dólares</option>
+              <option value="Colones">Solo Colones</option>
+              <option value="Dólares">Solo Dólares</option>
+            </select>
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
             <thead>
@@ -4727,8 +4758,11 @@ function GastosTarjeta() {
                   </td>
                   <td style={{ fontWeight: 700 }}>
                     {canGestionar ? (
-                      <input type="number" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 100 }} value={r.monto} onChange={(e) => setCampoGasto(r.id, "monto", Number(e.target.value) || 0)} />
-                    ) : fmtMoney(r.monto)}
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <span style={{ fontSize: 11, color: T.gray }}>{r.moneda === "Dólares" ? "$" : "₡"}</span>
+                        <input type="number" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 90 }} value={r.monto} onChange={(e) => setCampoGasto(r.id, "monto", Number(e.target.value) || 0)} />
+                      </div>
+                    ) : (r.moneda === "Dólares" ? "$" : "₡") + Number(r.monto || 0).toLocaleString("en-US")}
                   </td>
                   <td>
                     {canGestionar ? (

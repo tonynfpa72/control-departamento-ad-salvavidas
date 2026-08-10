@@ -406,6 +406,25 @@ function normalizarMesCorto(mes) {
   return MES_ALIAS[clave] || String(mes || "").trim();
 }
 
+// Similitud entre dos nombres (0 a 1) usando coeficiente de Dice sobre
+// bigramas de caracteres — sirve para agrupar clientes que se escribieron
+// distinto (mayúsculas, "S.A.", tildes, espacios) pero son el mismo.
+function similitudNombres(a, b) {
+  const norm = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+  const x = norm(a), y = norm(b);
+  if (!x || !y) return x === y ? 1 : 0;
+  if (x === y) return 1;
+  const bigramas = (s) => { const out = []; for (let i = 0; i < s.length - 1; i++) out.push(s.slice(i, i + 2)); return out; };
+  const bigX = bigramas(x), bigY = [...bigramas(y)];
+  if (bigX.length === 0 || bigY.length === 0) return 0;
+  let interseccion = 0;
+  bigX.forEach((bg) => {
+    const idx = bigY.indexOf(bg);
+    if (idx !== -1) { interseccion++; bigY.splice(idx, 1); }
+  });
+  return (2 * interseccion) / (bigX.length + [...bigramas(y)].length);
+}
+
 function etiquetaQuincenaCorta(fechaISO) {
   const [anio, mes, dia] = fechaISO.split("-").map(Number);
   const nombreMes = MESES_CORTOS_QNA[mes - 1];
@@ -4905,6 +4924,7 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
   const canEditar = isAdmin || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
   const [areaActiva, setAreaActiva] = useState(irInicial?.area || "inspecciones");
+  const [tipoOdActivo, setTipoOdActivo] = useState("Correctivo");
   const [subTab, setSubTab] = useState("pendientes");
   const [odsDelArea, setRows] = useClientesArea(areaActiva);
 
@@ -4931,9 +4951,9 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
     supabase.from("ordenes_trabajo").delete().eq("id", id).then();
   };
 
-  const correctivos = odsDelArea.filter((r) => r.tipoOD === "Correctivo");
-  const pendientes = correctivos.filter((r) => r.progreso === "Pendiente");
-  const completados = correctivos.filter((r) => r.progreso === "Completado");
+  const correctivos = odsDelArea.filter((r) => (r.tipoOD || "Normal") === tipoOdActivo);
+  const pendientes = correctivos.filter((r) => (r.estatusEquipo || "Abierto") !== "Completado");
+  const completados = correctivos.filter((r) => r.estatusEquipo === "Completado");
   const listaActiva = subTab === "completados" ? completados : pendientes;
 
   const listaFiltrada = listaActiva.filter((r) => {
@@ -4943,13 +4963,22 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
     return matchOd && matchCliente && matchPo;
   });
 
+  // Agrupa por cliente usando coincidencia difusa (80% de similitud), para
+  // que nombres escritos distinto ("Marina Pez Vela" / "MARINA PEZ VELA S.A.")
+  // queden juntos en una sola sección en vez de duplicarse.
   const porCliente = {};
+  const clavesCanonicas = [];
   listaFiltrada.forEach((r) => {
-    const clave = r.cliente || "Sin cliente";
-    if (!porCliente[clave]) porCliente[clave] = [];
+    const nombreCliente = r.cliente || "Sin cliente";
+    let clave = clavesCanonicas.find((c) => similitudNombres(c, nombreCliente) >= 0.8);
+    if (!clave) {
+      clave = nombreCliente;
+      clavesCanonicas.push(clave);
+      porCliente[clave] = [];
+    }
     porCliente[clave].push(r);
   });
-  const clientesOrdenados = Object.keys(porCliente).sort();
+  const clientesOrdenados = clavesCanonicas.sort();
 
   // Semáforo por antigüedad de la Fecha PO: 6 semanas = amarillo, 8 = rojo.
   const colorPorFechaPo = (fechaPo) => {
@@ -4958,7 +4987,7 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
     const semanas = dias / 7;
     if (semanas >= 8) return { fondo: T.redSoft, borde: T.red };
     if (semanas >= 6) return { fondo: T.amberSoft, borde: T.amber };
-    return { fondo: T.graySoft, borde: T.line };
+    return { fondo: T.greenSoft, borde: T.green };
   };
 
   return (
@@ -4966,6 +4995,9 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Btn variant={areaActiva === "inspecciones" ? "accent" : "ghost"} onClick={() => setAreaActiva("inspecciones")}>Inspecciones</Btn>
         <Btn variant={areaActiva === "proyectos" ? "accent" : "ghost"} onClick={() => setAreaActiva("proyectos")}>Proyectos</Btn>
+        <div style={{ width: 1, background: T.line, margin: "0 4px" }} />
+        <Btn variant={tipoOdActivo === "Correctivo" ? "accent" : "ghost"} onClick={() => setTipoOdActivo("Correctivo")}>OD Correctivos</Btn>
+        <Btn variant={tipoOdActivo === "Normal" ? "accent" : "ghost"} onClick={() => setTipoOdActivo("Normal")}>{areaActiva === "proyectos" ? "OD Proyectos" : "OD IPM"}</Btn>
         <div style={{ width: 1, background: T.line, margin: "0 4px" }} />
         <Btn variant={subTab === "pendientes" ? "accent" : "ghost"} onClick={() => setSubTab("pendientes")}>Pendientes ({pendientes.length})</Btn>
         <Btn variant={subTab === "completados" ? "accent" : "ghost"} onClick={() => setSubTab("completados")}>Completados ({completados.length})</Btn>
@@ -4988,7 +5020,8 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
 
       {subTab === "pendientes" && (
         <div style={{ display: "flex", gap: 14, fontSize: 12, color: T.inkSoft, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: T.graySoft, border: `1px solid ${T.line}` }} /> Al día</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: T.greenSoft, border: `1px solid ${T.green}` }} /> Al día</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: T.graySoft, border: `1px solid ${T.line}` }} /> Sin Fecha PO</span>
           <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: T.amberSoft, border: `1px solid ${T.amber}` }} /> 6+ semanas desde la Fecha PO</span>
           <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: T.redSoft, border: `1px solid ${T.red}` }} /> 8+ semanas desde la Fecha PO</span>
         </div>
@@ -5029,13 +5062,13 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
       ) : clientesOrdenados.map((cliente) => (
         <div key={cliente}>
           <div style={{ fontSize: 15, fontWeight: 700, color: T.ink, marginBottom: 10 }}>{cliente}</div>
-          <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(${vista === "compacta" ? 135 : 260}px, 1fr))`, gap: vista === "compacta" ? 10 : 12 }}>
+          <div style={{ display: "flex", flexWrap: "nowrap", gap: vista === "compacta" ? 10 : 12 }}>
             {porCliente[cliente].map((r) => {
               const { fondo, borde } = subTab === "completados" ? { fondo: T.greenSoft, borde: T.green } : colorPorFechaPo(r.fechaPo);
               return (
-                <div key={r.id} style={{ background: fondo, border: `1px solid ${borde}`, borderRadius: 12, padding: vista === "compacta" ? 10 : "14px 16px", display: "flex", flexDirection: "column", gap: vista === "compacta" ? 6 : 10 }}>
+                <div key={r.id} style={{ background: fondo, border: `1px solid ${borde}`, borderRadius: 12, padding: vista === "compacta" ? 10 : "14px 16px", display: "flex", flexDirection: "column", gap: vista === "compacta" ? 6 : 10, flex: "1 1 0", minWidth: 0 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div style={{ fontSize: 14, fontWeight: 700 }}>{r.od}</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.od}</div>
                     {canEditar && <button onClick={() => borrarOD(r.id)} title="Borrar" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 15, lineHeight: 1 }}>×</button>}
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: vista === "compacta" ? "1fr" : "1fr 1fr", gap: "6px 12px", fontSize: 12 }}>

@@ -4998,8 +4998,7 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
         {areaActiva === "proyectos" && (
           <>
             <div style={{ width: 1, background: T.line, margin: "0 4px" }} />
-            <Btn variant={tipoOdActivo === "Correctivo" ? "accent" : "ghost"} onClick={() => setTipoOdActivo("Correctivo")}>OD Correctivos</Btn>
-            <Btn variant={tipoOdActivo === "Normal" ? "accent" : "ghost"} onClick={() => setTipoOdActivo("Normal")}>OD Proyectos</Btn>
+            <Btn variant={tipoOdActivo === "Normal" ? "accent" : "ghost"} onClick={() => setTipoOdActivo(tipoOdActivo === "Normal" ? "Correctivo" : "Normal")}>OD Proyectos</Btn>
           </>
         )}
         <div style={{ width: 1, background: T.line, margin: "0 4px" }} />

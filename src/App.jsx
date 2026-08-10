@@ -5083,18 +5083,33 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
         ) : clientesOrdenados.map((cliente) => (
           <div key={cliente} style={{ marginBottom: 24 }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: T.ink, marginBottom: 10 }}>{cliente}</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(90px, 100px))", gap: 8, justifyContent: "start" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 170px))", gap: 10, justifyContent: "start" }}>
               {porCliente[cliente].map((r) => {
                 const { fondo, borde } = subTab === "completados" ? { fondo: T.greenSoft, borde: T.green } : colorPorFechaPo(r.fechaPo);
                 return (
-                  <div key={r.id} style={{ background: fondo, border: `1px solid ${borde}`, borderRadius: 8, padding: 8, aspectRatio: "1 / 1", display: "flex", flexDirection: "column", gap: 3, overflow: "hidden" }}>
+                  <div key={r.id} style={{ background: fondo, border: `1px solid ${borde}`, borderRadius: 10, padding: 12, display: "flex", flexDirection: "column", gap: 6, minHeight: 180 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.od}</div>
-                      {canEditar && <button onClick={() => borrarOD(r.id)} title="Borrar" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 12, lineHeight: 1 }}>×</button>}
+                      <div style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.od}</div>
+                      {canEditar && <button onClick={() => borrarOD(r.id)} title="Borrar" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 14, lineHeight: 1 }}>×</button>}
                     </div>
-                    <div style={{ fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><span style={{ color: T.inkSoft }}>PO#</span> {r.poNumero || "—"}</div>
-                    <div style={{ fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><span style={{ color: T.inkSoft }}>Fecha</span> {r.fechaPo || "—"}</div>
-                    <div style={{ fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><span style={{ color: T.inkSoft }}>SAP#</span> {r.sapNumero || "—"}</div>
+                    <div style={{ fontSize: 11.5 }}>
+                      <span style={{ color: T.inkSoft }}>PO#</span>{" "}
+                      {canEditar ? <input style={{ ...inputStyle, fontSize: 11.5, padding: "3px 5px", width: "100%" }} value={r.poNumero || ""} onChange={(e) => setCampo(r.id, "poNumero", e.target.value)} /> : (r.poNumero || "—")}
+                    </div>
+                    <div style={{ fontSize: 11.5 }}>
+                      <span style={{ color: T.inkSoft }}>Fecha</span>{" "}
+                      {canEditar ? <input type="date" style={{ ...inputStyle, fontSize: 11.5, padding: "3px 5px", width: "100%" }} value={r.fechaPo || ""} onChange={(e) => setCampo(r.id, "fechaPo", e.target.value)} /> : (r.fechaPo || "—")}
+                    </div>
+                    <div style={{ fontSize: 11.5 }}>
+                      <span style={{ color: T.inkSoft }}>SAP#</span>{" "}
+                      {canEditar ? <input style={{ ...inputStyle, fontSize: 11.5, padding: "3px 5px", width: "100%" }} value={r.sapNumero || ""} onChange={(e) => setCampo(r.id, "sapNumero", e.target.value)} /> : (r.sapNumero || "—")}
+                    </div>
+                    <div style={{ fontSize: 11.5, display: "flex", flexDirection: "column", flex: 1 }}>
+                      <span style={{ color: T.inkSoft, marginBottom: 2 }}>Equipos</span>
+                      {canEditar ? (
+                        <textarea style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: "100%", flex: 1, minHeight: 44, resize: "vertical" }} value={r.equiposCorrectivo || ""} onChange={(e) => setCampo(r.id, "equiposCorrectivo", e.target.value)} placeholder="Ej. escalera, taladro..." />
+                      ) : (r.equiposCorrectivo || "—")}
+                    </div>
                   </div>
                 );
               })}

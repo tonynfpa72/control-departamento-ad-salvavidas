@@ -7,7 +7,7 @@ import * as XLSX from "xlsx";
 import {
   LogOut, Plus, Download, Check, X, Clock, ClipboardList,
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
-  ChevronLeft, ChevronRight, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck
+  ChevronLeft, ChevronRight, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck, Package
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -153,6 +153,7 @@ const AREAS = [
   { id: "cotizaciones", label: "Cotizaciones", icon: FileText, color: T.amber },
   { id: "salud", label: "Salud Ocupacional", icon: CalendarDays, color: T.red },
   { id: "apertura", label: "Apertura de OD", icon: Building2, color: T.blue },
+  { id: "equipos", label: "Equipos", icon: Package, color: T.amber },
   { id: "facturacion_publica", label: "Facturación", icon: LayoutDashboard, color: T.green },
   { id: "gastos_tarjeta", label: "Gastos de Tarjeta", icon: CreditCard, color: T.red },
   { id: "vehiculos", label: "Vehículos", icon: Truck, color: T.blue },
@@ -703,6 +704,10 @@ function odRowFromDb(r) {
     fechaEntrega: r.fecha_entrega || "",
     fechaAprobacion: r.fecha_aprobacion || "",
     equiposCorrectivo: r.equipos_correctivo || "",
+    poNumero: r.po_numero || "",
+    fechaPo: r.fecha_po || "",
+    sapNumero: r.sap_numero || "",
+    estatusEquipo: r.estatus_equipo || "Abierto",
     accion: r.accion || "",
     tipoOD: r.tipo_od || "Normal",
     progreso: r.progreso || "Pendiente",
@@ -711,7 +716,11 @@ function odRowFromDb(r) {
     created_at: r.created_at,
   };
 }
-const ODFIELD_TO_DB = { fechaInicio: "fecha_inicio", fechaEntrega: "fecha_entrega", fechaAprobacion: "fecha_aprobacion", equiposCorrectivo: "equipos_correctivo", tipoOD: "tipo_od" };
+const ODFIELD_TO_DB = {
+  fechaInicio: "fecha_inicio", fechaEntrega: "fecha_entrega", fechaAprobacion: "fecha_aprobacion",
+  equiposCorrectivo: "equipos_correctivo", tipoOD: "tipo_od",
+  poNumero: "po_numero", fechaPo: "fecha_po", sapNumero: "sap_numero", estatusEquipo: "estatus_equipo",
+};
 function odPatchToDb(patch) {
   const out = {};
   for (const k in patch) out[ODFIELD_TO_DB[k] || k] = patch[k] === "" ? null : patch[k];
@@ -4888,6 +4897,108 @@ function GastosTarjeta() {
 
 const ALERTA_KM_MANTENIMIENTO = 300;
 
+const ESTATUS_EQUIPO_OPCIONES = ["Abierto", "En importación", "Cerrado", "Completado"];
+
+function EquiposCorrectivos() {
+  const currentUser = useContext(CurrentUserContext);
+  const isAdmin = currentUser?.categoria === "admin";
+  const canEditar = isAdmin || currentUser?.categoria === "asistente";
+  const [areaActiva, setAreaActiva] = useState("inspecciones");
+  const [odsDelArea, setRows] = useClientesArea(areaActiva);
+
+  const setCampo = (id, campo, valor) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, [campo]: valor } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ [campo]: valor })).eq("id", id).then();
+  };
+
+  const pendientes = odsDelArea.filter((r) => r.tipoOD === "Correctivo" && r.progreso === "Pendiente");
+
+  const porCliente = {};
+  pendientes.forEach((r) => {
+    const clave = r.cliente || "Sin cliente";
+    if (!porCliente[clave]) porCliente[clave] = [];
+    porCliente[clave].push(r);
+  });
+  const clientesOrdenados = Object.keys(porCliente).sort();
+
+  // Semáforo por antigüedad de la Fecha PO: 6 semanas = amarillo, 8 = rojo.
+  const colorPorFechaPo = (fechaPo) => {
+    if (!fechaPo) return { fondo: T.graySoft, borde: T.line };
+    const dias = (new Date(todayISO()) - new Date(fechaPo)) / (1000 * 60 * 60 * 24);
+    const semanas = dias / 7;
+    if (semanas >= 8) return { fondo: T.redSoft, borde: T.red };
+    if (semanas >= 6) return { fondo: T.amberSoft, borde: T.amber };
+    return { fondo: T.graySoft, borde: T.line };
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ display: "flex", gap: 8 }}>
+        <Btn variant={areaActiva === "inspecciones" ? "accent" : "ghost"} onClick={() => setAreaActiva("inspecciones")}>Inspecciones</Btn>
+        <Btn variant={areaActiva === "proyectos" ? "accent" : "ghost"} onClick={() => setAreaActiva("proyectos")}>Proyectos</Btn>
+      </div>
+
+      <div style={{ display: "flex", gap: 14, fontSize: 12, color: T.inkSoft, alignItems: "center" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: T.graySoft, border: `1px solid ${T.line}` }} /> Al día</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: T.amberSoft, border: `1px solid ${T.amber}` }} /> 6+ semanas desde la Fecha PO</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: T.redSoft, border: `1px solid ${T.red}` }} /> 8+ semanas desde la Fecha PO</span>
+      </div>
+
+      {clientesOrdenados.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 13.5 }}>No hay OD Correctivos pendientes en esta área.</div>
+      ) : clientesOrdenados.map((cliente) => (
+        <div key={cliente}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: T.ink, marginBottom: 10 }}>{cliente}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14 }}>
+            {porCliente[cliente].map((r) => {
+              const { fondo, borde } = colorPorFechaPo(r.fechaPo);
+              return (
+                <div key={r.id} style={{ background: fondo, border: `1px solid ${borde}`, borderRadius: 12, padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>{r.od}</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+                    <div>
+                      <span style={{ color: T.inkSoft }}>PO#: </span>
+                      {canEditar ? (
+                        <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.poNumero || ""} onChange={(e) => setCampo(r.id, "poNumero", e.target.value)} />
+                      ) : (r.poNumero || "—")}
+                    </div>
+                    <div>
+                      <span style={{ color: T.inkSoft }}>Fecha PO: </span>
+                      {canEditar ? (
+                        <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.fechaPo || ""} onChange={(e) => setCampo(r.id, "fechaPo", e.target.value)} />
+                      ) : (r.fechaPo || "—")}
+                    </div>
+                    <div>
+                      <span style={{ color: T.inkSoft }}>SAP#: </span>
+                      {canEditar ? (
+                        <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.sapNumero || ""} onChange={(e) => setCampo(r.id, "sapNumero", e.target.value)} />
+                      ) : (r.sapNumero || "—")}
+                    </div>
+                    <div>
+                      <span style={{ color: T.inkSoft }}>Estatus: </span>
+                      {canEditar ? (
+                        <select style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.estatusEquipo || "Abierto"} onChange={(e) => setCampo(r.id, "estatusEquipo", e.target.value)}>
+                          {ESTATUS_EQUIPO_OPCIONES.map((op) => <option key={op}>{op}</option>)}
+                        </select>
+                      ) : (r.estatusEquipo || "Abierto")}
+                    </div>
+                    <div>
+                      <span style={{ color: T.inkSoft }}>Equipos: </span>
+                      {canEditar ? (
+                        <textarea style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%", minHeight: 44, resize: "vertical" }} value={r.equiposCorrectivo || ""} onChange={(e) => setCampo(r.id, "equiposCorrectivo", e.target.value)} placeholder="Ej. escalera, taladro..." />
+                      ) : (r.equiposCorrectivo || "—")}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Vehiculos() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
@@ -5415,6 +5526,7 @@ function AppInner() {
         {tab === "facturacion_publica" && <FacturacionPublica />}
         {tab === "gastos_tarjeta" && <GastosTarjeta />}
         {tab === "vehiculos" && <Vehiculos />}
+        {tab === "equipos" && <EquiposCorrectivos />}
         {tab === "planilla" && <Planilla />}
         {tab === "admin" && <Administrativo />}
       </div>

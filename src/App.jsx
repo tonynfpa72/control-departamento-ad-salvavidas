@@ -1257,6 +1257,10 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, equiposCorrectivo } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ equiposCorrectivo })).eq("id", id).then();
   };
+  const setEstatusEquipoOD = (id, estatusEquipo) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, estatusEquipo } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ estatusEquipo })).eq("id", id).then();
+  };
   const setFrecuencia = (id, frecuencia) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, frecuencia } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ frecuencia })).eq("id", id).then();
@@ -1386,7 +1390,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
               <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
                 <th style={{ padding: "6px 8px" }}>OD</th><th style={{ minWidth: 190 }}>Cliente</th><th>Estado</th><th>{tecnicoLabel}</th>
                 {esCorrectivo && <th>Fecha de Aprobación</th>}
-                {esCorrectivo && <th style={{ minWidth: 140 }}>Equipos</th>}
+                {esCorrectivo && <th style={{ minWidth: 160 }}>Equipos</th>}
                 {!esCorrectivo && isInspecciones && <th>Fecha de Vencimiento</th>}
                 {!esCorrectivo && isInspecciones && <th>Frecuencia</th>}
                 {!esCorrectivo && isProyectos && <th>Fecha de Inicio</th>}
@@ -1461,7 +1465,16 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                   )}
                   {esCorrectivo && (
                     <td>
-                      <Btn small variant="ghost" onClick={() => irAEquipos(area, r.od)}><Package size={13} /> Ver en Equipos</Btn>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        {canEditProgreso ? (
+                          <select style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: 150 }} value={r.estatusEquipo || "Abierto"} onChange={(e) => setEstatusEquipoOD(r.id, e.target.value)}>
+                            {ESTATUS_EQUIPO_OPCIONES.map((op) => <option key={op}>{op}</option>)}
+                          </select>
+                        ) : (r.estatusEquipo || "Abierto")}
+                        {r.estatusEquipo !== "No lleva equipos" && (
+                          <Btn small variant="ghost" onClick={() => irAEquipos(area, r.od)}><Package size={13} /> Ver en Equipos</Btn>
+                        )}
+                      </div>
                     </td>
                   )}
                   {!esCorrectivo && isInspecciones && (
@@ -4916,7 +4929,7 @@ function GastosTarjeta() {
 
 const ALERTA_KM_MANTENIMIENTO = 300;
 
-const ESTATUS_EQUIPO_OPCIONES = ["Abierto", "En importación", "Cerrado", "Completado"];
+const ESTATUS_EQUIPO_OPCIONES = ["Abierto", "En importación", "Cerrado", "Completado", "No lleva equipos"];
 
 function EquiposCorrectivos({ irInicial, onIrConsumido }) {
   const currentUser = useContext(CurrentUserContext);
@@ -4951,7 +4964,10 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
     supabase.from("ordenes_trabajo").delete().eq("id", id).then();
   };
 
-  const correctivos = odsDelArea.filter((r) => (r.tipoOD || "Normal") === tipoOdActivo);
+  // Las tarjetas son solo para trabajos que sí necesitan solicitud de
+  // equipos — si se marca "No lleva equipos", desaparece sola del tablero
+  // (pero el OD sigue viéndose normal en Inspecciones/Proyectos).
+  const correctivos = odsDelArea.filter((r) => (r.tipoOD || "Normal") === tipoOdActivo && r.estatusEquipo !== "No lleva equipos");
   const pendientes = correctivos.filter((r) => (r.estatusEquipo || "Abierto") !== "Completado");
   const completados = correctivos.filter((r) => r.estatusEquipo === "Completado");
   const listaActiva = subTab === "completados" ? completados : pendientes;
@@ -5018,6 +5034,7 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
       <div style={{ display: "flex", gap: 6 }}>
         <Btn small variant={vista === "tarjetas" ? "accent" : "ghost"} onClick={() => setVista("tarjetas")}>Tarjetas</Btn>
         <Btn small variant={vista === "compacta" ? "accent" : "ghost"} onClick={() => setVista("compacta")}>Compacta</Btn>
+        <Btn small variant={vista === "cuadros" ? "accent" : "ghost"} onClick={() => setVista("cuadros")}>Cuadros</Btn>
         <Btn small variant={vista === "lista" ? "accent" : "ghost"} onClick={() => setVista("lista")}>Lista</Btn>
       </div>
 
@@ -5060,6 +5077,30 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
             ))}
           </tbody>
         </table>
+      ) : vista === "cuadros" ? (
+        clientesOrdenados.length === 0 ? (
+          <div style={{ color: T.gray, fontSize: 13.5 }}>No hay OD Correctivos {subTab === "completados" ? "completados" : "pendientes"} que coincidan en esta área.</div>
+        ) : clientesOrdenados.map((cliente) => (
+          <div key={cliente} style={{ marginBottom: 24 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: T.ink, marginBottom: 10 }}>{cliente}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+              {porCliente[cliente].map((r) => {
+                const { fondo, borde } = subTab === "completados" ? { fondo: T.greenSoft, borde: T.green } : colorPorFechaPo(r.fechaPo);
+                return (
+                  <div key={r.id} style={{ background: fondo, border: `1px solid ${borde}`, borderRadius: 12, padding: 14, aspectRatio: "1 / 1", display: "flex", flexDirection: "column", gap: 6, overflow: "hidden" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.od}</div>
+                      {canEditar && <button onClick={() => borrarOD(r.id)} title="Borrar" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 14, lineHeight: 1 }}>×</button>}
+                    </div>
+                    <div style={{ fontSize: 12 }}><span style={{ color: T.inkSoft }}>PO#</span> {r.poNumero || "—"}</div>
+                    <div style={{ fontSize: 12 }}><span style={{ color: T.inkSoft }}>Fecha PO</span> {r.fechaPo || "—"}</div>
+                    <div style={{ fontSize: 12 }}><span style={{ color: T.inkSoft }}>SAP#</span> {r.sapNumero || "—"}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))
       ) : clientesOrdenados.length === 0 ? (
         <div style={{ color: T.gray, fontSize: 13.5 }}>No hay OD Correctivos {subTab === "completados" ? "completados" : "pendientes"} que coincidan en esta área.</div>
       ) : clientesOrdenados.map((cliente) => (

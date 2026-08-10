@@ -4984,46 +4984,46 @@ function EquiposCorrectivos() {
       ) : clientesOrdenados.map((cliente) => (
         <div key={cliente}>
           <div style={{ fontSize: 15, fontWeight: 700, color: T.ink, marginBottom: 10 }}>{cliente}</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(135px, 1fr))", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
             {porCliente[cliente].map((r) => {
               const { fondo, borde } = subTab === "completados" ? { fondo: T.greenSoft, borde: T.green } : colorPorFechaPo(r.fechaPo);
               return (
-                <div key={r.id} style={{ background: fondo, border: `1px solid ${borde}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 5 }}>
+                <div key={r.id} style={{ background: fondo, border: `1px solid ${borde}`, borderRadius: 12, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div style={{ fontSize: 13, fontWeight: 700 }}>{r.od}</div>
-                    {canEditar && <button onClick={() => borrarOD(r.id)} title="Borrar" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 14, lineHeight: 1 }}>×</button>}
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>{r.od}</div>
+                    {canEditar && <button onClick={() => borrarOD(r.id)} title="Borrar" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 15, lineHeight: 1 }}>×</button>}
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 11.5 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 12px", fontSize: 12 }}>
+                    <div style={{ color: T.inkSoft, alignSelf: "center" }}>PO#</div>
                     <div>
-                      <span style={{ color: T.inkSoft }}>PO#: </span>
                       {canEditar ? (
-                        <input style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: "100%" }} value={r.poNumero || ""} onChange={(e) => setCampo(r.id, "poNumero", e.target.value)} />
+                        <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.poNumero || ""} onChange={(e) => setCampo(r.id, "poNumero", e.target.value)} />
                       ) : (r.poNumero || "—")}
                     </div>
+                    <div style={{ color: T.inkSoft, alignSelf: "center" }}>Fecha PO</div>
                     <div>
-                      <span style={{ color: T.inkSoft }}>Fecha PO: </span>
                       {canEditar ? (
-                        <input type="date" style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: "100%" }} value={r.fechaPo || ""} onChange={(e) => setCampo(r.id, "fechaPo", e.target.value)} />
+                        <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.fechaPo || ""} onChange={(e) => setCampo(r.id, "fechaPo", e.target.value)} />
                       ) : (r.fechaPo || "—")}
                     </div>
+                    <div style={{ color: T.inkSoft, alignSelf: "center" }}>SAP#</div>
                     <div>
-                      <span style={{ color: T.inkSoft }}>SAP#: </span>
                       {canEditar ? (
-                        <input style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: "100%" }} value={r.sapNumero || ""} onChange={(e) => setCampo(r.id, "sapNumero", e.target.value)} />
+                        <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.sapNumero || ""} onChange={(e) => setCampo(r.id, "sapNumero", e.target.value)} />
                       ) : (r.sapNumero || "—")}
                     </div>
+                    <div style={{ color: T.inkSoft, alignSelf: "center" }}>Estatus</div>
                     <div>
-                      <span style={{ color: T.inkSoft }}>Estatus: </span>
                       {canEditar ? (
-                        <select style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: "100%" }} value={r.estatusEquipo || "Abierto"} onChange={(e) => setCampo(r.id, "estatusEquipo", e.target.value)}>
+                        <select style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.estatusEquipo || "Abierto"} onChange={(e) => setCampo(r.id, "estatusEquipo", e.target.value)}>
                           {ESTATUS_EQUIPO_OPCIONES.map((op) => <option key={op}>{op}</option>)}
                         </select>
                       ) : (r.estatusEquipo || "Abierto")}
                     </div>
-                    <div>
-                      <span style={{ color: T.inkSoft }}>Equipos: </span>
+                    <div style={{ color: T.inkSoft }}>Equipos</div>
+                    <div style={{ gridColumn: "2 / 3" }}>
                       {canEditar ? (
-                        <textarea style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: "100%", minHeight: 40, resize: "vertical" }} value={r.equiposCorrectivo || ""} onChange={(e) => setCampo(r.id, "equiposCorrectivo", e.target.value)} placeholder="Ej. escalera, taladro..." />
+                        <textarea style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%", minHeight: 40, resize: "vertical" }} value={r.equiposCorrectivo || ""} onChange={(e) => setCampo(r.id, "equiposCorrectivo", e.target.value)} placeholder="Ej. escalera, taladro..." />
                       ) : (r.equiposCorrectivo || "—")}
                     </div>
                   </div>

@@ -1137,6 +1137,7 @@ function HorasExtras({ area, color }) {
 /* Contexto compartido: datos reales de OD/clientes de Inspecciones y
    Proyectos, para que el dashboard Administrativo pueda reflejarlos. */
 const ClientesContext = createContext(null);
+const EquiposNavContext = createContext({ irAEquipos: () => {} });
 const FechasCorteContext = createContext([]);
 
 function useClientesArea(area) {
@@ -1162,6 +1163,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const canMoverTipo = isAdmin || currentUser?.categoria === "asistente";
   const canEditProgreso = isAdmin || currentUser?.categoria === "asistente" || currentUser?.categoria === "tecnico";
   const confirmar = useContext(ConfirmContext);
+  const { irAEquipos } = useContext(EquiposNavContext);
   const isInspecciones = area === "inspecciones";
   const isProyectos = area === "proyectos";
   const esCorrectivo = tipoOD === "Correctivo";
@@ -1365,7 +1367,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
               <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
                 <th style={{ padding: "6px 8px" }}>OD</th><th style={{ minWidth: 190 }}>Cliente</th><th>Estado</th><th>{tecnicoLabel}</th>
                 {esCorrectivo && <th>Fecha de Aprobación</th>}
-                {esCorrectivo && <th style={{ minWidth: 200 }}>Equipos que lleva</th>}
+                {esCorrectivo && <th style={{ minWidth: 140 }}>Equipos</th>}
                 {!esCorrectivo && isInspecciones && <th>Fecha de Vencimiento</th>}
                 {!esCorrectivo && isInspecciones && <th>Frecuencia</th>}
                 {!esCorrectivo && isProyectos && <th>Fecha de Inicio</th>}
@@ -1440,9 +1442,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                   )}
                   {esCorrectivo && (
                     <td>
-                      {canEditProgreso ? (
-                        <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 190 }} value={r.equiposCorrectivo || ""} onChange={(e) => setEquiposCorrectivo(r.id, e.target.value)} placeholder="Ej. escalera, taladro, cinta..." />
-                      ) : (r.equiposCorrectivo || "—")}
+                      <Btn small variant="ghost" onClick={() => irAEquipos(area, r.od)}><Package size={13} /> Ver en Equipos</Btn>
                     </td>
                   )}
                   {!esCorrectivo && isInspecciones && (
@@ -4899,19 +4899,27 @@ const ALERTA_KM_MANTENIMIENTO = 300;
 
 const ESTATUS_EQUIPO_OPCIONES = ["Abierto", "En importación", "Cerrado", "Completado"];
 
-function EquiposCorrectivos() {
+function EquiposCorrectivos({ irInicial, onIrConsumido }) {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
   const canEditar = isAdmin || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
-  const [areaActiva, setAreaActiva] = useState("inspecciones");
+  const [areaActiva, setAreaActiva] = useState(irInicial?.area || "inspecciones");
   const [subTab, setSubTab] = useState("pendientes");
   const [odsDelArea, setRows] = useClientesArea(areaActiva);
 
-  const [filtroOd, setFiltroOd] = useState("");
+  const [filtroOd, setFiltroOd] = useState(irInicial?.od || "");
   const [filtroCliente, setFiltroCliente] = useState("");
   const [filtroPo, setFiltroPo] = useState("");
   const [vista, setVista] = useState("tarjetas");
+
+  useEffect(() => {
+    if (!irInicial) return;
+    setAreaActiva(irInicial.area || "inspecciones");
+    setFiltroOd(irInicial.od || "");
+    onIrConsumido && onIrConsumido();
+    // eslint-disable-next-line
+  }, [irInicial]);
 
   const setCampo = (id, campo, valor) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, [campo]: valor } : r));
@@ -5506,6 +5514,11 @@ function AppInner() {
     }
   });
   const [tab, setTab] = useState(null);
+  const [odParaEquipos, setOdParaEquipos] = useState(null);
+  const irAEquipos = (area, od) => {
+    setOdParaEquipos({ area, od });
+    setTab("equipos");
+  };
   const { logo } = useContext(LogoContext);
   const [esPantallaAngosta, setEsPantallaAngosta] = useState(() => typeof window !== "undefined" && window.innerWidth < 820);
 
@@ -5545,6 +5558,7 @@ function AppInner() {
 
   return (
     <CurrentUserContext.Provider value={user}>
+    <EquiposNavContext.Provider value={{ irAEquipos }}>
     <div style={{ minHeight: "100%", background: T.bg, fontFamily: "'Inter', -apple-system, sans-serif", color: T.ink, display: "flex" }}>
       {/* Sidebar */}
       <div style={{ width: 220, background: T.steel, color: "#fff", display: "flex", flexDirection: "column", padding: "20px 14px", flexShrink: 0 }}>
@@ -5605,11 +5619,12 @@ function AppInner() {
         {tab === "facturacion_publica" && <FacturacionPublica />}
         {tab === "gastos_tarjeta" && <GastosTarjeta />}
         {tab === "vehiculos" && <Vehiculos />}
-        {tab === "equipos" && <EquiposCorrectivos />}
+        {tab === "equipos" && <EquiposCorrectivos irInicial={odParaEquipos} onIrConsumido={() => setOdParaEquipos(null)} />}
         {tab === "planilla" && <Planilla />}
         {tab === "admin" && <Administrativo />}
       </div>
     </div>
+    </EquiposNavContext.Provider>
     </CurrentUserContext.Provider>
   );
 }

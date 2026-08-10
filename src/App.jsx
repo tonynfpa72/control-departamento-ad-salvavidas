@@ -4993,11 +4993,15 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <Btn variant={areaActiva === "inspecciones" ? "accent" : "ghost"} onClick={() => setAreaActiva("inspecciones")}>Inspecciones</Btn>
-        <Btn variant={areaActiva === "proyectos" ? "accent" : "ghost"} onClick={() => setAreaActiva("proyectos")}>Proyectos</Btn>
-        <div style={{ width: 1, background: T.line, margin: "0 4px" }} />
-        <Btn variant={tipoOdActivo === "Correctivo" ? "accent" : "ghost"} onClick={() => setTipoOdActivo("Correctivo")}>OD Correctivos</Btn>
-        <Btn variant={tipoOdActivo === "Normal" ? "accent" : "ghost"} onClick={() => setTipoOdActivo("Normal")}>{areaActiva === "proyectos" ? "OD Proyectos" : "OD IPM"}</Btn>
+        <Btn variant={areaActiva === "inspecciones" ? "accent" : "ghost"} onClick={() => { setAreaActiva("inspecciones"); setTipoOdActivo("Correctivo"); }}>Correctivos Inspecciones</Btn>
+        <Btn variant={areaActiva === "proyectos" ? "accent" : "ghost"} onClick={() => setAreaActiva("proyectos")}>Correctivos Proyectos</Btn>
+        {areaActiva === "proyectos" && (
+          <>
+            <div style={{ width: 1, background: T.line, margin: "0 4px" }} />
+            <Btn variant={tipoOdActivo === "Correctivo" ? "accent" : "ghost"} onClick={() => setTipoOdActivo("Correctivo")}>OD Correctivos</Btn>
+            <Btn variant={tipoOdActivo === "Normal" ? "accent" : "ghost"} onClick={() => setTipoOdActivo("Normal")}>OD Proyectos</Btn>
+          </>
+        )}
         <div style={{ width: 1, background: T.line, margin: "0 4px" }} />
         <Btn variant={subTab === "pendientes" ? "accent" : "ghost"} onClick={() => setSubTab("pendientes")}>Pendientes ({pendientes.length})</Btn>
         <Btn variant={subTab === "completados" ? "accent" : "ghost"} onClick={() => setSubTab("completados")}>Completados ({completados.length})</Btn>

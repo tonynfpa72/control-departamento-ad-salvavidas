@@ -5083,7 +5083,7 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
         ) : clientesOrdenados.map((cliente) => (
           <div key={cliente} style={{ marginBottom: 24 }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: T.ink, marginBottom: 10 }}>{cliente}</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(95px, 1fr))", gap: 8 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(90px, 100px))", gap: 8, justifyContent: "start" }}>
               {porCliente[cliente].map((r) => {
                 const { fondo, borde } = subTab === "completados" ? { fondo: T.greenSoft, borde: T.green } : colorPorFechaPo(r.fechaPo);
                 return (

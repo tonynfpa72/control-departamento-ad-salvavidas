@@ -1106,6 +1106,14 @@ function HorasExtras({ area, color }) {
         <div style={{ marginTop: 10, fontSize: 12.5, color: T.inkSoft, textAlign: "right", fontWeight: 700 }}>
           Total horas (esta pestaña): {rowsMostradas.reduce((s, r) => s + Number(r.horas || 0), 0)}h
         </div>
+        {subTab === "solicitud" && (
+          <div style={{ marginTop: 4, fontSize: 12, color: T.inkSoft, textAlign: "right" }}>
+            De esas: <span style={{ color: T.amber, fontWeight: 700 }}>{rowsMostradas.filter((r) => r.estado === "Pendiente").reduce((s, r) => s + Number(r.horas || 0), 0)}h Pendientes de aprobar</span>
+            {" · "}
+            <span style={{ color: T.green, fontWeight: 700 }}>{rowsMostradas.filter((r) => r.estado === "Aprobada").reduce((s, r) => s + Number(r.horas || 0), 0)}h ya Aprobadas</span>
+            {" (solo las Aprobadas y Cerradas cuentan en la gráfica)"}
+          </div>
+        )}
       </Card>
     </div>
   );
@@ -2949,21 +2957,35 @@ function ClientesPorPersona({ area, color }) {
    --------------------------------------------------------- */
 function HorasExtrasQuincenales({ area, color }) {
   const { fechasCorte } = useContext(FechasCorteContext);
-  const [filas, setFilas] = useState([]);
-  const [reales, setReales] = useState([]);
+  const [filasTodas, setFilasTodas] = useState([]);
+  const [realesTodas, setRealesTodas] = useState([]);
   const [ventana, setVentana] = useState(0);
   const VENTANA_QUINCENAS = 12;
+  // Inspecciones y Proyectos comparten las mismas fechas de corte, así que
+  // sus gráficas muestran siempre los mismos periodos en el eje (aunque
+  // alguno tenga 0 horas), para poder compararlas una al lado de la otra.
+  const AREAS_COMPARABLES = ["inspecciones", "proyectos"];
+  const areasParaPeriodos = AREAS_COMPARABLES.includes(area) ? AREAS_COMPARABLES : [area];
 
   useEffect(() => {
-    (async () => {
-      const { data } = await supabase.from("horas_extras_manual").select("*").eq("area", area).order("created_at", { ascending: true });
-      if (data) setFilas(data);
-    })();
-    (async () => {
-      const { data } = await supabase.from("horas_extras").select("*").eq("area", area).in("estado", ["Aprobada", "Cerrada"]);
-      if (data) setReales(data);
-    })();
+    const cargarManual = async () => {
+      const { data } = await supabase.from("horas_extras_manual").select("*").in("area", areasParaPeriodos).order("created_at", { ascending: true });
+      if (data) setFilasTodas(data);
+    };
+    const cargarReales = async () => {
+      const { data } = await supabase.from("horas_extras").select("*").in("area", areasParaPeriodos).in("estado", ["Aprobada", "Cerrada"]);
+      if (data) setRealesTodas(data);
+    };
+    cargarManual();
+    cargarReales();
+    // Se refresca sola, para que si apruebas/cierras una solicitud mientras
+    // tienes esta gráfica abierta, el número se actualice sin recargar la página.
+    const intervalo = setInterval(() => { cargarManual(); cargarReales(); }, 20000);
+    return () => clearInterval(intervalo);
   }, [area]);
+
+  const filas = filasTodas.filter((f) => f.area === area);
+  const reales = realesTodas.filter((r) => r.area === area);
 
   const autoPorQuincena = {};
   const fechaPorQuincenaAuto = {};
@@ -2974,10 +2996,23 @@ function HorasExtrasQuincenales({ area, color }) {
     autoPorQuincena[etiqueta] = (autoPorQuincena[etiqueta] || 0) + (Number(h.horas) || 0);
     if (!fechaPorQuincenaAuto[etiqueta] || fechaRef < fechaPorQuincenaAuto[etiqueta]) fechaPorQuincenaAuto[etiqueta] = fechaRef;
   });
+  // Los periodos que se muestran en el eje se arman con TODOS los registros
+  // (manual + reales) de las áreas comparables, no solo los de esta área,
+  // para que el eje quede igual entre Inspecciones y Proyectos.
+  const fechaPorQuincenaCompartida = {};
+  realesTodas.forEach((h) => {
+    const fechaRef = h.fecha_ejecucion || h.fecha;
+    if (!fechaRef) return;
+    const etiqueta = etiquetaPeriodo(fechaRef, fechasCorte);
+    if (!fechaPorQuincenaCompartida[etiqueta] || fechaRef < fechaPorQuincenaCompartida[etiqueta]) fechaPorQuincenaCompartida[etiqueta] = fechaRef;
+  });
   const quincenasOrdenadas = [];
-  filas.forEach((f) => { if (!quincenasOrdenadas.includes(f.quincena)) quincenasOrdenadas.push(f.quincena); });
-  const soloAuto = Object.keys(autoPorQuincena).filter((q) => !quincenasOrdenadas.includes(q));
-  soloAuto.sort((a, b) => (fechaPorQuincenaAuto[a] || "").localeCompare(fechaPorQuincenaAuto[b] || ""));
+  filasTodas.forEach((f) => { if (!quincenasOrdenadas.includes(f.quincena)) quincenasOrdenadas.push(f.quincena); });
+  const soloAuto = [...new Set(realesTodas.map((h) => {
+    const fechaRef = h.fecha_ejecucion || h.fecha;
+    return fechaRef ? etiquetaPeriodo(fechaRef, fechasCorte) : null;
+  }))].filter((q) => q && !quincenasOrdenadas.includes(q));
+  soloAuto.sort((a, b) => (fechaPorQuincenaCompartida[a] || "").localeCompare(fechaPorQuincenaCompartida[b] || ""));
   quincenasOrdenadas.push(...soloAuto);
 
   const dataCompleta = quincenasOrdenadas.map((q) => {
@@ -3078,18 +3113,25 @@ function ResumenEjecutivo() {
   const VENTANA_QUINCENAS = 12;
 
   useEffect(() => {
-    (async () => {
-      const { data } = await supabase.from("facturacion").select("*").order("created_at", { ascending: true });
-      if (data) setFacturas(data);
-    })();
-    (async () => {
-      const { data } = await supabase.from("horas_extras_manual").select("*").order("created_at", { ascending: true });
-      if (data) setHorasManual(data);
-    })();
-    (async () => {
-      const { data } = await supabase.from("horas_extras").select("*").in("area", ["inspecciones", "proyectos"]).in("estado", ["Aprobada", "Cerrada"]);
-      if (data) setHorasReales(data);
-    })();
+    const cargarTodo = () => {
+      (async () => {
+        const { data } = await supabase.from("facturacion").select("*").order("created_at", { ascending: true });
+        if (data) setFacturas(data);
+      })();
+      (async () => {
+        const { data } = await supabase.from("horas_extras_manual").select("*").order("created_at", { ascending: true });
+        if (data) setHorasManual(data);
+      })();
+      (async () => {
+        const { data } = await supabase.from("horas_extras").select("*").in("area", ["inspecciones", "proyectos"]).in("estado", ["Aprobada", "Cerrada"]);
+        if (data) setHorasReales(data);
+      })();
+    };
+    cargarTodo();
+    // Se refresca sola cada 20s, para que si apruebas/cierras horas extras o
+    // cambias facturación mientras tienes Administrativo abierto, se actualice sin recargar.
+    const intervalo = setInterval(cargarTodo, 20000);
+    return () => clearInterval(intervalo);
   }, []);
 
   const agregarMesCombinado = async () => {

@@ -4911,6 +4911,7 @@ function EquiposCorrectivos() {
   const [filtroOd, setFiltroOd] = useState("");
   const [filtroCliente, setFiltroCliente] = useState("");
   const [filtroPo, setFiltroPo] = useState("");
+  const [vista, setVista] = useState("tarjetas");
 
   const setCampo = (id, campo, valor) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, [campo]: valor } : r));
@@ -4971,6 +4972,12 @@ function EquiposCorrectivos() {
         )}
       </div>
 
+      <div style={{ display: "flex", gap: 6 }}>
+        <Btn small variant={vista === "tarjetas" ? "accent" : "ghost"} onClick={() => setVista("tarjetas")}>Tarjetas</Btn>
+        <Btn small variant={vista === "compacta" ? "accent" : "ghost"} onClick={() => setVista("compacta")}>Compacta</Btn>
+        <Btn small variant={vista === "lista" ? "accent" : "ghost"} onClick={() => setVista("lista")}>Lista</Btn>
+      </div>
+
       {subTab === "pendientes" && (
         <div style={{ display: "flex", gap: 14, fontSize: 12, color: T.inkSoft, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: T.graySoft, border: `1px solid ${T.line}` }} /> Al día</span>
@@ -4979,40 +4986,74 @@ function EquiposCorrectivos() {
         </div>
       )}
 
-      {clientesOrdenados.length === 0 ? (
+      {vista === "lista" ? (
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+          <thead>
+            <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
+              <th style={{ padding: "6px 8px" }}>Cliente</th><th>OD</th><th>PO#</th><th>Fecha PO</th><th>SAP#</th><th>Estatus</th><th style={{ minWidth: 160 }}>Equipos</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {listaFiltrada.length === 0 ? (
+              <tr><td colSpan={8} style={{ padding: "10px 8px", color: T.gray }}>No hay OD Correctivos que coincidan.</td></tr>
+            ) : listaFiltrada.map((r) => (
+              <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
+                <td style={{ padding: "8px" }}>{r.cliente || "Sin cliente"}</td>
+                <td style={{ fontWeight: 700 }}>{r.od}</td>
+                <td>{canEditar ? <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: 100 }} value={r.poNumero || ""} onChange={(e) => setCampo(r.id, "poNumero", e.target.value)} /> : (r.poNumero || "—")}</td>
+                <td>{canEditar ? <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: 130 }} value={r.fechaPo || ""} onChange={(e) => setCampo(r.id, "fechaPo", e.target.value)} /> : (r.fechaPo || "—")}</td>
+                <td>{canEditar ? <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: 100 }} value={r.sapNumero || ""} onChange={(e) => setCampo(r.id, "sapNumero", e.target.value)} /> : (r.sapNumero || "—")}</td>
+                <td>
+                  {canEditar ? (
+                    <select style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: 130 }} value={r.estatusEquipo || "Abierto"} onChange={(e) => setCampo(r.id, "estatusEquipo", e.target.value)}>
+                      {ESTATUS_EQUIPO_OPCIONES.map((op) => <option key={op}>{op}</option>)}
+                    </select>
+                  ) : (r.estatusEquipo || "Abierto")}
+                </td>
+                <td>{canEditar ? <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.equiposCorrectivo || ""} onChange={(e) => setCampo(r.id, "equiposCorrectivo", e.target.value)} placeholder="Ej. escalera, taladro..." /> : (r.equiposCorrectivo || "—")}</td>
+                <td>{canEditar && <Btn small variant="danger" onClick={() => borrarOD(r.id)}><X size={12} /></Btn>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : clientesOrdenados.length === 0 ? (
         <div style={{ color: T.gray, fontSize: 13.5 }}>No hay OD Correctivos {subTab === "completados" ? "completados" : "pendientes"} que coincidan en esta área.</div>
       ) : clientesOrdenados.map((cliente) => (
         <div key={cliente}>
           <div style={{ fontSize: 15, fontWeight: 700, color: T.ink, marginBottom: 10 }}>{cliente}</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(${vista === "compacta" ? 135 : 260}px, 1fr))`, gap: vista === "compacta" ? 10 : 12 }}>
             {porCliente[cliente].map((r) => {
               const { fondo, borde } = subTab === "completados" ? { fondo: T.greenSoft, borde: T.green } : colorPorFechaPo(r.fechaPo);
               return (
-                <div key={r.id} style={{ background: fondo, border: `1px solid ${borde}`, borderRadius: 12, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+                <div key={r.id} style={{ background: fondo, border: `1px solid ${borde}`, borderRadius: 12, padding: vista === "compacta" ? 10 : "14px 16px", display: "flex", flexDirection: "column", gap: vista === "compacta" ? 6 : 10 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div style={{ fontSize: 14, fontWeight: 700 }}>{r.od}</div>
                     {canEditar && <button onClick={() => borrarOD(r.id)} title="Borrar" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 15, lineHeight: 1 }}>×</button>}
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 12px", fontSize: 12 }}>
-                    <div style={{ color: T.inkSoft, alignSelf: "center" }}>PO#</div>
+                  <div style={{ display: "grid", gridTemplateColumns: vista === "compacta" ? "1fr" : "1fr 1fr", gap: "6px 12px", fontSize: 12 }}>
+                    {vista === "compacta" && <div style={{ color: T.inkSoft }}>PO#</div>}
+                    {vista !== "compacta" && <div style={{ color: T.inkSoft, alignSelf: "center" }}>PO#</div>}
                     <div>
                       {canEditar ? (
                         <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.poNumero || ""} onChange={(e) => setCampo(r.id, "poNumero", e.target.value)} />
                       ) : (r.poNumero || "—")}
                     </div>
-                    <div style={{ color: T.inkSoft, alignSelf: "center" }}>Fecha PO</div>
+                    {vista === "compacta" && <div style={{ color: T.inkSoft }}>Fecha PO</div>}
+                    {vista !== "compacta" && <div style={{ color: T.inkSoft, alignSelf: "center" }}>Fecha PO</div>}
                     <div>
                       {canEditar ? (
                         <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.fechaPo || ""} onChange={(e) => setCampo(r.id, "fechaPo", e.target.value)} />
                       ) : (r.fechaPo || "—")}
                     </div>
-                    <div style={{ color: T.inkSoft, alignSelf: "center" }}>SAP#</div>
+                    {vista === "compacta" && <div style={{ color: T.inkSoft }}>SAP#</div>}
+                    {vista !== "compacta" && <div style={{ color: T.inkSoft, alignSelf: "center" }}>SAP#</div>}
                     <div>
                       {canEditar ? (
                         <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.sapNumero || ""} onChange={(e) => setCampo(r.id, "sapNumero", e.target.value)} />
                       ) : (r.sapNumero || "—")}
                     </div>
-                    <div style={{ color: T.inkSoft, alignSelf: "center" }}>Estatus</div>
+                    {vista === "compacta" && <div style={{ color: T.inkSoft }}>Estatus</div>}
+                    {vista !== "compacta" && <div style={{ color: T.inkSoft, alignSelf: "center" }}>Estatus</div>}
                     <div>
                       {canEditar ? (
                         <select style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.estatusEquipo || "Abierto"} onChange={(e) => setCampo(r.id, "estatusEquipo", e.target.value)}>
@@ -5021,7 +5062,7 @@ function EquiposCorrectivos() {
                       ) : (r.estatusEquipo || "Abierto")}
                     </div>
                     <div style={{ color: T.inkSoft }}>Equipos</div>
-                    <div style={{ gridColumn: "2 / 3" }}>
+                    <div style={{ gridColumn: vista === "compacta" ? "1 / 2" : "2 / 3" }}>
                       {canEditar ? (
                         <textarea style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%", minHeight: 40, resize: "vertical" }} value={r.equiposCorrectivo || ""} onChange={(e) => setCampo(r.id, "equiposCorrectivo", e.target.value)} placeholder="Ej. escalera, taladro..." />
                       ) : (r.equiposCorrectivo || "—")}

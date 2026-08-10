@@ -4903,18 +4903,39 @@ function EquiposCorrectivos() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
   const canEditar = isAdmin || currentUser?.categoria === "asistente";
+  const confirmar = useContext(ConfirmContext);
   const [areaActiva, setAreaActiva] = useState("inspecciones");
+  const [subTab, setSubTab] = useState("pendientes");
   const [odsDelArea, setRows] = useClientesArea(areaActiva);
+
+  const [filtroOd, setFiltroOd] = useState("");
+  const [filtroCliente, setFiltroCliente] = useState("");
+  const [filtroPo, setFiltroPo] = useState("");
 
   const setCampo = (id, campo, valor) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, [campo]: valor } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ [campo]: valor })).eq("id", id).then();
   };
+  const borrarOD = async (id) => {
+    if (!(await confirmar("¿Está seguro que desea eliminar este OD Correctivo? Esta acción no se puede deshacer."))) return;
+    setRows((prev) => prev.filter((r) => r.id !== id));
+    supabase.from("ordenes_trabajo").delete().eq("id", id).then();
+  };
 
-  const pendientes = odsDelArea.filter((r) => r.tipoOD === "Correctivo" && r.progreso === "Pendiente");
+  const correctivos = odsDelArea.filter((r) => r.tipoOD === "Correctivo");
+  const pendientes = correctivos.filter((r) => r.progreso === "Pendiente");
+  const completados = correctivos.filter((r) => r.progreso === "Completado");
+  const listaActiva = subTab === "completados" ? completados : pendientes;
+
+  const listaFiltrada = listaActiva.filter((r) => {
+    const matchOd = !filtroOd.trim() || (r.od || "").toLowerCase().includes(filtroOd.trim().toLowerCase());
+    const matchCliente = !filtroCliente.trim() || (r.cliente || "").toLowerCase().includes(filtroCliente.trim().toLowerCase());
+    const matchPo = !filtroPo.trim() || (r.poNumero || "").toLowerCase().includes(filtroPo.trim().toLowerCase());
+    return matchOd && matchCliente && matchPo;
+  });
 
   const porCliente = {};
-  pendientes.forEach((r) => {
+  listaFiltrada.forEach((r) => {
     const clave = r.cliente || "Sin cliente";
     if (!porCliente[clave]) porCliente[clave] = [];
     porCliente[clave].push(r);
@@ -4933,51 +4954,68 @@ function EquiposCorrectivos() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <div style={{ display: "flex", gap: 8 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Btn variant={areaActiva === "inspecciones" ? "accent" : "ghost"} onClick={() => setAreaActiva("inspecciones")}>Inspecciones</Btn>
         <Btn variant={areaActiva === "proyectos" ? "accent" : "ghost"} onClick={() => setAreaActiva("proyectos")}>Proyectos</Btn>
+        <div style={{ width: 1, background: T.line, margin: "0 4px" }} />
+        <Btn variant={subTab === "pendientes" ? "accent" : "ghost"} onClick={() => setSubTab("pendientes")}>Pendientes ({pendientes.length})</Btn>
+        <Btn variant={subTab === "completados" ? "accent" : "ghost"} onClick={() => setSubTab("completados")}>Completados ({completados.length})</Btn>
       </div>
 
-      <div style={{ display: "flex", gap: 14, fontSize: 12, color: T.inkSoft, alignItems: "center" }}>
-        <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: T.graySoft, border: `1px solid ${T.line}` }} /> Al día</span>
-        <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: T.amberSoft, border: `1px solid ${T.amber}` }} /> 6+ semanas desde la Fecha PO</span>
-        <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: T.redSoft, border: `1px solid ${T.red}` }} /> 8+ semanas desde la Fecha PO</span>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <input style={{ ...inputStyle, width: 150 }} value={filtroOd} onChange={(e) => setFiltroOd(e.target.value)} placeholder="Filtrar por OD..." />
+        <input style={{ ...inputStyle, width: 180 }} value={filtroCliente} onChange={(e) => setFiltroCliente(e.target.value)} placeholder="Filtrar por cliente..." />
+        <input style={{ ...inputStyle, width: 150 }} value={filtroPo} onChange={(e) => setFiltroPo(e.target.value)} placeholder="Filtrar por PO..." />
+        {(filtroOd || filtroCliente || filtroPo) && (
+          <Btn small variant="ghost" onClick={() => { setFiltroOd(""); setFiltroCliente(""); setFiltroPo(""); }}>Limpiar filtros</Btn>
+        )}
       </div>
+
+      {subTab === "pendientes" && (
+        <div style={{ display: "flex", gap: 14, fontSize: 12, color: T.inkSoft, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: T.graySoft, border: `1px solid ${T.line}` }} /> Al día</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: T.amberSoft, border: `1px solid ${T.amber}` }} /> 6+ semanas desde la Fecha PO</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: T.redSoft, border: `1px solid ${T.red}` }} /> 8+ semanas desde la Fecha PO</span>
+        </div>
+      )}
 
       {clientesOrdenados.length === 0 ? (
-        <div style={{ color: T.gray, fontSize: 13.5 }}>No hay OD Correctivos pendientes en esta área.</div>
+        <div style={{ color: T.gray, fontSize: 13.5 }}>No hay OD Correctivos {subTab === "completados" ? "completados" : "pendientes"} que coincidan en esta área.</div>
       ) : clientesOrdenados.map((cliente) => (
         <div key={cliente}>
           <div style={{ fontSize: 15, fontWeight: 700, color: T.ink, marginBottom: 10 }}>{cliente}</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 12 }}>
             {porCliente[cliente].map((r) => {
-              const { fondo, borde } = colorPorFechaPo(r.fechaPo);
+              const { fondo, borde } = subTab === "completados" ? { fondo: T.greenSoft, borde: T.green } : colorPorFechaPo(r.fechaPo);
               return (
-                <div key={r.id} style={{ background: fondo, border: `1px solid ${borde}`, borderRadius: 12, padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700 }}>{r.od}</div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+                <div key={r.id} style={{ background: fondo, border: `1px solid ${borde}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>{r.od}</div>
+                    {canEditar && <button onClick={() => borrarOD(r.id)} title="Borrar" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 14, lineHeight: 1 }}>×</button>}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 11.5 }}>
                     <div>
                       <span style={{ color: T.inkSoft }}>PO#: </span>
                       {canEditar ? (
-                        <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.poNumero || ""} onChange={(e) => setCampo(r.id, "poNumero", e.target.value)} />
+                        <input style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: "100%" }} value={r.poNumero || ""} onChange={(e) => setCampo(r.id, "poNumero", e.target.value)} />
                       ) : (r.poNumero || "—")}
                     </div>
                     <div>
                       <span style={{ color: T.inkSoft }}>Fecha PO: </span>
                       {canEditar ? (
-                        <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.fechaPo || ""} onChange={(e) => setCampo(r.id, "fechaPo", e.target.value)} />
+                        <input type="date" style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: "100%" }} value={r.fechaPo || ""} onChange={(e) => setCampo(r.id, "fechaPo", e.target.value)} />
                       ) : (r.fechaPo || "—")}
                     </div>
                     <div>
                       <span style={{ color: T.inkSoft }}>SAP#: </span>
                       {canEditar ? (
-                        <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.sapNumero || ""} onChange={(e) => setCampo(r.id, "sapNumero", e.target.value)} />
+                        <input style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: "100%" }} value={r.sapNumero || ""} onChange={(e) => setCampo(r.id, "sapNumero", e.target.value)} />
                       ) : (r.sapNumero || "—")}
                     </div>
                     <div>
                       <span style={{ color: T.inkSoft }}>Estatus: </span>
                       {canEditar ? (
-                        <select style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.estatusEquipo || "Abierto"} onChange={(e) => setCampo(r.id, "estatusEquipo", e.target.value)}>
+                        <select style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: "100%" }} value={r.estatusEquipo || "Abierto"} onChange={(e) => setCampo(r.id, "estatusEquipo", e.target.value)}>
                           {ESTATUS_EQUIPO_OPCIONES.map((op) => <option key={op}>{op}</option>)}
                         </select>
                       ) : (r.estatusEquipo || "Abierto")}
@@ -4985,7 +5023,7 @@ function EquiposCorrectivos() {
                     <div>
                       <span style={{ color: T.inkSoft }}>Equipos: </span>
                       {canEditar ? (
-                        <textarea style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%", minHeight: 44, resize: "vertical" }} value={r.equiposCorrectivo || ""} onChange={(e) => setCampo(r.id, "equiposCorrectivo", e.target.value)} placeholder="Ej. escalera, taladro..." />
+                        <textarea style={{ ...inputStyle, fontSize: 11.5, padding: "4px 6px", width: "100%", minHeight: 40, resize: "vertical" }} value={r.equiposCorrectivo || ""} onChange={(e) => setCampo(r.id, "equiposCorrectivo", e.target.value)} placeholder="Ej. escalera, taladro..." />
                       ) : (r.equiposCorrectivo || "—")}
                     </div>
                   </div>

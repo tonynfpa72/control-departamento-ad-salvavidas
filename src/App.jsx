@@ -5057,7 +5057,7 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
           <tbody>
             {listaFiltrada.length === 0 ? (
               <tr><td colSpan={8} style={{ padding: "10px 8px", color: T.gray }}>No hay OD Correctivos que coincidan.</td></tr>
-            ) : listaFiltrada.map((r) => (
+            ) : [...listaFiltrada].sort((a, b) => (a.cliente || "Sin cliente").localeCompare(b.cliente || "Sin cliente")).map((r) => (
               <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
                 <td style={{ padding: "8px" }}>{r.cliente || "Sin cliente"}</td>
                 <td style={{ fontWeight: 700 }}>{r.od}</td>
@@ -5083,18 +5083,18 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
         ) : clientesOrdenados.map((cliente) => (
           <div key={cliente} style={{ marginBottom: 24 }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: T.ink, marginBottom: 10 }}>{cliente}</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(95px, 1fr))", gap: 8 }}>
               {porCliente[cliente].map((r) => {
                 const { fondo, borde } = subTab === "completados" ? { fondo: T.greenSoft, borde: T.green } : colorPorFechaPo(r.fechaPo);
                 return (
-                  <div key={r.id} style={{ background: fondo, border: `1px solid ${borde}`, borderRadius: 12, padding: 14, aspectRatio: "1 / 1", display: "flex", flexDirection: "column", gap: 6, overflow: "hidden" }}>
+                  <div key={r.id} style={{ background: fondo, border: `1px solid ${borde}`, borderRadius: 8, padding: 8, aspectRatio: "1 / 1", display: "flex", flexDirection: "column", gap: 3, overflow: "hidden" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.od}</div>
-                      {canEditar && <button onClick={() => borrarOD(r.id)} title="Borrar" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 14, lineHeight: 1 }}>×</button>}
+                      <div style={{ fontSize: 11, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.od}</div>
+                      {canEditar && <button onClick={() => borrarOD(r.id)} title="Borrar" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 12, lineHeight: 1 }}>×</button>}
                     </div>
-                    <div style={{ fontSize: 12 }}><span style={{ color: T.inkSoft }}>PO#</span> {r.poNumero || "—"}</div>
-                    <div style={{ fontSize: 12 }}><span style={{ color: T.inkSoft }}>Fecha PO</span> {r.fechaPo || "—"}</div>
-                    <div style={{ fontSize: 12 }}><span style={{ color: T.inkSoft }}>SAP#</span> {r.sapNumero || "—"}</div>
+                    <div style={{ fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><span style={{ color: T.inkSoft }}>PO#</span> {r.poNumero || "—"}</div>
+                    <div style={{ fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><span style={{ color: T.inkSoft }}>Fecha</span> {r.fechaPo || "—"}</div>
+                    <div style={{ fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}><span style={{ color: T.inkSoft }}>SAP#</span> {r.sapNumero || "—"}</div>
                   </div>
                 );
               })}

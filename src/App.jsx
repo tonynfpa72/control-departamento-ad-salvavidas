@@ -5064,8 +5064,10 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
           <tbody>
             {listaFiltrada.length === 0 ? (
               <tr><td colSpan={8} style={{ padding: "10px 8px", color: T.gray }}>No hay OD Correctivos que coincidan.</td></tr>
-            ) : [...listaFiltrada].sort((a, b) => (a.cliente || "Sin cliente").localeCompare(b.cliente || "Sin cliente")).map((r) => (
-              <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
+            ) : [...listaFiltrada].sort((a, b) => (a.cliente || "Sin cliente").localeCompare(b.cliente || "Sin cliente")).map((r) => {
+              const { fondo, borde } = subTab === "completados" ? { fondo: T.greenSoft, borde: T.green } : colorPorFechaPo(r.fechaPo);
+              return (
+              <tr key={r.id} style={{ borderTop: `1px solid ${T.line}`, background: fondo, borderLeft: `3px solid ${borde}` }}>
                 <td style={{ padding: "8px" }}>{r.cliente || "Sin cliente"}</td>
                 <td style={{ fontWeight: 700 }}>{r.od}</td>
                 <td>{canEditar ? <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: 100 }} value={r.poNumero || ""} onChange={(e) => setCampo(r.id, "poNumero", e.target.value)} /> : (r.poNumero || "—")}</td>
@@ -5081,7 +5083,8 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
                 <td>{canEditar ? <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: "100%" }} value={r.equiposCorrectivo || ""} onChange={(e) => setCampo(r.id, "equiposCorrectivo", e.target.value)} placeholder="Ej. escalera, taladro..." /> : (r.equiposCorrectivo || "—")}</td>
                 <td>{canEditar && <Btn small variant="danger" onClick={() => borrarOD(r.id)}><X size={12} /></Btn>}</td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       ) : vista === "cuadros" ? (

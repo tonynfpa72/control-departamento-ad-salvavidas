@@ -4984,11 +4984,11 @@ function EquiposCorrectivos() {
       ) : clientesOrdenados.map((cliente) => (
         <div key={cliente}>
           <div style={{ fontSize: 15, fontWeight: 700, color: T.ink, marginBottom: 10 }}>{cliente}</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(135px, 1fr))", gap: 10 }}>
             {porCliente[cliente].map((r) => {
               const { fondo, borde } = subTab === "completados" ? { fondo: T.greenSoft, borde: T.green } : colorPorFechaPo(r.fechaPo);
               return (
-                <div key={r.id} style={{ background: fondo, border: `1px solid ${borde}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+                <div key={r.id} style={{ background: fondo, border: `1px solid ${borde}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 5 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div style={{ fontSize: 13, fontWeight: 700 }}>{r.od}</div>
                     {canEditar && <button onClick={() => borrarOD(r.id)} title="Borrar" style={{ background: "transparent", border: "none", color: T.red, cursor: "pointer", fontSize: 14, lineHeight: 1 }}>×</button>}

@@ -1250,8 +1250,9 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     supabase.from("ordenes_trabajo").update(odPatchToDb({ vencimiento })).eq("id", id).then();
   };
   const setFechaAprobacion = (id, fechaAprobacion) => {
-    setRows((prev) => prev.map((r) => r.id === id ? { ...r, fechaAprobacion } : r));
-    supabase.from("ordenes_trabajo").update(odPatchToDb({ fechaAprobacion })).eq("id", id).then();
+    // Se sincroniza con Fecha PO (Equipos) — son la misma fecha en los dos lados.
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, fechaAprobacion, fechaPo: fechaAprobacion } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ fechaAprobacion, fechaPo: fechaAprobacion })).eq("id", id).then();
   };
   const setEquiposCorrectivo = (id, equiposCorrectivo) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, equiposCorrectivo } : r));
@@ -4955,6 +4956,12 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
   }, [irInicial]);
 
   const setCampo = (id, campo, valor) => {
+    // Fecha PO se sincroniza con Fecha de Aprobación (OD Correctivos) — son la misma fecha en los dos lados.
+    if (campo === "fechaPo") {
+      setRows((prev) => prev.map((r) => r.id === id ? { ...r, fechaPo: valor, fechaAprobacion: valor } : r));
+      supabase.from("ordenes_trabajo").update(odPatchToDb({ fechaPo: valor, fechaAprobacion: valor })).eq("id", id).then();
+      return;
+    }
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, [campo]: valor } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ [campo]: valor })).eq("id", id).then();
   };

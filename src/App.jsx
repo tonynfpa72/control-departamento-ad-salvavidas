@@ -832,14 +832,17 @@ function HorasExtras({ area, color }) {
   const horasCalculadas = calcularHorasRango(form.horaInicio, form.horaFin);
 
   useEffect(() => {
-    (async () => {
+    const cargar = async () => {
       const { data: filas } = await supabase.from("horas_extras").select("*").eq("area", area).order("created_at", { ascending: false });
       if (filas) setRows(filas);
       const { data: config } = await supabase.from("horas_disponible").select("*").eq("area", area).single();
       if (config) setDisponibleState(Number(config.disponible));
       const { data: personal } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
       if (personal) setEmpleados(personal);
-    })();
+    };
+    cargar();
+    const intervalo = setInterval(cargar, 20000);
+    return () => clearInterval(intervalo);
   }, [area]);
 
   const setDisponible = (valor) => {
@@ -2498,7 +2501,7 @@ function CursosEHS() {
   }, []);
 
   useEffect(() => {
-    (async () => {
+    const cargar = async () => {
       const { data } = await supabase.from("cursos_ehs").select("*").order("created_at", { ascending: false });
       if (data) {
         const normalizados = data.map((r) => ({ ...r, fecha: r.fecha || "" }));
@@ -2519,7 +2522,10 @@ function CursosEHS() {
         setRows(finales);
         idsReciclados.forEach((id) => supabase.from("cursos_ehs").update({ estado: "Pendiente", fecha: null }).eq("id", id).then());
       }
-    })();
+    };
+    cargar();
+    const intervalo = setInterval(cargar, 20000);
+    return () => clearInterval(intervalo);
   }, []);
 
   const add = async () => {
@@ -2698,18 +2704,23 @@ function EquipoSeguridad() {
   const [carrito, setCarrito] = useState([]);
 
   useEffect(() => {
-    (async () => {
-      const { data } = await supabase.from("epp_registros").select("*").order("created_at", { ascending: false });
-      if (data) setRows(data);
-    })();
-    (async () => {
-      const { data } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
-      if (data) setEmpleados(data);
-    })();
-    (async () => {
-      const { data } = await supabase.from("epp_tipos").select("*").order("nombre", { ascending: true });
-      if (data && data.length > 0) setTiposEPP(data.map((t) => t.nombre));
-    })();
+    const cargar = () => {
+      (async () => {
+        const { data } = await supabase.from("epp_registros").select("*").order("created_at", { ascending: false });
+        if (data) setRows(data);
+      })();
+      (async () => {
+        const { data } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
+        if (data) setEmpleados(data);
+      })();
+      (async () => {
+        const { data } = await supabase.from("epp_tipos").select("*").order("nombre", { ascending: true });
+        if (data && data.length > 0) setTiposEPP(data.map((t) => t.nombre));
+      })();
+    };
+    cargar();
+    const intervalo = setInterval(cargar, 20000);
+    return () => clearInterval(intervalo);
   }, []);
 
   const agregarTipoEPP = async () => {
@@ -4245,10 +4256,13 @@ function FacturacionPublica() {
   const VENTANA_MESES = 12;
   const PUNTO_EQUILIBRIO = 120000;
   useEffect(() => {
-    (async () => {
+    const cargar = async () => {
       const { data } = await supabase.from("facturacion").select("*").order("created_at", { ascending: true });
       if (data) setFacturas(data);
-    })();
+    };
+    cargar();
+    const intervalo = setInterval(cargar, 20000);
+    return () => clearInterval(intervalo);
   }, []);
   // Solo se muestra el año más reciente cargado; los años anteriores
   // quedan reservados para la gráfica de comparación de Administrativo.
@@ -4548,18 +4562,20 @@ function GastosTarjeta() {
   const fileInputRefGastos = React.useRef(null);
 
   useEffect(() => {
-    (async () => {
-      const { data } = await supabase.from("gastos_tarjeta").select("*").order("fecha", { ascending: false });
-      if (data) setRows(data);
-    })();
-    (async () => {
-      const { data } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
-      if (data) setEmpleados(data);
-    })();
-    (async () => {
-      const { data } = await supabase.from("gastos_categorias").select("*").order("nombre", { ascending: true });
-      if (data && data.length > 0) setCategorias(data.map((c) => c.nombre));
-    })();
+    const cargarTodo = () => {
+      refetchGastos();
+      (async () => {
+        const { data } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
+        if (data) setEmpleados(data);
+      })();
+      (async () => {
+        const { data } = await supabase.from("gastos_categorias").select("*").order("nombre", { ascending: true });
+        if (data && data.length > 0) setCategorias(data.map((c) => c.nombre));
+      })();
+    };
+    cargarTodo();
+    const intervalo = setInterval(cargarTodo, 20000);
+    return () => clearInterval(intervalo);
   }, []);
 
   // Compara "NOMBRE TARJETA" (ej. "ADRIAN CASTILLO L.") contra el nombre
@@ -4891,18 +4907,23 @@ function Vehiculos() {
   const [filtroMes, setFiltroMes] = useState("");
 
   useEffect(() => {
-    (async () => {
-      const { data } = await supabase.from("vehiculos").select("*").order("placa", { ascending: true });
-      if (data) setVehiculos(data);
-    })();
-    (async () => {
-      const { data } = await supabase.from("vehiculos_kilometraje").select("*").order("fecha", { ascending: false });
-      if (data) setRegistros(data);
-    })();
-    (async () => {
-      const { data } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
-      if (data) setEmpleados(data);
-    })();
+    const cargar = () => {
+      (async () => {
+        const { data } = await supabase.from("vehiculos").select("*").order("placa", { ascending: true });
+        if (data) setVehiculos(data);
+      })();
+      (async () => {
+        const { data } = await supabase.from("vehiculos_kilometraje").select("*").order("fecha", { ascending: false });
+        if (data) setRegistros(data);
+      })();
+      (async () => {
+        const { data } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
+        if (data) setEmpleados(data);
+      })();
+    };
+    cargar();
+    const intervalo = setInterval(cargar, 20000);
+    return () => clearInterval(intervalo);
   }, []);
 
   const agregarVehiculo = async () => {
@@ -5750,6 +5771,14 @@ export default function App() {
     refetchClientes();
     refetchLogo();
     refetchFechasCorte();
+    // Se refresca sola cada 20s, para que Inspecciones, Proyectos y
+    // Apertura de OD (que comparten estos mismos datos) se mantengan al
+    // día entre varios usuarios sin tener que recargar la página a mano.
+    const intervalo = setInterval(() => {
+      refetchClientes();
+      refetchFechasCorte();
+    }, 20000);
+    return () => clearInterval(intervalo);
   }, []);
 
   return (

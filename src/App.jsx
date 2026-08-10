@@ -2213,10 +2213,16 @@ function Cotizaciones() {
   });
 
   useEffect(() => {
-    (async () => {
+    const cargar = async () => {
       const { data } = await supabase.from("cotizaciones").select("*").order("numero", { ascending: false });
       if (data) setRows(data.map(cotRowFromDb));
-    })();
+    };
+    cargar();
+    // Se refresca sola, para que el consecutivo (próximo número) y la lista
+    // se mantengan al día si alguien más agrega una cotización mientras
+    // tienes esta pantalla abierta.
+    const intervalo = setInterval(cargar, 15000);
+    return () => clearInterval(intervalo);
   }, []);
 
   const maxNumero = rows.reduce((m, r) => Math.max(m, Number(r.consecutivo) || 0), 0);
@@ -2746,6 +2752,12 @@ function EquipoSeguridad() {
     setRows((prev) => prev.filter((r) => r.id !== id));
     supabase.from("epp_registros").delete().eq("id", id).then();
   };
+  const reiniciarEPP = async () => {
+    if (!(await confirmar("¿Está seguro que desea BORRAR TODOS los registros de EPP (solicitados y entregados)? Esta acción no se puede deshacer, se usa para empezar un año nuevo.", { confirmLabel: "Sí, reiniciar", variant: "danger" }))) return;
+    const ids = rows.map((r) => r.id);
+    setRows([]);
+    for (const id of ids) await supabase.from("epp_registros").delete().eq("id", id);
+  };
 
   const rowsSolicitado = rows.filter((r) => r.estado === "Solicitado");
   const rowsEntregado = rows.filter((r) => r.estado === "Entregado");
@@ -2762,6 +2774,7 @@ function EquipoSeguridad() {
     totalPorPersona[r.personal_nombre] = (totalPorPersona[r.personal_nombre] || 0) + (Number(r.cantidad) || 0);
   });
   const resumenPersonas = Object.entries(totalPorPersona).sort((a, b) => b[1] - a[1]);
+  const totalGeneralEntregado = resumenPersonas.reduce((s, [, total]) => s + total, 0);
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
@@ -2868,18 +2881,29 @@ function EquipoSeguridad() {
           </div>
         </Card>
 
-        <Card title="Total entregado por persona">
+        <Card
+          title="Total entregado por persona"
+          action={isAdmin && rows.length > 0 && (
+            <Btn small variant="danger" onClick={reiniciarEPP}><X size={13} /> Reiniciar año</Btn>
+          )}
+        >
           {resumenPersonas.length === 0 ? (
             <div style={{ color: T.gray, fontSize: 13 }}>Todavía no se ha marcado ninguna entrega.</div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {resumenPersonas.map(([nombre, total]) => (
-                <div key={nombre} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px dashed ${T.line}`, paddingBottom: 6 }}>
-                  <span style={{ fontSize: 12.5 }}>{nombre}</span>
-                  <Badge color={T.green} soft={T.greenSoft}>{total} artículos</Badge>
-                </div>
-              ))}
-            </div>
+            <>
+              <div style={{ background: T.blueSoft, borderRadius: 10, padding: "10px 14px", marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase" }}>Total general entregado</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: T.blue }}>{totalGeneralEntregado} artículos</div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {resumenPersonas.map(([nombre, total]) => (
+                  <div key={nombre} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px dashed ${T.line}`, paddingBottom: 6 }}>
+                    <span style={{ fontSize: 12.5 }}>{nombre}</span>
+                    <Badge color={T.green} soft={T.greenSoft}>{total} artículos</Badge>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
         </Card>
       </div>

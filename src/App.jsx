@@ -7,7 +7,7 @@ import * as XLSX from "xlsx";
 import {
   LogOut, Plus, Download, Check, X, Clock, ClipboardList,
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
-  ChevronLeft, ChevronRight, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck, Package
+  ChevronLeft, ChevronRight, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck, Package, GraduationCap, Award
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -158,6 +158,7 @@ const AREAS = [
   { id: "gastos_tarjeta", label: "Gastos de Tarjeta", icon: CreditCard, color: T.red },
   { id: "vehiculos", label: "Vehículos", icon: Truck, color: T.blue },
   { id: "planilla", label: "Planilla", icon: Wallet, color: T.amber },
+  { id: "entrenamiento", label: "Entrenamiento", icon: GraduationCap, color: T.turquoise },
   { id: "admin", label: "Administrativo", icon: LayoutDashboard, color: T.steelSoft },
 ];
 
@@ -167,6 +168,7 @@ const CATEGORIAS_USUARIO = [
   { id: "asistente", label: "Asistente" },
   { id: "tecnico", label: "Técnico" },
   { id: "ehs", label: "EHS" },
+  { id: "entrenamiento", label: "Entrenamiento" },
 ];
 
 // Los usuarios ya NO viven aquí: se guardan en Supabase (tabla "usuarios").
@@ -281,6 +283,66 @@ function Dot({ color }) {
   return <span style={{ width: 9, height: 9, borderRadius: "50%", background: color, display: "inline-block", boxShadow: `0 0 0 3px ${color}22` }} />;
 }
 
+// Ícono de trofeo para Entrenamiento: cada rango se representa con un
+// componente real de un sistema de alarma contra incendio, en orden de
+// complejidad creciente.
+function IconTrofeo({ tipo, size = 16, color = "#000" }) {
+  const s = color;
+  const iconos = {
+    estacion_manual: (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+        <rect x="3" y="3" width="18" height="18" rx="2" stroke={s} strokeWidth="2" />
+        <path d="M7 17 L17 7" stroke={s} strokeWidth="2" strokeLinecap="round" />
+        <path d="M12 7 H17 V12" stroke={s} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    ),
+    detector_humo: (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+        <circle cx="12" cy="12" r="9" stroke={s} strokeWidth="2" />
+        <circle cx="12" cy="12" r="3" fill={s} />
+        <circle cx="12" cy="12" r="9" stroke={s} strokeWidth="1" strokeDasharray="1 3" />
+      </svg>
+    ),
+    sensor_flama: (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill={s}>
+        <path d="M12 2c1 3-3 4-3 8a3 3 0 0 0 6 0c0-1-.5-2-1-2.5.8 3 3 3.5 3 6.5a5 5 0 0 1-10 0c0-4 3-5 3-9 0-1.2.5-2.3 2-3z" />
+      </svg>
+    ),
+    modulo_monitor: (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+        <rect x="3" y="5" width="18" height="14" rx="2" stroke={s} strokeWidth="2" />
+        <circle cx="8" cy="12" r="2" fill={s} />
+        <path d="M13 9h5M13 12h5M13 15h5" stroke={s} strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
+    ),
+    modulo_rele: (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+        <rect x="3" y="5" width="18" height="14" rx="2" stroke={s} strokeWidth="2" />
+        <path d="M7 9 a3 3 0 1 0 0.001 0" stroke={s} strokeWidth="1.6" />
+        <path d="M11 12h4l-1.5-1.5M15 12l-1.5 1.5" stroke={s} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    ),
+    bateria_12v: (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+        <rect x="2" y="7" width="16" height="10" rx="1.5" stroke={s} strokeWidth="2" />
+        <rect x="18" y="10" width="2.5" height="4" fill={s} />
+        <path d="M6 12h3M7.5 10.5v3" stroke={s} strokeWidth="1.6" strokeLinecap="round" />
+        <path d="M12 12h3" stroke={s} strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
+    ),
+    panel: (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+        <rect x="3" y="2" width="18" height="20" rx="2" stroke={s} strokeWidth="2" />
+        <circle cx="8" cy="7" r="1.4" fill={s} />
+        <circle cx="12.5" cy="7" r="1.4" fill={s} />
+        <circle cx="17" cy="7" r="1.4" fill={s} />
+        <path d="M6 12h12M6 15h12M6 18h8" stroke={s} strokeWidth="1.4" strokeLinecap="round" />
+      </svg>
+    ),
+  };
+  return iconos[tipo] || null;
+}
+
 function Card({ title, action, children, style }) {
   return (
     <div style={{ background: T.panel, border: `1px solid ${T.line}`, borderRadius: 14, padding: 20, ...style }}>
@@ -292,6 +354,66 @@ function Card({ title, action, children, style }) {
       )}
       {children}
     </div>
+  );
+}
+
+// Guía educativa organizada por sub-temas: a la izquierda la lista de
+// temas del módulo (se marcan con ✓ los ya revisados), a la derecha el
+// contenido ampliado del tema seleccionado. Se usa como pantalla previa
+// obligatoria antes de cada examen/ejercicio de Entrenamiento.
+function GuiaPorTemas({ temas, onContinuar, tituloModulo }) {
+  const [temaActivo, setTemaActivo] = useState(temas[0].id);
+  const [confirmados, setConfirmados] = useState(() => new Set());
+  const seleccionar = (id) => setTemaActivo(id);
+  const confirmarTema = (id) => setConfirmados((prev) => new Set(prev).add(id));
+  const tema = temas.find((t) => t.id === temaActivo);
+  const faltantes = temas.filter((t) => !confirmados.has(t.id));
+  const todoConfirmado = faltantes.length === 0;
+  const temaConfirmado = confirmados.has(tema.id);
+
+  return (
+    <Card title={`Antes de empezar: ${tituloModulo}`}>
+      <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+        <div style={{ width: 230, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+          {temas.map((t) => {
+            const activo = temaActivo === t.id;
+            const confirmado = confirmados.has(t.id);
+            return (
+              <button key={t.id} onClick={() => seleccionar(t.id)} style={{
+                textAlign: "left", padding: "9px 12px", borderRadius: 8, border: "none", cursor: "pointer",
+                background: activo ? T.accent : (confirmado ? T.greenSoft : T.graySoft),
+                color: activo ? "#fff" : (confirmado ? T.green : T.ink),
+                fontSize: 12.5, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+              }}>
+                <span>{t.titulo}</span>
+                {confirmado && !activo && <Check size={13} />}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ flex: 1, minWidth: 260 }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: T.ink, marginBottom: 10 }}>{tema.titulo}</div>
+          <div style={{ fontSize: 13, color: T.inkSoft, lineHeight: 1.7 }}>{tema.contenido}</div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14, padding: "10px 12px", background: temaConfirmado ? T.greenSoft : T.graySoft, borderRadius: 8, cursor: "pointer", width: "fit-content" }}>
+            <input type="checkbox" checked={temaConfirmado} onChange={() => confirmarTema(tema.id)} />
+            <span style={{ fontSize: 12.5, fontWeight: 600, color: temaConfirmado ? T.green : T.ink }}>
+              {temaConfirmado ? "Comprendido y confirmado" : "Marcar como comprendido"}
+            </span>
+          </label>
+        </div>
+      </div>
+      <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+          <Btn variant="accent" onClick={onContinuar} disabled={!todoConfirmado}>Ya entendí, empezar el examen</Btn>
+          <span style={{ fontSize: 12, color: T.gray }}>{confirmados.size}/{temas.length} temas confirmados</span>
+        </div>
+        {!todoConfirmado && (
+          <div style={{ fontSize: 12, color: T.amber }}>
+            Falta confirmar: {faltantes.map((t) => t.titulo).join(", ")}
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 
@@ -3878,9 +4000,72 @@ function Administrativo() {
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <Btn variant={tab === "resumen" ? "accent" : "ghost"} small onClick={() => setTab("resumen")}>Resumen Ejecutivo</Btn>
         <Btn variant={tab === "usuarios" ? "accent" : "ghost"} small onClick={() => setTab("usuarios")}>Gestión de Usuarios</Btn>
+        <Btn variant={tab === "ranking" ? "accent" : "ghost"} small onClick={() => setTab("ranking")}>Ranking de Entrenamiento</Btn>
       </div>
-      {tab === "resumen" ? <ResumenEjecutivo /> : <GestionUsuarios />}
+      {tab === "resumen" && <ResumenEjecutivo />}
+      {tab === "usuarios" && <GestionUsuarios />}
+      {tab === "ranking" && <RankingEntrenamiento />}
     </div>
+  );
+}
+
+// Ranking de Entrenamiento (solo Administrativo): tabla de todo el
+// personal ordenada por puntaje total, con su rango/trofeo y el
+// desglose por módulo — para ver de un vistazo quién va más avanzado.
+function RankingEntrenamiento() {
+  const [puntajes, setPuntajes] = useState([]);
+  useEffect(() => {
+    const cargar = async () => {
+      const { data } = await supabase.from("entrenamiento_puntajes").select("*");
+      if (data) setPuntajes(data);
+    };
+    cargar();
+    const intervalo = setInterval(cargar, 20000);
+    return () => clearInterval(intervalo);
+  }, []);
+
+  const porPersona = {};
+  puntajes.forEach((p) => {
+    if (!porPersona[p.personal_codigo]) porPersona[p.personal_codigo] = { nombre: p.personal_nombre, total: 0, porSegmento: {} };
+    porPersona[p.personal_codigo].total += p.puntos;
+    porPersona[p.personal_codigo].porSegmento[p.segmento] = (porPersona[p.personal_codigo].porSegmento[p.segmento] || 0) + p.puntos;
+  });
+  const filas = Object.values(porPersona).sort((a, b) => b.total - a.total);
+
+  return (
+    <Card title="Ranking de Entrenamiento — todo el personal">
+      {filas.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 13 }}>Todavía nadie ha jugado ningún módulo de Entrenamiento.</div>
+      ) : (
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+          <thead>
+            <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
+              <th style={{ padding: "6px 8px" }}>#</th><th>Persona</th><th>Rango</th><th>Puntaje total</th>
+              {SEGMENTOS_ENTRENAMIENTO.map((s) => <th key={s.id}>{s.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {filas.map((f, i) => {
+              const rango = calcularRangoUsuario(f.total, f.porSegmento);
+              return (
+                <tr key={f.nombre} style={{ borderTop: `1px solid ${T.line}` }}>
+                  <td style={{ padding: "8px", fontWeight: 700, color: i === 0 ? T.accent : T.ink }}>{i + 1}{i === 0 ? " 🏆" : ""}</td>
+                  <td style={{ fontWeight: 600 }}>{f.nombre}</td>
+                  <td>
+                    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                      <Badge color={rango.color} soft={rango.soft}>{rango.nombre}</Badge>
+                      {rango.tipo && <IconTrofeo tipo={rango.tipo} size={14} color={rango.color} />}
+                    </div>
+                  </td>
+                  <td style={{ fontWeight: 800 }}>{f.total} pts</td>
+                  {SEGMENTOS_ENTRENAMIENTO.map((s) => <td key={s.id} style={{ color: T.inkSoft }}>{f.porSegmento[s.id] || 0} pts</td>)}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </Card>
   );
 }
 
@@ -5452,6 +5637,2374 @@ function Vehiculos() {
   );
 }
 
+// ---------------------------------------------------------
+// ÁREA: ENTRENAMIENTO — módulos de práctica tipo juego, con
+// puntaje por segmento que se suma a un total, por empleado
+// (tomado de Planilla). Se va llenando con más segmentos:
+// compuertas lógicas, tablas de verdad, lógica en escalera,
+// ecuaciones de símplex, notifier.
+// ---------------------------------------------------------
+const SEGMENTOS_ENTRENAMIENTO = [
+  { id: "compuertas", label: "Compuertas lógicas" },
+  { id: "tablas_verdad", label: "Tablas de la verdad" },
+  { id: "escalera", label: "Lógica en escalera" },
+  { id: "simplex", label: "Ecuaciones de símplex" },
+  { id: "notifier", label: "Ecuaciones Notifier" },
+  { id: "nfpa72", label: "NFPA 72" },
+  { id: "electronica", label: "Electrónica Básica" },
+];
+
+// Rangos de Entrenamiento: cada nivel se representa con un componente
+// real de un sistema de alarma contra incendio, en orden de complejidad
+// creciente — desde una estación manual hasta el panel completo.
+const RANGOS_ENTRENAMIENTO = [
+  { nombre: "Aprendiz", min: 0, siguiente: 40, color: T.gray, soft: T.graySoft, tipo: null, mensaje: "" },
+  { nombre: "Estación Manual", min: 40, siguiente: 90, color: T.blue, soft: T.blueSoft, tipo: "estacion_manual", mensaje: "Diste el primer paso de verdad. Así como una estación manual, ahora eres parte activa del sistema." },
+  { nombre: "Detector de Humo", min: 90, siguiente: 160, color: T.turquoise, soft: T.turquoiseSoft, tipo: "detector_humo", mensaje: "Tu ojo para los detalles está mejorando. Sigue detectando cada respuesta correcta." },
+  { nombre: "Sensor de Flama", min: 160, siguiente: 240, color: T.amber, soft: T.amberSoft, tipo: "sensor_flama", mensaje: "¡Vas encendido! Tu conocimiento técnico ya responde tan rápido como un sensor de flama." },
+  { nombre: "Módulo Monitor", min: 240, siguiente: 330, color: T.steel, soft: T.steelSoft, tipo: "modulo_monitor", mensaje: "Ya supervisas el sistema completo. Tu nivel técnico está a la altura de un módulo monitor." },
+  { nombre: "Módulo Relé", min: 330, siguiente: 430, color: T.accent, soft: T.accentSoft, tipo: "modulo_rele", mensaje: "Estás a un paso del máximo nivel. Como un relé, ya conectas todo el conocimiento con precisión. Para dar el salto final a Senior necesitas 100% en todos los módulos con contenido." },
+  { nombre: "Panel — Senior Experto Certificado", min: 430, siguiente: null, color: T.green, soft: T.greenSoft, tipo: "panel", mensaje: "¡Llegaste al panel! Eres el cerebro del sistema — dominas al 100% todos los módulos de Entrenamiento." },
+];
+function rangoDeEntrenamiento(pts) {
+  let actual = RANGOS_ENTRENAMIENTO[0];
+  for (const r of RANGOS_ENTRENAMIENTO) { if (pts >= r.min) actual = r; }
+  return actual;
+}
+
+// Puntaje máximo posible por segmento (cantidad de ejercicios/preguntas ×
+// 10 puntos cada uno). Los segmentos en 0 todavía no tienen contenido y no
+// bloquean el rango Senior mientras sigan vacíos.
+const MAX_PUNTOS_SEGMENTO = {
+  compuertas: 160, tablas_verdad: 120, escalera: 50, simplex: 80, notifier: 0, nfpa72: 200, electronica: 190,
+};
+
+// El rango Senior (el más alto) SOLO se otorga si el usuario tiene 100% en
+// TODOS los módulos que ya tienen contenido — sin importar el puntaje
+// acumulado. Si no cumple ese requisito, se tope en el penúltimo rango.
+function calcularRangoUsuario(puntosTotal, puntosPorSegmento) {
+  const rango = rangoDeEntrenamiento(puntosTotal);
+  if (rango.tipo !== "panel") return rango;
+  const segmentosConContenido = SEGMENTOS_ENTRENAMIENTO.filter((s) => (MAX_PUNTOS_SEGMENTO[s.id] || 0) > 0);
+  const cumpleSenior = segmentosConContenido.length > 0 && segmentosConContenido.every((s) => (puntosPorSegmento[s.id] || 0) >= MAX_PUNTOS_SEGMENTO[s.id]);
+  if (cumpleSenior) return rango;
+  return RANGOS_ENTRENAMIENTO[RANGOS_ENTRENAMIENTO.length - 2]; // Módulo Relé
+}
+
+function Entrenamiento() {
+  const currentUser = useContext(CurrentUserContext);
+  const esTecnico = currentUser?.categoria === "tecnico";
+  const [empleados, setEmpleados] = useState([]);
+  const [jugadorCodigo, setJugadorCodigo] = useState("");
+  const [puntajes, setPuntajes] = useState([]);
+  const [modulo, setModulo] = useState(null);
+  const [mostrarRangos, setMostrarRangos] = useState(false);
+  const [subioDeRango, setSubioDeRango] = useState(null);
+  const rangoAnteriorRef = React.useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
+      if (data) setEmpleados(data);
+    })();
+  }, []);
+
+  // Un usuario Técnico queda bloqueado a su propio perfil (encontrado por
+  // coincidencia de nombre contra Planilla) — no puede elegir a nadie más.
+  useEffect(() => {
+    if (!esTecnico || empleados.length === 0 || jugadorCodigo) return;
+    let mejor = null, mejorScore = 0;
+    empleados.forEach((emp) => {
+      const score = similitudNombres(emp.nombre, currentUser?.name || "");
+      if (score > mejorScore) { mejorScore = score; mejor = emp; }
+    });
+    if (mejor && mejorScore >= 0.5) setJugadorCodigo(mejor.codigo);
+  }, [esTecnico, empleados, currentUser]);
+
+  const jugador = empleados.find((e) => e.codigo === jugadorCodigo);
+
+  const cargarPuntajes = async (codigo) => {
+    const { data } = await supabase.from("entrenamiento_puntajes").select("*").eq("personal_codigo", codigo);
+    if (data) setPuntajes(data);
+  };
+
+  useEffect(() => {
+    if (jugadorCodigo) cargarPuntajes(jugadorCodigo);
+    else setPuntajes([]);
+  }, [jugadorCodigo]);
+
+  const registrarPuntos = async (segmento, ejercicio, puntos) => {
+    if (!jugador) return;
+    const payload = { personal_codigo: jugador.codigo, personal_nombre: jugador.nombre, segmento, ejercicio, puntos, fecha: todayISO() };
+    const { data } = await supabase.from("entrenamiento_puntajes").insert(payload).select().single();
+    if (data) setPuntajes((prev) => [...prev, data]);
+  };
+
+  const puntosDeSegmento = (segId) => puntajes.filter((p) => p.segmento === segId).reduce((s, p) => s + p.puntos, 0);
+  const puntosTotal = puntajes.reduce((s, p) => s + p.puntos, 0);
+  const puntosPorSegmento = {};
+  SEGMENTOS_ENTRENAMIENTO.forEach((s) => { puntosPorSegmento[s.id] = puntosDeSegmento(s.id); });
+
+  const rangoActual = calcularRangoUsuario(puntosTotal, puntosPorSegmento);
+
+  // Detecta cuando el rango sube, para mostrar una celebración breve.
+  useEffect(() => {
+    if (rangoAnteriorRef.current !== null && rangoActual.min > rangoAnteriorRef.current) {
+      setSubioDeRango(rangoActual);
+      const t = setTimeout(() => setSubioDeRango(null), 8000);
+      rangoAnteriorRef.current = rangoActual.min;
+      return () => clearTimeout(t);
+    }
+    rangoAnteriorRef.current = rangoActual.min;
+  }, [rangoActual.min]);
+
+  // Insignia por segmento: se muestra el mismo ícono del dispositivo que
+  // corresponda al puntaje de ese segmento, para ver de un vistazo en
+  // cuál módulo va más avanzado.
+  const rangoDeSegmento = (segId) => rangoDeEntrenamiento(puntosDeSegmento(segId));
+
+  const LOGROS = [
+    { id: "primer_punto", nombre: "Primer paso", desc: "Gana tus primeros puntos", cumplido: puntosTotal > 0 },
+    { id: "tres_modulos", nombre: "Explorador", desc: "Suma puntos en 3 módulos distintos", cumplido: SEGMENTOS_ENTRENAMIENTO.filter((s) => puntosDeSegmento(s.id) > 0).length >= 3 },
+    { id: "todos_modulos", nombre: "Todo Terreno", desc: "Suma puntos en todos los módulos", cumplido: SEGMENTOS_ENTRENAMIENTO.every((s) => puntosDeSegmento(s.id) > 0) },
+    { id: "cien_puntos", nombre: "Centurión", desc: "Alcanza 100 puntos en total", cumplido: puntosTotal >= 100 },
+    { id: "nfpa_aprobado", nombre: "Certificado NFPA 72", desc: "Aprueba el Examen Básico de NFPA 72", cumplido: puntosDeSegmento("nfpa72") >= 200 },
+    { id: "senior", nombre: "Senior Experto", desc: "Alcanza el rango máximo (Panel)", cumplido: rangoActual.tipo === "panel" },
+  ];
+
+  if (!jugadorCodigo) {
+    return (
+      <Card title="Entrenamiento — ¿Quién va a jugar?">
+        <div style={{ fontSize: 13.5, color: T.inkSoft, marginBottom: 14 }}>
+          {esTecnico
+            ? "No pudimos relacionar tu usuario con un nombre en Planilla. Pídele a un Administrativo que verifique que tu nombre esté cargado ahí."
+            : "Selecciona tu nombre de la lista de Planilla para empezar a acumular puntos."}
+        </div>
+        {empleados.length === 0 ? (
+          <div style={{ fontSize: 13, color: T.gray }}>Aún no hay personal cargado. Agrégalo desde Planilla.</div>
+        ) : esTecnico ? null : (
+          <select style={{ ...inputStyle, maxWidth: 320 }} value={jugadorCodigo} onChange={(e) => setJugadorCodigo(e.target.value)}>
+            <option value="">Selecciona tu nombre…</option>
+            {empleados.map((emp) => <option key={emp.codigo} value={emp.codigo}>{emp.nombre}</option>)}
+          </select>
+        )}
+      </Card>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {subioDeRango && (
+        <>
+        <style>{`
+          @keyframes trofeoBounce { 0% { transform: scale(0.3) rotate(-15deg); opacity: 0; } 50% { transform: scale(1.15) rotate(6deg); opacity: 1; } 70% { transform: scale(0.95) rotate(-3deg); } 100% { transform: scale(1) rotate(0deg); } }
+          @keyframes bannerGlow { 0%,100% { box-shadow: 0 0 0 0 ${subioDeRango.color}55; } 50% { box-shadow: 0 0 0 10px ${subioDeRango.color}00; } }
+        `}</style>
+        <div style={{
+          background: `linear-gradient(120deg, ${subioDeRango.soft}, #fff 70%)`, border: `2px solid ${subioDeRango.color}`,
+          borderRadius: 14, padding: "18px 22px", display: "flex", alignItems: "center", gap: 18,
+          animation: "bannerGlow 1.8s ease-in-out infinite",
+        }}>
+          <div style={{
+            width: 64, height: 64, borderRadius: "50%", background: "#fff", border: `3px solid ${subioDeRango.color}`,
+            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+            animation: "trofeoBounce 0.7s cubic-bezier(.36,1.5,.4,1)",
+          }}>
+            {subioDeRango.tipo ? <IconTrofeo tipo={subioDeRango.tipo} size={34} color={subioDeRango.color} /> : <Award size={34} color={subioDeRango.color} fill={subioDeRango.color} />}
+          </div>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: subioDeRango.color, textTransform: "uppercase", letterSpacing: 0.4 }}>🎉 ¡Felicidades, {jugador?.nombre?.split(" ")[0] || ""}!</div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: T.ink, margin: "2px 0 4px" }}>Nuevo rango desbloqueado: {subioDeRango.nombre}</div>
+            <div style={{ fontSize: 12.5, color: T.inkSoft }}>{subioDeRango.mensaje || "Sigue sumando puntos en los módulos para llegar más alto."}</div>
+          </div>
+        </div>
+        </>
+      )}
+      <Card
+        title={`Entrenamiento — ${jugador?.nombre || ""}`}
+        action={<div style={{ display: "flex", gap: 8 }}>
+          <Btn small variant="ghost" onClick={() => setMostrarRangos((v) => !v)}>{mostrarRangos ? "Ocultar" : "Ver"} tabla de rangos</Btn>
+          {!esTecnico && <Btn small variant="ghost" onClick={() => setJugadorCodigo("")}>Cambiar jugador</Btn>}
+        </div>}
+      >
+        <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+          <div style={{ background: T.blueSoft, borderRadius: 10, padding: "10px 16px" }}>
+            <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase" }}>Puntaje total</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: T.blue }}>{puntosTotal} pts</div>
+          </div>
+          <div style={{ background: rangoActual.soft, borderRadius: 10, padding: "10px 16px", minWidth: 210 }}>
+            <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase" }}>Rango</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: rangoActual.siguiente ? 6 : 0 }}>
+              <div style={{ fontSize: 16, fontWeight: 800, color: rangoActual.color }}>{rangoActual.nombre}</div>
+              {rangoActual.tipo && <IconTrofeo tipo={rangoActual.tipo} size={20} color={rangoActual.color} />}
+            </div>
+            {rangoActual.siguiente && (
+              <>
+                <div style={{ height: 6, background: "#fff", borderRadius: 99, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${Math.min(100, (puntosTotal / rangoActual.siguiente) * 100)}%`, background: rangoActual.color, transition: "width 0.4s ease" }} />
+                </div>
+                <div style={{ fontSize: 10.5, color: T.inkSoft, marginTop: 3 }}>{rangoActual.siguiente - puntosTotal} pts para el siguiente rango</div>
+              </>
+            )}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+          {SEGMENTOS_ENTRENAMIENTO.map((s) => {
+            const rangoSeg = rangoDeSegmento(s.id);
+            const max = MAX_PUNTOS_SEGMENTO[s.id] || 0;
+            const pts = puntosDeSegmento(s.id);
+            const porcentaje = max > 0 ? Math.round((pts / max) * 100) : 0;
+            const aprobado = max > 0 && porcentaje >= 70;
+            const completo = max > 0 && pts >= max;
+            return (
+              <div key={s.id} style={{ border: `1px solid ${completo ? T.green : (aprobado ? T.greenSoft : T.line)}`, borderRadius: 8, padding: "6px 10px", minWidth: 130 }}>
+                <div style={{ fontSize: 11, color: T.inkSoft }}>{s.label}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  <b style={{ color: T.ink, fontSize: 13 }}>{pts} pts{max > 0 ? ` (${porcentaje}%)` : ""}</b>
+                  {rangoSeg.tipo && <IconTrofeo tipo={rangoSeg.tipo} size={13} color={rangoSeg.color} />}
+                </div>
+                {max > 0 && (
+                  <div style={{ fontSize: 10, fontWeight: 700, color: completo ? T.green : (aprobado ? T.turquoise : T.gray), marginTop: 2 }}>
+                    {completo ? "✓ 100% completo" : aprobado ? "✓ Aprobado (70%+)" : "Pendiente de aprobar"}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {mostrarRangos && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+            {RANGOS_ENTRENAMIENTO.map((r) => (
+              <div key={r.nombre} style={{ background: rangoActual.nombre === r.nombre ? r.soft : "#fff", border: `1px solid ${rangoActual.nombre === r.nombre ? r.color : T.line}`, borderRadius: 10, padding: "8px 12px", minWidth: 165 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  {r.tipo && <IconTrofeo tipo={r.tipo} size={14} color={r.color} />}
+                  <div style={{ fontSize: 12, fontWeight: 700, color: r.color }}>{r.nombre}</div>
+                </div>
+                <div style={{ fontSize: 11, color: T.inkSoft }}>{r.min}{r.siguiente ? ` – ${r.siguiente - 1}` : "+"} pts</div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+          {LOGROS.map((l) => (
+            <div key={l.id} title={l.desc} style={{
+              display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", borderRadius: 999,
+              background: l.cumplido ? T.greenSoft : T.graySoft, opacity: l.cumplido ? 1 : 0.55,
+            }}>
+              <Award size={13} color={l.cumplido ? T.green : T.gray} fill={l.cumplido ? T.green : "none"} />
+              <span style={{ fontSize: 11.5, fontWeight: 600, color: l.cumplido ? T.green : T.gray }}>{l.nombre}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {SEGMENTOS_ENTRENAMIENTO.map((m) => (
+            <Btn key={m.id} variant={modulo === m.id ? "accent" : "ghost"} onClick={() => setModulo(m.id)}>{m.label}</Btn>
+          ))}
+        </div>
+      </Card>
+
+      {modulo === "compuertas" && (
+        <JuegoCompuertasLogicas
+          onGanarPuntos={(ejercicio, puntos) => registrarPuntos("compuertas", ejercicio, puntos)}
+        />
+      )}
+
+      {modulo === "escalera" && (
+        <JuegoLogicaEscalera
+          onGanarPuntos={(ejercicio, puntos) => registrarPuntos("escalera", ejercicio, puntos)}
+        />
+      )}
+
+      {modulo === "tablas_verdad" && (
+        <JuegoTablasVerdad
+          onGanarPuntos={(ejercicio, puntos) => registrarPuntos("tablas_verdad", ejercicio, puntos)}
+        />
+      )}
+
+      {modulo === "nfpa72" && (
+        <JuegoNFPA72
+          onGanarPuntos={(ejercicio, puntos) => registrarPuntos("nfpa72", ejercicio, puntos)}
+        />
+      )}
+
+      {modulo === "electronica" && (
+        <JuegoElectronicaBasica
+          onGanarPuntos={(ejercicio, puntos) => registrarPuntos("electronica", ejercicio, puntos)}
+        />
+      )}
+
+      {modulo === "simplex" && (
+        <JuegoSimplex
+          onGanarPuntos={(ejercicio, puntos) => registrarPuntos("simplex", ejercicio, puntos)}
+        />
+      )}
+
+      {modulo && modulo !== "compuertas" && modulo !== "escalera" && modulo !== "tablas_verdad" && modulo !== "nfpa72" && modulo !== "electronica" && modulo !== "simplex" && (
+        <Card title={SEGMENTOS_ENTRENAMIENTO.find((m) => m.id === modulo)?.label}>
+          <div style={{ color: T.gray, fontSize: 13.5 }}>
+            Este módulo todavía no tiene contenido. Comparte el primer ejemplo de "{SEGMENTOS_ENTRENAMIENTO.find((m) => m.id === modulo)?.label}" y lo armamos aquí.
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// Juego de Compuertas Lógicas: arrastra compuertas reales al lienzo,
+// conéctalas dibujando el cable a mano, y el fondo cambia de color solo
+// (gris = incompleto, verde = correcto, rojo = incorrecto). Al acertar
+// un ejercicio nuevo, avisa hacia arriba para sumar puntos.
+function JuegoCompuertasLogicas({ onGanarPuntos }) {
+  const contenedorRef = React.useRef(null);
+  const ganadosRef = React.useRef(new Set());
+  const falladosRef = React.useRef(new Set());
+  const [mostrarIntro, setMostrarIntro] = useState(true);
+
+  useEffect(() => {
+    if (mostrarIntro) return;
+    const cont = contenedorRef.current;
+    if (!cont) return;
+
+    const GATES_JUEGO = {
+      AND: { inputs: 2, fn: (a, b) => (a && b) },
+      OR: { inputs: 2, fn: (a, b) => (a || b) },
+      NAND: { inputs: 2, fn: (a, b) => !(a && b) },
+      NOR: { inputs: 2, fn: (a, b) => !(a || b) },
+      NOT: { inputs: 1, fn: (a) => !a },
+    };
+    const NIVELES_JUEGO = {
+      "Básico": [
+        { frase: '"Activa la Notificación Audible si hay Sensor de Humo o Estación Manual."', terminales: ["Sensor de Humo", "Estación Manual"], evaluar: (v) => v["Sensor de Humo"] || v["Estación Manual"] },
+        { frase: '"Envía al Extractor de Humo si hay Sensor de Humo y Sensor de Temperatura."', terminales: ["Sensor de Humo", "Sensor de Temperatura"], evaluar: (v) => v["Sensor de Humo"] && v["Sensor de Temperatura"] },
+        { frase: '"El Inyector de Aire debe estar apagado mientras haya Sensor de Humo activo."', terminales: ["Sensor de Humo"], evaluar: (v) => !v["Sensor de Humo"] },
+        { frase: '"El Extractor de Humo se apaga únicamente cuando el Sensor de Humo y el Sensor de Temperatura están ambos activos a la vez; en cualquier otro caso, sigue encendido."', terminales: ["Sensor de Humo", "Sensor de Temperatura"], evaluar: (v) => !(v["Sensor de Humo"] && v["Sensor de Temperatura"]) },
+        { frase: '"El Sistema de Diluvio solo se habilita cuando no hay Sensor de Gas LPG ni Falla del Sistema activos."', terminales: ["Sensor de Gas LPG", "Falla del Sistema"], evaluar: (v) => !(v["Sensor de Gas LPG"] || v["Falla del Sistema"]) },
+      ],
+      "Intermedio": [
+        { frase: '"Activa Notificación Visible si hay Sensor de Flama o Sensor de Temperatura, y no hay Falla del Sistema."', terminales: ["Sensor de Flama", "Sensor de Temperatura", "Falla del Sistema"], evaluar: (v) => (v["Sensor de Flama"] || v["Sensor de Temperatura"]) && !v["Falla del Sistema"] },
+        { frase: '"Abre las Puertas si hay Sensor de Gas LPG y no hay Falla del Sistema."', terminales: ["Sensor de Gas LPG", "Falla del Sistema"], evaluar: (v) => v["Sensor de Gas LPG"] && !v["Falla del Sistema"] },
+        { frase: '"Control de Elevadores baja al vestíbulo si hay Estación Manual y no hay Falla del Sistema."', terminales: ["Estación Manual", "Falla del Sistema"], evaluar: (v) => v["Estación Manual"] && !v["Falla del Sistema"] },
+        { frase: '"Activa el Sistema de Espuma si hay Sensor de Flama y Sensor de Flujo, y no hay Sensor de Monóxido."', terminales: ["Sensor de Flama", "Sensor de Flujo", "Sensor de Monóxido"], evaluar: (v) => v["Sensor de Flama"] && v["Sensor de Flujo"] && !v["Sensor de Monóxido"] },
+        { frase: '"La Notificación Audible se silencia únicamente cuando la Estación Manual y el Llavín de Mantenimiento están ambos activos a la vez; en cualquier otro caso, suena."', terminales: ["Estación Manual", "Llavín de Mantenimiento"], evaluar: (v) => !(v["Estación Manual"] && v["Llavín de Mantenimiento"]) },
+        { frase: '"El Control de Elevadores solo se habilita para el recall cuando no hay Sensor de Humo ni Sensor de Monóxido activos."', terminales: ["Sensor de Humo", "Sensor de Monóxido"], evaluar: (v) => !(v["Sensor de Humo"] || v["Sensor de Monóxido"]) },
+      ],
+      "Avanzado": [
+        { frase: 'Activa el Sistema de Diluvio cuando cualquiera de los sensores de detección (Humo, Flama o Estación Manual) se dispare, siempre que además haya flujo de agua confirmado por el Sensor de Flujo.', terminales: ["Sensor de Humo", "Sensor de Flama", "Estación Manual", "Sensor de Flujo"], evaluar: (v) => (v["Sensor de Humo"] || v["Sensor de Flama"] || v["Estación Manual"]) && v["Sensor de Flujo"] },
+        { frase: 'El Agente Limpio se descarga si los tres sensores (Humo, Temperatura y Flama) detectan la condición al mismo tiempo, o si alguien activa la Estación Manual.', terminales: ["Sensor de Humo", "Sensor de Temperatura", "Sensor de Flama", "Estación Manual"], evaluar: (v) => (v["Sensor de Humo"] && v["Sensor de Temperatura"] && v["Sensor de Flama"]) || v["Estación Manual"] },
+        { frase: 'El Extractor de Humo se enciende si hay Sensor de Humo o se activó la Estación Manual junto con temperatura elevada; también se enciende automáticamente si hay una fuga detectada por el Sensor de Gas LPG.', terminales: ["Sensor de Humo", "Estación Manual", "Sensor de Temperatura", "Sensor de Gas LPG"], evaluar: (v) => ((v["Sensor de Humo"] || v["Estación Manual"]) && v["Sensor de Temperatura"]) || v["Sensor de Gas LPG"] },
+        { frase: 'El Control de Elevadores hace el recall si detecta Humo o Monóxido junto con el Sensor de Flama, o si se activa la Estación Manual.', terminales: ["Sensor de Humo", "Sensor de Monóxido", "Sensor de Flama", "Estación Manual"], evaluar: (v) => ((v["Sensor de Humo"] || v["Sensor de Monóxido"]) && v["Sensor de Flama"]) || v["Estación Manual"] },
+        { frase: 'Prueba Final — Sistema de Agente Limpio: hay dos sensores de humo. Si ambos sensores están activos a la vez, se debe iniciar la Descarga del agente — a menos que se presione el Botón de Aborto o esté puesto el Llavín de Mantenimiento. También hay un Botón de Descarga Directa que dispara la Descarga de inmediato, pero solo si el Llavín de Mantenimiento no está puesto.', terminales: ["Sensor Humo 1", "Sensor Humo 2", "Botón Aborto", "Llavín Mantenimiento", "Botón Descarga Directa"], evaluar: (v) => (v["Sensor Humo 1"] && v["Sensor Humo 2"] && !v["Botón Aborto"] && !v["Llavín Mantenimiento"]) || (v["Botón Descarga Directa"] && !v["Llavín Mantenimiento"]) },
+      ],
+    };
+    let nivelActual = "Básico";
+    let EJERCICIOS_JUEGO = NIVELES_JUEGO[nivelActual];
+
+    function svgGate(tipo) {
+      const s = "currentColor";
+      const dosEntradas = `<line x1="-10" y1="8" x2="2" y2="8" stroke="${s}" stroke-width="2"/><line x1="-10" y1="32" x2="2" y2="32" stroke="${s}" stroke-width="2"/>`;
+      const unaEntrada = `<line x1="-10" y1="20" x2="2" y2="20" stroke="${s}" stroke-width="2"/>`;
+      const shapes = {
+        AND: `${dosEntradas}<path d="M2,2 L20,2 A18,18 0 0 1 20,38 L2,38 Z" fill="none" stroke="${s}" stroke-width="2"/><line x1="38" y1="20" x2="48" y2="20" stroke="${s}" stroke-width="2"/>`,
+        NAND: `${dosEntradas}<path d="M2,2 L18,2 A18,18 0 0 1 18,38 L2,38 Z" fill="none" stroke="${s}" stroke-width="2"/><circle cx="42" cy="20" r="4" fill="none" stroke="${s}" stroke-width="2"/><line x1="46" y1="20" x2="56" y2="20" stroke="${s}" stroke-width="2"/>`,
+        OR: `${dosEntradas}<path d="M2,2 C16,2 16,2 24,20 C16,38 16,38 2,38 C10,28 10,12 2,2 Z" fill="none" stroke="${s}" stroke-width="2" stroke-linejoin="round"/><line x1="24" y1="20" x2="34" y2="20" stroke="${s}" stroke-width="2"/>`,
+        NOR: `${dosEntradas}<path d="M2,2 C14,2 14,2 20,20 C14,38 14,38 2,38 C8,28 8,12 2,2 Z" fill="none" stroke="${s}" stroke-width="2" stroke-linejoin="round"/><circle cx="38" cy="20" r="4" fill="none" stroke="${s}" stroke-width="2"/><line x1="42" y1="20" x2="52" y2="20" stroke="${s}" stroke-width="2"/>`,
+        NOT: `${unaEntrada}<path d="M2,2 L2,38 L32,20 Z" fill="none" stroke="${s}" stroke-width="2" stroke-linejoin="round"/><circle cx="38" cy="20" r="4" fill="none" stroke="${s}" stroke-width="2"/><line x1="42" y1="20" x2="52" y2="20" stroke="${s}" stroke-width="2"/>`,
+      };
+      return `<svg width="66" height="40" viewBox="-10 0 76 40" style="display:block; color:${T.ink};">${shapes[tipo]}</svg>`;
+    }
+
+    let ejActual = 0, nodos = {}, conexiones = [], nodoIdSeq = 1, conexionIdSeq = 1, arrastreCable = null;
+
+    const elTitulo = cont.querySelector(".je-titulo");
+    const elFrase = cont.querySelector(".je-frase");
+    const elCanvas = cont.querySelector(".je-canvas");
+    const elSvg = cont.querySelector(".je-wires");
+    const elResultado = cont.querySelector(".je-resultado");
+    const elPalette = cont.querySelector(".je-palette");
+
+    function fondoNeutral() { elCanvas.style.background = T.graySoft; }
+
+    function limpiarLienzo() {
+      nodos = {}; conexiones = []; arrastreCable = null;
+      Array.from(elCanvas.querySelectorAll(".je-nodo")).forEach((n) => n.remove());
+      elResultado.textContent = "";
+      fondoNeutral();
+      dibujarConexiones();
+    }
+
+    function cargarEjercicio(i) {
+      if (EJERCICIOS_JUEGO.length === 0) {
+        ejActual = 0;
+        elTitulo.textContent = nivelActual + " — sin ejercicios todavía";
+        elFrase.textContent = "Este nivel se irá llenando pronto.";
+        limpiarLienzo();
+        return;
+      }
+      ejActual = (i + EJERCICIOS_JUEGO.length) % EJERCICIOS_JUEGO.length;
+      const ej = EJERCICIOS_JUEGO[ejActual];
+      elTitulo.textContent = nivelActual + " — Ejercicio #" + (ejActual + 1);
+      elFrase.textContent = ej.frase;
+      limpiarLienzo();
+      ej.terminales.forEach((nombre, i2) => crearNodo("term", nombre, 10, 16 + i2 * 72));
+      crearNodo("salida", "Salida", 560, 160);
+    }
+
+    function cambiarNivel(nivel) {
+      nivelActual = nivel;
+      EJERCICIOS_JUEGO = NIVELES_JUEGO[nivelActual];
+      Array.from(cont.querySelectorAll(".je-nivel-btn")).forEach((b) => {
+        const activo = b.dataset.nivel === nivel;
+        b.style.background = activo ? T.accent : "transparent";
+        b.style.color = activo ? "#fff" : T.steel;
+        b.style.borderColor = activo ? T.accent : T.line;
+      });
+      cargarEjercicio(0);
+    }
+
+    function borrarNodo(id) {
+      conexiones = conexiones.filter((c) => c.deNodo !== id && c.aNodo !== id);
+      const el = elCanvas.querySelector('.je-nodo[data-id="' + id + '"]');
+      if (el) el.remove();
+      delete nodos[id];
+      dibujarConexiones();
+      actualizarEstado();
+    }
+
+    function crearNodo(tipo, label, x, y) {
+      const id = "n" + (nodoIdSeq++);
+      const inputs = tipo === "gate" ? GATES_JUEGO[label].inputs : (tipo === "salida" ? 1 : 0);
+      const el = document.createElement("div");
+      el.className = "je-nodo";
+      el.dataset.id = id;
+      el.style.cssText = "position:absolute; cursor:grab; user-select:none;";
+      el.style.left = x + "px"; el.style.top = y + "px";
+
+      if (tipo === "gate") {
+        el.innerHTML = svgGate(label) +
+          `<button class="je-btn-borrar" style="position:absolute; top:-8px; right:-4px; width:18px; height:18px; padding:0; border-radius:50%; background:${T.red}; color:#fff; border:none; font-size:11px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center;">×</button>`;
+      } else if (tipo === "term") {
+        el.innerHTML = `<div style="padding:8px 12px; background:${T.blueSoft}; color:${T.blue}; border-radius:8px; font-size:12px; font-weight:700; min-width:50px; text-align:center;">${label}</div>`;
+      } else {
+        el.innerHTML = `<div style="padding:8px 12px; background:#fff; border:1px solid ${T.line}; border-radius:8px; font-size:12px; font-weight:700; min-width:50px; text-align:center;">Salida</div>`;
+      }
+      elCanvas.appendChild(el);
+      nodos[id] = { tipo, label, x, y, valorFijo: tipo === "term" ? false : null };
+
+      if (inputs >= 1) crearPuerto(el, id, "in0", "in", 0, inputs, tipo);
+      if (inputs >= 2) crearPuerto(el, id, "in1", "in", 1, inputs, tipo);
+      if (tipo === "gate" || tipo === "term") crearPuerto(el, id, "out", "out", 0, 1, tipo);
+
+      if (tipo === "term") {
+        el.onclick = (e) => {
+          if (e.target.classList.contains("je-puerto")) return;
+          nodos[id].valorFijo = !nodos[id].valorFijo;
+          const box = el.querySelector("div");
+          box.style.background = nodos[id].valorFijo ? T.greenSoft : T.blueSoft;
+          box.style.color = nodos[id].valorFijo ? T.green : T.blue;
+        };
+      }
+      if (tipo === "gate") {
+        const btnBorrar = el.querySelector(".je-btn-borrar");
+        btnBorrar.addEventListener("pointerdown", (e) => e.stopPropagation());
+        btnBorrar.addEventListener("click", (e) => { e.stopPropagation(); borrarNodo(id); });
+      }
+      hacerArrastrable(el, id);
+      return id;
+    }
+
+    function altoNodo(tipo) { return tipo === "gate" ? 40 : 34; }
+
+    function crearPuerto(nodoEl, nodoId, puertoId, dir, idx, total, tipo) {
+      const dot = document.createElement("div");
+      dot.className = "je-puerto";
+      dot.dataset.nodo = nodoId; dot.dataset.puerto = puertoId; dot.dataset.dir = dir;
+      const h = altoNodo(tipo);
+      const offsetY = total > 1 ? (idx === 0 ? h * 0.28 : h * 0.72) : h / 2;
+      dot.style.cssText = `position:absolute; width:11px; height:11px; border-radius:50%; background:${T.steel}; cursor:crosshair; top:${offsetY}px; transform:translate(-50%,-50%); z-index:2;`;
+      dot.style.left = dir === "in" ? "0px" : (tipo === "gate" ? "62px" : "100%");
+      nodoEl.appendChild(dot);
+
+      dot.addEventListener("pointerdown", (e) => {
+        if (dir !== "out") return;
+        e.stopPropagation();
+        const p1 = centroPuerto(nodoId, puertoId);
+        arrastreCable = { deNodo: nodoId, dePuerto: puertoId, x: p1.x, y: p1.y, curX: e.clientX, curY: e.clientY };
+        dibujarConexiones();
+      });
+      dot.addEventListener("pointerup", (e) => {
+        if (dir !== "in" || !arrastreCable) return;
+        e.stopPropagation();
+        conexiones = conexiones.filter((c) => !(c.aNodo === nodoId && c.aPuerto === puertoId));
+        conexiones.push({ id: "c" + (conexionIdSeq++), deNodo: arrastreCable.deNodo, dePuerto: arrastreCable.dePuerto, aNodo: nodoId, aPuerto: puertoId });
+        arrastreCable = null;
+        dibujarConexiones();
+        actualizarEstado();
+      });
+    }
+
+    function onDocPointerMove(e) {
+      if (!arrastreCable) return;
+      const cr = elCanvas.getBoundingClientRect();
+      arrastreCable.curX = e.clientX - cr.left;
+      arrastreCable.curY = e.clientY - cr.top;
+      dibujarConexiones();
+    }
+    function onDocPointerUp() {
+      if (arrastreCable) { arrastreCable = null; dibujarConexiones(); }
+    }
+    document.addEventListener("pointermove", onDocPointerMove);
+    document.addEventListener("pointerup", onDocPointerUp);
+
+    function hacerArrastrable(el, id) {
+      let arrastrando = false, offX = 0, offY = 0;
+      el.addEventListener("pointerdown", (e) => {
+        if (e.target.classList.contains("je-puerto") || e.target.classList.contains("je-btn-borrar")) return;
+        arrastrando = true;
+        el.setPointerCapture(e.pointerId);
+        const rect = el.getBoundingClientRect();
+        offX = e.clientX - rect.left; offY = e.clientY - rect.top;
+      });
+      el.addEventListener("pointermove", (e) => {
+        if (!arrastrando) return;
+        const canvasRect = elCanvas.getBoundingClientRect();
+        let x = e.clientX - canvasRect.left - offX;
+        let y = e.clientY - canvasRect.top - offY;
+        x = Math.max(0, Math.min(x, canvasRect.width - 60));
+        y = Math.max(0, Math.min(y, canvasRect.height - 40));
+        el.style.left = x + "px"; el.style.top = y + "px";
+        nodos[id].x = x; nodos[id].y = y;
+        dibujarConexiones();
+      });
+      el.addEventListener("pointerup", () => { arrastrando = false; });
+    }
+
+    function centroPuerto(nodoId, puertoId) {
+      const nodoEl = elCanvas.querySelector('.je-nodo[data-id="' + nodoId + '"]');
+      const puertoEl = nodoEl.querySelector('.je-puerto[data-puerto="' + puertoId + '"]');
+      const r = puertoEl.getBoundingClientRect();
+      const cr = elCanvas.getBoundingClientRect();
+      return { x: r.left - cr.left + r.width / 2, y: r.top - cr.top + r.height / 2 };
+    }
+
+    function curva(p1, p2) {
+      const midX = (p1.x + p2.x) / 2;
+      return `M ${p1.x} ${p1.y} C ${midX} ${p1.y}, ${midX} ${p2.y}, ${p2.x} ${p2.y}`;
+    }
+
+    function dibujarConexiones() {
+      elSvg.innerHTML = "";
+      conexiones.forEach((c) => {
+        if (!nodos[c.deNodo] || !nodos[c.aNodo]) return;
+        const p1 = centroPuerto(c.deNodo, c.dePuerto);
+        const p2 = centroPuerto(c.aNodo, c.aPuerto);
+        const grupo = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        const hit = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        hit.setAttribute("d", curva(p1, p2));
+        hit.setAttribute("stroke", "transparent");
+        hit.setAttribute("stroke-width", "14");
+        hit.setAttribute("fill", "none");
+        hit.style.cursor = "pointer";
+        hit.style.pointerEvents = "stroke";
+        const visible = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        visible.setAttribute("d", curva(p1, p2));
+        visible.setAttribute("stroke", T.inkSoft);
+        visible.setAttribute("stroke-width", "2");
+        visible.setAttribute("fill", "none");
+        visible.style.pointerEvents = "none";
+        hit.addEventListener("click", () => {
+          conexiones = conexiones.filter((x) => x.id !== c.id);
+          dibujarConexiones();
+          actualizarEstado();
+        });
+        hit.addEventListener("mouseenter", () => visible.setAttribute("stroke", T.red));
+        hit.addEventListener("mouseleave", () => visible.setAttribute("stroke", T.inkSoft));
+        grupo.appendChild(hit); grupo.appendChild(visible);
+        elSvg.appendChild(grupo);
+      });
+      if (arrastreCable) {
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", curva({ x: arrastreCable.x, y: arrastreCable.y }, { x: arrastreCable.curX, y: arrastreCable.curY }));
+        path.setAttribute("stroke", T.blue);
+        path.setAttribute("stroke-width", "2");
+        path.setAttribute("stroke-dasharray", "4 3");
+        path.setAttribute("fill", "none");
+        elSvg.appendChild(path);
+      }
+    }
+
+    elPalette.innerHTML = "";
+    const ECUACION_GATE = { AND: "C=a·b", OR: "C=a+b", NOT: "b=¬a", NAND: "C=¬(a·b)", NOR: "C=¬(a+b)" };
+    Object.keys(GATES_JUEGO).forEach((key) => {
+      const btn = document.createElement("button");
+      btn.style.cssText = "padding:4px 10px; display:flex; align-items:center; gap:6px; border:1px solid " + T.line + "; border-radius:8px; background:#fff; cursor:pointer;";
+      btn.innerHTML = svgGate(key) + `<span style="display:flex; flex-direction:column; align-items:flex-start;"><span style="font-size:11px; font-weight:600;">${key}</span><span style="font-size:9.5px; color:${T.gray};">${ECUACION_GATE[key]}</span></span>`;
+      btn.onclick = () => { crearNodo("gate", key, 200 + Math.random() * 140, 30 + Math.random() * 220); actualizarEstado(); };
+      elPalette.appendChild(btn);
+    });
+
+    cont.querySelector(".je-limpiar").onclick = () => cargarEjercicio(ejActual);
+    cont.querySelector(".je-prev").onclick = () => cargarEjercicio(ejActual - 1);
+    cont.querySelector(".je-next").onclick = () => cargarEjercicio(ejActual + 1);
+
+    function evaluarNodo(nodoId, cache) {
+      if (cache.has(nodoId)) return cache.get(nodoId);
+      const n = nodos[nodoId];
+      if (n.tipo === "term") { cache.set(nodoId, n.valorFijo); return n.valorFijo; }
+      const entradas = conexiones.filter((c) => c.aNodo === nodoId).sort((a, b) => a.aPuerto.localeCompare(b.aPuerto));
+      if (n.tipo === "salida") {
+        if (entradas.length === 0) return null;
+        return evaluarNodo(entradas[0].deNodo, cache);
+      }
+      const gate = GATES_JUEGO[n.label];
+      if (entradas.length < gate.inputs) return null;
+      const valores = entradas.slice(0, gate.inputs).map((e) => evaluarNodo(e.deNodo, cache));
+      if (valores.some((v) => v === null)) return null;
+      const resultado = gate.fn(...valores);
+      cache.set(nodoId, resultado);
+      return resultado;
+    }
+
+    function actualizarEstado() {
+      const ej = EJERCICIOS_JUEGO[ejActual];
+      const salidaId = Object.keys(nodos).find((id) => nodos[id].tipo === "salida");
+      const n = ej.terminales.length;
+      const combinaciones = [];
+      for (let i = 0; i < (1 << n); i++) {
+        const v = {};
+        ej.terminales.forEach((t, idx) => v[t] = !!((i >> idx) & 1));
+        combinaciones.push(v);
+      }
+      const valoresGuardados = {};
+      Object.keys(nodos).forEach((id) => { if (nodos[id].tipo === "term") valoresGuardados[id] = nodos[id].valorFijo; });
+
+      let incompleto = false, todoCorrecto = true;
+      for (const combo of combinaciones) {
+        Object.keys(nodos).forEach((id) => { if (nodos[id].tipo === "term") nodos[id].valorFijo = combo[nodos[id].label]; });
+        const salida = evaluarNodo(salidaId, new Map());
+        if (salida === null) { incompleto = true; break; }
+        if (!!salida !== !!ej.evaluar(combo)) { todoCorrecto = false; break; }
+      }
+      Object.keys(valoresGuardados).forEach((id) => { nodos[id].valorFijo = valoresGuardados[id]; });
+
+      if (incompleto) {
+        fondoNeutral();
+        elResultado.textContent = "Circuito incompleto — sigue conectando hasta Salida.";
+        elResultado.style.color = T.inkSoft;
+      } else if (todoCorrecto) {
+        elCanvas.style.background = T.greenSoft;
+        const clave = nivelActual + "-" + ejActual;
+        const yaGanado = ganadosRef.current.has(clave);
+        elResultado.textContent = yaGanado ? "✓ Correcto (ya ganaste los puntos de este ejercicio)." : "✓ ¡Correcto! +10 puntos.";
+        elResultado.style.color = T.green;
+        if (!yaGanado) {
+          ganadosRef.current.add(clave);
+          falladosRef.current.delete(clave);
+          onGanarPuntos && onGanarPuntos(nivelActual + " — Ejercicio #" + (ejActual + 1), 10);
+        }
+      } else {
+        elCanvas.style.background = T.redSoft;
+        const clave = nivelActual + "-" + ejActual;
+        const yaFallado = falladosRef.current.has(clave);
+        const yaGanado = ganadosRef.current.has(clave);
+        elResultado.textContent = (yaFallado || yaGanado) ? "✗ No coincide en todos los casos — borra una línea o compuerta y corrige." : "✗ No coincide en todos los casos — borra una línea o compuerta y corrige. -10 puntos.";
+        elResultado.style.color = T.red;
+        if (!yaFallado && !yaGanado) {
+          falladosRef.current.add(clave);
+          onGanarPuntos && onGanarPuntos(nivelActual + " — Ejercicio #" + (ejActual + 1) + " (fallo)", -10);
+        }
+      }
+    }
+
+    Array.from(cont.querySelectorAll(".je-nivel-btn")).forEach((b) => {
+      b.onclick = () => cambiarNivel(b.dataset.nivel);
+    });
+    cambiarNivel("Básico");
+
+    return () => {
+      document.removeEventListener("pointermove", onDocPointerMove);
+      document.removeEventListener("pointerup", onDocPointerUp);
+    };
+  }, [mostrarIntro]);
+
+  const INFO_COMPUERTAS = [
+    { tipo: "AND", ecuacion: "C = a · b", explicacion: "Trabaja en serie con todas las entradas previas: la salida solo se activa si TODAS las entradas están activas a la vez.", tabla: [[0, 0, 0], [0, 1, 0], [1, 0, 0], [1, 1, 1]] },
+    { tipo: "OR", ecuacion: "C = a + b", explicacion: "Trabaja en paralelo con todas las entradas previas: la salida se activa si CUALQUIERA de las entradas está activa.", tabla: [[0, 0, 0], [0, 1, 1], [1, 0, 1], [1, 1, 1]] },
+    { tipo: "NOT", ecuacion: "b = ¬a", explicacion: "Actúa como un inversor de estado: invierte lo que recibe. Se puede combinar con OR/AND para lograr un objetivo.", tabla: [[0, 1], [1, 0]] },
+    { tipo: "NAND", ecuacion: "C = ¬(a · b)", explicacion: "Es un AND seguido de un NOT: la salida se activa en todos los casos MENOS cuando ambas entradas están activas.", tabla: [[0, 0, 1], [0, 1, 1], [1, 0, 1], [1, 1, 0]] },
+    { tipo: "NOR", ecuacion: "C = ¬(a + b)", explicacion: "Es un OR seguido de un NOT: la salida solo se activa cuando NINGUNA entrada está activa.", tabla: [[0, 0, 1], [0, 1, 0], [1, 0, 0], [1, 1, 0]] },
+  ];
+  const svgGateIntro = (tipo) => {
+    const s = T.ink;
+    const dosEntradas = <><line x1="-10" y1="8" x2="2" y2="8" stroke={s} strokeWidth="2" /><line x1="-10" y1="32" x2="2" y2="32" stroke={s} strokeWidth="2" /></>;
+    const unaEntrada = <line x1="-10" y1="20" x2="2" y2="20" stroke={s} strokeWidth="2" />;
+    const shapes = {
+      AND: <>{dosEntradas}<path d="M2,2 L20,2 A18,18 0 0 1 20,38 L2,38 Z" fill={T.graySoft} stroke={s} strokeWidth="2" /><line x1="38" y1="20" x2="48" y2="20" stroke={s} strokeWidth="2" /></>,
+      NAND: <>{dosEntradas}<path d="M2,2 L18,2 A18,18 0 0 1 18,38 L2,38 Z" fill={T.graySoft} stroke={s} strokeWidth="2" /><circle cx="42" cy="20" r="4" fill={T.graySoft} stroke={s} strokeWidth="2" /><line x1="46" y1="20" x2="56" y2="20" stroke={s} strokeWidth="2" /></>,
+      OR: <>{dosEntradas}<path d="M2,2 C16,2 16,2 24,20 C16,38 16,38 2,38 C10,28 10,12 2,2 Z" fill={T.graySoft} stroke={s} strokeWidth="2" strokeLinejoin="round" /><line x1="24" y1="20" x2="34" y2="20" stroke={s} strokeWidth="2" /></>,
+      NOR: <>{dosEntradas}<path d="M2,2 C14,2 14,2 20,20 C14,38 14,38 2,38 C8,28 8,12 2,2 Z" fill={T.graySoft} stroke={s} strokeWidth="2" strokeLinejoin="round" /><circle cx="38" cy="20" r="4" fill={T.graySoft} stroke={s} strokeWidth="2" /><line x1="42" y1="20" x2="52" y2="20" stroke={s} strokeWidth="2" /></>,
+      NOT: <>{unaEntrada}<path d="M2,2 L2,38 L32,20 Z" fill={T.graySoft} stroke={s} strokeWidth="2" strokeLinejoin="round" /><circle cx="38" cy="20" r="4" fill={T.graySoft} stroke={s} strokeWidth="2" /><line x1="42" y1="20" x2="52" y2="20" stroke={s} strokeWidth="2" /></>,
+    };
+    return <svg width="66" height="40" viewBox="-10 0 76 40" style={{ display: "block" }}>{shapes[tipo]}</svg>;
+  };
+
+  if (mostrarIntro) {
+    const TEMA_INTRO_COMPUERTAS = {
+      id: "intro",
+      titulo: "Introducción a las Compuertas Lógicas",
+      contenido: (
+        <>
+          <p>Las <strong>compuertas lógicas</strong> son los bloques básicos con los que se construye cualquier lógica de
+          control: reciben una o varias entradas (0 = apagado, 1 = activo) y producen una salida según una regla fija. En los
+          siguientes temas vas a repasar cada compuerta por separado (AND, OR, NOT, NAND, NOR), con su símbolo, ecuación y
+          tabla de verdad.</p>
+          <a href="https://www.youtube.com/watch?v=shcAMLESVrE" target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, padding: "8px 12px", background: T.redSoft, color: T.red, borderRadius: 8, fontSize: 12.5, fontWeight: 700, textDecoration: "none" }}>
+            ▶ Ver video explicativo — Compuertas Lógicas
+          </a>
+        </>
+      ),
+    };
+    const TEMAS_COMPUERTAS = [TEMA_INTRO_COMPUERTAS, ...INFO_COMPUERTAS.map((g) => ({
+      id: g.tipo,
+      titulo: `Compuerta ${g.tipo}`,
+      contenido: (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 10 }}>
+            {svgGateIntro(g.tipo)}
+            <div style={{ fontSize: 16, fontWeight: 800, color: T.ink }}>{g.ecuacion}</div>
+          </div>
+          <p>{g.explicacion}</p>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft, margin: "10px 0 6px" }}>Tabla de verdad</div>
+          <table style={{ fontSize: 12, borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ color: T.gray }}>
+                <th style={{ textAlign: "left", padding: "3px 10px 3px 0" }}>a</th>
+                {g.tabla[0].length === 3 && <th style={{ textAlign: "left", padding: "3px 10px" }}>b</th>}
+                <th style={{ textAlign: "left", padding: "3px 10px" }}>salida</th>
+              </tr>
+            </thead>
+            <tbody>
+              {g.tabla.map((fila, i) => (
+                <tr key={i} style={{ borderTop: `1px solid ${T.line}` }}>
+                  {fila.map((v, j) => <td key={j} style={{ padding: "3px 10px 3px 0", fontWeight: j === fila.length - 1 ? 700 : 400 }}>{v}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      ),
+    }))];
+    return <GuiaPorTemas temas={TEMAS_COMPUERTAS} onContinuar={() => setMostrarIntro(false)} tituloModulo="cómo funcionan las compuertas lógicas" />;
+  }
+
+  return (
+    <Card>
+      <div ref={contenedorRef}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          {["Básico", "Intermedio", "Avanzado"].map((niv) => (
+            <button key={niv} className="je-nivel-btn" data-nivel={niv} style={{ padding: "6px 14px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>{niv}</button>
+          ))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <div className="je-titulo" style={{ fontSize: 15, fontWeight: 700 }}>Ejercicio #1</div>
+            <div className="je-frase" style={{ fontSize: 13, color: T.inkSoft }}></div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="je-prev" style={{ padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>← Anterior</button>
+            <button className="je-next" style={{ padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Siguiente →</button>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10, padding: 10, background: T.graySoft, borderRadius: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: 12, color: T.gray, marginRight: 4 }}>Arrastra al lienzo:</span>
+          <div className="je-palette" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}></div>
+          <span style={{ fontSize: 12, color: T.gray, marginLeft: 12 }}>Clic en la × para borrar una compuerta, o en una línea para borrarla.</span>
+          <button className="je-limpiar" style={{ padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Limpiar lienzo</button>
+          <button onClick={() => setMostrarIntro(true)} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Ver la guía otra vez</button>
+        </div>
+        <div className="je-canvas" style={{ position: "relative", height: 400, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s" }}>
+          <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
+          <span className="je-resultado" style={{ fontSize: 14 }}></span>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// Juego de Lógica en Escalera: arrastra tarjetas de contacto (con o sin
+// NOT) a los espacios ya ubicados en la escalera — series = AND, ramas
+// en paralelo = OR — respetando el estilo exacto de los diagramas
+// originales (contacto = dos rayitas ⊣⊢, NOT = raya diagonal cruzada,
+// salida = óvalo).
+function ContactoSlot({ valor, sobre, onDragOver, onDragLeave, onDrop, tarjetasPorId }) {
+  const tarjeta = valor ? tarjetasPorId[valor] : null;
+  return (
+    <div
+      onDragOver={(e) => { e.preventDefault(); onDragOver && onDragOver(); }}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      style={{
+        display: "flex", flexDirection: "column", alignItems: "center", gap: 3, minWidth: 74,
+      }}
+    >
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.ink, height: 14 }}>{tarjeta ? tarjeta.varLabel : ""}</div>
+      <div style={{
+        width: 64, height: 40, border: `1.5px ${valor ? "solid" : "dashed"} ${sobre ? T.accent : (valor ? T.ink : T.line)}`,
+        borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", position: "relative",
+        background: valor ? T.graySoft : "#fff",
+      }}>
+        {!valor && <span style={{ fontSize: 9.5, color: T.gray }}>soltar</span>}
+        {valor && (
+          <>
+            <div style={{ width: 3, height: 26, background: T.ink, marginRight: 5 }} />
+            <div style={{ width: 3, height: 26, background: T.ink }} />
+            {tarjeta.not && <div style={{ position: "absolute", width: 30, height: 2, background: T.ink, transform: "rotate(-55deg)" }} />}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+function LineaConector({ ancho = 24 }) {
+  return <div style={{ width: ancho, height: 2, background: T.ink }} />;
+}
+function SalidaOvalo({ label = "SALIDA" }) {
+  return (
+    <div style={{ width: 78, height: 54, borderRadius: "50%", border: `2px solid ${T.ink}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10.5, fontWeight: 700, color: T.ink, textAlign: "center", padding: 4, flexShrink: 0 }}>
+      {label}
+    </div>
+  );
+}
+
+function JuegoLogicaEscalera({ onGanarPuntos }) {
+  const [mostrarIntro, setMostrarIntro] = useState(true);
+  const [nivel, setNivel] = useState("Básico");
+  const [ejActual, setEjActual] = useState(0);
+  const [slots, setSlots] = useState({});
+  const [sobreSlot, setSobreSlot] = useState(null);
+  const [resultado, setResultado] = useState(null);
+  const ganadosRef = React.useRef(new Set());
+  const falladosRef = React.useRef(new Set());
+
+  const NIVELES_ESCALERA = {
+    "Básico": [
+      {
+        frase: '"Activa el Sistema de Espuma: Sensor de Flama y Sensor de Flujo, y no hay Falla del Sistema."',
+        layout: "serie",
+        ramas: [["flama", "flujo", "falla_not"]],
+        tarjetas: [
+          { id: "flama", label: "Flama", varLabel: "Sensor de Flama", not: false },
+          { id: "flujo", label: "Flujo", varLabel: "Sensor de Flujo", not: false },
+          { id: "falla_not", label: "Falla (NOT)", varLabel: "Falla del Sistema", not: true },
+          { id: "falla", label: "Falla", varLabel: "Falla del Sistema", not: false },
+          { id: "flama_not", label: "Flama (NOT)", varLabel: "Sensor de Flama", not: true },
+        ],
+      },
+      {
+        frase: '"El Inyector de Aire funciona solo si no hay Sensor de Humo ni Sensor de Temperatura activos."',
+        layout: "serie",
+        ramas: [["humo_not", "temp_not"]],
+        tarjetas: [
+          { id: "humo_not", label: "Humo (NOT)", varLabel: "Sensor de Humo", not: true },
+          { id: "temp_not", label: "Temperatura (NOT)", varLabel: "Sensor de Temperatura", not: true },
+          { id: "humo", label: "Humo", varLabel: "Sensor de Humo", not: false },
+          { id: "temp", label: "Temperatura", varLabel: "Sensor de Temperatura", not: false },
+        ],
+      },
+    ],
+    "Intermedio": [
+      {
+        frase: 'Activa el Sistema de Diluvio cuando cualquiera de los sensores de detección (Humo, Flama o Estación Manual) se dispare, siempre que además haya flujo de agua confirmado por el Sensor de Flujo.',
+        layout: "or_and",
+        ramas: [["humo", "flama", "manual"], ["flujo"]],
+        tarjetas: [
+          { id: "humo", label: "Humo", varLabel: "Sensor de Humo", not: false },
+          { id: "flama", label: "Flama", varLabel: "Sensor de Flama", not: false },
+          { id: "manual", label: "Estación Manual", varLabel: "Estación Manual", not: false },
+          { id: "flujo", label: "Flujo", varLabel: "Sensor de Flujo", not: false },
+          { id: "humo_not", label: "Humo (NOT)", varLabel: "Sensor de Humo", not: true },
+        ],
+      },
+      {
+        frase: 'Abre las Puertas si hay Sensor de Gas LPG o se activa la Estación Manual, y no hay Falla del Sistema.',
+        layout: "or_and",
+        ramas: [["lpg", "manual"], ["falla_not"]],
+        tarjetas: [
+          { id: "lpg", label: "Gas LPG", varLabel: "Sensor de Gas LPG", not: false },
+          { id: "manual", label: "Estación Manual", varLabel: "Estación Manual", not: false },
+          { id: "falla_not", label: "Falla (NOT)", varLabel: "Falla del Sistema", not: true },
+          { id: "falla", label: "Falla", varLabel: "Falla del Sistema", not: false },
+          { id: "lpg_not", label: "Gas LPG (NOT)", varLabel: "Sensor de Gas LPG", not: true },
+        ],
+      },
+    ],
+    "Avanzado": [
+      {
+        frase: 'Activa la Notificación Audible si los tres sensores (Humo, Temperatura y Monóxido) detectan la condición al mismo tiempo, o si alguien activa la Estación Manual.',
+        layout: "and_or",
+        ramas: [["humo", "temp", "co"], ["manual"]],
+        tarjetas: [
+          { id: "humo", label: "Humo", varLabel: "Sensor de Humo", not: false },
+          { id: "temp", label: "Temperatura", varLabel: "Sensor de Temperatura", not: false },
+          { id: "co", label: "Monóxido", varLabel: "Sensor de Monóxido", not: false },
+          { id: "manual", label: "Estación Manual", varLabel: "Estación Manual", not: false },
+          { id: "manual_not", label: "Manual (NOT)", varLabel: "Estación Manual", not: true },
+        ],
+      },
+    ],
+  };
+
+  const ejercicios = NIVELES_ESCALERA[nivel];
+  const ej = ejercicios[ejActual] || ejercicios[0];
+  const tarjetasPorId = {};
+  ej.tarjetas.forEach((t) => { tarjetasPorId[t.id] = t; });
+
+  const cambiarNivel = (n) => { setNivel(n); setEjActual(0); setSlots({}); setResultado(null); };
+  const cambiarEjercicio = (delta) => {
+    const total = ejercicios.length;
+    setEjActual((prev) => (prev + delta + total) % total);
+    setSlots({});
+    setResultado(null);
+  };
+
+  const soltar = (ramaIdx, slotIdx, e) => {
+    e.preventDefault();
+    const id = e.dataTransfer.getData("text/plain");
+    setSlots((prev) => ({ ...prev, [`${ramaIdx}-${slotIdx}`]: id }));
+    setSobreSlot(null);
+  };
+
+  const limpiar = () => { setSlots({}); setResultado(null); };
+
+  const verificar = () => {
+    const totalSlots = ej.ramas.reduce((s, r) => s + r.length, 0);
+    const llenos = Object.keys(slots).filter((k) => k.startsWith(ejActual + "n") || true);
+    const valores = ej.ramas.map((rama, ri) => rama.map((_, si) => slots[`${ri}-${si}`]));
+    if (valores.some((rama) => rama.some((v) => !v))) {
+      setResultado({ ok: null, msg: "Completa todos los espacios primero." });
+      return;
+    }
+    // Para cada rama, compara el conjunto de valores (sin importar el
+    // orden dentro de la rama) contra el conjunto esperado.
+    const correcto = ej.ramas.every((ramaEsperada, ri) => {
+      const puestos = [...valores[ri]].sort().join(",");
+      const esperado = [...ramaEsperada].sort().join(",");
+      return puestos === esperado;
+    });
+    if (correcto) {
+      const clave = nivel + "-" + ejActual;
+      const yaGanado = ganadosRef.current.has(clave);
+      setResultado({ ok: true, msg: yaGanado ? "✓ Correcto (ya ganaste los puntos de este ejercicio)." : "✓ ¡Correcto! +10 puntos." });
+      if (!yaGanado) {
+        ganadosRef.current.add(clave);
+        falladosRef.current.delete(clave);
+        onGanarPuntos && onGanarPuntos(nivel + " — Ejercicio #" + (ejActual + 1), 10);
+      }
+    } else {
+      const clave = nivel + "-" + ejActual;
+      const yaFallado = falladosRef.current.has(clave);
+      const yaGanado = ganadosRef.current.has(clave);
+      setResultado({
+        ok: false,
+        msg: (yaFallado || yaGanado) ? "✗ Todavía no — revisa qué contactos van en cada rama, y cuál necesita NOT." : "✗ Todavía no — revisa qué contactos van en cada rama, y cuál necesita NOT. -10 puntos.",
+      });
+      if (!yaFallado && !yaGanado) {
+        falladosRef.current.add(clave);
+        onGanarPuntos && onGanarPuntos(nivel + " — Ejercicio #" + (ejActual + 1) + " (fallo)", -10);
+      }
+    }
+  };
+
+  const fondo = resultado?.ok === true ? T.greenSoft : resultado?.ok === false ? T.redSoft : T.graySoft;
+
+  if (mostrarIntro) {
+    const TEMAS_ESCALERA = [
+      {
+        id: "contactos", titulo: "Contactos, serie y paralelo",
+        contenido: (
+          <p>Cada contacto (⊣⊢) representa una condición. Varios contactos <strong>en serie</strong> (uno después del otro,
+          en la misma línea) funcionan como un <strong>AND</strong> — todos deben cumplirse a la vez. Varios contactos en
+          <strong> ramas separadas en paralelo</strong> funcionan como un <strong>OR</strong> — con que se cumpla uno solo
+          alcanza para activar la salida. Un contacto con una raya cruzada es un <strong>NOT</strong> (se activa precisamente
+          cuando la condición NO se cumple). La salida siempre se dibuja como un óvalo al final del circuito, conectado al
+          riel derecho.</p>
+        ),
+      },
+      {
+        id: "ejemplo1", titulo: "Ejemplo — DET L18 → TRACK ON P3",
+        contenido: (
+          <>
+            <p>Este es el ejemplo original de una escalera con un solo contacto en serie: si el sensor "DET L18" se activa, se
+            enciende la salida "TRACK ON P3".</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 0, marginTop: 12, border: `1px solid ${T.line}`, borderRadius: 10, padding: "16px 20px", background: T.graySoft }}>
+              <div style={{ width: 3, height: 60, background: T.ink }} />
+              <div style={{ padding: "0 16px" }}>
+                <ContactoSlot valor="det" tarjetasPorId={{ det: { varLabel: "DET L18", not: false } }} />
+              </div>
+              <LineaConector ancho={30} />
+              <SalidaOvalo label="TRACK ON P3" />
+              <LineaConector ancho={20} />
+              <div style={{ width: 3, height: 60, background: T.ink }} />
+            </div>
+          </>
+        ),
+      },
+      {
+        id: "ejemplo2", titulo: "Ejemplo — ramas en paralelo (OR)",
+        contenido: (
+          <>
+            <p>Aquí hay dos ramas separadas, cada una con su propio contacto — si cualquiera de los dos sensores de humo se
+            activa (Zona A o Zona B), se enciende la Notificación Audible. Esto es lo mismo que un OR entre ambas entradas.</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 0, marginTop: 12, border: `1px solid ${T.line}`, borderRadius: 10, padding: "16px 20px", background: T.graySoft }}>
+              <div style={{ width: 3, height: 100, background: T.ink }} />
+              <div style={{ padding: "0 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+                <ContactoSlot valor="humoA" tarjetasPorId={{ humoA: { varLabel: "Sensor Humo Zona A", not: false } }} />
+                <ContactoSlot valor="humoB" tarjetasPorId={{ humoB: { varLabel: "Sensor Humo Zona B", not: false } }} />
+              </div>
+              <LineaConector ancho={30} />
+              <SalidaOvalo label="NOTIF. AUDIBLE" />
+              <LineaConector ancho={20} />
+              <div style={{ width: 3, height: 100, background: T.ink }} />
+            </div>
+          </>
+        ),
+      },
+    ];
+    return <GuiaPorTemas temas={TEMAS_ESCALERA} onContinuar={() => setMostrarIntro(false)} tituloModulo="cómo funciona la lógica en escalera" />;
+  }
+
+  return (
+    <Card>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        {Object.keys(NIVELES_ESCALERA).map((n) => (
+          <Btn key={n} small variant={nivel === n ? "accent" : "ghost"} onClick={() => cambiarNivel(n)}>{n}</Btn>
+        ))}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>{nivel} — Ejercicio #{ejActual + 1}</div>
+          <div style={{ fontSize: 13, color: T.inkSoft }}>{ej.frase}</div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn small variant="ghost" onClick={() => cambiarEjercicio(-1)}>← Anterior</Btn>
+          <Btn small variant="ghost" onClick={() => cambiarEjercicio(1)}>Siguiente →</Btn>
+          <Btn small variant="ghost" onClick={() => setMostrarIntro(true)}>Ver la guía otra vez</Btn>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 10, padding: 10, background: T.graySoft, borderRadius: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ fontSize: 12, color: T.gray, marginRight: 4 }}>Tarjetas:</span>
+        {ej.tarjetas.map((t) => (
+          <div key={t.id} draggable onDragStart={(e) => e.dataTransfer.setData("text/plain", t.id)}
+            style={{ padding: "8px 14px", background: "#fff", border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: "grab" }}>
+            {t.label}
+          </div>
+        ))}
+        <Btn small variant="ghost" onClick={limpiar} style={{ marginLeft: "auto" }}>Limpiar</Btn>
+      </div>
+
+      <div style={{ background: fondo, borderRadius: 12, border: `1px solid ${T.line}`, padding: "20px 24px", transition: "background 0.2s", display: "flex", alignItems: "center", minHeight: 160 }}>
+        <div style={{ width: 3, alignSelf: "stretch", background: T.ink }} />
+        <div style={{ padding: "0 20px", display: "flex", flexDirection: "column", gap: 16, flex: 1 }}>
+          {ej.layout === "serie" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              {ej.ramas[0].map((_, si) => (
+                <React.Fragment key={si}>
+                  {si > 0 && <LineaConector />}
+                  <ContactoSlot
+                    valor={slots[`0-${si}`]}
+                    sobre={sobreSlot === `0-${si}`}
+                    onDragOver={() => setSobreSlot(`0-${si}`)}
+                    onDragLeave={() => setSobreSlot(null)}
+                    onDrop={(e) => soltar(0, si, e)}
+                    tarjetasPorId={tarjetasPorId}
+                  />
+                </React.Fragment>
+              ))}
+            </div>
+          )}
+          {ej.layout === "or_and" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {ej.ramas[0].map((_, si) => (
+                  <ContactoSlot key={si} valor={slots[`0-${si}`]} sobre={sobreSlot === `0-${si}`}
+                    onDragOver={() => setSobreSlot(`0-${si}`)} onDragLeave={() => setSobreSlot(null)}
+                    onDrop={(e) => soltar(0, si, e)} tarjetasPorId={tarjetasPorId} />
+                ))}
+              </div>
+              <LineaConector />
+              <ContactoSlot valor={slots["1-0"]} sobre={sobreSlot === "1-0"}
+                onDragOver={() => setSobreSlot("1-0")} onDragLeave={() => setSobreSlot(null)}
+                onDrop={(e) => soltar(1, 0, e)} tarjetasPorId={tarjetasPorId} />
+            </div>
+          )}
+          {ej.layout === "and_or" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                {ej.ramas[0].map((_, si) => (
+                  <React.Fragment key={si}>
+                    {si > 0 && <LineaConector />}
+                    <ContactoSlot valor={slots[`0-${si}`]} sobre={sobreSlot === `0-${si}`}
+                      onDragOver={() => setSobreSlot(`0-${si}`)} onDragLeave={() => setSobreSlot(null)}
+                      onDrop={(e) => soltar(0, si, e)} tarjetasPorId={tarjetasPorId} />
+                  </React.Fragment>
+                ))}
+              </div>
+              <ContactoSlot valor={slots["1-0"]} sobre={sobreSlot === "1-0"}
+                onDragOver={() => setSobreSlot("1-0")} onDragLeave={() => setSobreSlot(null)}
+                onDrop={(e) => soltar(1, 0, e)} tarjetasPorId={tarjetasPorId} />
+            </div>
+          )}
+        </div>
+        <SalidaOvalo />
+        <LineaConector ancho={16} />
+        <div style={{ width: 3, alignSelf: "stretch", background: T.ink }} />
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
+        <Btn variant="accent" onClick={verificar}>Verificar</Btn>
+        {resultado && <span style={{ fontSize: 14, color: resultado.ok === true ? T.green : resultado.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultado.msg}</span>}
+      </div>
+    </Card>
+  );
+}
+
+// Juego de Tablas de la Verdad: se da una fórmula lógica (con sensores y
+// salidas de sistemas de alarma contra incendio) y hay que llenar TODA la
+// tabla de verdad — una fila por cada combinación posible de entradas —
+// marcando 0 o 1 en la columna de salida.
+function JuegoTablasVerdad({ onGanarPuntos }) {
+  const [mostrarIntro, setMostrarIntro] = useState(true);
+  const [nivel, setNivel] = useState("Básico");
+  const [ejActual, setEjActual] = useState(0);
+  const [respuestas, setRespuestas] = useState({});
+  const [resultado, setResultado] = useState(null);
+  const ganadosRef = React.useRef(new Set());
+  const falladosRef = React.useRef(new Set());
+
+  const NIVELES_TABLA = {
+    "Básico": [
+      { frase: "Notificación Audible = Sensor de Humo OR Estación Manual", vars: ["Sensor de Humo", "Estación Manual"], evaluar: (v) => v[0] || v[1] },
+      { frase: "Extractor de Humo = Sensor de Humo AND Sensor de Temperatura", vars: ["Sensor de Humo", "Sensor de Temperatura"], evaluar: (v) => v[0] && v[1] },
+      { frase: "Inyector de Aire = NOT Sensor de Humo", vars: ["Sensor de Humo"], evaluar: (v) => !v[0] },
+      { frase: "Recall de Elevadores = Sensor de Humo NAND Sensor de Temperatura (se cancela solo cuando ambos sensores están activos a la vez)", vars: ["Sensor de Humo", "Sensor de Temperatura"], evaluar: (v) => !(v[0] && v[1]) },
+      { frase: "Sistema de Diluvio = Sensor de Gas LPG NOR Falla del Sistema (solo se habilita cuando ninguno de los dos está activo)", vars: ["Sensor de Gas LPG", "Falla del Sistema"], evaluar: (v) => !(v[0] || v[1]) },
+    ],
+    "Intermedio": [
+      { frase: "Notificación Visible = (Sensor de Flama OR Sensor de Temperatura) AND NOT Falla del Sistema", vars: ["Sensor de Flama", "Sensor de Temperatura", "Falla del Sistema"], evaluar: (v) => (v[0] || v[1]) && !v[2] },
+      { frase: "Sistema de Espuma = Sensor de Flama AND Sensor de Flujo AND NOT Sensor de Monóxido", vars: ["Sensor de Flama", "Sensor de Flujo", "Sensor de Monóxido"], evaluar: (v) => v[0] && v[1] && !v[2] },
+      { frase: "Apertura de Puertas = NOT (Sensor de Gas LPG OR Falla del Sistema)", vars: ["Sensor de Gas LPG", "Falla del Sistema"], evaluar: (v) => !(v[0] || v[1]) },
+      { frase: "Agente Limpio = Estación Manual NAND Llavín de Mantenimiento (se cancela solo cuando ambos están activos a la vez)", vars: ["Estación Manual", "Llavín de Mantenimiento"], evaluar: (v) => !(v[0] && v[1]) },
+      { frase: "Notificación de Descarga = Sensor de Humo NOR Sensor de Temperatura (solo se habilita cuando ninguno de los dos está activo)", vars: ["Sensor de Humo", "Sensor de Temperatura"], evaluar: (v) => !(v[0] || v[1]) },
+    ],
+    "Avanzado": [
+      { frase: "Sistema de Diluvio = (Sensor de Humo OR Sensor de Flama OR Estación Manual) AND Sensor de Flujo", vars: ["Sensor de Humo", "Sensor de Flama", "Estación Manual", "Sensor de Flujo"], evaluar: (v) => (v[0] || v[1] || v[2]) && v[3] },
+      { frase: "Agente Limpio = (Sensor de Humo AND Sensor de Temperatura AND Sensor de Flama) OR Estación Manual", vars: ["Sensor de Humo", "Sensor de Temperatura", "Sensor de Flama", "Estación Manual"], evaluar: (v) => (v[0] && v[1] && v[2]) || v[3] },
+    ],
+  };
+
+  const ejercicios = NIVELES_TABLA[nivel];
+  const ej = ejercicios[ejActual] || ejercicios[0];
+  const n = ej.vars.length;
+  const filas = [];
+  for (let i = 0; i < (1 << n); i++) {
+    const combo = [];
+    for (let b = n - 1; b >= 0; b--) combo.push(!!((i >> b) & 1));
+    filas.push(combo);
+  }
+
+  const cambiarNivel = (nv) => { setNivel(nv); setEjActual(0); setRespuestas({}); setResultado(null); };
+  const cambiarEjercicio = (delta) => {
+    const total = ejercicios.length;
+    setEjActual((prev) => (prev + delta + total) % total);
+    setRespuestas({});
+    setResultado(null);
+  };
+  const marcar = (fila, valor) => setRespuestas((prev) => ({ ...prev, [fila]: valor }));
+  const limpiar = () => { setRespuestas({}); setResultado(null); };
+
+  const verificar = () => {
+    if (filas.some((_, i) => respuestas[i] === undefined)) {
+      setResultado({ ok: null, msg: "Completa todas las filas de la tabla primero." });
+      return;
+    }
+    const correcto = filas.every((combo, i) => (respuestas[i] === 1) === !!ej.evaluar(combo));
+    const clave = nivel + "-" + ejActual;
+    if (correcto) {
+      const yaGanado = ganadosRef.current.has(clave);
+      setResultado({ ok: true, msg: yaGanado ? "✓ Correcto (ya ganaste los puntos de este ejercicio)." : "✓ ¡Correcto! +10 puntos." });
+      if (!yaGanado) {
+        ganadosRef.current.add(clave);
+        falladosRef.current.delete(clave);
+        onGanarPuntos && onGanarPuntos(nivel + " — Ejercicio #" + (ejActual + 1), 10);
+      }
+    } else {
+      const yaFallado = falladosRef.current.has(clave);
+      const yaGanado = ganadosRef.current.has(clave);
+      setResultado({
+        ok: false,
+        msg: (yaFallado || yaGanado) ? "✗ Hay filas incorrectas — revisa cada combinación." : "✗ Hay filas incorrectas — revisa cada combinación. -10 puntos.",
+      });
+      if (!yaFallado && !yaGanado) {
+        falladosRef.current.add(clave);
+        onGanarPuntos && onGanarPuntos(nivel + " — Ejercicio #" + (ejActual + 1) + " (fallo)", -10);
+      }
+    }
+  };
+
+  if (mostrarIntro) {
+    const TEMAS_TABLAS = [
+      {
+        id: "que_es", titulo: "¿Qué es una tabla de verdad?",
+        contenido: (
+          <p>Una tabla de la verdad muestra <strong>todas las combinaciones posibles</strong> de las entradas (0 = apagado/falso,
+          1 = activo/verdadero), y para cada una, cuál debería ser la salida según la fórmula. Si hay <strong>2 entradas</strong> hay
+          <strong> 4 combinaciones</strong> posibles (2²); con <strong>3 entradas</strong> hay <strong>8</strong> (2³); con
+          <strong> 4 entradas</strong> hay <strong>16</strong> (2⁴). Cuantas más entradas tenga la fórmula, más filas hay que
+          llenar — pero la lógica de cada fila es siempre la misma.</p>
+        ),
+      },
+      {
+        id: "como_leer", titulo: "Cómo leer cada fila",
+        contenido: (
+          <p>El truco para llenar una tabla de verdad es revisarla <strong>fila por fila</strong>, nunca de un solo vistazo:
+          toma los valores de entrada de esa fila exacta, aplica la fórmula tal cual está escrita (respetando el orden de OR,
+          AND y NOT), y anota 1 si el resultado da activo, o 0 si da apagado. No hay que "adivinar" el patrón completo — cada
+          fila es un cálculo independiente.</p>
+        ),
+      },
+      {
+        id: "ejemplo_or", titulo: "Ejemplo resuelto — OR",
+        contenido: (
+          <>
+            <p>Fórmula: Notificación Audible = Sensor de Humo OR Estación Manual. Con el OR, la salida se activa si
+            <strong> cualquiera</strong> de las entradas (o ambas) están activas — solo da 0 cuando las dos están apagadas.</p>
+            <table style={{ width: "100%", maxWidth: 380, fontSize: 12.5, borderCollapse: "collapse", marginTop: 10 }}>
+              <thead>
+                <tr style={{ color: T.inkSoft, textAlign: "left" }}>
+                  <th style={{ padding: "6px 10px" }}>Sensor de Humo</th>
+                  <th style={{ padding: "6px 10px" }}>Estación Manual</th>
+                  <th style={{ padding: "6px 10px" }}>Salida</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[[0, 0, 0], [0, 1, 1], [1, 0, 1], [1, 1, 1]].map((fila, i) => (
+                  <tr key={i} style={{ borderTop: `1px solid ${T.line}` }}>
+                    {fila.map((v, j) => <td key={j} style={{ padding: "6px 10px", fontWeight: j === 2 ? 700 : 400 }}>{v}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        ),
+      },
+      {
+        id: "ejemplo_and", titulo: "Ejemplo resuelto — AND",
+        contenido: (
+          <>
+            <p>Fórmula: Extractor de Humo = Sensor de Humo AND Sensor de Temperatura. Con el AND, la salida solo se activa
+            cuando <strong>ambas</strong> entradas están activas al mismo tiempo — en cualquier otro caso da 0.</p>
+            <table style={{ width: "100%", maxWidth: 380, fontSize: 12.5, borderCollapse: "collapse", marginTop: 10 }}>
+              <thead>
+                <tr style={{ color: T.inkSoft, textAlign: "left" }}>
+                  <th style={{ padding: "6px 10px" }}>Sensor de Humo</th>
+                  <th style={{ padding: "6px 10px" }}>Sensor de Temperatura</th>
+                  <th style={{ padding: "6px 10px" }}>Salida</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[[0, 0, 0], [0, 1, 0], [1, 0, 0], [1, 1, 1]].map((fila, i) => (
+                  <tr key={i} style={{ borderTop: `1px solid ${T.line}` }}>
+                    {fila.map((v, j) => <td key={j} style={{ padding: "6px 10px", fontWeight: j === 2 ? 700 : 400 }}>{v}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        ),
+      },
+      {
+        id: "ejemplo_not", titulo: "Ejemplo resuelto — NOT",
+        contenido: (
+          <>
+            <p>Fórmula: Inyector de Aire = NOT Sensor de Humo. El NOT simplemente invierte el valor de la entrada: si el sensor
+            está en 0 (apagado), la salida da 1; si está en 1 (activo), la salida da 0.</p>
+            <table style={{ width: "100%", maxWidth: 300, fontSize: 12.5, borderCollapse: "collapse", marginTop: 10 }}>
+              <thead>
+                <tr style={{ color: T.inkSoft, textAlign: "left" }}>
+                  <th style={{ padding: "6px 10px" }}>Sensor de Humo</th>
+                  <th style={{ padding: "6px 10px" }}>Salida</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[[0, 1], [1, 0]].map((fila, i) => (
+                  <tr key={i} style={{ borderTop: `1px solid ${T.line}` }}>
+                    {fila.map((v, j) => <td key={j} style={{ padding: "6px 10px", fontWeight: j === 1 ? 700 : 400 }}>{v}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        ),
+      },
+    ];
+    return <GuiaPorTemas temas={TEMAS_TABLAS} onContinuar={() => setMostrarIntro(false)} tituloModulo="cómo funciona una tabla de la verdad" />;
+  }
+
+  return (
+    <Card>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        {Object.keys(NIVELES_TABLA).map((nv) => (
+          <Btn key={nv} small variant={nivel === nv ? "accent" : "ghost"} onClick={() => cambiarNivel(nv)}>{nv}</Btn>
+        ))}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>{nivel} — Ejercicio #{ejActual + 1}</div>
+          <div style={{ fontSize: 13, color: T.inkSoft }}>{ej.frase}</div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn small variant="ghost" onClick={() => cambiarEjercicio(-1)}>← Anterior</Btn>
+          <Btn small variant="ghost" onClick={() => cambiarEjercicio(1)}>Siguiente →</Btn>
+          <Btn small variant="ghost" onClick={limpiar}>Limpiar</Btn>
+          <Btn small variant="ghost" onClick={() => setMostrarIntro(true)}>Ver la guía otra vez</Btn>
+        </div>
+      </div>
+
+      <table style={{ width: "100%", fontSize: 12.5, borderCollapse: "collapse" }}>
+        <thead>
+          <tr style={{ color: T.inkSoft, textAlign: "left" }}>
+            {ej.vars.map((v) => <th key={v} style={{ padding: "6px 10px" }}>{v}</th>)}
+            <th style={{ padding: "6px 10px" }}>Salida</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filas.map((combo, i) => {
+            const marcada = respuestas[i];
+            return (
+              <tr key={i} style={{ borderTop: `1px solid ${T.line}` }}>
+                {combo.map((v, j) => <td key={j} style={{ padding: "6px 10px" }}>{v ? 1 : 0}</td>)}
+                <td style={{ padding: "4px 10px" }}>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <button onClick={() => marcar(i, 0)} style={{ width: 30, height: 26, borderRadius: 6, border: `1px solid ${T.line}`, background: marcada === 0 ? T.redSoft : "#fff", color: marcada === 0 ? T.red : T.inkSoft, fontWeight: 700, cursor: "pointer" }}>0</button>
+                    <button onClick={() => marcar(i, 1)} style={{ width: 30, height: 26, borderRadius: 6, border: `1px solid ${T.line}`, background: marcada === 1 ? T.greenSoft : "#fff", color: marcada === 1 ? T.green : T.inkSoft, fontWeight: 700, cursor: "pointer" }}>1</button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
+        <Btn variant="accent" onClick={verificar}>Verificar</Btn>
+        {resultado && <span style={{ fontSize: 14, color: resultado.ok === true ? T.green : resultado.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultado.msg}</span>}
+      </div>
+    </Card>
+  );
+}
+
+// Módulo NFPA 72: guía educativa con lo esencial de la capacitación
+// (cableados, tipos de detectores, cobertura), y un Examen Básico de
+// certificación tipo "todo o nada": se responde completo de una sola
+// vez; si algo sale mal, se limpia todo y hay que volver a presentar
+// las 20 preguntas desde cero para poder sumar los puntos.
+const PREGUNTAS_NFPA72 = [
+  { texto: "Los pulsadores manuales deben ubicarse dentro de los __________ de la apertura de la puerta de cada una de las salidas de cada piso.", tipo: "mc", opciones: ["1.07m", "1,22m", "1,52m", "Ninguna de las anteriores."], correcta: 2 },
+  { texto: "Se deben suministrar pulsadores manuales adicionales para que la distancia de recorrido hasta la estación manual más próxima no exceda los ____________ (medidos en forma horizontal).", tipo: "mc", opciones: ["4.5m", "9m", "61m", "13m"], correcta: 2 },
+  { texto: "La parte operable de cada pulsador manual de alarma debe estar al menos a _________ y a no más de _________ por encima del nivel del piso.", tipo: "mc", opciones: ["1m y 2,42m", "50cm y 150m", "120 y 130m", "1,07m y 1,22m"], correcta: 3, imagen: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAOMAAAD3CAYAAADvyePBAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAF5OSURBVHhe7d0JvH3lvD/w7Q5/XPM8JmUoQiIaqKhIptKgZGpQEQ0klWbK0IxKSPRrIqEUDVSGZCyZMmQeShIZrnsLd//X+/nt7+nZ67f2dM7e66xz2p/zWq+z99rPXnsNz3cenju0C7SmmGKKecV111/X+rfO6ymmmGIecYdimxLjFFM0BFNinGKKhmBKjFNM0RBMiXGKKRqCqTd1RPzlL39J/0855ZTW//t//y+9fvKTn9xaffXV0+spppgNrr/+uikxjorzzjsv/X/hC1+Y/gNC/NrXvtb6t3+bKhpTzA6IcTp7RsTf/va3tOX485//3Hk1xRSzx5QYR8SNN96YtimmGDemxDgi7nvf+6ZtiinGjSkxjgh24dQ2nGLsuMMdpsQ4xRRNwZQYR8QdCg5mm2KKcWNKjCNiqqZOMSlMZ9WI+Ne//pW2KaYYN6bEOAY89rGPnaquU8wJ81JCJeHnM5/5TGvLLbdsHXvssZ29t+Gcc85pbbfddq0NN9yw9bGPfaz1f//3f51Pmouf/OQn6bqmmGIuqJUY//d//7f14he/uLX55pu3zj777NaFF17Y+aSViG7//fdvvehFL2p9+MMfbl1yySVp7O67794otVA+auSkBm699dbOqymmmD1qJcb//u//bn3rW99KRAmPfOQj03+Q83n44Ycn58jGG2/cetWrXpX2H3fccYlwmwKENyW+KSaBWonx3ve+d6p2CJCQ8Mc//rG1/fbbt/7xj3+0nvSkJ7U++clPto455pjW3e52t/T55Zdfnv43Fc985jMXvM34hz/8ofXtb3+79bnPfa714x//eIZhBjwbOblUckx1IZgPCw21EqMJSzICVW/ttddOr7/zne8kgoRddtmldcc73jG9DlTZY1RcUvPzn/9865BDDmldcMEFrWuvvTZJVxMq8KUvfam19957tw499NDW9773vbTv0ksvTfbqP//5z1Rt8drXvrb161//On02G5DmsyXGn/70p2mizyeuu+661qMe9ajWE5/4xNaznvWs1korrdRaZZVVWn/605/S57/73e/S/gc96EFp3MMf/vDWm970pmUIdoo5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69aWcwFiLLSmzrtmoRZihFe84hWJM/71r3/t7Fm4+MIXvpC2mHyx7b333svss+l6Ht23C5W0fdhhh6X9VnWC+J6u3QsR66yzTjr/Qg1Nq34Vtnznk9vwl7/8pX3SSSfNrAFpLlx99dWdT+sDYqSJNBG1EeMb3/jG9hOf+MTOu4WNXsRIJdXmv7zf9oIXvKDz7XZSdbXRJy3BQqXGrLXWWun9QsKJJ56Yzp36edNNN3X29gZVXMNmRGlBVveiTiDGVVddtfOuWShsxvqI8dnPfnbn3cJGLzWVDXjFFVe073nPey7zGdUo1gopg7RcaaWV0rhrr722s7fZYPO97W1va9/pTndK16YL/LDw3Z122inZbmeccUZnbz1AjNY2aSIQY22R53JB7kIF76qtClbKsn78M57xjK4Ocryxlq6rysAR+pCpAzysTQevqTVOrFp86623pvVNrPk/LCQ7vP3tb0/Xfeyxx3atlJyHkW6PmKaBjBkmFOKSlC7EEii4cgr0V0EYCM4777zKOGmT8P73vz9dh7DPlltumcI11nYcJQlf8L2QrGl5OUkRoOh3SoxTjA1ihlbHktggnimgn6Nq5dxCvW0tv/zyabXgX/7ylylO11S4PtKs0KrSSmGFzZiIat11100L2+69995d7RARrJWf7H/Na17T9VmhLqb/l112WfovwaMO7Slfw6VxWKqxThaFWjPjPVzo6OXAYft99rOf7YqhWc+wmKTpc+vi//znP+98siyEAIxbeeWVk1OHDdo07LfffukcPUse4nPOOSe9v8td7jLjKbXxsD7zmc9M9mTssxUSsX3QQQelcA8PK8+mkJdVveoAm5F3u4mozYEj8G0B08WAXsTYi3huuOGG9ote9KI0RpyxytlRSNMUf4tjcf1fcMEFnU+bA55IDiqe4+uvvz5NbDHSH/zgB+2rrrqqvfPOO7fve9/7zlyH+CMCPv/881PMMfY/4AEPSGEuTJojxzEtzjppFFI6LS3YRNRGjIVdkILbiwGIxBYTK7Z+kozUtIakiUc6CHpHzLWwm2YydB760IemTBaShySVwdQkkPLWxHSthV2czrkckrEC71FHHZUI8G9/+1tnbztlMfGeRvCfFuG+rLjiiul9hHomCZLRbzURtRHjoYceumjijFSzUM/ybZBaWdhP7d13331mPLX0xhtvnMnKedrTnpak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" },
+  { texto: "Los detectores de humo montados en un muro lateral se pueden montar desde la altura del cielorraso hasta los _________ en dirección descendente.", tipo: "mc", opciones: ["10cm", "1m", "30cm", "No hay restricciones de montaje"], correcta: 2 },
+  { texto: "Si se requiere cobertura de un detector de humo cerca de un espacio de cocina, se deberá ubicar entre __________ y _________ desde el artefacto de cocina fijo o estacionario.", tipo: "mc", opciones: ["3m y 6.1m", "9.1 y 15m", "1,2m y 2.9m", "7m y 10m"], correcta: 0 },
+  { texto: "¿Cuál es la altura mínima y máxima para el montaje de dispositivos de notificación visual de montaje en pared, medidos desde el piso?", tipo: "mc", opciones: ["2m hasta 6m", "2.03m hasta 2.44m", "1,07m hasta 1,22m", "No existen restricciones"], correcta: 1 },
+  { texto: "La NFPA 72 establece que el sonido emitido por una base audible de un detector de humo debe ser de _________ HZ.", tipo: "mc", opciones: ["100 HZ", "520 HZ", "Temporal 3", "300 HZ"], correcta: 1 },
+  { texto: "La NFPA 72 define el concepto de Señal de Alarma. Elija la opción correcta:", tipo: "mc", opciones: ["Indica que ocurre una condición adversa en el sistema.", "Indica una acción asociada al mantenimiento o a la revisión de un evento de supervisión.", "Indica una condición de emergencia o alerta que requiere una acción."], correcta: 2 },
+  { texto: "La NFPA 72 define el concepto de Señal de Falla. Elija la opción correcta:", tipo: "mc", opciones: ["Indica que ocurre una condición adversa en el sistema.", "Indica una acción asociada al mantenimiento o a la revisión de un evento de supervisión.", "Indica una condición de emergencia o alerta que requiere una acción."], correcta: 0 },
+  { texto: "El estilo de cableado 4 (Clase B) para dispositivos convencionales debe llevar una Resistencia de Final de Línea en el último dispositivo.", tipo: "vf", opciones: ["Falso", "Verdadero"], correcta: 1 },
+  { texto: "Un circuito de Lámparas/Bocinas direccionadas (IDNAC) lleva Resistencia de Final de Línea.", tipo: "vf", opciones: ["Falso", "Verdadero"], correcta: 0 },
+  { texto: "¿Cuál de las siguientes normas establece los requerimientos mínimos para la detección y notificación de incendios en un edificio?", tipo: "mc", opciones: ["NFPA 72", "NFPA 70", "NFPA 101"], correcta: 2 },
+  { texto: "Según los lineamientos ADA (Americans with Disabilities Act), ¿cuál es la fuerza que se debe aplicar a un activador manual?", tipo: "mc", opciones: ["15 Lb", "3 Lb", "5 Lb"], correcta: 2 },
+  { texto: "El espaciamiento entre detectores de calor se verá afectado para cielorrasos a partir de los ________ m de altura.", tipo: "mc", opciones: ["3 m", "9.5 m", "4.5 m", "3.7 m"], correcta: 3 },
+  { texto: "Para el montaje de los detectores de temperatura, ¿cuál es la distancia mínima que se debe respetar respecto a la pared?", tipo: "mc", opciones: ["5m", "10cm", "4cm", "No hay restricción"], correcta: 1, imagen: "data:image/png;base64,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" },
+  { texto: "La estratificación: ¿es el efecto que le permite al humo llegar a las partes más altas de una bodega?", tipo: "vf", opciones: ["Falso", "Verdadero"], correcta: 0 },
+  { texto: "Los detectores de humo deben separarse de toda corriente de aire al menos _______.", tipo: "mc", opciones: ["15cm", "0.9m", "4.5m"], correcta: 1 },
+  { texto: "En un corredor menor a 6.1m de ancho, ¿cuál es la separación máxima entre dispositivos de notificación visual?", tipo: "mc", opciones: ["15m", "4.57m", "30.5m", "20ft"], correcta: 0 },
+  { texto: "Salvavidas de Centroamérica cuenta con personal certificado en múltiples marcas de detección de incendios. ¿En cuál de los siguientes fabricantes somos distribuidores directos en la oficina de Costa Rica?", tipo: "mc", opciones: ["Notifier", "Simplex", "Edwards", "Todos los anteriores"], correcta: 1 },
+  { texto: "¿Cuál de las siguientes normas establece los requerimientos mínimos para la instalación, prueba y mantenimiento de los sistemas de alarma y detección?", tipo: "mc", opciones: ["NFPA 72", "NFPA 70", "NFPA 101"], correcta: 0 },
+];
+const PUNTOS_POR_PREGUNTA_NFPA72 = 10;
+
+function JuegoNFPA72({ onGanarPuntos }) {
+  const [mostrarIntro, setMostrarIntro] = useState(true);
+  const [respuestas, setRespuestas] = useState({});
+  const [resultado, setResultado] = useState(null);
+  const ganadasRef = React.useRef(new Set());
+  const falladasRef = React.useRef(new Set());
+
+  const responder = (i, valor) => setRespuestas((prev) => ({ ...prev, [i]: valor }));
+  const reiniciarExamen = () => { setRespuestas({}); setResultado(null); };
+
+  const enviarExamen = () => {
+    if (PREGUNTAS_NFPA72.some((_, i) => respuestas[i] === undefined)) {
+      setResultado({ ok: null, msg: "Debes responder las " + PREGUNTAS_NFPA72.length + " preguntas antes de enviar el examen." });
+      return;
+    }
+    const detalle = PREGUNTAS_NFPA72.map((p, i) => respuestas[i] === p.correcta);
+    const correctas = detalle.filter(Boolean).length;
+    const total = PREGUNTAS_NFPA72.length;
+    const porcentaje = Math.round((correctas / total) * 100);
+    let puntosGanados = 0;
+    detalle.forEach((esCorrecta, i) => {
+      if (esCorrecta && !ganadasRef.current.has(i)) {
+        ganadasRef.current.add(i);
+        falladasRef.current.delete(i);
+        puntosGanados += PUNTOS_POR_PREGUNTA_NFPA72;
+      } else if (!esCorrecta && !falladasRef.current.has(i) && !ganadasRef.current.has(i)) {
+        falladasRef.current.add(i);
+        puntosGanados -= PUNTOS_POR_PREGUNTA_NFPA72;
+      }
+    });
+    if (puntosGanados !== 0) onGanarPuntos && onGanarPuntos("Examen Básico NFPA 72", puntosGanados);
+    const aprobado = porcentaje >= 70;
+    setResultado({
+      ok: aprobado, detalle,
+      msg: aprobado
+        ? `✓ ¡Examen aprobado! ${correctas}/${total} correctas (${porcentaje}%).${porcentaje < 100 ? " Para llegar al rango Senior necesitas 100% en todos los módulos." : ""}`
+        : `✗ Examen no aprobado — ${correctas}/${total} correctas (${porcentaje}%). Se necesita al menos 70% para aprobar. Revisa las preguntas marcadas en rojo y vuelve a intentar.`,
+    });
+  };
+
+  if (mostrarIntro) {
+    const TEMAS_NFPA72 = [
+      {
+        id: "que_es_nfpa", titulo: "¿Qué es la NFPA?",
+        contenido: (
+          <>
+            <p>La <strong>Asociación Nacional de Protección contra el Fuego (NFPA)</strong> es el organismo internacional
+            especializado en prevención, seguridad humana y protección contra incendios. Publica un paquete completo de normas
+            técnicas usadas en todo el mundo como referencia para el diseño, instalación y mantenimiento de sistemas de
+            protección contra incendios.</p>
+            <p>En Costa Rica, la totalidad del paquete normativo de la NFPA es de <strong>aplicación obligatoria</strong>, según
+            lo establecido en el artículo 66 del Decreto N° 37615-MP (Gaceta N° 66 del 5 de abril de 2013) y su reforma
+            (Decreto Ejecutivo N° 43733 del 12 de octubre de 2022) — salvo las excepciones establecidas en el reglamento para
+            el sector de diseño y construcción.</p>
+          </>
+        ),
+      },
+      {
+        id: "nfpa101_72", titulo: "NFPA 101 vs NFPA 72",
+        contenido: (
+          <>
+            <p><strong>NFPA 101 — Código de Seguridad Humana:</strong> establece los requisitos de diseño de edificaciones
+            enfocados en proteger la vida de las personas — rutas de evacuación, salidas de emergencia, ocupación máxima, etc.</p>
+            <p><strong>NFPA 72 — Código Nacional de Alarmas de Incendio y Señalización:</strong> es la norma específica que
+            establece los requisitos mínimos para la <strong>instalación, prueba y mantenimiento</strong> de los sistemas de
+            alarma y detección de incendios — la norma central del trabajo diario de Salvavidas de Centroamérica.</p>
+          </>
+        ),
+      },
+      {
+        id: "cableados", titulo: "Definiciones de cableado",
+        contenido: (
+          <>
+            <p>Un sistema de detección de incendios usa varios tipos de circuitos, cada uno con una función distinta:</p>
+            <ul style={{ margin: "4px 0 10px", paddingLeft: 20 }}>
+              <li><strong>NAC / SIG</strong> (Circuito de Aparatos de Notificación): alimenta y controla bocinas, lámparas y
+              strobes que avisan a las personas sobre la emergencia.</li>
+              <li><strong>SLC</strong> (Línea de Circuito de Señales): el circuito que comunica al panel con los dispositivos
+              direccionables (detectores, módulos), permitiendo identificar cada uno individualmente.</li>
+              <li><strong>IDNAC</strong>: como el NAC, pero para dispositivos de notificación <strong>direccionables</strong>
+              (cada uno tiene su propia dirección dentro del circuito).</li>
+              <li><strong>AUX</strong>: salida de 24 Voltios DC, usada para alimentar accesorios del sistema.</li>
+              <li><strong>IDC</strong> (Circuito de Dispositivos de Iniciación): circuito convencional que conecta los
+              dispositivos que inician una alarma (detectores, estaciones manuales) sin direccionamiento individual.</li>
+            </ul>
+          </>
+        ),
+      },
+      {
+        id: "detectores", titulo: "Detectores de humo",
+        contenido: (
+          <>
+            <p>Existen dos tecnologías principales de detección de humo:</p>
+            <ul style={{ margin: "4px 0 10px", paddingLeft: 20 }}>
+              <li><strong>Iónico:</strong> detecta partículas de combustión muy pequeñas, ideal para fuegos de llama abierta y
+              rápida propagación.</li>
+              <li><strong>Fotoeléctrico:</strong> detecta partículas de humo más grandes mediante un haz de luz, ideal para
+              fuegos de combustión lenta (humeantes).</li>
+            </ul>
+            <p><strong>Detectores para ductos:</strong> tienen limitaciones específicas importantes — NO son sustitutos de los
+            detectores para áreas abiertas, NO son sustitutos para detección de alerta temprana, y NO reemplazan al sistema de
+            detección de fuego general de un edificio. Su función es específicamente detener la propagación de humo a través
+            del sistema de ventilación (HVAC).</p>
+          </>
+        ),
+      },
+      {
+        id: "cobertura", titulo: "Cobertura y espaciamiento",
+        contenido: (
+          <>
+            <p>La cobertura de un detector de humo (el área que puede vigilar de forma confiable) cambia según varios
+            factores: el tipo de cielorraso, la presencia de vigas, la altura del techo, y la distancia a paredes o corrientes
+            de aire.</p>
+            <p><strong>Cielorrasos con vigas:</strong> cuando la profundidad de las vigas es ≥10% de la altura del cielorraso, y
+            la separación entre vigas es ≥40% de esa misma altura, el detector debe ubicarse <strong>en el espacio entre
+            vigas</strong> (no sobre ellas), ya que el humo se acumula ahí antes de esparcirse por todo el cielorraso.</p>
+            <p>Estas reglas de espaciamiento son las que se evalúan en detalle en el examen — repásalas junto con las medidas
+            específicas (distancias a paredes, corrientes de aire, cocinas, etc.) antes de presentarlo.</p>
+          </>
+        ),
+      },
+      {
+        id: "reglas_examen", titulo: "Reglas del Examen Básico",
+        contenido: (
+          <>
+            <p>El <strong>Examen Básico</strong> tiene {PREGUNTAS_NFPA72.length} preguntas y se responde completo de una sola vez.</p>
+            <p>Si apruebas {PREGUNTAS_NFPA72.length}/{PREGUNTAS_NFPA72.length}, sumas <strong>{PREGUNTAS_NFPA72.length * PUNTOS_POR_PREGUNTA_NFPA72} puntos</strong> al
+            segmento y al total. Si te equivocas en alguna, el examen se reinicia por completo — no se puede corregir solo la
+            pregunta fallada, hay que repasar y presentarlo entero otra vez.</p>
+          </>
+        ),
+      },
+    ];
+    return <GuiaPorTemas temas={TEMAS_NFPA72} onContinuar={() => setMostrarIntro(false)} tituloModulo="lo esencial de NFPA 72" />;
+  }
+
+  return (
+    <Card
+      title="Examen Básico — NFPA 72"
+      action={<Btn small variant="ghost" onClick={() => setMostrarIntro(true)}>Ver la guía otra vez</Btn>}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        {PREGUNTAS_NFPA72.map((p, i) => {
+          const correctaMostrada = resultado?.detalle;
+          const esCorrecta = correctaMostrada ? correctaMostrada[i] : null;
+          return (
+            <div key={i} style={{
+              border: `1px solid ${T.line}`, borderRadius: 10, padding: 14,
+              background: correctaMostrada ? (esCorrecta ? T.greenSoft : T.redSoft) : T.graySoft,
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{i + 1}. {p.texto}</div>
+              {p.imagen && <img src={p.imagen} alt="Figura de referencia" style={{ maxWidth: 220, borderRadius: 8, border: `1px solid ${T.line}`, marginBottom: 10, display: "block" }} />}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {p.opciones.map((op, j) => (
+                  <label key={j} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+                    <input type="radio" name={`p${i}`} checked={respuestas[i] === j} onChange={() => responder(i, j)} />
+                    {op}
+                  </label>
+                ))}
+              </div>
+              {correctaMostrada && !esCorrecta && (
+                <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>Respuesta correcta: {p.opciones[p.correcta]}</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
+        <Btn variant="accent" onClick={enviarExamen}>Enviar examen</Btn>
+        {resultado && <Btn variant="ghost" onClick={reiniciarExamen}>Empezar de nuevo</Btn>}
+        {resultado && <span style={{ fontSize: 14, color: resultado.ok === true ? T.green : resultado.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultado.msg}</span>}
+      </div>
+    </Card>
+  );
+}
+
+// Módulo Electrónica Básica: guía con los fundamentos (Ley de Ohm,
+// resistencias y código de colores, diodos, tensión/corriente DC-AC,
+// Ley de Watt) y un examen clasificado por nivel — Básico e Intermedio
+// cubren fundamentos y cálculos; Avanzado cubre las leyes de circuitos
+// (Kirchhoff, Superposición, Norton, Thevenin). Usa la misma regla de
+// "todo o nada por nivel" que los demás módulos de ejercicios.
+const CODIGO_COLORES_RESISTENCIAS = [
+  { color: "Negro", valor: 0 }, { color: "Marrón", valor: 1 }, { color: "Rojo", valor: 2 },
+  { color: "Naranja", valor: 3 }, { color: "Amarillo", valor: 4 }, { color: "Verde", valor: 5 },
+  { color: "Azul", valor: 6 }, { color: "Violeta", valor: 7 }, { color: "Gris", valor: 8 }, { color: "Blanco", valor: 9 },
+];
+
+const NIVELES_ELECTRONICA = {
+  "Básico": [
+    { texto: "La Ley de Ohm relaciona Voltaje (V), Corriente (I) y Resistencia (R). ¿Cuál es la fórmula correcta?", tipo: "mc", opciones: ["V = I / R", "V = I × R", "V = R / I", "I = V × R"], correcta: 1 },
+    { texto: "¿Qué es una resistencia (componente electrónico)?", tipo: "mc", opciones: ["Un componente que se opone/limita al paso de la corriente eléctrica.", "Un componente que genera corriente eléctrica.", "Un componente que almacena carga eléctrica.", "Un componente que convierte AC en DC."], correcta: 0 },
+    { texto: "En el código de colores, una resistencia con bandas Marrón–Negro–Rojo representa:", tipo: "mc", opciones: ["10 Ω", "100 Ω", "1,000 Ω (1 kΩ)", "10,000 Ω (10 kΩ)"], correcta: 2 },
+    { texto: "¿Cuál es la unidad de medida de la Tensión (diferencia de potencial)?", tipo: "mc", opciones: ["Amperio (A)", "Voltio (V)", "Watt (W)", "Ohmio (Ω)"], correcta: 1 },
+    { texto: "¿Cuál es la unidad de medida de la Corriente eléctrica?", tipo: "mc", opciones: ["Voltio (V)", "Ohmio (Ω)", "Amperio (A)", "Watt (W)"], correcta: 2 },
+    { texto: "¿Qué es un diodo y cuál es su función principal?", tipo: "mc", opciones: ["Un semiconductor que permite el paso de corriente en un solo sentido.", "Un componente que aumenta el voltaje del circuito.", "Un componente que mide la corriente.", "Un tipo de resistencia variable."], correcta: 0 },
+    { texto: "La corriente DC (directa) cambia de polaridad periódicamente con el tiempo.", tipo: "vf", opciones: ["Falso", "Verdadero"], correcta: 0 },
+    { texto: "¿Cómo se conecta un multímetro para medir Corriente en un circuito?", tipo: "mc", opciones: ["En paralelo con el componente.", "En serie con el circuito, en modo amperímetro.", "Directamente a la fuente sin el circuito.", "No se puede medir la corriente con un multímetro."], correcta: 1 },
+  ],
+  "Intermedio": [
+    { texto: "En una conexión de resistencias en SERIE, la resistencia total se calcula como:", tipo: "mc", opciones: ["Rt = R1 + R2 + R3 ...", "Rt = 1 / (1/R1 + 1/R2)", "Rt = R1 × R2", "Rt = (R1 + R2) / 2"], correcta: 0 },
+    { texto: "En una conexión de DOS resistencias en PARALELO, la resistencia total se calcula como:", tipo: "mc", opciones: ["Rt = R1 + R2", "Rt = (R1 × R2) / (R1 + R2)", "Rt = R1 - R2", "Rt = R1 × R2 × 2"], correcta: 1 },
+    { texto: "¿Cómo se conecta un multímetro para medir Voltaje respecto a un componente o circuito?", tipo: "mc", opciones: ["En serie con el circuito.", "En paralelo con el componente o circuito.", "Se debe abrir el circuito primero.", "No se puede medir con multímetro."], correcta: 1 },
+    { texto: "La Ley de Watt (potencia eléctrica) se calcula como:", tipo: "mc", opciones: ["P = V / I", "P = V + I", "P = V × I", "P = I / V"], correcta: 2 },
+    { texto: "Si un circuito tiene 12V y consume 2A, ¿cuál es su potencia?", tipo: "mc", opciones: ["6 W", "14 W", "24 W", "48 W"], correcta: 2 },
+    { texto: "Si un circuito tiene una resistencia de 100Ω y se le aplican 12V, ¿cuál es la corriente (usando I = V/R)?", tipo: "mc", opciones: ["0.12 A", "1.2 A", "12 A", "120 A"], correcta: 0 },
+  ],
+  "Avanzado": [
+    { texto: "La Ley de Corrientes de Kirchhoff (LKC) establece que en un nodo:", tipo: "mc", opciones: ["La suma de corrientes que entran es igual a la suma de las que salen.", "El voltaje siempre es cero.", "La resistencia total es infinita.", "La corriente siempre se duplica."], correcta: 0 },
+    { texto: "La Ley de Voltajes de Kirchhoff (LKV) establece que en una malla cerrada:", tipo: "mc", opciones: ["La suma de las caídas de voltaje es igual a cero.", "La corriente siempre es cero.", "El voltaje se duplica en cada componente.", "Solo aplica a corriente DC."], correcta: 0 },
+    { texto: "El Teorema de Superposición permite analizar un circuito con varias fuentes:", tipo: "mc", opciones: ["Calculando el efecto de cada fuente por separado y sumando los resultados.", "Eliminando todas las fuentes menos una para siempre.", "Solo funciona con una fuente a la vez sin poder sumar.", "No aplica a circuitos con más de una fuente."], correcta: 0 },
+    { texto: "El Teorema de Thevenin simplifica un circuito complejo a:", tipo: "mc", opciones: ["Una fuente de corriente en paralelo con una resistencia.", "Una fuente de voltaje equivalente en serie con una resistencia equivalente.", "Solo una resistencia, sin fuente.", "Un circuito abierto."], correcta: 1 },
+    { texto: "El Teorema de Norton simplifica un circuito complejo a:", tipo: "mc", opciones: ["Una fuente de voltaje en serie con una resistencia.", "Un circuito en cortocircuito.", "Una fuente de corriente equivalente en paralelo con una resistencia equivalente.", "Solo un capacitor."], correcta: 2 },
+  ],
+};
+const PUNTOS_POR_PREGUNTA_ELECTRONICA = 10;
+
+function JuegoElectronicaBasica({ onGanarPuntos }) {
+  const [mostrarIntro, setMostrarIntro] = useState(true);
+  const [nivel, setNivel] = useState("Básico");
+  const [respuestas, setRespuestas] = useState({});
+  const [resultado, setResultado] = useState(null);
+  const ganadasRef = React.useRef({});
+  const falladasRef = React.useRef({});
+
+  const preguntas = NIVELES_ELECTRONICA[nivel];
+  const responder = (i, valor) => setRespuestas((prev) => ({ ...prev, [i]: valor }));
+  const cambiarNivel = (n) => { setNivel(n); setRespuestas({}); setResultado(null); };
+
+  const enviarNivel = () => {
+    if (preguntas.some((_, i) => respuestas[i] === undefined)) {
+      setResultado({ ok: null, msg: "Responde todas las preguntas de este nivel antes de enviar." });
+      return;
+    }
+    if (!ganadasRef.current[nivel]) ganadasRef.current[nivel] = new Set();
+    if (!falladasRef.current[nivel]) falladasRef.current[nivel] = new Set();
+    const detalle = preguntas.map((p, i) => respuestas[i] === p.correcta);
+    const correctas = detalle.filter(Boolean).length;
+    const total = preguntas.length;
+    const porcentaje = Math.round((correctas / total) * 100);
+    let puntosGanados = 0;
+    detalle.forEach((esCorrecta, i) => {
+      if (esCorrecta && !ganadasRef.current[nivel].has(i)) {
+        ganadasRef.current[nivel].add(i);
+        falladasRef.current[nivel].delete(i);
+        puntosGanados += PUNTOS_POR_PREGUNTA_ELECTRONICA;
+      } else if (!esCorrecta && !falladasRef.current[nivel].has(i) && !ganadasRef.current[nivel].has(i)) {
+        falladasRef.current[nivel].add(i);
+        puntosGanados -= PUNTOS_POR_PREGUNTA_ELECTRONICA;
+      }
+    });
+    if (puntosGanados !== 0) onGanarPuntos && onGanarPuntos(nivel, puntosGanados);
+    const aprobado = porcentaje >= 70;
+    setResultado({
+      ok: aprobado, detalle,
+      msg: aprobado
+        ? `✓ ¡Nivel ${nivel} aprobado! ${correctas}/${total} correctas (${porcentaje}%).${porcentaje < 100 ? " Para el rango Senior necesitas 100% en todos los módulos." : ""}`
+        : `✗ ${correctas}/${total} correctas (${porcentaje}%) — se necesita al menos 70% para aprobar. Revisa las marcadas en rojo y vuelve a intentar.`,
+    });
+  };
+  const reiniciarNivel = () => { setRespuestas({}); setResultado(null); };
+
+  if (mostrarIntro) {
+    const TEMAS_ELECTRONICA = [
+      {
+        id: "ohm", titulo: "Ley de Ohm",
+        contenido: (
+          <>
+            <p>La Ley de Ohm es la relación fundamental entre las tres magnitudes básicas de un circuito eléctrico:
+            <strong> Voltaje (V)</strong>, <strong>Corriente (I)</strong> y <strong>Resistencia (R)</strong>.</p>
+            <div style={{ background: T.graySoft, borderRadius: 8, padding: "10px 14px", margin: "8px 0", fontSize: 14, fontWeight: 700 }}>V = I × R</div>
+            <p>De esta fórmula se derivan las otras dos formas, según qué dato tengas y cuál necesites calcular:</p>
+            <ul style={{ margin: "4px 0 10px", paddingLeft: 20 }}>
+              <li><strong>I = V / R</strong> — para calcular la corriente si conoces el voltaje y la resistencia.</li>
+              <li><strong>R = V / I</strong> — para calcular la resistencia si conoces el voltaje y la corriente.</li>
+            </ul>
+            <p><strong>Ejemplo práctico:</strong> si un circuito tiene una fuente de 12V y una resistencia de 100Ω, la corriente
+            que circula es I = 12/100 = <strong>0.12 A</strong>. Esta ley es la base para calcular casi cualquier valor eléctrico
+            en instalaciones de detección de incendios (por ejemplo, para dimensionar circuitos NAC o IDC).</p>
+            <a href="https://www.youtube.com/watch?v=MIJiPhtpAF8" target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, padding: "8px 12px", background: T.redSoft, color: T.red, borderRadius: 8, fontSize: 12.5, fontWeight: 700, textDecoration: "none" }}>
+              ▶ Ver video explicativo — Ley de Ohm
+            </a>
+          </>
+        ),
+      },
+      {
+        id: "resistencias", titulo: "Resistencias y código de colores",
+        contenido: (
+          <>
+            <p>Una <strong>resistencia</strong> es un componente electrónico que se opone al paso de la corriente eléctrica,
+            limitándola a un valor controlado. Se mide en <strong>Ohmios (Ω)</strong>.</p>
+            <p>Como las resistencias son físicamente pequeñas, su valor no se escribe con números sino con un
+            <strong> código de colores</strong>: cada banda de color representa un dígito, y la última banda suele ser un
+            multiplicador (o la tolerancia). Estos son los valores que representa cada color:</p>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "8px 0 12px" }}>
+              {CODIGO_COLORES_RESISTENCIAS.map((c) => (
+                <div key={c.color} style={{ border: `1px solid ${T.line}`, borderRadius: 6, padding: "4px 8px", fontSize: 11.5 }}>
+                  <b>{c.color}</b> = {c.valor}
+                </div>
+              ))}
+            </div>
+            <p><strong>Ejemplo:</strong> una resistencia con bandas Marrón–Negro–Rojo se lee así: el primer color (Marrón=1) y
+            el segundo (Negro=0) forman el número "10", y el tercero (Rojo=2) es el multiplicador ×100. Resultado: 10 × 100 =
+            <strong> 1,000 Ω (1 kΩ)</strong>.</p>
+            <a href="https://www.youtube.com/watch?v=YdaiLW4WOWo" target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, padding: "8px 12px", background: T.redSoft, color: T.red, borderRadius: 8, fontSize: 12.5, fontWeight: 700, textDecoration: "none" }}>
+              ▶ Ver video explicativo — Código de colores de resistencias
+            </a>
+          </>
+        ),
+      },
+      {
+        id: "serie", titulo: "Resistencias en Serie",
+        contenido: (
+          <>
+            <p><strong>En serie</strong> (una resistencia después de otra, en la misma línea): la resistencia total es
+            simplemente la suma de todas.</p>
+            <div style={{ background: T.graySoft, borderRadius: 8, padding: "10px 14px", margin: "8px 0", fontSize: 13, fontWeight: 700 }}>Rt = R1 + R2 + R3 + ...</div>
+            <p><strong>Ejemplo:</strong> tres resistencias de 100Ω, 220Ω y 330Ω en serie dan Rt = 100 + 220 + 330 =
+            <strong> 650Ω</strong>. La resistencia total en serie siempre es MAYOR que la más grande de las resistencias
+            individuales.</p>
+            <a href="https://www.youtube.com/watch?v=5_4eQqBJSB8" target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, padding: "8px 12px", background: T.redSoft, color: T.red, borderRadius: 8, fontSize: 12.5, fontWeight: 700, textDecoration: "none" }}>
+              ▶ Ver video explicativo — Resistencias en Serie
+            </a>
+          </>
+        ),
+      },
+      {
+        id: "paralelo", titulo: "Resistencias en Paralelo",
+        contenido: (
+          <>
+            <p><strong>En paralelo</strong> (varias resistencias conectadas entre los mismos dos puntos): la resistencia total
+            siempre es MENOR que la más pequeña de las resistencias individuales. Para dos resistencias:</p>
+            <div style={{ background: T.graySoft, borderRadius: 8, padding: "10px 14px", margin: "8px 0", fontSize: 13, fontWeight: 700 }}>Rt = (R1 × R2) / (R1 + R2)</div>
+            <p>Para tres o más resistencias en paralelo, se usa la fórmula general: 1/Rt = 1/R1 + 1/R2 + 1/R3 ...</p>
+            <p><strong>Ejemplo:</strong> dos resistencias de 100Ω en paralelo dan Rt = (100×100)/(100+100) = 10,000/200 =
+            <strong> 50Ω</strong> — la mitad de cada una, por ser iguales.</p>
+            <a href="https://www.youtube.com/watch?v=UQqSrMOpC-c" target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, padding: "8px 12px", background: T.redSoft, color: T.red, borderRadius: 8, fontSize: 12.5, fontWeight: 700, textDecoration: "none" }}>
+              ▶ Ver video explicativo — Resistencias en Paralelo
+            </a>
+          </>
+        ),
+      },
+      {
+        id: "diodo", titulo: "Diodos",
+        contenido: (
+          <>
+            <p>Un <strong>diodo</strong> es un componente semiconductor que permite el paso de la corriente eléctrica en
+            <strong> un solo sentido</strong> (del ánodo al cátodo) y la bloquea en sentido contrario — funciona como una
+            "válvula" eléctrica de un solo sentido.</p>
+            <p><strong>Funciones comunes de un diodo:</strong></p>
+            <ul style={{ margin: "4px 0 10px", paddingLeft: 20 }}>
+              <li>Rectificación: convertir corriente alterna (AC) en corriente directa (DC) pulsante.</li>
+              <li>Protección: evitar que la corriente circule en sentido inverso y dañe otros componentes (por ejemplo, en bobinas de relés).</li>
+              <li>Indicación visual: los LED (diodos emisores de luz) son un tipo de diodo que emite luz al circular corriente en el sentido correcto.</li>
+            </ul>
+            <p>Si se conecta con la polaridad invertida, el diodo normalmente NO deja pasar corriente (a menos que se exceda su
+            voltaje de ruptura, lo cual puede dañarlo).</p>
+            <a href="https://www.youtube.com/watch?v=aPY3I8pG478" target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, padding: "8px 12px", background: T.redSoft, color: T.red, borderRadius: 8, fontSize: 12.5, fontWeight: 700, textDecoration: "none" }}>
+              ▶ Ver video explicativo — El Diodo
+            </a>
+          </>
+        ),
+      },
+      {
+        id: "tension_corriente", titulo: "Tensión, Corriente, DC y AC",
+        contenido: (
+          <>
+            <p><strong>Tensión o diferencia de potencial:</strong> es la "fuerza" que empuja a los electrones a moverse por un
+            circuito. Se mide en <strong>Voltios (V)</strong>. Para medirla con un multímetro, se conecta
+            <strong> en paralelo</strong> con el componente o circuito (sin interrumpirlo).</p>
+            <p><strong>Corriente eléctrica:</strong> es el flujo de electrones que circula por el circuito. Se mide en
+            <strong> Amperios (A)</strong>. Para medirla con un multímetro, hay que <strong>interrumpir el circuito</strong> y
+            conectar el multímetro <strong>en serie</strong>, en modo amperímetro.</p>
+            <p><strong>DC (Corriente Directa):</strong> fluye siempre en el mismo sentido, con polaridad fija (positivo y
+            negativo no cambian). Ejemplos: baterías, paneles de alarma, circuitos IDC/SLC.</p>
+            <p><strong>AC (Corriente Alterna):</strong> cambia de sentido y polaridad periódicamente (en Costa Rica, 60 veces
+            por segundo — 60Hz). Ejemplo: la energía eléctrica que llega de la red comercial (120V/240V) a un panel de alarma.</p>
+          </>
+        ),
+      },
+      {
+        id: "watt", titulo: "Ley de Watt (Potencia)",
+        contenido: (
+          <>
+            <p>La <strong>Potencia eléctrica</strong> mide cuánta energía consume o entrega un circuito por unidad de tiempo.
+            Se mide en <strong>Watts (W)</strong>, y se calcula con la Ley de Watt:</p>
+            <div style={{ background: T.graySoft, borderRadius: 8, padding: "10px 14px", margin: "8px 0", fontSize: 14, fontWeight: 700 }}>P = V × I</div>
+            <p><strong>Ejemplo:</strong> un dispositivo de notificación (bocina/lámpara) que trabaja a 24V y consume 0.5A tiene
+            una potencia de P = 24 × 0.5 = <strong>12W</strong>. Este cálculo es clave para dimensionar la capacidad de las
+            fuentes de poder y baterías de respaldo en un sistema de alarma.</p>
+            <a href="https://www.youtube.com/watch?v=nT1t_DbO3xU" target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, padding: "8px 12px", background: T.redSoft, color: T.red, borderRadius: 8, fontSize: 12.5, fontWeight: 700, textDecoration: "none" }}>
+              ▶ Ver video explicativo — Ley de Watt
+            </a>
+          </>
+        ),
+      },
+      {
+        id: "kirchhoff", titulo: "Leyes de Kirchhoff",
+        contenido: (
+          <>
+            <p>Las <strong>Leyes de Kirchhoff</strong> son dos reglas fundamentales para analizar circuitos con varias mallas o
+            varios nodos, donde la Ley de Ohm sola no alcanza.</p>
+            <p><strong>Ley de Corrientes de Kirchhoff (LKC):</strong> en cualquier nodo (punto donde se unen varios cables), la
+            suma de las corrientes que ENTRAN es igual a la suma de las corrientes que SALEN. Ninguna corriente "desaparece".</p>
+            <p><strong>Ley de Voltajes de Kirchhoff (LKV):</strong> en cualquier malla cerrada (recorrido cerrado del circuito),
+            la suma de todas las caídas y subidas de voltaje es igual a cero.</p>
+            <p>Estas dos leyes permiten plantear ecuaciones para resolver circuitos complejos con varias fuentes y ramas, algo
+            muy común al analizar paneles con múltiples circuitos NAC/SLC compartiendo una misma fuente.</p>
+          </>
+        ),
+      },
+      {
+        id: "superposicion", titulo: "Teorema de Superposición",
+        contenido: (
+          <>
+            <p>El <strong>Teorema de Superposición</strong> aplica a circuitos lineales con <strong>más de una fuente</strong>
+            de energía (por ejemplo, dos baterías o una batería más una fuente AC).</p>
+            <p>El método consiste en: analizar el circuito considerando <strong>una sola fuente activa a la vez</strong>
+            (las demás fuentes de voltaje se cortocircuitan, y las de corriente se dejan en circuito abierto), calcular el
+            efecto (voltaje o corriente) que produce esa fuente sola, repetir el proceso para cada fuente, y finalmente
+            <strong> sumar algebraicamente todos los resultados</strong> para obtener el valor real total.</p>
+            <p>Es especialmente útil cuando resulta más simple analizar el efecto de cada fuente por separado que resolver
+            todo el circuito de una sola vez.</p>
+            <a href="https://www.youtube.com/watch?v=Ygx2dQIwe7Q" target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, padding: "8px 12px", background: T.redSoft, color: T.red, borderRadius: 8, fontSize: 12.5, fontWeight: 700, textDecoration: "none" }}>
+              ▶ Ver video explicativo — Teorema de Superposición
+            </a>
+          </>
+        ),
+      },
+      {
+        id: "thevenin", titulo: "Teorema de Thevenin",
+        contenido: (
+          <>
+            <p>El <strong>Teorema de Thevenin</strong> permite simplificar cualquier circuito lineal complejo, visto desde dos
+            terminales específicas, a un circuito equivalente mucho más simple: <strong>una sola fuente de voltaje (Vth) en
+            serie con una sola resistencia (Rth)</strong>.</p>
+            <p>Esto es muy útil cuando se quiere analizar cómo se comporta un circuito grande frente a distintas cargas
+            conectadas en un mismo punto, sin tener que resolver todo el circuito completo cada vez que la carga cambia — solo
+            se calcula Vth y Rth una vez, y luego se analiza fácilmente con cualquier carga.</p>
+            <a href="https://www.youtube.com/watch?v=yoGGTfONnwE" target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, padding: "8px 12px", background: T.redSoft, color: T.red, borderRadius: 8, fontSize: 12.5, fontWeight: 700, textDecoration: "none" }}>
+              ▶ Ver video explicativo — Ley de Thevenin
+            </a>
+          </>
+        ),
+      },
+      {
+        id: "norton", titulo: "Teorema de Norton",
+        contenido: (
+          <>
+            <p>El <strong>Teorema de Norton</strong> es el "hermano" del Teorema de Thevenin: también simplifica un circuito
+            complejo visto desde dos terminales, pero en vez de una fuente de voltaje, lo reduce a
+            <strong> una fuente de corriente (In) en paralelo con una resistencia (Rn)</strong>.</p>
+            <p>De hecho, el circuito de Norton y el de Thevenin son matemáticamente equivalentes y se pueden convertir uno en
+            el otro — la resistencia Rn es igual a Rth, y la corriente In se relaciona con Vth mediante la Ley de Ohm
+            (In = Vth / Rth).</p>
+            <a href="https://www.youtube.com/watch?v=PIA7oywgQR8&t=680s" target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 8, padding: "8px 12px", background: T.redSoft, color: T.red, borderRadius: 8, fontSize: 12.5, fontWeight: 700, textDecoration: "none" }}>
+              ▶ Ver video explicativo — Ley de Norton
+            </a>
+          </>
+        ),
+      },
+    ];
+    return <GuiaPorTemas temas={TEMAS_ELECTRONICA} onContinuar={() => setMostrarIntro(false)} tituloModulo="Electrónica Básica" />;
+  }
+
+  return (
+    <Card
+      title="Examen — Electrónica Básica"
+      action={<Btn small variant="ghost" onClick={() => setMostrarIntro(true)}>Ver la guía otra vez</Btn>}
+    >
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {Object.keys(NIVELES_ELECTRONICA).map((n) => (
+          <Btn key={n} small variant={nivel === n ? "accent" : "ghost"} onClick={() => cambiarNivel(n)}>{n}</Btn>
+        ))}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        {preguntas.map((p, i) => {
+          const correctaMostrada = resultado?.detalle;
+          const esCorrecta = correctaMostrada ? correctaMostrada[i] : null;
+          return (
+            <div key={i} style={{
+              border: `1px solid ${T.line}`, borderRadius: 10, padding: 14,
+              background: correctaMostrada ? (esCorrecta ? T.greenSoft : T.redSoft) : T.graySoft,
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{i + 1}. {p.texto}</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {p.opciones.map((op, j) => (
+                  <label key={j} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+                    <input type="radio" name={`elec-${nivel}-${i}`} checked={respuestas[i] === j} onChange={() => responder(i, j)} />
+                    {op}
+                  </label>
+                ))}
+              </div>
+              {correctaMostrada && !esCorrecta && (
+                <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>Respuesta correcta: {p.opciones[p.correcta]}</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
+        <Btn variant="accent" onClick={enviarNivel}>Enviar nivel</Btn>
+        {resultado && <Btn variant="ghost" onClick={reiniciarNivel}>Empezar de nuevo</Btn>}
+        {resultado && <span style={{ fontSize: 14, color: resultado.ok === true ? T.green : resultado.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultado.msg}</span>}
+      </div>
+    </Card>
+  );
+}
+
+// Editor visual de Ecuaciones Simplex: se arrastran (o se hace clic en)
+// herramientas individuales hacia el área de INPUTS o de OUTPUTS, se
+// pueden reordenar y borrar, el sistema genera el texto de la ecuación
+// automáticamente, y se verifica contra la ecuación de referencia
+// (elementos, orden, compuertas OR/AND/NOT, dispositivos y acción).
+const HERRAMIENTAS_INPUT_SIMPLEX = [
+  { id: "status", texto: "STATUS" },
+  { id: "on_i", texto: "ON" },
+  { id: "fire", texto: "FIRE" },
+  { id: "detect", texto: "DETECT" },
+  { id: "or", texto: "OR" },
+  { id: "and", texto: "AND" },
+  { id: "not", texto: "NOT" },
+  { id: "p48", texto: "P48 MANUAL EVAC", codigo: "P48 | DIGITAL | MANUAL EVAC" },
+  { id: "p550", texto: "P550 BOTON DE INHABILITAR LAS SIRENAS", codigo: "P550 | DIGITAL | TROUBL | BOTON DE INHABILITAR LAS SIRENAS" },
+  { id: "p551", texto: "P551 BOTON DE BYPASS", codigo: "P551 | DIGITAL | SUPV | BOTON DE BYPASS" },
+  { id: "l259_humo", texto: "L259 | LIST | MIXED | GENERAL DETECTORES DE HUMO" },
+  { id: "l259_manual", texto: "L259 | LIST | MIXED | GENERAL ESTACIONES MANUALES" },
+  { id: "l260_flujo", texto: "L260 | LIST | MIXED | GENERAL SENSORES DE FLUJO" },
+  { id: "m1_112", texto: "M1-112 SENSOR DE FLAMA", codigo: "M1-112 | ANALOG | UTILITY |" },
+  { id: "m1_115", texto: "M1-115 SENSOR DE GAS LPG", codigo: "M1-115 | ANALOG | UTILITY |" },
+  { id: "m1_11", texto: "M1-11 SENSOR DE MONOXIDO", codigo: "M1-11 | ANALOG | UTILITY |" },
+  { id: "m1_200", texto: "M1-200 SENSOR DE HUMO LOBBY FRT ELEVADOR P1", codigo: "M1-200 | ANALOG | UTILITY |" },
+  { id: "m1_201", texto: "M1-201 SENSOR DE HUMO LOBBY FRT ELEVADOR P3", codigo: "M1-201 | ANALOG | UTILITY |" },
+];
+const HERRAMIENTAS_OUTPUT_SIMPLEX = [
+  { id: "hold", texto: "HOLD" },
+  { id: "on_o", texto: "ON" },
+  { id: "pri", texto: "PRI" },
+  { id: "igual", texto: "=" },
+  { id: "n2", texto: "2" }, { id: "n3", texto: "3" }, { id: "n4", texto: "4" }, { id: "n5", texto: "5" },
+  { id: "n6", texto: "6" }, { id: "n7", texto: "7" }, { id: "n8", texto: "8" }, { id: "n9", texto: "9" },
+  { id: "coma", texto: "," },
+  { id: "desable", texto: "DISABLE" },
+  { id: "off", texto: "OFF" },
+  { id: "puntoycoma", texto: ";" },
+  { id: "temporal", texto: "TEMPORAL" },
+  { id: "track", texto: "TRACK" },
+  { id: "l256_lamparas", texto: "L256 | LIST | CONTROL | LAMPARAS BOCINAS" },
+  { id: "l257", texto: "L257 | LIST | MIXED | GENERAL LAMPARAS BOCINAS" },
+  { id: "l259_primario", texto: "L259 | LIST | MIXED | RELE LLAMADO PRIMARIO" },
+  { id: "l258_alt", texto: "L258 | LIST | MIXED | RELE LLAMADO ALTERNATIVO" },
+  { id: "l270", texto: "L270 | LIST | MIXED | SOLENOIDE SISTEMA DE DILUVIO" },
+  { id: "l271", texto: "L271 | LIST | MIXED | RELE CORTE DE GAS" },
+];
+const TEXTO_HERRAMIENTA_SIMPLEX = {};
+const CODIGO_HERRAMIENTA_SIMPLEX = {};
+[...HERRAMIENTAS_INPUT_SIMPLEX, ...HERRAMIENTAS_OUTPUT_SIMPLEX].forEach((h) => {
+  TEXTO_HERRAMIENTA_SIMPLEX[h.id] = h.texto;
+  CODIGO_HERRAMIENTA_SIMPLEX[h.id] = h.codigo || h.texto;
+});
+// Un token es "dispositivo/lista" (va en su propia línea, indentada, en la
+// ecuación generada) si su código trae el formato con barras "|".
+const esDispositivoSimplex = (id) => CODIGO_HERRAMIENTA_SIMPLEX[id].includes("|");
+
+const EJERCICIOS_SIMPLEX = [
+  { titulo: "Ejercicio #1 — Inhabilitar Notificación", explicacion: "Cuando el botón P550 se activa, la ecuación inhabilita las lámparas y bocinas generales.",
+    inputsRef: ["status", "on_i", "p550"], outputsRef: ["desable", "on_o", "l256_lamparas"] },
+  { titulo: "Ejercicio #2 — Habilitar Notificación", explicacion: "Cuando el botón P550 no está activado, la función de inhabilitación se desactiva y las lámparas y bocinas quedan habilitadas nuevamente.",
+    inputsRef: ["not", "status", "on_i", "p550"], outputsRef: ["desable", "off", "l256_lamparas"] },
+  { titulo: "Ejercicio #3 — Activar la Notificación por Evacuación Manual", explicacion: "Cuando se activa el botón de evacuación manual P48, se activa temporal la notificación general mediante las lámparas y bocinas.",
+    inputsRef: ["status", "on_i", "p48"], outputsRef: ["temporal", "pri", "igual", "n9", "coma", "n9", "l256_lamparas"] },
+  { titulo: "Ejercicio #4 — Llamado Primario del Elevador", explicacion: "Cuando el sensor de humo ubicado en el lobby frente del elevador del piso 1 detecta humo, se activa el relé de llamado primario del elevador.",
+    inputsRef: ["status", "detect", "m1_200"], outputsRef: ["hold", "on_o", "pri", "igual", "n9", "coma", "n9", "l259_primario"] },
+  { titulo: "Ejercicio #5 — Llamado Alternativo del Elevador", explicacion: "Cuando el sensor de humo M1-201 del lobby frente del elevador en P3 detecta humo, se activa el relé de llamado alternativo.",
+    inputsRef: ["status", "detect", "m1_201"], outputsRef: ["hold", "on_o", "pri", "igual", "n9", "coma", "n9", "l258_alt"] },
+  { titulo: "Ejercicio #6 — Activación General de Alarmas", explicacion: "Las lámparas y bocinas generales se activan cuando existe detección de humo, o cuando se activa una estación manual de alarma.",
+    inputsRef: ["status", "detect", "l259_humo", "or", "status", "on_i", "l259_manual"], outputsRef: ["temporal", "pri", "igual", "n9", "coma", "n9", "l256_lamparas"] },
+  { titulo: "Ejercicio #7 — Activación del Sistema de Diluvio", explicacion: "El sistema de diluvio se activa únicamente cuando el sensor de flama detecta una condición y, además, existe una señal de los sensores generales de flujo.",
+    inputsRef: ["status", "detect", "m1_112", "and", "status", "on_i", "l260_flujo"], outputsRef: ["hold", "on_o", "pri", "igual", "n9", "coma", "n9", "l270"] },
+  { titulo: "Ejercicio #8 — Corte de Suministro de Gas", explicacion: "El relé de corte de gas se activa cuando se detecta gas LPG o monóxido de carbono, junto con la lista de sensores de humo.",
+    inputsRef: ["status", "detect", "m1_115", "or", "status", "detect", "m1_11", "and", "status", "detect", "l259_humo"], outputsRef: ["hold", "on_o", "pri", "igual", "n8", "coma", "n8", "l271"] },
+];
+const PUNTOS_POR_EJERCICIO_SIMPLEX = 10;
+
+// Colorea un token tipo "P550 | DIGITAL | UTILITY |" segmento por segmento:
+// el primero en negro, el segundo en azul, el tercero en verde, el resto en negro.
+function LineaDispositivoSimplex({ codigo }) {
+  const partes = codigo.split("|").map((p) => p.trim()).filter((p, i, arr) => !(p === "" && i === arr.length - 1));
+  const colores = [T.ink, T.blue, T.green, T.ink, T.ink];
+  return (
+    <span>
+      {partes.map((parte, i) => (
+        <span key={i}>
+          {i > 0 && <span style={{ color: T.gray }}> | </span>}
+          <span style={{ color: colores[i] || T.ink }}>{parte}</span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+// Agrupa la secuencia de tokens colocados en "líneas" para mostrarlas como
+// una ecuación real: las palabras clave (STATUS, ON, AND...) se juntan en
+// una línea de condición, y cada dispositivo/lista pasa a su propia línea
+// indentada — igual que en el editor real de Simplex.
+// Une las palabras de una línea de condición con espacios normales, EXCEPTO
+// alrededor de "=" y "," donde no debe quedar espacio — así "PRI", "=", "9",
+// ",", "9" se ven como "PRI=9,9" en vez de "PRI = 9 , 9".
+function unirTokensCondicionSimplex(tokens) {
+  let resultado = "";
+  tokens.forEach((t, i) => {
+    if (i === 0) { resultado = t; return; }
+    const sinEspacio = t === "=" || t === "," || tokens[i - 1] === "=" || tokens[i - 1] === ",";
+    resultado += (sinEspacio ? "" : " ") + t;
+  });
+  return resultado;
+}
+
+function agruparLineasSimplex(colocados) {
+  const lineas = [];
+  let bufferTexto = [];
+  let bufferIndices = [];
+  colocados.forEach((id, i) => {
+    if (esDispositivoSimplex(id)) {
+      if (bufferTexto.length) { lineas.push({ tipo: "condicion", texto: unirTokensCondicionSimplex(bufferTexto), indices: bufferIndices }); bufferTexto = []; bufferIndices = []; }
+      lineas.push({ tipo: "dispositivo", codigo: CODIGO_HERRAMIENTA_SIMPLEX[id], indices: [i] });
+    } else {
+      bufferTexto.push(TEXTO_HERRAMIENTA_SIMPLEX[id]);
+      bufferIndices.push(i);
+    }
+  });
+  if (bufferTexto.length) lineas.push({ tipo: "condicion", texto: unirTokensCondicionSimplex(bufferTexto), indices: bufferIndices });
+  return lineas;
+}
+
+function PanelEcuacionSimplex({ inputsColocados, outputsColocados, onQuitarIndices }) {
+  const lineasInputs = agruparLineasSimplex(inputsColocados);
+  const lineasOutputs = agruparLineasSimplex(outputsColocados);
+
+  const renderLinea = (linea, zona, idx) => (
+    <div
+      key={zona + idx}
+      onClick={() => onQuitarIndices(zona, linea.indices)}
+      title="Clic para quitar este elemento"
+      style={{ cursor: "pointer", padding: "1px 4px", borderRadius: 4 }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = T.redSoft)}
+      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+    >
+      {linea.tipo === "condicion"
+        ? <span style={{ color: T.blue, fontWeight: 700 }}>{linea.texto}</span>
+        : <LineaDispositivoSimplex codigo={linea.codigo} />}
+    </div>
+  );
+
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${T.line}`, borderRadius: 10, padding: "16px 20px", minHeight: 320, fontFamily: "monospace", fontSize: 13, lineHeight: 1.8 }}>
+      <div>[INPUTS]</div>
+      <div style={{ paddingLeft: 24 }}>
+        {lineasInputs.length === 0 && <div style={{ color: T.gray, fontStyle: "italic" }}>&nbsp;</div>}
+        {lineasInputs.map((l, i) => (
+          <div key={i} style={{ paddingLeft: l.tipo === "dispositivo" ? 24 : 0 }}>{renderLinea(l, "input", i)}</div>
+        ))}
+      </div>
+      <div>[END INPUTS]</div>
+      <div style={{ height: 18 }} />
+      <div>[OUTPUTS]</div>
+      <div style={{ paddingLeft: 24 }}>
+        {lineasOutputs.length === 0 && <div style={{ color: T.gray, fontStyle: "italic" }}>&nbsp;</div>}
+        {lineasOutputs.map((l, i) => (
+          <div key={i} style={{ paddingLeft: l.tipo === "dispositivo" ? 24 : 0 }}>{renderLinea(l, "output", i)}</div>
+        ))}
+      </div>
+      <div>[END OUTPUTS]</div>
+    </div>
+  );
+}
+
+// Analiza la secuencia de INPUTS para VERIFICAR la ecuación: agrupa por
+// dispositivo igual que arriba, pero guarda las palabras de condición
+// (STATUS, ON, DETECT, FIRE) como un conjunto ordenado alfabéticamente —
+// así no importa en qué orden se arrastraron "STATUS" y "ON", solo que
+// estén las correctas, junto con el dispositivo, el NOT y el operador
+// correcto entre grupos.
+function analizarInputsParaVerificar(colocados) {
+  const grupos = [];
+  let condicionActual = [];
+  let negActual = false;
+  let operadorActual = null;
+  colocados.forEach((id) => {
+    if (id === "not") { negActual = true; return; }
+    if (id === "or") { operadorActual = "OR"; return; }
+    if (id === "and") { operadorActual = "AND"; return; }
+    if (esDispositivoSimplex(id)) {
+      grupos.push({ condicion: [...condicionActual].sort(), deviceId: id, neg: negActual, operador: operadorActual });
+      condicionActual = [];
+      negActual = false;
+      operadorActual = null;
+    } else {
+      condicionActual.push(id);
+    }
+  });
+  return grupos;
+}
+
+// Analiza la secuencia de INPUTS colocada y arma los "grupos" (un
+// dispositivo, si venía negado con NOT, y con qué operador se conecta al
+// grupo anterior) para poder dibujar el diagrama de compuertas.
+function parsearGruposSimplex(colocados) {
+  const grupos = [];
+  let negActual = false;
+  let operadorActual = null;
+  colocados.forEach((id) => {
+    if (id === "not") { negActual = true; return; }
+    if (id === "or") { operadorActual = "OR"; return; }
+    if (id === "and") { operadorActual = "AND"; return; }
+    if (esDispositivoSimplex(id)) {
+      grupos.push({ dispositivo: TEXTO_HERRAMIENTA_SIMPLEX[id].split("|")[0].trim(), neg: negActual, operador: operadorActual });
+      negActual = false;
+      operadorActual = null;
+    }
+  });
+  return grupos;
+}
+
+// Arma el árbol de compuertas en cascada de izquierda a derecha: la primera
+// entrada siempre pasa por una compuerta OR (aunque esté sola); cada
+// entrada siguiente se combina con el resultado acumulado usando su propio
+// operador (OR/AND).
+function construirArbolSimplex(grupos) {
+  if (grupos.length === 0) return null;
+  let nodo = { tipo: "OR", hijos: [grupos[0]] };
+  for (let i = 1; i < grupos.length; i++) {
+    nodo = { tipo: grupos[i].operador || "OR", hijos: [nodo, grupos[i]] };
+  }
+  return nodo;
+}
+
+function IconoCompuertaSimplex({ tipo }) {
+  const s = T.ink;
+  const shapes = {
+    OR: <path d="M2,2 C16,2 16,2 24,20 C16,38 16,38 2,38 C10,28 10,12 2,2 Z" fill={T.graySoft} stroke={s} strokeWidth="2" strokeLinejoin="round" />,
+    AND: <path d="M2,2 L18,2 A18,18 0 0 1 18,38 L2,38 Z" fill={T.graySoft} stroke={s} strokeWidth="2" />,
+  };
+  return <svg width="30" height="40" viewBox="0 0 26 40">{shapes[tipo] || shapes.OR}</svg>;
+}
+
+function DispositivoBoxSimplex({ neg, label }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+      <div style={{ background: "#a6e3ef", border: `1px solid ${T.blue}`, borderRadius: 8, padding: "6px 10px", fontSize: 11, fontWeight: 700, color: T.ink, whiteSpace: "nowrap" }}>
+        {label}
+      </div>
+      <div style={{ width: 14, height: 2, background: T.ink }} />
+      {neg && <div style={{ width: 8, height: 8, borderRadius: "50%", border: `2px solid ${T.red}`, background: "#fff" }} />}
+    </div>
+  );
+}
+
+function NodoArbolSimplex({ nodo }) {
+  if (!nodo.tipo) return <DispositivoBoxSimplex neg={nodo.neg} label={nodo.dispositivo} />;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {nodo.hijos.map((h, i) => <NodoArbolSimplex key={i} nodo={h} />)}
+      </div>
+      <div style={{ width: 10, height: 2, background: T.ink }} />
+      <IconoCompuertaSimplex tipo={nodo.tipo} />
+    </div>
+  );
+}
+
+// Genera automáticamente el diagrama de compuertas lógicas equivalente a
+// lo que se lleva construido en INPUTS — la primera entrada siempre entra
+// por una compuerta OR, y cada entrada adicional se combina con el
+// resultado acumulado según el operador (OR/AND) que la precede.
+function DiagramaLogicoSimplex({ inputsColocados }) {
+  const grupos = parsearGruposSimplex(inputsColocados);
+  const arbol = construirArbolSimplex(grupos);
+  return (
+    <div style={{ background: T.graySoft, borderRadius: 10, padding: 16, minHeight: 320, display: "flex", alignItems: "center", justifyContent: "center", overflowX: "auto" }}>
+      {!arbol ? (
+        <span style={{ fontSize: 12, color: T.gray, textAlign: "center" }}>Agrega dispositivos en INPUTS para ver aquí su representación en compuertas lógicas.</span>
+      ) : (
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <NodoArbolSimplex nodo={arbol} />
+          <div style={{ width: 14, height: 2, background: T.ink }} />
+          <div style={{ background: "#fff", border: `1px solid ${T.line}`, borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, color: T.ink }}>Salida</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function JuegoSimplex({ onGanarPuntos }) {
+  const [mostrarIntro, setMostrarIntro] = useState(true);
+  const [ejActual, setEjActual] = useState(0);
+  const [inputsColocados, setInputsColocados] = useState([]);
+  const [outputsColocados, setOutputsColocados] = useState([]);
+  const [resultado, setResultado] = useState(null);
+  const ganadosRef = React.useRef(new Set());
+  const falladosRef = React.useRef(new Set());
+
+  const ej = EJERCICIOS_SIMPLEX[ejActual];
+
+  const agregar = (zona, id) => {
+    if (zona === "input") setInputsColocados((prev) => [...prev, id]);
+    else setOutputsColocados((prev) => [...prev, id]);
+    setResultado(null);
+  };
+  const quitarIndices = (zona, indices) => {
+    const setter = zona === "input" ? setInputsColocados : setOutputsColocados;
+    setter((prev) => prev.filter((_, j) => !indices.includes(j)));
+    setResultado(null);
+  };
+  const limpiar = () => { setInputsColocados([]); setOutputsColocados([]); setResultado(null); };
+  const cambiarEjercicio = (delta) => {
+    setEjActual((prev) => (prev + delta + EJERCICIOS_SIMPLEX.length) % EJERCICIOS_SIMPLEX.length);
+    setInputsColocados([]); setOutputsColocados([]); setResultado(null);
+  };
+
+  const verificar = () => {
+    const inputsOk = JSON.stringify(analizarInputsParaVerificar(inputsColocados)) === JSON.stringify(analizarInputsParaVerificar(ej.inputsRef));
+    const outputsOk = JSON.stringify(outputsColocados) === JSON.stringify(ej.outputsRef);
+    const correcto = inputsOk && outputsOk;
+    const clave = "ej" + ejActual;
+    if (correcto) {
+      const yaGanado = ganadosRef.current.has(clave);
+      setResultado({ ok: true, msg: yaGanado ? "✓ Correcto (ya ganaste los puntos de este ejercicio)." : `✓ ¡Ecuación correcta! +${PUNTOS_POR_EJERCICIO_SIMPLEX} puntos.` });
+      if (!yaGanado) {
+        ganadosRef.current.add(clave);
+        falladosRef.current.delete(clave);
+        onGanarPuntos && onGanarPuntos(ej.titulo, PUNTOS_POR_EJERCICIO_SIMPLEX);
+      }
+    } else {
+      const yaFallado = falladosRef.current.has(clave);
+      const yaGanado = ganadosRef.current.has(clave);
+      let detalle = [];
+      if (!inputsOk) detalle.push("revisa los elementos, el orden y las compuertas (OR/AND/NOT) de INPUTS");
+      if (!outputsOk) detalle.push("revisa la acción y el argumento de OUTPUTS");
+      setResultado({ ok: false, msg: `✗ Todavía no — ${detalle.join("; ")}.${(yaFallado || yaGanado) ? "" : ` -${PUNTOS_POR_EJERCICIO_SIMPLEX} puntos.`}` });
+      if (!yaFallado && !yaGanado) {
+        falladosRef.current.add(clave);
+        onGanarPuntos && onGanarPuntos(ej.titulo + " (fallo)", -PUNTOS_POR_EJERCICIO_SIMPLEX);
+      }
+    }
+  };
+
+  if (mostrarIntro) {
+    const TEMAS_SIMPLEX = [
+      {
+        id: "que_es", titulo: "¿Qué son las Ecuaciones Simplex?",
+        contenido: (
+          <p>Las ecuaciones Simplex son la forma de programar la lógica de un panel de alarma: definen qué <strong>ENTRADAS</strong> (sensores, botones, listas de dispositivos) deben cumplirse para disparar una <strong>SALIDA</strong> (una acción sobre sirenas, relés, solenoides, etc.). Cada entrada puede ser un solo dispositivo o una lista con varios dispositivos agrupados; cada salida puede ser un solo punto o una lista de salidas.</p>
+        ),
+      },
+      {
+        id: "estructura_input", titulo: "Estructura de INPUT",
+        contenido: (
+          <>
+            <p>Un bloque INPUT define la condición que debe evaluarse, con un <strong>Estado de entrada</strong> (por ejemplo STATUS ON, o STATUS DETECT) y un <strong>Argumento de entrada</strong> (el dispositivo o lista al que aplica).</p>
+            <div style={{ background: T.graySoft, borderRadius: 8, padding: "10px 14px", margin: "8px 0", fontSize: 12.5, fontFamily: "monospace" }}>INPUT<br />&nbsp;&nbsp;Estado de entrada<br />&nbsp;&nbsp;Argumento de entrada<br />FIN INPUT</div>
+          </>
+        ),
+      },
+      {
+        id: "estructura_output", titulo: "Estructura de OUTPUT",
+        contenido: (
+          <>
+            <p>Un bloque OUTPUT define qué <strong>Acción</strong> se ejecuta (por ejemplo ACTIVAR, TEMPORAL, HOLD) y sobre qué <strong>Argumento</strong> (el dispositivo, grupo o lista de salidas).</p>
+            <div style={{ background: T.graySoft, borderRadius: 8, padding: "10px 14px", margin: "8px 0", fontSize: 12.5, fontFamily: "monospace" }}>OUTPUT<br />&nbsp;&nbsp;ACCIÓN = ACTIVAR<br />&nbsp;&nbsp;ARGUMENTO = SIRENAS_PISO_1<br />FIN OUTPUT</div>
+          </>
+        ),
+      },
+      {
+        id: "ejemplo_real", titulo: "Ejemplo real completo",
+        contenido: (
+          <div style={{ background: T.graySoft, borderRadius: 8, padding: "10px 14px", fontSize: 12, fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
+{`INPUTS
+STATUS DETECT L18 | LIST | MIXED | GENERAL FIRE ALARM MONITOR ZONES
+OR STATUS ON P35 | DIGITAL | UTILITY | MANUAL EVACUATION SWITCH INPUT
+AND NOT STATUS ON P199 | DIGITAL | UTILITY | INHIBIT ALARM DEFAULT
+OUTPUTS
+TRACK ON PRI=2,2 P3 | DIGITAL | UTILITY | FIRE ALARM DETECT`}
+          </div>
+        ),
+      },
+      {
+        id: "editor", titulo: "Cómo usar el editor visual",
+        contenido: (
+          <>
+            <p>En cada ejercicio vas a ver solo el <strong>enunciado</strong> (la explicación de lo que debe hacer el sistema) — tú construyes la ecuación arrastrando o haciendo clic en las herramientas correspondientes, primero hacia el área de INPUTS y luego hacia OUTPUTS.</p>
+            <ul style={{ margin: "4px 0 10px", paddingLeft: 20 }}>
+              <li>Cada herramienta se agrega al final de la fila.</li>
+              <li>Usa las flechitas ◀ ▶ en cada elemento para reordenarlo.</li>
+              <li>Usa la × para quitar un elemento colocado por error.</li>
+              <li>El sistema genera automáticamente el texto de la ecuación abajo.</li>
+              <li>"Verificar" compara tu ecuación contra la de referencia: elementos, orden, compuertas (OR/AND/NOT), dispositivos y la acción de salida.</li>
+            </ul>
+          </>
+        ),
+      },
+    ];
+    return <GuiaPorTemas temas={TEMAS_SIMPLEX} onContinuar={() => setMostrarIntro(false)} tituloModulo="Ecuaciones Simplex" />;
+  }
+
+  return (
+    <Card>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>{ej.titulo}</div>
+          <div style={{ fontSize: 13, color: T.inkSoft }}>{ej.explicacion}</div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn small variant="ghost" onClick={() => cambiarEjercicio(-1)}>← Anterior</Btn>
+          <Btn small variant="ghost" onClick={() => cambiarEjercicio(1)}>Siguiente →</Btn>
+          <Btn small variant="ghost" onClick={limpiar}>Limpiar</Btn>
+          <Btn small variant="ghost" onClick={() => setMostrarIntro(true)}>Ver la guía otra vez</Btn>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+        <div>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: T.inkSoft, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.4 }}>Herramientas de Inputs</div>
+          <div
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => { const v = e.dataTransfer.getData("text/plain"); if (v.startsWith("input:")) agregar("input", v.slice(6)); }}
+            style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: 10, background: T.blueSoft, borderRadius: 10, minHeight: 100, alignContent: "flex-start" }}
+          >
+            {HERRAMIENTAS_INPUT_SIMPLEX.map((h) => (
+              <button key={h.id} draggable onDragStart={(e) => e.dataTransfer.setData("text/plain", "input:" + h.id)} onClick={() => agregar("input", h.id)}
+                style={{ padding: "5px 10px", background: "#fff", border: `1px solid ${T.blue}`, color: T.blue, borderRadius: 999, fontSize: 10.5, fontWeight: 700, cursor: "grab", textTransform: "uppercase" }}>
+                {h.texto}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: T.inkSoft, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.4 }}>Herramientas de Outputs</div>
+          <div
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => { const v = e.dataTransfer.getData("text/plain"); if (v.startsWith("output:")) agregar("output", v.slice(7)); }}
+            style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: 10, background: T.greenSoft, borderRadius: 10, minHeight: 100, alignContent: "flex-start" }}
+          >
+            {HERRAMIENTAS_OUTPUT_SIMPLEX.map((h) => (
+              <button key={h.id} draggable onDragStart={(e) => e.dataTransfer.setData("text/plain", "output:" + h.id)} onClick={() => agregar("output", h.id)}
+                style={{ padding: "5px 10px", background: "#fff", border: `1px solid ${T.green}`, color: T.green, borderRadius: 999, fontSize: 10.5, fontWeight: 700, cursor: "grab", textTransform: "uppercase" }}>
+                {h.texto}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 11, color: T.gray, marginBottom: 6 }}>Arrastra o haz clic en una herramienta para agregarla. Haz clic sobre un elemento ya colocado abajo para quitarlo.</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 14 }}>
+        <PanelEcuacionSimplex inputsColocados={inputsColocados} outputsColocados={outputsColocados} onQuitarIndices={quitarIndices} />
+        <div>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: T.inkSoft, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.4 }}>Diagrama de compuertas (INPUTS)</div>
+          <DiagramaLogicoSimplex inputsColocados={inputsColocados} />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginTop: 16 }}>
+        <Btn variant="accent" onClick={verificar}>Verificar</Btn>
+        {resultado && <span style={{ fontSize: 14, color: resultado.ok === true ? T.green : resultado.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultado.msg}</span>}
+      </div>
+    </Card>
+  );
+}
+
 function Planilla() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
@@ -5645,6 +8198,8 @@ function AppInner() {
     // Todos los usuarios ven las áreas operativas; Administrativo
     // (incluyendo Gestión de Usuarios) queda reservado solo para la
     // categoría "admin". Los técnicos, además, no ven Proyectos ni Planilla.
+    // El perfil "entrenamiento" solo ve el área de Entrenamiento — nada más.
+    if (user.categoria === "entrenamiento") return AREAS.filter((a) => a.id === "entrenamiento");
     if (user.categoria === "admin") return AREAS;
     if (user.categoria === "tecnico") return AREAS.filter((a) => a.id !== "admin" && a.id !== "proyectos" && a.id !== "planilla");
     return AREAS.filter((a) => a.id !== "admin");
@@ -5723,6 +8278,7 @@ function AppInner() {
         {tab === "vehiculos" && <Vehiculos />}
         {tab === "equipos" && <EquiposCorrectivos irInicial={odParaEquipos} onIrConsumido={() => setOdParaEquipos(null)} />}
         {tab === "planilla" && <Planilla />}
+        {tab === "entrenamiento" && <Entrenamiento />}
         {tab === "admin" && <Administrativo />}
       </div>
     </div>

@@ -5747,13 +5747,11 @@ function Entrenamiento() {
 
   const rangoActual = calcularRangoUsuario(puntosTotal, puntosPorSegmento);
 
-  // Detecta cuando el rango sube, para mostrar una celebración breve.
+  // Detecta cuando el rango sube, para mostrar una celebración — se queda
+  // visible hasta que la persona le dé clic a la X, así da tiempo de leerla.
   useEffect(() => {
     if (rangoAnteriorRef.current !== null && rangoActual.min > rangoAnteriorRef.current) {
       setSubioDeRango(rangoActual);
-      const t = setTimeout(() => setSubioDeRango(null), 8000);
-      rangoAnteriorRef.current = rangoActual.min;
-      return () => clearTimeout(t);
     }
     rangoAnteriorRef.current = rangoActual.min;
   }, [rangoActual.min]);
@@ -5801,10 +5799,22 @@ function Entrenamiento() {
           @keyframes bannerGlow { 0%,100% { box-shadow: 0 0 0 0 ${subioDeRango.color}55; } 50% { box-shadow: 0 0 0 10px ${subioDeRango.color}00; } }
         `}</style>
         <div style={{
+          position: "relative",
           background: `linear-gradient(120deg, ${subioDeRango.soft}, #fff 70%)`, border: `2px solid ${subioDeRango.color}`,
           borderRadius: 14, padding: "18px 22px", display: "flex", alignItems: "center", gap: 18,
           animation: "bannerGlow 1.8s ease-in-out infinite",
         }}>
+          <button
+            onClick={() => setSubioDeRango(null)}
+            aria-label="Cerrar"
+            style={{
+              position: "absolute", top: 10, right: 10, width: 26, height: 26, borderRadius: "50%",
+              border: "none", background: "#fff", color: T.inkSoft, cursor: "pointer", fontSize: 15, fontWeight: 700,
+              display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 1px 4px rgba(0,0,0,0.15)",
+            }}
+          >
+            <X size={14} />
+          </button>
           <div style={{
             width: 64, height: 64, borderRadius: "50%", background: "#fff", border: `3px solid ${subioDeRango.color}`,
             display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
@@ -5812,7 +5822,7 @@ function Entrenamiento() {
           }}>
             {subioDeRango.tipo ? <IconTrofeo tipo={subioDeRango.tipo} size={34} color={subioDeRango.color} /> : <Award size={34} color={subioDeRango.color} fill={subioDeRango.color} />}
           </div>
-          <div>
+          <div style={{ paddingRight: 24 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: subioDeRango.color, textTransform: "uppercase", letterSpacing: 0.4 }}>🎉 ¡Felicidades, {jugador?.nombre?.split(" ")[0] || ""}!</div>
             <div style={{ fontSize: 17, fontWeight: 800, color: T.ink, margin: "2px 0 4px" }}>Nuevo rango desbloqueado: {subioDeRango.nombre}</div>
             <div style={{ fontSize: 12.5, color: T.inkSoft }}>{subioDeRango.mensaje || "Sigue sumando puntos en los módulos para llegar más alto."}</div>
@@ -7561,7 +7571,7 @@ const HERRAMIENTAS_INPUT_SIMPLEX = [
   { id: "p550", texto: "P550 BOTON DE INHABILITAR LAS SIRENAS", codigo: "P550 | DIGITAL | TROUBL | BOTON DE INHABILITAR LAS SIRENAS" },
   { id: "p551", texto: "P551 BOTON DE BYPASS", codigo: "P551 | DIGITAL | SUPV | BOTON DE BYPASS" },
   { id: "l259_humo", texto: "L259 | LIST | MIXED | GENERAL DETECTORES DE HUMO" },
-  { id: "l259_manual", texto: "L259 | LIST | MIXED | GENERAL ESTACIONES MANUALES" },
+  { id: "l261_manual", texto: "L261 | LIST | MIXED | GENERAL ESTACIONES MANUALES" },
   { id: "l260_flujo", texto: "L260 | LIST | MIXED | GENERAL SENSORES DE FLUJO" },
   { id: "m1_112", texto: "M1-112 SENSOR DE FLAMA", codigo: "M1-112 | ANALOG | UTILITY |" },
   { id: "m1_115", texto: "M1-115 SENSOR DE GAS LPG", codigo: "M1-115 | ANALOG | UTILITY |" },
@@ -7582,8 +7592,7 @@ const HERRAMIENTAS_OUTPUT_SIMPLEX = [
   { id: "puntoycoma", texto: ";" },
   { id: "temporal", texto: "TEMPORAL" },
   { id: "track", texto: "TRACK" },
-  { id: "l256_lamparas", texto: "L256 | LIST | CONTROL | LAMPARAS BOCINAS" },
-  { id: "l257", texto: "L257 | LIST | MIXED | GENERAL LAMPARAS BOCINAS" },
+  { id: "l256_lamparas", texto: "L256 | LIST | CONTROL | GENERAL LAMPARAS BOCINAS" },
   { id: "l259_primario", texto: "L259 | LIST | MIXED | RELE LLAMADO PRIMARIO" },
   { id: "l258_alt", texto: "L258 | LIST | MIXED | RELE LLAMADO ALTERNATIVO" },
   { id: "l270", texto: "L270 | LIST | MIXED | SOLENOIDE SISTEMA DE DILUVIO" },
@@ -7611,7 +7620,7 @@ const EJERCICIOS_SIMPLEX = [
   { titulo: "Ejercicio #5 — Llamado Alternativo del Elevador", explicacion: "Cuando el sensor de humo M1-201 del lobby frente del elevador en P3 detecta humo, se activa el relé de llamado alternativo.",
     inputsRef: ["status", "detect", "m1_201"], outputsRef: ["hold", "on_o", "pri", "igual", "n9", "coma", "n9", "l258_alt"] },
   { titulo: "Ejercicio #6 — Activación General de Alarmas", explicacion: "Las lámparas y bocinas generales se activan cuando existe detección de humo, o cuando se activa una estación manual de alarma.",
-    inputsRef: ["status", "detect", "l259_humo", "or", "status", "on_i", "l259_manual"], outputsRef: ["temporal", "pri", "igual", "n9", "coma", "n9", "l256_lamparas"] },
+    inputsRef: ["status", "detect", "l259_humo", "or", "status", "on_i", "l261_manual"], outputsRef: ["temporal", "pri", "igual", "n9", "coma", "n9", "l256_lamparas"] },
   { titulo: "Ejercicio #7 — Activación del Sistema de Diluvio", explicacion: "El sistema de diluvio se activa únicamente cuando el sensor de flama detecta una condición y, además, existe una señal de los sensores generales de flujo.",
     inputsRef: ["status", "detect", "m1_112", "and", "status", "on_i", "l260_flujo"], outputsRef: ["hold", "on_o", "pri", "igual", "n9", "coma", "n9", "l270"] },
   { titulo: "Ejercicio #8 — Corte de Suministro de Gas", explicacion: "El relé de corte de gas se activa cuando se detecta gas LPG o monóxido de carbono, junto con la lista de sensores de humo.",
@@ -7856,7 +7865,7 @@ function JuegoSimplex({ onGanarPuntos }) {
   };
 
   const verificar = () => {
-    const inputsOk = JSON.stringify(analizarInputsParaVerificar(inputsColocados)) === JSON.stringify(analizarInputsParaVerificar(ej.inputsRef));
+    const inputsOk = JSON.stringify(inputsColocados) === JSON.stringify(ej.inputsRef);
     const outputsOk = JSON.stringify(outputsColocados) === JSON.stringify(ej.outputsRef);
     const correcto = inputsOk && outputsOk;
     const clave = "ej" + ejActual;

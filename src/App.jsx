@@ -5761,6 +5761,8 @@ function Entrenamiento() {
   // cuál módulo va más avanzado.
   const rangoDeSegmento = (segId) => rangoDeEntrenamiento(puntosDeSegmento(segId));
 
+  const repasos = puntajes.filter((p) => p.ejercicio && p.ejercicio.includes("(repaso)")).length;
+
   const LOGROS = [
     { id: "primer_punto", nombre: "Primer paso", desc: "Gana tus primeros puntos", cumplido: puntosTotal > 0 },
     { id: "tres_modulos", nombre: "Explorador", desc: "Suma puntos en 3 módulos distintos", cumplido: SEGMENTOS_ENTRENAMIENTO.filter((s) => puntosDeSegmento(s.id) > 0).length >= 3 },
@@ -5768,6 +5770,7 @@ function Entrenamiento() {
     { id: "cien_puntos", nombre: "Centurión", desc: "Alcanza 100 puntos en total", cumplido: puntosTotal >= 100 },
     { id: "nfpa_aprobado", nombre: "Certificado NFPA 72", desc: "Aprueba el Examen Básico de NFPA 72", cumplido: puntosDeSegmento("nfpa72") >= 200 },
     { id: "senior", nombre: "Senior Experto", desc: "Alcanza el rango máximo (Panel)", cumplido: rangoActual.tipo === "panel" },
+    { id: "perseverancia", nombre: "Perseverancia", desc: "Repite un ejercicio ya acertado, para reforzar lo aprendido", cumplido: repasos >= 1 },
   ];
 
   if (!jugadorCodigo) {
@@ -6310,6 +6313,8 @@ function JuegoCompuertasLogicas({ onGanarPuntos }) {
           ganadosRef.current.add(clave);
           falladosRef.current.delete(clave);
           onGanarPuntos && onGanarPuntos(nivelActual + " — Ejercicio #" + (ejActual + 1), 10);
+        } else {
+          onGanarPuntos && onGanarPuntos(nivelActual + " — Ejercicio #" + (ejActual + 1) + " (repaso)", 0);
         }
       } else {
         elCanvas.style.background = T.redSoft;
@@ -6442,343 +6447,509 @@ function JuegoCompuertasLogicas({ onGanarPuntos }) {
   );
 }
 
-// Juego de Lógica en Escalera: arrastra tarjetas de contacto (con o sin
-// NOT) a los espacios ya ubicados en la escalera — series = AND, ramas
-// en paralelo = OR — respetando el estilo exacto de los diagramas
-// originales (contacto = dos rayitas ⊣⊢, NOT = raya diagonal cruzada,
-// salida = óvalo).
-function ContactoSlot({ valor, sobre, onDragOver, onDragLeave, onDrop, tarjetasPorId }) {
-  const tarjeta = valor ? tarjetasPorId[valor] : null;
-  return (
-    <div
-      onDragOver={(e) => { e.preventDefault(); onDragOver && onDragOver(); }}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-      style={{
-        display: "flex", flexDirection: "column", alignItems: "center", gap: 3, minWidth: 74,
-      }}
-    >
-      <div style={{ fontSize: 11, fontWeight: 700, color: T.ink, height: 14 }}>{tarjeta ? tarjeta.varLabel : ""}</div>
-      <div style={{
-        width: 64, height: 40, border: `1.5px ${valor ? "solid" : "dashed"} ${sobre ? T.accent : (valor ? T.ink : T.line)}`,
-        borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", position: "relative",
-        background: valor ? T.graySoft : "#fff",
-      }}>
-        {!valor && <span style={{ fontSize: 9.5, color: T.gray }}>soltar</span>}
-        {valor && (
-          <>
-            <div style={{ width: 3, height: 26, background: T.ink, marginRight: 5 }} />
-            <div style={{ width: 3, height: 26, background: T.ink }} />
-            {tarjeta.not && <div style={{ position: "absolute", width: 30, height: 2, background: T.ink, transform: "rotate(-55deg)" }} />}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-function LineaConector({ ancho = 24 }) {
-  return <div style={{ width: ancho, height: 2, background: T.ink }} />;
-}
-function SalidaOvalo({ label = "SALIDA" }) {
-  return (
-    <div style={{ width: 78, height: 54, borderRadius: "50%", border: `2px solid ${T.ink}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10.5, fontWeight: 700, color: T.ink, textAlign: "center", padding: 4, flexShrink: 0 }}>
-      {label}
-    </div>
-  );
-}
-
+// Juego de Lógica en Escalera: mismo motor que Compuertas Lógicas —
+// arrastras contactos (OR/AND/NOT dibujados al estilo de riel: rayitas
+// ⊣⊢, NOT con raya diagonal) al lienzo y los conectas cableando a mano,
+// con verificación automática contra todas las combinaciones posibles.
 function JuegoLogicaEscalera({ onGanarPuntos }) {
-  const [mostrarIntro, setMostrarIntro] = useState(true);
-  const [nivel, setNivel] = useState("Básico");
-  const [ejActual, setEjActual] = useState(0);
-  const [slots, setSlots] = useState({});
-  const [sobreSlot, setSobreSlot] = useState(null);
-  const [resultado, setResultado] = useState(null);
+  const contenedorRef = React.useRef(null);
   const ganadosRef = React.useRef(new Set());
   const falladosRef = React.useRef(new Set());
+  const [mostrarIntro, setMostrarIntro] = useState(true);
 
-  const NIVELES_ESCALERA = {
-    "Básico": [
-      {
-        frase: '"Activa el Sistema de Espuma: Sensor de Flama y Sensor de Flujo, y no hay Falla del Sistema."',
-        layout: "serie",
-        ramas: [["flama", "flujo", "falla_not"]],
-        tarjetas: [
-          { id: "flama", label: "Flama", varLabel: "Sensor de Flama", not: false },
-          { id: "flujo", label: "Flujo", varLabel: "Sensor de Flujo", not: false },
-          { id: "falla_not", label: "Falla (NOT)", varLabel: "Falla del Sistema", not: true },
-          { id: "falla", label: "Falla", varLabel: "Falla del Sistema", not: false },
-          { id: "flama_not", label: "Flama (NOT)", varLabel: "Sensor de Flama", not: true },
-        ],
-      },
-      {
-        frase: '"El Inyector de Aire funciona solo si no hay Sensor de Humo ni Sensor de Temperatura activos."',
-        layout: "serie",
-        ramas: [["humo_not", "temp_not"]],
-        tarjetas: [
-          { id: "humo_not", label: "Humo (NOT)", varLabel: "Sensor de Humo", not: true },
-          { id: "temp_not", label: "Temperatura (NOT)", varLabel: "Sensor de Temperatura", not: true },
-          { id: "humo", label: "Humo", varLabel: "Sensor de Humo", not: false },
-          { id: "temp", label: "Temperatura", varLabel: "Sensor de Temperatura", not: false },
-        ],
-      },
-    ],
-    "Intermedio": [
-      {
-        frase: 'Activa el Sistema de Diluvio cuando cualquiera de los sensores de detección (Humo, Flama o Estación Manual) se dispare, siempre que además haya flujo de agua confirmado por el Sensor de Flujo.',
-        layout: "or_and",
-        ramas: [["humo", "flama", "manual"], ["flujo"]],
-        tarjetas: [
-          { id: "humo", label: "Humo", varLabel: "Sensor de Humo", not: false },
-          { id: "flama", label: "Flama", varLabel: "Sensor de Flama", not: false },
-          { id: "manual", label: "Estación Manual", varLabel: "Estación Manual", not: false },
-          { id: "flujo", label: "Flujo", varLabel: "Sensor de Flujo", not: false },
-          { id: "humo_not", label: "Humo (NOT)", varLabel: "Sensor de Humo", not: true },
-        ],
-      },
-      {
-        frase: 'Abre las Puertas si hay Sensor de Gas LPG o se activa la Estación Manual, y no hay Falla del Sistema.',
-        layout: "or_and",
-        ramas: [["lpg", "manual"], ["falla_not"]],
-        tarjetas: [
-          { id: "lpg", label: "Gas LPG", varLabel: "Sensor de Gas LPG", not: false },
-          { id: "manual", label: "Estación Manual", varLabel: "Estación Manual", not: false },
-          { id: "falla_not", label: "Falla (NOT)", varLabel: "Falla del Sistema", not: true },
-          { id: "falla", label: "Falla", varLabel: "Falla del Sistema", not: false },
-          { id: "lpg_not", label: "Gas LPG (NOT)", varLabel: "Sensor de Gas LPG", not: true },
-        ],
-      },
-    ],
-    "Avanzado": [
-      {
-        frase: 'Activa la Notificación Audible si los tres sensores (Humo, Temperatura y Monóxido) detectan la condición al mismo tiempo, o si alguien activa la Estación Manual.',
-        layout: "and_or",
-        ramas: [["humo", "temp", "co"], ["manual"]],
-        tarjetas: [
-          { id: "humo", label: "Humo", varLabel: "Sensor de Humo", not: false },
-          { id: "temp", label: "Temperatura", varLabel: "Sensor de Temperatura", not: false },
-          { id: "co", label: "Monóxido", varLabel: "Sensor de Monóxido", not: false },
-          { id: "manual", label: "Estación Manual", varLabel: "Estación Manual", not: false },
-          { id: "manual_not", label: "Manual (NOT)", varLabel: "Estación Manual", not: true },
-        ],
-      },
-    ],
-  };
+  useEffect(() => {
+    if (mostrarIntro) return;
+    const cont = contenedorRef.current;
+    if (!cont) return;
 
-  const ejercicios = NIVELES_ESCALERA[nivel];
-  const ej = ejercicios[ejActual] || ejercicios[0];
-  const tarjetasPorId = {};
-  ej.tarjetas.forEach((t) => { tarjetasPorId[t.id] = t; });
+    const GATES_JUEGO = {
+      AND: { inputs: 2, fn: (a, b) => (a && b) },
+      OR: { inputs: 2, fn: (a, b) => (a || b) },
+      NOT: { inputs: 1, fn: (a) => !a },
+    };
+    const NIVELES_JUEGO = {
+      "Básico": [
+        { frase: '"Activa la Notificación Audible si hay Sensor de Humo o Estación Manual."', terminales: ["Sensor de Humo", "Estación Manual"], evaluar: (v) => v["Sensor de Humo"] || v["Estación Manual"] },
+        { frase: '"Envía al Extractor de Humo si hay Sensor de Humo y Sensor de Temperatura."', terminales: ["Sensor de Humo", "Sensor de Temperatura"], evaluar: (v) => v["Sensor de Humo"] && v["Sensor de Temperatura"] },
+        { frase: '"El Inyector de Aire debe estar apagado mientras haya Sensor de Humo activo."', terminales: ["Sensor de Humo"], evaluar: (v) => !v["Sensor de Humo"] },
+        { frase: '"Activa el Sistema de Espuma si hay Sensor de Flama y Sensor de Flujo, y no hay Falla del Sistema."', terminales: ["Sensor de Flama", "Sensor de Flujo", "Falla del Sistema"], evaluar: (v) => v["Sensor de Flama"] && v["Sensor de Flujo"] && !v["Falla del Sistema"] },
+        { frase: '"El Sistema de Diluvio solo se habilita cuando no hay Sensor de Gas LPG ni Falla del Sistema activos."', terminales: ["Sensor de Gas LPG", "Falla del Sistema"], evaluar: (v) => !(v["Sensor de Gas LPG"] || v["Falla del Sistema"]) },
+      ],
+      "Intermedio": [
+        { frase: '"Activa Notificación Visible si hay Sensor de Flama o Sensor de Temperatura, y no hay Falla del Sistema."', terminales: ["Sensor de Flama", "Sensor de Temperatura", "Falla del Sistema"], evaluar: (v) => (v["Sensor de Flama"] || v["Sensor de Temperatura"]) && !v["Falla del Sistema"] },
+        { frase: '"Abre las Puertas si hay Sensor de Gas LPG o se activa la Estación Manual, y no hay Falla del Sistema."', terminales: ["Sensor de Gas LPG", "Estación Manual", "Falla del Sistema"], evaluar: (v) => (v["Sensor de Gas LPG"] || v["Estación Manual"]) && !v["Falla del Sistema"] },
+        { frase: '"Control de Elevadores baja al vestíbulo si hay Estación Manual y no hay Falla del Sistema."', terminales: ["Estación Manual", "Falla del Sistema"], evaluar: (v) => v["Estación Manual"] && !v["Falla del Sistema"] },
+        { frase: '"El Inyector de Aire funciona solo si no hay Sensor de Humo ni Sensor de Temperatura activos."', terminales: ["Sensor de Humo", "Sensor de Temperatura"], evaluar: (v) => !(v["Sensor de Humo"] || v["Sensor de Temperatura"]) },
+      ],
+      "Avanzado": [
+        { frase: 'Activa el Sistema de Diluvio cuando cualquiera de los sensores de detección (Humo, Flama o Estación Manual) se dispare, siempre que además haya flujo de agua confirmado por el Sensor de Flujo.', terminales: ["Sensor de Humo", "Sensor de Flama", "Estación Manual", "Sensor de Flujo"], evaluar: (v) => (v["Sensor de Humo"] || v["Sensor de Flama"] || v["Estación Manual"]) && v["Sensor de Flujo"] },
+        { frase: 'Activa la Notificación Audible si los tres sensores (Humo, Temperatura y Monóxido) detectan la condición al mismo tiempo, o si alguien activa la Estación Manual.', terminales: ["Sensor de Humo", "Sensor de Temperatura", "Sensor de Monóxido", "Estación Manual"], evaluar: (v) => (v["Sensor de Humo"] && v["Sensor de Temperatura"] && v["Sensor de Monóxido"]) || v["Estación Manual"] },
+      ],
+    };
+    let nivelActual = "Básico";
+    let EJERCICIOS_JUEGO = NIVELES_JUEGO[nivelActual];
 
-  const cambiarNivel = (n) => { setNivel(n); setEjActual(0); setSlots({}); setResultado(null); };
-  const cambiarEjercicio = (delta) => {
-    const total = ejercicios.length;
-    setEjActual((prev) => (prev + delta + total) % total);
-    setSlots({});
-    setResultado(null);
-  };
-
-  const soltar = (ramaIdx, slotIdx, e) => {
-    e.preventDefault();
-    const id = e.dataTransfer.getData("text/plain");
-    setSlots((prev) => ({ ...prev, [`${ramaIdx}-${slotIdx}`]: id }));
-    setSobreSlot(null);
-  };
-
-  const limpiar = () => { setSlots({}); setResultado(null); };
-
-  const verificar = () => {
-    const totalSlots = ej.ramas.reduce((s, r) => s + r.length, 0);
-    const llenos = Object.keys(slots).filter((k) => k.startsWith(ejActual + "n") || true);
-    const valores = ej.ramas.map((rama, ri) => rama.map((_, si) => slots[`${ri}-${si}`]));
-    if (valores.some((rama) => rama.some((v) => !v))) {
-      setResultado({ ok: null, msg: "Completa todos los espacios primero." });
-      return;
+    // Contacto de riel: dos rayitas verticales (⊣⊢); NOT agrega la raya
+    // diagonal cruzada — el mismo estilo que ya usan las guías educativas.
+    function svgGate(tipo) {
+      const s = "currentColor";
+      const contacto = (cx, cy, negado) => `
+        <line x1="${cx - 3}" y1="${cy - 8}" x2="${cx - 3}" y2="${cy + 8}" stroke="${s}" stroke-width="2"/>
+        <line x1="${cx + 3}" y1="${cy - 8}" x2="${cx + 3}" y2="${cy + 8}" stroke="${s}" stroke-width="2"/>
+        ${negado ? `<line x1="${cx - 8}" y1="${cy + 10}" x2="${cx + 8}" y2="${cy - 10}" stroke="${s}" stroke-width="2"/>` : ""}
+      `;
+      const shapes = {
+        OR: `
+          <line x1="-10" y1="8" x2="14" y2="8" stroke="${s}" stroke-width="2"/>${contacto(17, 8, false)}<line x1="20" y1="8" x2="38" y2="8" stroke="${s}" stroke-width="2"/>
+          <line x1="-10" y1="32" x2="14" y2="32" stroke="${s}" stroke-width="2"/>${contacto(17, 32, false)}<line x1="20" y1="32" x2="38" y2="32" stroke="${s}" stroke-width="2"/>
+          <line x1="38" y1="8" x2="38" y2="32" stroke="${s}" stroke-width="2"/>
+          <line x1="38" y1="20" x2="56" y2="20" stroke="${s}" stroke-width="2"/>
+        `,
+        AND: `
+          <line x1="-10" y1="8" x2="6" y2="8" stroke="${s}" stroke-width="2"/><line x1="6" y1="8" x2="6" y2="20" stroke="${s}" stroke-width="2"/>
+          <line x1="6" y1="20" x2="14" y2="20" stroke="${s}" stroke-width="2"/>${contacto(17, 20, false)}<line x1="20" y1="20" x2="34" y2="20" stroke="${s}" stroke-width="2"/>${contacto(37, 20, false)}<line x1="40" y1="20" x2="56" y2="20" stroke="${s}" stroke-width="2"/>
+          <line x1="-10" y1="32" x2="30" y2="32" stroke="${s}" stroke-width="2"/><line x1="30" y1="32" x2="30" y2="23" stroke="${s}" stroke-width="2"/>
+        `,
+        NOT: `
+          <line x1="-10" y1="20" x2="14" y2="20" stroke="${s}" stroke-width="2"/>${contacto(17, 20, true)}<line x1="20" y1="20" x2="56" y2="20" stroke="${s}" stroke-width="2"/>
+        `,
+      };
+      return `<svg width="66" height="40" viewBox="-10 0 76 40" style="display:block; color:${T.ink};">${shapes[tipo]}</svg>`;
     }
-    // Para cada rama, compara el conjunto de valores (sin importar el
-    // orden dentro de la rama) contra el conjunto esperado.
-    const correcto = ej.ramas.every((ramaEsperada, ri) => {
-      const puestos = [...valores[ri]].sort().join(",");
-      const esperado = [...ramaEsperada].sort().join(",");
-      return puestos === esperado;
-    });
-    if (correcto) {
-      const clave = nivel + "-" + ejActual;
-      const yaGanado = ganadosRef.current.has(clave);
-      setResultado({ ok: true, msg: yaGanado ? "✓ Correcto (ya ganaste los puntos de este ejercicio)." : "✓ ¡Correcto! +10 puntos." });
-      if (!yaGanado) {
-        ganadosRef.current.add(clave);
-        falladosRef.current.delete(clave);
-        onGanarPuntos && onGanarPuntos(nivel + " — Ejercicio #" + (ejActual + 1), 10);
+
+    let ejActual = 0, nodos = {}, conexiones = [], nodoIdSeq = 1, conexionIdSeq = 1, arrastreCable = null;
+
+    const elTitulo = cont.querySelector(".je-titulo");
+    const elFrase = cont.querySelector(".je-frase");
+    const elCanvas = cont.querySelector(".je-canvas");
+    const elSvg = cont.querySelector(".je-wires");
+    const elResultado = cont.querySelector(".je-resultado");
+    const elPalette = cont.querySelector(".je-palette");
+
+    function fondoNeutral() { elCanvas.style.background = T.graySoft; }
+
+    function limpiarLienzo() {
+      nodos = {}; conexiones = []; arrastreCable = null;
+      Array.from(elCanvas.querySelectorAll(".je-nodo")).forEach((n) => n.remove());
+      elResultado.textContent = "";
+      fondoNeutral();
+      dibujarConexiones();
+    }
+
+    function cargarEjercicio(i) {
+      if (EJERCICIOS_JUEGO.length === 0) {
+        ejActual = 0;
+        elTitulo.textContent = nivelActual + " — sin ejercicios todavía";
+        elFrase.textContent = "Este nivel se irá llenando pronto.";
+        limpiarLienzo();
+        return;
       }
-    } else {
-      const clave = nivel + "-" + ejActual;
-      const yaFallado = falladosRef.current.has(clave);
-      const yaGanado = ganadosRef.current.has(clave);
-      setResultado({
-        ok: false,
-        msg: (yaFallado || yaGanado) ? "✗ Todavía no — revisa qué contactos van en cada rama, y cuál necesita NOT." : "✗ Todavía no — revisa qué contactos van en cada rama, y cuál necesita NOT. -10 puntos.",
+      ejActual = (i + EJERCICIOS_JUEGO.length) % EJERCICIOS_JUEGO.length;
+      const ej = EJERCICIOS_JUEGO[ejActual];
+      elTitulo.textContent = nivelActual + " — Ejercicio #" + (ejActual + 1);
+      elFrase.textContent = ej.frase;
+      limpiarLienzo();
+      ej.terminales.forEach((nombre, i2) => crearNodo("term", nombre, 10, 16 + i2 * 72));
+      crearNodo("salida", "Salida", 560, 160);
+    }
+
+    function cambiarNivel(nivel) {
+      nivelActual = nivel;
+      EJERCICIOS_JUEGO = NIVELES_JUEGO[nivelActual];
+      Array.from(cont.querySelectorAll(".je-nivel-btn")).forEach((b) => {
+        const activo = b.dataset.nivel === nivel;
+        b.style.background = activo ? T.accent : "transparent";
+        b.style.color = activo ? "#fff" : T.steel;
+        b.style.borderColor = activo ? T.accent : T.line;
       });
-      if (!yaFallado && !yaGanado) {
-        falladosRef.current.add(clave);
-        onGanarPuntos && onGanarPuntos(nivel + " — Ejercicio #" + (ejActual + 1) + " (fallo)", -10);
+      cargarEjercicio(0);
+    }
+
+    function borrarNodo(id) {
+      conexiones = conexiones.filter((c) => c.deNodo !== id && c.aNodo !== id);
+      const el = elCanvas.querySelector('.je-nodo[data-id="' + id + '"]');
+      if (el) el.remove();
+      delete nodos[id];
+      dibujarConexiones();
+      actualizarEstado();
+    }
+
+    function crearNodo(tipo, label, x, y) {
+      const id = "n" + (nodoIdSeq++);
+      const inputs = tipo === "gate" ? GATES_JUEGO[label].inputs : (tipo === "salida" ? 1 : 0);
+      const el = document.createElement("div");
+      el.className = "je-nodo";
+      el.dataset.id = id;
+      el.style.cssText = "position:absolute; cursor:grab; user-select:none;";
+      el.style.left = x + "px"; el.style.top = y + "px";
+
+      if (tipo === "gate") {
+        el.innerHTML = svgGate(label) +
+          `<button class="je-btn-borrar" style="position:absolute; top:-8px; right:-4px; width:18px; height:18px; padding:0; border-radius:50%; background:${T.red}; color:#fff; border:none; font-size:11px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center;">×</button>`;
+      } else if (tipo === "term") {
+        el.innerHTML = `<div style="padding:8px 12px; background:${T.blueSoft}; color:${T.blue}; border-radius:8px; font-size:12px; font-weight:700; min-width:50px; text-align:center;">${label}</div>`;
+      } else {
+        el.innerHTML = `<div style="padding:8px 12px; background:#fff; border:1px solid ${T.line}; border-radius:8px; font-size:12px; font-weight:700; min-width:50px; text-align:center;">Salida</div>`;
+      }
+      elCanvas.appendChild(el);
+      nodos[id] = { tipo, label, x, y, valorFijo: tipo === "term" ? false : null };
+
+      if (inputs >= 1) crearPuerto(el, id, "in0", "in", 0, inputs, tipo);
+      if (inputs >= 2) crearPuerto(el, id, "in1", "in", 1, inputs, tipo);
+      if (tipo === "gate" || tipo === "term") crearPuerto(el, id, "out", "out", 0, 1, tipo);
+
+      if (tipo === "term") {
+        el.onclick = (e) => {
+          if (e.target.classList.contains("je-puerto")) return;
+          nodos[id].valorFijo = !nodos[id].valorFijo;
+          const box = el.querySelector("div");
+          box.style.background = nodos[id].valorFijo ? T.greenSoft : T.blueSoft;
+          box.style.color = nodos[id].valorFijo ? T.green : T.blue;
+        };
+      }
+      if (tipo === "gate") {
+        const btnBorrar = el.querySelector(".je-btn-borrar");
+        btnBorrar.addEventListener("pointerdown", (e) => e.stopPropagation());
+        btnBorrar.addEventListener("click", (e) => { e.stopPropagation(); borrarNodo(id); });
+      }
+      hacerArrastrable(el, id);
+      return id;
+    }
+
+    function altoNodo(tipo) { return tipo === "gate" ? 40 : 34; }
+
+    function crearPuerto(nodoEl, nodoId, puertoId, dir, idx, total, tipo) {
+      const dot = document.createElement("div");
+      dot.className = "je-puerto";
+      dot.dataset.nodo = nodoId; dot.dataset.puerto = puertoId; dot.dataset.dir = dir;
+      const h = altoNodo(tipo);
+      const offsetY = total > 1 ? (idx === 0 ? h * 0.28 : h * 0.72) : h / 2;
+      dot.style.cssText = `position:absolute; width:11px; height:11px; border-radius:50%; background:${T.steel}; cursor:crosshair; top:${offsetY}px; transform:translate(-50%,-50%); z-index:2;`;
+      dot.style.left = dir === "in" ? "0px" : (tipo === "gate" ? "62px" : "100%");
+      nodoEl.appendChild(dot);
+
+      dot.addEventListener("pointerdown", (e) => {
+        if (dir !== "out") return;
+        e.stopPropagation();
+        const p1 = centroPuerto(nodoId, puertoId);
+        arrastreCable = { deNodo: nodoId, dePuerto: puertoId, x: p1.x, y: p1.y, curX: e.clientX, curY: e.clientY };
+        dibujarConexiones();
+      });
+      dot.addEventListener("pointerup", (e) => {
+        if (dir !== "in" || !arrastreCable) return;
+        e.stopPropagation();
+        conexiones = conexiones.filter((c) => !(c.aNodo === nodoId && c.aPuerto === puertoId));
+        conexiones.push({ id: "c" + (conexionIdSeq++), deNodo: arrastreCable.deNodo, dePuerto: arrastreCable.dePuerto, aNodo: nodoId, aPuerto: puertoId });
+        arrastreCable = null;
+        dibujarConexiones();
+        actualizarEstado();
+      });
+    }
+
+    function onDocPointerMove(e) {
+      if (!arrastreCable) return;
+      const cr = elCanvas.getBoundingClientRect();
+      arrastreCable.curX = e.clientX - cr.left;
+      arrastreCable.curY = e.clientY - cr.top;
+      dibujarConexiones();
+    }
+    function onDocPointerUp() {
+      if (arrastreCable) { arrastreCable = null; dibujarConexiones(); }
+    }
+    document.addEventListener("pointermove", onDocPointerMove);
+    document.addEventListener("pointerup", onDocPointerUp);
+
+    function hacerArrastrable(el, id) {
+      let arrastrando = false, offX = 0, offY = 0;
+      el.addEventListener("pointerdown", (e) => {
+        if (e.target.classList.contains("je-puerto") || e.target.classList.contains("je-btn-borrar")) return;
+        arrastrando = true;
+        el.setPointerCapture(e.pointerId);
+        const rect = el.getBoundingClientRect();
+        offX = e.clientX - rect.left; offY = e.clientY - rect.top;
+      });
+      el.addEventListener("pointermove", (e) => {
+        if (!arrastrando) return;
+        const canvasRect = elCanvas.getBoundingClientRect();
+        let x = e.clientX - canvasRect.left - offX;
+        let y = e.clientY - canvasRect.top - offY;
+        x = Math.max(0, Math.min(x, canvasRect.width - 60));
+        y = Math.max(0, Math.min(y, canvasRect.height - 40));
+        el.style.left = x + "px"; el.style.top = y + "px";
+        nodos[id].x = x; nodos[id].y = y;
+        dibujarConexiones();
+      });
+      el.addEventListener("pointerup", () => { arrastrando = false; });
+    }
+
+    function centroPuerto(nodoId, puertoId) {
+      const nodoEl = elCanvas.querySelector('.je-nodo[data-id="' + nodoId + '"]');
+      const puertoEl = nodoEl.querySelector('.je-puerto[data-puerto="' + puertoId + '"]');
+      const r = puertoEl.getBoundingClientRect();
+      const cr = elCanvas.getBoundingClientRect();
+      return { x: r.left - cr.left + r.width / 2, y: r.top - cr.top + r.height / 2 };
+    }
+
+    function curva(p1, p2) {
+      const midX = (p1.x + p2.x) / 2;
+      return `M ${p1.x} ${p1.y} C ${midX} ${p1.y}, ${midX} ${p2.y}, ${p2.x} ${p2.y}`;
+    }
+
+    function dibujarConexiones() {
+      elSvg.innerHTML = "";
+      conexiones.forEach((c) => {
+        if (!nodos[c.deNodo] || !nodos[c.aNodo]) return;
+        const p1 = centroPuerto(c.deNodo, c.dePuerto);
+        const p2 = centroPuerto(c.aNodo, c.aPuerto);
+        const grupo = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        const hit = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        hit.setAttribute("d", curva(p1, p2));
+        hit.setAttribute("stroke", "transparent");
+        hit.setAttribute("stroke-width", "14");
+        hit.setAttribute("fill", "none");
+        hit.style.cursor = "pointer";
+        hit.style.pointerEvents = "stroke";
+        const visible = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        visible.setAttribute("d", curva(p1, p2));
+        visible.setAttribute("stroke", T.inkSoft);
+        visible.setAttribute("stroke-width", "2");
+        visible.setAttribute("fill", "none");
+        visible.style.pointerEvents = "none";
+        hit.addEventListener("click", () => {
+          conexiones = conexiones.filter((x) => x.id !== c.id);
+          dibujarConexiones();
+          actualizarEstado();
+        });
+        hit.addEventListener("mouseenter", () => visible.setAttribute("stroke", T.red));
+        hit.addEventListener("mouseleave", () => visible.setAttribute("stroke", T.inkSoft));
+        grupo.appendChild(hit); grupo.appendChild(visible);
+        elSvg.appendChild(grupo);
+      });
+      if (arrastreCable) {
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", curva({ x: arrastreCable.x, y: arrastreCable.y }, { x: arrastreCable.curX, y: arrastreCable.curY }));
+        path.setAttribute("stroke", T.blue);
+        path.setAttribute("stroke-width", "2");
+        path.setAttribute("stroke-dasharray", "4 3");
+        path.setAttribute("fill", "none");
+        elSvg.appendChild(path);
       }
     }
-  };
 
-  const fondo = resultado?.ok === true ? T.greenSoft : resultado?.ok === false ? T.redSoft : T.graySoft;
+    elPalette.innerHTML = "";
+    Object.keys(GATES_JUEGO).forEach((key) => {
+      const btn = document.createElement("button");
+      btn.style.cssText = "padding:4px 10px; display:flex; align-items:center; gap:6px; border:1px solid " + T.line + "; border-radius:8px; background:#fff; cursor:pointer;";
+      btn.innerHTML = svgGate(key) + `<span style="font-size:11px; font-weight:600;">${key}</span>`;
+      btn.onclick = () => { crearNodo("gate", key, 200 + Math.random() * 140, 30 + Math.random() * 220); actualizarEstado(); };
+      elPalette.appendChild(btn);
+    });
+
+    cont.querySelector(".je-limpiar").onclick = () => cargarEjercicio(ejActual);
+    cont.querySelector(".je-prev").onclick = () => cargarEjercicio(ejActual - 1);
+    cont.querySelector(".je-next").onclick = () => cargarEjercicio(ejActual + 1);
+
+    function evaluarNodo(nodoId, cache) {
+      if (cache.has(nodoId)) return cache.get(nodoId);
+      const n = nodos[nodoId];
+      if (n.tipo === "term") { cache.set(nodoId, n.valorFijo); return n.valorFijo; }
+      const entradas = conexiones.filter((c) => c.aNodo === nodoId).sort((a, b) => a.aPuerto.localeCompare(b.aPuerto));
+      if (n.tipo === "salida") {
+        if (entradas.length === 0) return null;
+        return evaluarNodo(entradas[0].deNodo, cache);
+      }
+      const gate = GATES_JUEGO[n.label];
+      if (entradas.length < gate.inputs) return null;
+      const valores = entradas.slice(0, gate.inputs).map((e) => evaluarNodo(e.deNodo, cache));
+      if (valores.some((v) => v === null)) return null;
+      const resultado = gate.fn(...valores);
+      cache.set(nodoId, resultado);
+      return resultado;
+    }
+
+    function actualizarEstado() {
+      const ej = EJERCICIOS_JUEGO[ejActual];
+      const salidaId = Object.keys(nodos).find((id) => nodos[id].tipo === "salida");
+      const n = ej.terminales.length;
+      const combinaciones = [];
+      for (let i = 0; i < (1 << n); i++) {
+        const v = {};
+        ej.terminales.forEach((t, idx) => v[t] = !!((i >> idx) & 1));
+        combinaciones.push(v);
+      }
+      const valoresGuardados = {};
+      Object.keys(nodos).forEach((id) => { if (nodos[id].tipo === "term") valoresGuardados[id] = nodos[id].valorFijo; });
+
+      let incompleto = false, todoCorrecto = true;
+      for (const combo of combinaciones) {
+        Object.keys(nodos).forEach((id) => { if (nodos[id].tipo === "term") nodos[id].valorFijo = combo[nodos[id].label]; });
+        const salida = evaluarNodo(salidaId, new Map());
+        if (salida === null) { incompleto = true; break; }
+        if (!!salida !== !!ej.evaluar(combo)) { todoCorrecto = false; break; }
+      }
+      Object.keys(valoresGuardados).forEach((id) => { nodos[id].valorFijo = valoresGuardados[id]; });
+
+      if (incompleto) {
+        fondoNeutral();
+        elResultado.textContent = "Circuito incompleto — sigue conectando hasta Salida.";
+        elResultado.style.color = T.inkSoft;
+      } else if (todoCorrecto) {
+        elCanvas.style.background = T.greenSoft;
+        const clave = nivelActual + "-" + ejActual;
+        const yaGanado = ganadosRef.current.has(clave);
+        elResultado.textContent = yaGanado ? "✓ Correcto (ya ganaste los puntos de este ejercicio)." : "✓ ¡Correcto! +10 puntos.";
+        elResultado.style.color = T.green;
+        if (!yaGanado) {
+          ganadosRef.current.add(clave);
+          falladosRef.current.delete(clave);
+          onGanarPuntos && onGanarPuntos(nivelActual + " — Ejercicio #" + (ejActual + 1), 10);
+        } else {
+          onGanarPuntos && onGanarPuntos(nivelActual + " — Ejercicio #" + (ejActual + 1) + " (repaso)", 0);
+        }
+      } else {
+        elCanvas.style.background = T.redSoft;
+        const clave = nivelActual + "-" + ejActual;
+        const yaFallado = falladosRef.current.has(clave);
+        const yaGanado = ganadosRef.current.has(clave);
+        elResultado.textContent = (yaFallado || yaGanado) ? "✗ No coincide en todos los casos — borra una línea o contacto y corrige." : "✗ No coincide en todos los casos — borra una línea o contacto y corrige. -10 puntos.";
+        elResultado.style.color = T.red;
+        if (!yaFallado && !yaGanado) {
+          falladosRef.current.add(clave);
+          onGanarPuntos && onGanarPuntos(nivelActual + " — Ejercicio #" + (ejActual + 1) + " (fallo)", -10);
+        }
+      }
+    }
+
+    Array.from(cont.querySelectorAll(".je-nivel-btn")).forEach((b) => {
+      b.onclick = () => cambiarNivel(b.dataset.nivel);
+    });
+    cambiarNivel("Básico");
+
+    return () => {
+      document.removeEventListener("pointermove", onDocPointerMove);
+      document.removeEventListener("pointerup", onDocPointerUp);
+    };
+  }, [mostrarIntro]);
+
+  const INFO_CONTACTOS = [
+    { tipo: "AND", ecuacion: "Serie — C = a · b", explicacion: "Dos (o más) contactos uno después del otro, en la misma línea: la corriente solo llega a la salida si TODOS los contactos están cerrados (activos) a la vez.", tabla: [[0, 0, 0], [0, 1, 0], [1, 0, 0], [1, 1, 1]] },
+    { tipo: "OR", ecuacion: "Paralelo — C = a + b", explicacion: "Dos (o más) contactos en ramas separadas que se unen antes de la salida: con que UNO solo esté cerrado (activo), ya llega corriente a la salida.", tabla: [[0, 0, 0], [0, 1, 1], [1, 0, 1], [1, 1, 1]] },
+    { tipo: "NOT", ecuacion: "Contacto negado — b = ¬a", explicacion: "Un contacto con la raya diagonal cruzada: al revés de lo normal, deja pasar corriente cuando la condición NO se cumple.", tabla: [[0, 1], [1, 0]] },
+  ];
+  const svgGateIntro = (tipo) => {
+    const s = T.ink;
+    const contacto = (cx, cy, negado) => (
+      <>
+        <line x1={cx - 3} y1={cy - 8} x2={cx - 3} y2={cy + 8} stroke={s} strokeWidth="2" />
+        <line x1={cx + 3} y1={cy - 8} x2={cx + 3} y2={cy + 8} stroke={s} strokeWidth="2" />
+        {negado && <line x1={cx - 8} y1={cy + 10} x2={cx + 8} y2={cy - 10} stroke={s} strokeWidth="2" />}
+      </>
+    );
+    const shapes = {
+      OR: (
+        <>
+          <line x1="-10" y1="8" x2="14" y2="8" stroke={s} strokeWidth="2" />{contacto(17, 8, false)}<line x1="20" y1="8" x2="38" y2="8" stroke={s} strokeWidth="2" />
+          <line x1="-10" y1="32" x2="14" y2="32" stroke={s} strokeWidth="2" />{contacto(17, 32, false)}<line x1="20" y1="32" x2="38" y2="32" stroke={s} strokeWidth="2" />
+          <line x1="38" y1="8" x2="38" y2="32" stroke={s} strokeWidth="2" />
+          <line x1="38" y1="20" x2="56" y2="20" stroke={s} strokeWidth="2" />
+        </>
+      ),
+      AND: (
+        <>
+          <line x1="-10" y1="8" x2="6" y2="8" stroke={s} strokeWidth="2" /><line x1="6" y1="8" x2="6" y2="20" stroke={s} strokeWidth="2" />
+          <line x1="6" y1="20" x2="14" y2="20" stroke={s} strokeWidth="2" />{contacto(17, 20, false)}<line x1="20" y1="20" x2="34" y2="20" stroke={s} strokeWidth="2" />{contacto(37, 20, false)}<line x1="40" y1="20" x2="56" y2="20" stroke={s} strokeWidth="2" />
+          <line x1="-10" y1="32" x2="30" y2="32" stroke={s} strokeWidth="2" /><line x1="30" y1="32" x2="30" y2="23" stroke={s} strokeWidth="2" />
+        </>
+      ),
+      NOT: (
+        <>
+          <line x1="-10" y1="20" x2="14" y2="20" stroke={s} strokeWidth="2" />{contacto(17, 20, true)}<line x1="20" y1="20" x2="56" y2="20" stroke={s} strokeWidth="2" />
+        </>
+      ),
+    };
+    return <svg width="66" height="40" viewBox="-10 0 76 40" style={{ display: "block" }}>{shapes[tipo]}</svg>;
+  };
 
   if (mostrarIntro) {
-    const TEMAS_ESCALERA = [
-      {
-        id: "contactos", titulo: "Contactos, serie y paralelo",
-        contenido: (
-          <p>Cada contacto (⊣⊢) representa una condición. Varios contactos <strong>en serie</strong> (uno después del otro,
-          en la misma línea) funcionan como un <strong>AND</strong> — todos deben cumplirse a la vez. Varios contactos en
-          <strong> ramas separadas en paralelo</strong> funcionan como un <strong>OR</strong> — con que se cumpla uno solo
-          alcanza para activar la salida. Un contacto con una raya cruzada es un <strong>NOT</strong> (se activa precisamente
-          cuando la condición NO se cumple). La salida siempre se dibuja como un óvalo al final del circuito, conectado al
-          riel derecho.</p>
-        ),
-      },
-      {
-        id: "ejemplo1", titulo: "Ejemplo — DET L18 → TRACK ON P3",
-        contenido: (
-          <>
-            <p>Este es el ejemplo original de una escalera con un solo contacto en serie: si el sensor "DET L18" se activa, se
-            enciende la salida "TRACK ON P3".</p>
-            <div style={{ display: "flex", alignItems: "center", gap: 0, marginTop: 12, border: `1px solid ${T.line}`, borderRadius: 10, padding: "16px 20px", background: T.graySoft }}>
-              <div style={{ width: 3, height: 60, background: T.ink }} />
-              <div style={{ padding: "0 16px" }}>
-                <ContactoSlot valor="det" tarjetasPorId={{ det: { varLabel: "DET L18", not: false } }} />
-              </div>
-              <LineaConector ancho={30} />
-              <SalidaOvalo label="TRACK ON P3" />
-              <LineaConector ancho={20} />
-              <div style={{ width: 3, height: 60, background: T.ink }} />
-            </div>
-          </>
-        ),
-      },
-      {
-        id: "ejemplo2", titulo: "Ejemplo — ramas en paralelo (OR)",
-        contenido: (
-          <>
-            <p>Aquí hay dos ramas separadas, cada una con su propio contacto — si cualquiera de los dos sensores de humo se
-            activa (Zona A o Zona B), se enciende la Notificación Audible. Esto es lo mismo que un OR entre ambas entradas.</p>
-            <div style={{ display: "flex", alignItems: "center", gap: 0, marginTop: 12, border: `1px solid ${T.line}`, borderRadius: 10, padding: "16px 20px", background: T.graySoft }}>
-              <div style={{ width: 3, height: 100, background: T.ink }} />
-              <div style={{ padding: "0 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-                <ContactoSlot valor="humoA" tarjetasPorId={{ humoA: { varLabel: "Sensor Humo Zona A", not: false } }} />
-                <ContactoSlot valor="humoB" tarjetasPorId={{ humoB: { varLabel: "Sensor Humo Zona B", not: false } }} />
-              </div>
-              <LineaConector ancho={30} />
-              <SalidaOvalo label="NOTIF. AUDIBLE" />
-              <LineaConector ancho={20} />
-              <div style={{ width: 3, height: 100, background: T.ink }} />
-            </div>
-          </>
-        ),
-      },
-    ];
+    const TEMA_INTRO_ESCALERA = {
+      id: "intro",
+      titulo: "Introducción a la Lógica en Escalera",
+      contenido: (
+        <p>Cada contacto (⊣⊢) representa una condición. En los siguientes temas vas a repasar los 3 tipos de contacto que
+        vas a usar para armar tus circuitos: en <strong>serie</strong> (AND), en <strong>paralelo</strong> (OR), y
+        <strong> negado</strong> (NOT). Arrastras el contacto que necesitas al lienzo y lo conectas cableando a mano —
+        exactamente igual que en Compuertas Lógicas, pero dibujado al estilo de riel eléctrico.</p>
+      ),
+    };
+    const TEMAS_ESCALERA = [TEMA_INTRO_ESCALERA, ...INFO_CONTACTOS.map((g) => ({
+      id: g.tipo,
+      titulo: `Contacto ${g.tipo}`,
+      contenido: (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 10 }}>
+            {svgGateIntro(g.tipo)}
+            <div style={{ fontSize: 15, fontWeight: 800, color: T.ink }}>{g.ecuacion}</div>
+          </div>
+          <p>{g.explicacion}</p>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft, margin: "10px 0 6px" }}>Tabla de verdad</div>
+          <table style={{ fontSize: 12, borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ color: T.gray }}>
+                <th style={{ textAlign: "left", padding: "3px 10px 3px 0" }}>a</th>
+                {g.tabla[0].length === 3 && <th style={{ textAlign: "left", padding: "3px 10px" }}>b</th>}
+                <th style={{ textAlign: "left", padding: "3px 10px" }}>salida</th>
+              </tr>
+            </thead>
+            <tbody>
+              {g.tabla.map((fila, i) => (
+                <tr key={i} style={{ borderTop: `1px solid ${T.line}` }}>
+                  {fila.map((v, j) => <td key={j} style={{ padding: "3px 10px 3px 0", fontWeight: j === fila.length - 1 ? 700 : 400 }}>{v}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      ),
+    }))];
     return <GuiaPorTemas temas={TEMAS_ESCALERA} onContinuar={() => setMostrarIntro(false)} tituloModulo="cómo funciona la lógica en escalera" />;
   }
 
   return (
     <Card>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        {Object.keys(NIVELES_ESCALERA).map((n) => (
-          <Btn key={n} small variant={nivel === n ? "accent" : "ghost"} onClick={() => cambiarNivel(n)}>{n}</Btn>
-        ))}
-      </div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>{nivel} — Ejercicio #{ejActual + 1}</div>
-          <div style={{ fontSize: 13, color: T.inkSoft }}>{ej.frase}</div>
+      <div ref={contenedorRef}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          {["Básico", "Intermedio", "Avanzado"].map((niv) => (
+            <button key={niv} className="je-nivel-btn" data-nivel={niv} style={{ padding: "6px 14px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>{niv}</button>
+          ))}
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Btn small variant="ghost" onClick={() => cambiarEjercicio(-1)}>← Anterior</Btn>
-          <Btn small variant="ghost" onClick={() => cambiarEjercicio(1)}>Siguiente →</Btn>
-          <Btn small variant="ghost" onClick={() => setMostrarIntro(true)}>Ver la guía otra vez</Btn>
-        </div>
-      </div>
-
-      <div style={{ display: "flex", gap: 10, marginBottom: 10, padding: 10, background: T.graySoft, borderRadius: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <span style={{ fontSize: 12, color: T.gray, marginRight: 4 }}>Tarjetas:</span>
-        {ej.tarjetas.map((t) => (
-          <div key={t.id} draggable onDragStart={(e) => e.dataTransfer.setData("text/plain", t.id)}
-            style={{ padding: "8px 14px", background: "#fff", border: `1px solid ${T.line}`, borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: "grab" }}>
-            {t.label}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <div className="je-titulo" style={{ fontSize: 15, fontWeight: 700 }}>Ejercicio #1</div>
+            <div className="je-frase" style={{ fontSize: 13, color: T.inkSoft }}></div>
           </div>
-        ))}
-        <Btn small variant="ghost" onClick={limpiar} style={{ marginLeft: "auto" }}>Limpiar</Btn>
-      </div>
-
-      <div style={{ background: fondo, borderRadius: 12, border: `1px solid ${T.line}`, padding: "20px 24px", transition: "background 0.2s", display: "flex", alignItems: "center", minHeight: 160 }}>
-        <div style={{ width: 3, alignSelf: "stretch", background: T.ink }} />
-        <div style={{ padding: "0 20px", display: "flex", flexDirection: "column", gap: 16, flex: 1 }}>
-          {ej.layout === "serie" && (
-            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              {ej.ramas[0].map((_, si) => (
-                <React.Fragment key={si}>
-                  {si > 0 && <LineaConector />}
-                  <ContactoSlot
-                    valor={slots[`0-${si}`]}
-                    sobre={sobreSlot === `0-${si}`}
-                    onDragOver={() => setSobreSlot(`0-${si}`)}
-                    onDragLeave={() => setSobreSlot(null)}
-                    onDrop={(e) => soltar(0, si, e)}
-                    tarjetasPorId={tarjetasPorId}
-                  />
-                </React.Fragment>
-              ))}
-            </div>
-          )}
-          {ej.layout === "or_and" && (
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {ej.ramas[0].map((_, si) => (
-                  <ContactoSlot key={si} valor={slots[`0-${si}`]} sobre={sobreSlot === `0-${si}`}
-                    onDragOver={() => setSobreSlot(`0-${si}`)} onDragLeave={() => setSobreSlot(null)}
-                    onDrop={(e) => soltar(0, si, e)} tarjetasPorId={tarjetasPorId} />
-                ))}
-              </div>
-              <LineaConector />
-              <ContactoSlot valor={slots["1-0"]} sobre={sobreSlot === "1-0"}
-                onDragOver={() => setSobreSlot("1-0")} onDragLeave={() => setSobreSlot(null)}
-                onDrop={(e) => soltar(1, 0, e)} tarjetasPorId={tarjetasPorId} />
-            </div>
-          )}
-          {ej.layout === "and_or" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                {ej.ramas[0].map((_, si) => (
-                  <React.Fragment key={si}>
-                    {si > 0 && <LineaConector />}
-                    <ContactoSlot valor={slots[`0-${si}`]} sobre={sobreSlot === `0-${si}`}
-                      onDragOver={() => setSobreSlot(`0-${si}`)} onDragLeave={() => setSobreSlot(null)}
-                      onDrop={(e) => soltar(0, si, e)} tarjetasPorId={tarjetasPorId} />
-                  </React.Fragment>
-                ))}
-              </div>
-              <ContactoSlot valor={slots["1-0"]} sobre={sobreSlot === "1-0"}
-                onDragOver={() => setSobreSlot("1-0")} onDragLeave={() => setSobreSlot(null)}
-                onDrop={(e) => soltar(1, 0, e)} tarjetasPorId={tarjetasPorId} />
-            </div>
-          )}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="je-prev" style={{ padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>← Anterior</button>
+            <button className="je-next" style={{ padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Siguiente →</button>
+          </div>
         </div>
-        <SalidaOvalo />
-        <LineaConector ancho={16} />
-        <div style={{ width: 3, alignSelf: "stretch", background: T.ink }} />
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
-        <Btn variant="accent" onClick={verificar}>Verificar</Btn>
-        {resultado && <span style={{ fontSize: 14, color: resultado.ok === true ? T.green : resultado.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultado.msg}</span>}
+        <div style={{ display: "flex", gap: 8, marginBottom: 10, padding: 10, background: T.graySoft, borderRadius: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: 12, color: T.gray, marginRight: 4 }}>Arrastra al lienzo:</span>
+          <div className="je-palette" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}></div>
+          <span style={{ fontSize: 12, color: T.gray, marginLeft: 12 }}>Clic en la × para borrar un contacto, o en una línea para borrarla.</span>
+          <button className="je-limpiar" style={{ padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Limpiar lienzo</button>
+          <button onClick={() => setMostrarIntro(true)} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Ver la guía otra vez</button>
+        </div>
+        <div className="je-canvas" style={{ position: "relative", height: 400, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s" }}>
+          <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
+          <span className="je-resultado" style={{ fontSize: 14 }}></span>
+        </div>
       </div>
     </Card>
   );
 }
+
 
 // Juego de Tablas de la Verdad: se da una fórmula lógica (con sensores y
 // salidas de sistemas de alarma contra incendio) y hay que llenar TODA la
@@ -6848,6 +7019,8 @@ function JuegoTablasVerdad({ onGanarPuntos }) {
         ganadosRef.current.add(clave);
         falladosRef.current.delete(clave);
         onGanarPuntos && onGanarPuntos(nivel + " — Ejercicio #" + (ejActual + 1), 10);
+      } else {
+        onGanarPuntos && onGanarPuntos(nivel + " — Ejercicio #" + (ejActual + 1) + " (repaso)", 0);
       }
     } else {
       const yaFallado = falladosRef.current.has(clave);
@@ -7876,6 +8049,8 @@ function JuegoSimplex({ onGanarPuntos }) {
         ganadosRef.current.add(clave);
         falladosRef.current.delete(clave);
         onGanarPuntos && onGanarPuntos(ej.titulo, PUNTOS_POR_EJERCICIO_SIMPLEX);
+      } else {
+        onGanarPuntos && onGanarPuntos(ej.titulo + " (repaso)", 0);
       }
     } else {
       const yaFallado = falladosRef.current.has(clave);

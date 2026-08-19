@@ -372,7 +372,7 @@ function NumeroAnimado({ valor }) {
   return <>{mostrado}</>;
 }
 
-function InsigniaMedalla({ nombre, desc, Icono, colorDesde, colorHasta, cumplido, progresoTexto, progresoPct }) {
+function InsigniaMedalla({ nombre, desc, Icono, imagenUrl, colorDesde = "#868e96", colorHasta = "#495057", cumplido, progresoTexto, progresoPct }) {
   const gradId = "grad-" + nombre.replace(/\s+/g, "-").toLowerCase();
   return (
     <div title={desc} style={{
@@ -385,20 +385,32 @@ function InsigniaMedalla({ nombre, desc, Icono, colorDesde, colorHasta, cumplido
       <style>{`@keyframes insigniaGlow { 0%,100% { filter: drop-shadow(0 0 0px ${colorHasta}); } 50% { filter: drop-shadow(0 0 6px ${colorHasta}); } }
         @keyframes brilloBarra { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }`}</style>
       <div style={{ position: "relative", width: 68, height: 68, animation: cumplido ? "insigniaGlow 2.5s ease-in-out infinite" : "none" }}>
-        <svg width="68" height="68" viewBox="0 0 68 68" style={{ position: "absolute", inset: 0 }}>
-          <defs>
-            <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stopColor={colorDesde} />
-              <stop offset="100%" stopColor={colorHasta} />
-            </linearGradient>
-          </defs>
-          <circle cx="34" cy="34" r="32" fill={cumplido ? `url(#${gradId})` : T.graySoft} stroke={cumplido ? colorHasta : T.line} strokeWidth="2" />
-          {cumplido && <circle cx="34" cy="34" r="32" fill="none" stroke="#fff" strokeWidth="1.5" strokeOpacity="0.4" />}
-        </svg>
-        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          {cumplido ? <Icono size={30} color="#fff" strokeWidth={2.2} /> : <Lock size={22} color={T.gray} strokeWidth={2} />}
-        </div>
-      </div>
+        {imagenUrl ? (
+          <div style={{ width: 68, height: 68, borderRadius: "50%", overflow: "hidden", border: `2px solid ${cumplido ? colorHasta : T.line}`, opacity: cumplido ? 1 : 0.4, filter: cumplido ? "none" : "grayscale(1)" }}>
+            <img src={imagenUrl} alt={nombre} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          </div>
+        ) : (
+          <svg width="68" height="68" viewBox="0 0 68 68" style={{ position: "absolute", inset: 0 }}>
+            <defs>
+              <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor={colorDesde} />
+                <stop offset="100%" stopColor={colorHasta} />
+              </linearGradient>
+            </defs>
+            <circle cx="34" cy="34" r="32" fill={cumplido ? `url(#${gradId})` : T.graySoft} stroke={cumplido ? colorHasta : T.line} strokeWidth="2" />
+            {cumplido && <circle cx="34" cy="34" r="32" fill="none" stroke="#fff" strokeWidth="1.5" strokeOpacity="0.4" />}
+          </svg>
+        )}
+        {!imagenUrl && (
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {cumplido ? <Icono size={30} color="#fff" strokeWidth={2.2} /> : <Lock size={22} color={T.gray} strokeWidth={2} />}
+          </div>
+        )}
+        {imagenUrl && !cumplido && (
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.35)", borderRadius: "50%" }}>
+            <Lock size={20} color="#fff" strokeWidth={2} />
+          </div>
+        )}
       <div style={{ fontSize: 11, fontWeight: 800, color: cumplido ? T.ink : T.gray, textAlign: "center", lineHeight: 1.2 }}>{nombre}</div>
       {progresoTexto && (
         <div style={{ width: "100%" }}>
@@ -419,33 +431,43 @@ function InsigniaMedalla({ nombre, desc, Icono, colorDesde, colorHasta, cumplido
 // Tarjeta de "misión" para elegir módulo dentro de Entrenamiento — estilo
 // juego: fondo con degradado del color del módulo, ícono grande, lema
 // motivacional, barra de progreso, y un trofeo cuando ya está al 100%.
-function MisionCard({ label, Icono, colorDesde, colorHasta, lema, puntos, max, seleccionada, onClick }) {
+function MisionCard({ label, Icono, colorDesde, colorHasta, lema, puntos, max, seleccionada, onClick, bloqueada, moduloAnterior }) {
   const pct = max > 0 ? Math.min(100, (puntos / max) * 100) : 0;
   const completa = max > 0 && puntos >= max;
   const casiCompleta = max > 0 && pct >= 90 && !completa;
   return (
-    <button onClick={onClick} style={{
-      position: "relative", width: "clamp(150px, 44vw, 190px)", textAlign: "left", border: "none", borderRadius: 16, padding: 0, cursor: "pointer",
+    <button
+      onClick={bloqueada ? undefined : onClick}
+      title={bloqueada ? `Aprueba (70%+) "${moduloAnterior}" primero para desbloquear este módulo` : undefined}
+      style={{
+      position: "relative", width: "clamp(150px, 44vw, 190px)", textAlign: "left", border: "none", borderRadius: 16, padding: 0,
+      cursor: bloqueada ? "not-allowed" : "pointer",
       overflow: "hidden", boxShadow: seleccionada ? `0 0 0 3px ${colorHasta}, 0 8px 18px ${colorHasta}55` : "0 2px 8px rgba(0,0,0,0.08)",
       transform: seleccionada ? "translateY(-3px)" : "translateY(0)", transition: "transform 0.15s, box-shadow 0.15s",
-      animation: casiCompleta ? "misionCasiLista 1.6s ease-in-out infinite" : "none",
+      animation: casiCompleta && !bloqueada ? "misionCasiLista 1.6s ease-in-out infinite" : "none",
+      opacity: bloqueada ? 0.65 : 1,
     }}
-      onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-3px)"; }}
+      onMouseEnter={(e) => { if (!bloqueada) e.currentTarget.style.transform = "translateY(-3px)"; }}
       onMouseLeave={(e) => { e.currentTarget.style.transform = seleccionada ? "translateY(-3px)" : "translateY(0)"; }}
     >
       <style>{`@keyframes misionCasiLista { 0%,100% { box-shadow: 0 2px 8px rgba(0,0,0,0.08), 0 0 0px ${colorHasta}00; } 50% { box-shadow: 0 2px 8px rgba(0,0,0,0.08), 0 0 14px ${colorHasta}99; } }
         @keyframes brilloBarraMision { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }`}</style>
-      <div style={{ background: `linear-gradient(135deg, ${colorDesde}, ${colorHasta})`, padding: "16px 16px 14px" }}>
-        {completa && (
+      <div style={{ background: `linear-gradient(135deg, ${colorDesde}, ${colorHasta})`, padding: "16px 16px 14px", filter: bloqueada ? "grayscale(60%)" : "none" }}>
+        {completa && !bloqueada && (
           <div style={{ position: "absolute", top: 10, right: 10, background: "rgba(255,255,255,0.9)", borderRadius: "50%", width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <Trophy size={14} color="#f59f00" fill="#f59f00" />
+          </div>
+        )}
+        {bloqueada && (
+          <div style={{ position: "absolute", top: 10, right: 10, background: "rgba(0,0,0,0.35)", borderRadius: "50%", width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Lock size={13} color="#fff" />
           </div>
         )}
         <div style={{ width: 42, height: 42, borderRadius: 12, background: "rgba(255,255,255,0.25)", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 10 }}>
           <Icono size={22} color="#fff" strokeWidth={2.2} />
         </div>
         <div style={{ fontSize: 13.5, fontWeight: 800, color: "#fff", marginBottom: 3 }}>{label}</div>
-        <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.85)", lineHeight: 1.3, minHeight: 26 }}>{lema}</div>
+        <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.85)", lineHeight: 1.3, minHeight: 26 }}>{bloqueada ? `🔒 Aprueba "${moduloAnterior}" para desbloquear` : lema}</div>
       </div>
       <div style={{ background: "#fff", padding: "10px 14px" }}>
         <div style={{ height: 6, background: T.graySoft, borderRadius: 99, overflow: "hidden", marginBottom: 5, position: "relative" }}>
@@ -4148,7 +4170,10 @@ function Administrativo() {
 // trofeo, sus insignias, y el desglose por módulo — para generar
 // competitividad sana entre técnicos.
 function RankingEntrenamiento() {
+  const currentUser = useContext(CurrentUserContext);
+  const esAdmin = currentUser?.categoria === "admin";
   const [puntajes, setPuntajes] = useState([]);
+  const [confirmando, setConfirmando] = useState(null); // codigo de la persona a punto de reiniciar
   useEffect(() => {
     const cargar = async () => {
       const { data } = await supabase.from("entrenamiento_puntajes").select("*");
@@ -4161,7 +4186,7 @@ function RankingEntrenamiento() {
 
   const porPersona = {};
   puntajes.forEach((p) => {
-    if (!porPersona[p.personal_codigo]) porPersona[p.personal_codigo] = { nombre: p.personal_nombre, total: 0, porSegmento: {}, repasos: 0 };
+    if (!porPersona[p.personal_codigo]) porPersona[p.personal_codigo] = { codigo: p.personal_codigo, nombre: p.personal_nombre, total: 0, porSegmento: {}, repasos: 0 };
     porPersona[p.personal_codigo].total += p.puntos;
     porPersona[p.personal_codigo].porSegmento[p.segmento] = (porPersona[p.personal_codigo].porSegmento[p.segmento] || 0) + p.puntos;
     if (p.ejercicio && p.ejercicio.includes("(repaso)")) porPersona[p.personal_codigo].repasos += 1;
@@ -4169,7 +4194,13 @@ function RankingEntrenamiento() {
   const filas = Object.values(porPersona).sort((a, b) => b.total - a.total);
   const medallas = ["🥇", "🥈", "🥉"];
   const coloresAvatar = ["#ff8787", "#74c0fc", "#63e6be", "#ffd43b", "#b197fc", "#ffa94d"];
-  const TOTAL_INSIGNIAS = 17;
+  const TOTAL_INSIGNIAS = 18;
+
+  const reiniciarPersona = async (codigo) => {
+    await supabase.from("entrenamiento_puntajes").delete().eq("personal_codigo", codigo);
+    setPuntajes((prev) => prev.filter((p) => p.personal_codigo !== codigo));
+    setConfirmando(null);
+  };
 
   return (
     <Card title="Ranking de Entrenamiento — todo el personal">
@@ -4183,6 +4214,7 @@ function RankingEntrenamiento() {
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
               <th style={{ padding: "8px" }}>#</th><th>Persona</th><th>Rango</th><th>Puntaje total</th><th>Premios</th><th>Repasos</th>
               {SEGMENTOS_ENTRENAMIENTO.map((s) => <th key={s.id}>{s.label}</th>)}
+              {esAdmin && <th></th>}
             </tr>
           </thead>
           <tbody>
@@ -4218,6 +4250,19 @@ function RankingEntrenamiento() {
                     {f.repasos > 0 ? <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><Repeat size={11} color={T.turquoise} />{f.repasos}</span> : "—"}
                   </td>
                   {SEGMENTOS_ENTRENAMIENTO.map((s) => <td key={s.id} style={{ color: T.inkSoft }}>{f.porSegmento[s.id] || 0} pts</td>)}
+                  {esAdmin && (
+                    <td>
+                      {confirmando === f.codigo ? (
+                        <div style={{ display: "flex", gap: 4, alignItems: "center", whiteSpace: "nowrap" }}>
+                          <span style={{ fontSize: 10.5, color: T.red, fontWeight: 700 }}>¿Seguro?</span>
+                          <button onClick={() => reiniciarPersona(f.codigo)} style={{ background: T.red, color: "#fff", border: "none", borderRadius: 6, padding: "3px 8px", fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}>Sí</button>
+                          <button onClick={() => setConfirmando(null)} style={{ background: T.graySoft, color: T.inkSoft, border: "none", borderRadius: 6, padding: "3px 8px", fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}>No</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setConfirmando(f.codigo)} title="Volver a cero todo el ranking de esta persona" style={{ background: "transparent", border: `1px solid ${T.line}`, borderRadius: 6, padding: "4px 8px", fontSize: 10.5, fontWeight: 700, color: T.red, cursor: "pointer", whiteSpace: "nowrap" }}>↺ A cero</button>
+                      )}
+                    </td>
+                  )}
                 </tr>
               );
             })}
@@ -5812,11 +5857,14 @@ const SEGMENTOS_ENTRENAMIENTO = [
   { id: "notifier", label: "Ecuaciones Notifier", Icono: AlertCircle, colorDesde: "#f783ac", colorHasta: "#c2255c", lema: "Domina las ecuaciones del panel Notifier" },
   { id: "nfpa72", label: "NFPA 72", Icono: ShieldCheck, colorDesde: "#ff6b6b", colorHasta: "#c92a2a", lema: "Certifícate en la norma que salva vidas" },
   { id: "electronica", label: "Electrónica Básica", Icono: Sparkles, colorDesde: "#ffd43b", colorHasta: "#f08c00", lema: "Domina los fundamentos eléctricos" },
+  { id: "nicet", label: "NICET", Icono: GraduationCap, colorDesde: "#495057", colorHasta: "#212529", lema: "Certifícate al nivel de un profesional NICET" },
 ];
 
 // Rangos de Entrenamiento: cada nivel se representa con un componente
 // real de un sistema de alarma contra incendio, en orden de complejidad
 // creciente — desde una estación manual hasta el panel completo.
+const NICET_BADGE_B64 = "data:image/jpeg;base64,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";
+
 const RANGOS_ENTRENAMIENTO = [
   { nombre: "Aprendiz", min: 0, siguiente: 40, color: T.gray, soft: T.graySoft, tipo: null, mensaje: "" },
   { nombre: "Estación Manual", min: 40, siguiente: 90, color: T.blue, soft: T.blueSoft, tipo: "estacion_manual", mensaje: "Diste el primer paso de verdad. Así como una estación manual, ahora eres parte activa del sistema." },
@@ -5836,12 +5884,29 @@ function rangoDeEntrenamiento(pts) {
 // 10 puntos cada uno). Los segmentos en 0 todavía no tienen contenido y no
 // bloquean el rango Senior mientras sigan vacíos.
 const MAX_PUNTOS_SEGMENTO = {
-  compuertas: 160, tablas_verdad: 120, escalera: 50, simplex: 80, notifier: 0, nfpa72: 200, electronica: 190,
+  compuertas: 160, tablas_verdad: 120, escalera: 50, simplex: 80, notifier: 0, nfpa72: 200, electronica: 190, nicet: 150,
 };
 
 // El rango Senior (el más alto) SOLO se otorga si el usuario tiene 100% en
 // TODOS los módulos que ya tienen contenido — sin importar el puntaje
 // acumulado. Si no cumple ese requisito, se tope en el penúltimo rango.
+// Desbloqueo progresivo: cada módulo (con contenido) requiere que el
+// ANTERIOR (con contenido) esté aprobado (70%+) para poder abrirse. Los
+// módulos sin contenido todavía (ej. Notifier) no bloquean ni se
+// bloquean — se saltan en la cadena.
+function calcularModulosDesbloqueados(puntosPorSegmento) {
+  const resultado = {};
+  let previoAprobado = true;
+  SEGMENTOS_ENTRENAMIENTO.forEach((s) => {
+    const max = MAX_PUNTOS_SEGMENTO[s.id] || 0;
+    if (max === 0) { resultado[s.id] = true; return; }
+    resultado[s.id] = previoAprobado;
+    const pts = puntosPorSegmento[s.id] || 0;
+    previoAprobado = pts >= 0.7 * max;
+  });
+  return resultado;
+}
+
 function calcularRangoUsuario(puntosTotal, puntosPorSegmento) {
   const rango = rangoDeEntrenamiento(puntosTotal);
   if (rango.tipo !== "panel") return rango;
@@ -5857,26 +5922,27 @@ function calcularRangoUsuario(puntosTotal, puntosPorSegmento) {
 // Entrenamiento, para poder mostrar el conteo también en el ranking.
 function contarInsigniasGanadas(puntosTotal, porSegmento, repasos) {
   const segmentosConContenido = SEGMENTOS_ENTRENAMIENTO.filter((s) => (MAX_PUNTOS_SEGMENTO[s.id] || 0) > 0);
-  const modulosConPuntos = SEGMENTOS_ENTRENAMIENTO.filter((s) => (porSegmento[s.id] || 0) > 0).length;
+  const modulosAprobados = segmentosConContenido.filter((s) => (porSegmento[s.id] || 0) >= 0.7 * MAX_PUNTOS_SEGMENTO[s.id]).length;
   const modulosAl100 = segmentosConContenido.filter((s) => (porSegmento[s.id] || 0) >= MAX_PUNTOS_SEGMENTO[s.id]).length;
   const rango = calcularRangoUsuario(puntosTotal, porSegmento);
   let n = 0;
   if (puntosTotal > 0) n++;
   if (puntosTotal >= 100) n++;
-  if (puntosTotal >= 300) n++;
-  if (puntosTotal >= 500) n++;
-  if (puntosTotal >= 800) n++;
+  if (puntosTotal >= 300 && modulosAprobados >= 3) n++;
+  if (puntosTotal >= 500 && segmentosConContenido.length > 0 && modulosAprobados === segmentosConContenido.length) n++;
+  if (puntosTotal >= 800 && segmentosConContenido.length > 0 && modulosAl100 === segmentosConContenido.length) n++;
   if (repasos >= 1) n++;
   if (repasos >= 5) n++;
   if (repasos >= 15) n++;
   if (repasos >= 30) n++;
-  if (modulosConPuntos >= 3) n++;
-  if (modulosConPuntos >= SEGMENTOS_ENTRENAMIENTO.length) n++;
+  if (modulosAprobados >= 3) n++;
+  if (segmentosConContenido.length > 0 && modulosAprobados === segmentosConContenido.length) n++;
   if (segmentosConContenido.length > 0 && modulosAl100 === segmentosConContenido.length) n++;
   if ((porSegmento.nfpa72 || 0) >= 200) n++;
   if ((porSegmento.electronica || 0) >= (MAX_PUNTOS_SEGMENTO.electronica || Infinity)) n++;
   if ((porSegmento.compuertas || 0) >= (MAX_PUNTOS_SEGMENTO.compuertas || Infinity)) n++;
   if ((porSegmento.escalera || 0) >= (MAX_PUNTOS_SEGMENTO.escalera || Infinity)) n++;
+  if ((porSegmento.nicet || 0) >= 0.85 * (MAX_PUNTOS_SEGMENTO.nicet || Infinity)) n++;
   if (rango.tipo === "panel") n++;
   return n;
 }
@@ -6017,6 +6083,14 @@ function Entrenamiento() {
   SEGMENTOS_ENTRENAMIENTO.forEach((s) => { puntosPorSegmento[s.id] = puntosDeSegmento(s.id); });
 
   const rangoActual = calcularRangoUsuario(puntosTotal, puntosPorSegmento);
+  const modulosDesbloqueados = calcularModulosDesbloqueados(puntosPorSegmento);
+  const labelModuloAnterior = (segId) => {
+    const idx = SEGMENTOS_ENTRENAMIENTO.findIndex((x) => x.id === segId);
+    for (let j = idx - 1; j >= 0; j--) {
+      if ((MAX_PUNTOS_SEGMENTO[SEGMENTOS_ENTRENAMIENTO[j].id] || 0) > 0) return SEGMENTOS_ENTRENAMIENTO[j].label;
+    }
+    return "";
+  };
   const racha = calcularRacha(puntajes);
   const misionesDiarias = calcularMisionesDiarias(puntajes);
   const [mostrarPerfil, setMostrarPerfil] = useState(false);
@@ -6038,27 +6112,31 @@ function Entrenamiento() {
   const rangoDeSegmento = (segId) => rangoDeEntrenamiento(puntosDeSegmento(segId));
 
   const repasos = puntajes.filter((p) => p.ejercicio && p.ejercicio.includes("(repaso)")).length;
-  const modulosConPuntos = SEGMENTOS_ENTRENAMIENTO.filter((s) => puntosDeSegmento(s.id) > 0).length;
   const modulosConContenido = SEGMENTOS_ENTRENAMIENTO.filter((s) => (MAX_PUNTOS_SEGMENTO[s.id] || 0) > 0);
   const modulosAl100 = modulosConContenido.filter((s) => puntosDeSegmento(s.id) >= MAX_PUNTOS_SEGMENTO[s.id]).length;
+  // "Aprobado" = 70%+ del puntaje máximo posible de ese módulo — evita que
+  // alcancen insignias de puntaje solo repitiendo 2-3 módulos fáciles: para
+  // los umbrales altos también hace falta haber aprobado varios módulos.
+  const modulosAprobados = modulosConContenido.filter((s) => puntosDeSegmento(s.id) >= 0.7 * MAX_PUNTOS_SEGMENTO[s.id]).length;
 
   const LOGROS = [
     { id: "primer_punto", nombre: "Primer Paso", desc: "Gana tus primeros puntos", Icono: Star, colorDesde: "#ffd43b", colorHasta: "#f59f00", cumplido: puntosTotal > 0 },
     { id: "cien_puntos", nombre: "Centurión", desc: "Alcanza 100 puntos en total", Icono: Medal, colorDesde: "#74c0fc", colorHasta: "#1c7ed6", cumplido: puntosTotal >= 100, progresoTexto: `${Math.min(puntosTotal, 100)}/100 pts`, progresoPct: (puntosTotal / 100) * 100 },
-    { id: "trescientos_puntos", nombre: "Medio Millar", desc: "Alcanza 300 puntos en total", Icono: Trophy, colorDesde: "#b197fc", colorHasta: "#7048e8", cumplido: puntosTotal >= 300, progresoTexto: `${Math.min(puntosTotal, 300)}/300 pts`, progresoPct: (puntosTotal / 300) * 100 },
-    { id: "quinientos_puntos", nombre: "Élite Técnica", desc: "Alcanza 500 puntos en total", Icono: Crown, colorDesde: "#ff8787", colorHasta: "#e03131", cumplido: puntosTotal >= 500, progresoTexto: `${Math.min(puntosTotal, 500)}/500 pts`, progresoPct: (puntosTotal / 500) * 100 },
-    { id: "ochocientos_puntos", nombre: "Leyenda A&D", desc: "Alcanza 800 puntos en total", Icono: Gem, colorDesde: "#63e6be", colorHasta: "#0ca678", cumplido: puntosTotal >= 800, progresoTexto: `${Math.min(puntosTotal, 800)}/800 pts`, progresoPct: (puntosTotal / 800) * 100 },
+    { id: "trescientos_puntos", nombre: "Medio Millar", desc: "Alcanza 300 puntos en total y aprueba al menos 3 módulos distintos", Icono: Trophy, colorDesde: "#b197fc", colorHasta: "#7048e8", cumplido: puntosTotal >= 300 && modulosAprobados >= 3, progresoTexto: `${Math.min(puntosTotal, 300)}/300 pts · ${Math.min(modulosAprobados, 3)}/3 módulos`, progresoPct: Math.min((puntosTotal / 300) * 100, (modulosAprobados / 3) * 100) },
+    { id: "quinientos_puntos", nombre: "Élite Técnica", desc: "Alcanza 500 puntos y aprueba TODOS los módulos con contenido", Icono: Crown, colorDesde: "#ff8787", colorHasta: "#e03131", cumplido: puntosTotal >= 500 && modulosConContenido.length > 0 && modulosAprobados === modulosConContenido.length, progresoTexto: `${Math.min(puntosTotal, 500)}/500 pts · ${modulosAprobados}/${modulosConContenido.length} módulos`, progresoPct: modulosConContenido.length > 0 ? Math.min((puntosTotal / 500) * 100, (modulosAprobados / modulosConContenido.length) * 100) : 0 },
+    { id: "ochocientos_puntos", nombre: "Leyenda A&D", desc: "Alcanza 800 puntos con el 100% en todos los módulos", Icono: Gem, colorDesde: "#63e6be", colorHasta: "#0ca678", cumplido: puntosTotal >= 800 && modulosConContenido.length > 0 && modulosAl100 === modulosConContenido.length, progresoTexto: `${Math.min(puntosTotal, 800)}/800 pts · ${modulosAl100}/${modulosConContenido.length} al 100%`, progresoPct: modulosConContenido.length > 0 ? Math.min((puntosTotal / 800) * 100, (modulosAl100 / modulosConContenido.length) * 100) : 0 },
     { id: "perseverancia_bronce", nombre: "Constancia I", desc: "Repite 1 ejercicio ya acertado", Icono: Repeat, colorDesde: "#e8b895", colorHasta: "#a9682f", cumplido: repasos >= 1, progresoTexto: `${Math.min(repasos, 1)}/1 repaso`, progresoPct: (repasos / 1) * 100 },
     { id: "perseverancia_plata", nombre: "Constancia II", desc: "Repite 5 ejercicios ya acertados", Icono: Repeat, colorDesde: "#dee2e6", colorHasta: "#868e96", cumplido: repasos >= 5, progresoTexto: `${Math.min(repasos, 5)}/5 repasos`, progresoPct: (repasos / 5) * 100 },
     { id: "perseverancia_oro", nombre: "Constancia III", desc: "Repite 15 ejercicios ya acertados", Icono: Repeat, colorDesde: "#ffe066", colorHasta: "#f59f00", cumplido: repasos >= 15, progresoTexto: `${Math.min(repasos, 15)}/15 repasos`, progresoPct: (repasos / 15) * 100 },
     { id: "perseverancia_diamante", nombre: "Constancia IV", desc: "Repite 30 ejercicios ya acertados", Icono: Repeat, colorDesde: "#99e9f2", colorHasta: "#15aabf", cumplido: repasos >= 30, progresoTexto: `${Math.min(repasos, 30)}/30 repasos`, progresoPct: (repasos / 30) * 100 },
-    { id: "tres_modulos", nombre: "Explorador", desc: "Suma puntos en 3 módulos distintos", Icono: Rocket, colorDesde: "#ffa94d", colorHasta: "#e8590c", cumplido: modulosConPuntos >= 3, progresoTexto: `${Math.min(modulosConPuntos, 3)}/3 módulos`, progresoPct: (modulosConPuntos / 3) * 100 },
-    { id: "todos_modulos", nombre: "Todo Terreno", desc: "Suma puntos en todos los módulos", Icono: Target, colorDesde: "#8ce99a", colorHasta: "#2f9e44", cumplido: SEGMENTOS_ENTRENAMIENTO.every((s) => puntosDeSegmento(s.id) > 0), progresoTexto: `${modulosConPuntos}/${SEGMENTOS_ENTRENAMIENTO.length} módulos`, progresoPct: (modulosConPuntos / SEGMENTOS_ENTRENAMIENTO.length) * 100 },
+    { id: "tres_modulos", nombre: "Explorador", desc: "Aprueba (70%+) al menos 3 módulos distintos", Icono: Rocket, colorDesde: "#ffa94d", colorHasta: "#e8590c", cumplido: modulosAprobados >= 3, progresoTexto: `${Math.min(modulosAprobados, 3)}/3 módulos`, progresoPct: (modulosAprobados / 3) * 100 },
+    { id: "todos_modulos", nombre: "Todo Terreno", desc: "Aprueba (70%+) todos los módulos con contenido", Icono: Target, colorDesde: "#8ce99a", colorHasta: "#2f9e44", cumplido: modulosConContenido.length > 0 && modulosAprobados === modulosConContenido.length, progresoTexto: `${modulosAprobados}/${modulosConContenido.length} módulos`, progresoPct: modulosConContenido.length > 0 ? (modulosAprobados / modulosConContenido.length) * 100 : 0 },
     { id: "perfeccionista", nombre: "Perfeccionista", desc: "Alcanza el 100% en todos los módulos con contenido", Icono: Sparkles, colorDesde: "#ffe066", colorHasta: "#fab005", cumplido: modulosConContenido.length > 0 && modulosAl100 === modulosConContenido.length, progresoTexto: `${modulosAl100}/${modulosConContenido.length} al 100%`, progresoPct: modulosConContenido.length > 0 ? (modulosAl100 / modulosConContenido.length) * 100 : 0 },
     { id: "nfpa_aprobado", nombre: "Certificado NFPA 72", desc: "Aprueba el Examen Básico de NFPA 72", Icono: ShieldCheck, colorDesde: "#ff8787", colorHasta: "#c92a2a", cumplido: puntosDeSegmento("nfpa72") >= 200 },
     { id: "electronica_aprobada", nombre: "Certificado Electrónica", desc: "Alcanza el 100% en Electrónica Básica", Icono: Zap, colorDesde: "#ffe066", colorHasta: "#f08c00", cumplido: puntosDeSegmento("electronica") >= (MAX_PUNTOS_SEGMENTO.electronica || Infinity) },
     { id: "compuertas_aprobada", nombre: "Certificado Compuertas", desc: "Alcanza el 100% en Compuertas Lógicas", Icono: GraduationCap, colorDesde: "#a5d8ff", colorHasta: "#1971c2", cumplido: puntosDeSegmento("compuertas") >= (MAX_PUNTOS_SEGMENTO.compuertas || Infinity) },
     { id: "escalera_aprobada", nombre: "Certificado Escalera", desc: "Alcanza el 100% en Lógica en Escalera", Icono: HardHat, colorDesde: "#eebefa", colorHasta: "#9c36b5", cumplido: puntosDeSegmento("escalera") >= (MAX_PUNTOS_SEGMENTO.escalera || Infinity) },
+    { id: "nicet", nombre: "NICET", desc: "Aprueba el examen NICET con 85% o más", imagenUrl: NICET_BADGE_B64, cumplido: puntosDeSegmento("nicet") >= 0.85 * (MAX_PUNTOS_SEGMENTO.nicet || Infinity) },
     { id: "senior", nombre: "Senior Experto", desc: "Alcanza el rango máximo (Panel) — 100% en todos los módulos", Icono: Crown, colorDesde: "#40c057", colorHasta: "#2b8a3e", cumplido: rangoActual.tipo === "panel" },
   ];
 
@@ -6113,6 +6191,8 @@ function Entrenamiento() {
         esAdmin={currentUser?.categoria === "admin"}
         onReiniciar={(borrarRanking) => reiniciarSegmento("simplex", borrarRanking)}
       />
+    ) : modulo === "nicet" ? (
+      <JuegoNICET onGanarPuntos={(ejercicio, puntos) => registrarPuntos("nicet", ejercicio, puntos)} />
     ) : modulo ? (
       <Card title={SEGMENTOS_ENTRENAMIENTO.find((m) => m.id === modulo)?.label}>
         <div style={{ color: T.gray, fontSize: 13.5 }}>
@@ -6214,6 +6294,7 @@ function Entrenamiento() {
                           label={s.label} Icono={s.Icono} colorDesde={s.colorDesde} colorHasta={s.colorHasta} lema={s.lema}
                           puntos={puntosDeSegmento(s.id)} max={MAX_PUNTOS_SEGMENTO[s.id] || 0}
                           seleccionada={false}
+                          bloqueada={!modulosDesbloqueados[s.id]} moduloAnterior={labelModuloAnterior(s.id)}
                           onClick={() => setModulo(s.id)}
                         />
                       </div>
@@ -6447,6 +6528,7 @@ function Entrenamiento() {
               label={s.label} Icono={s.Icono} colorDesde={s.colorDesde} colorHasta={s.colorHasta} lema={s.lema}
               puntos={puntosDeSegmento(s.id)} max={MAX_PUNTOS_SEGMENTO[s.id] || 0}
               seleccionada={modulo === s.id}
+              bloqueada={!modulosDesbloqueados[s.id]} moduloAnterior={labelModuloAnterior(s.id)}
               onClick={() => setModulo(s.id)}
             />
           ))}
@@ -8075,6 +8157,176 @@ function JuegoNFPA72({ onGanarPuntos }) {
                 {p.opciones.map((op, j) => (
                   <label key={j} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
                     <input type="radio" name={`p${i}`} checked={respuestas[i] === j} onChange={() => responder(i, j)} />
+                    {op}
+                  </label>
+                ))}
+              </div>
+              {correctaMostrada && !esCorrecta && (
+                <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>Respuesta correcta: {p.opciones[p.correcta]}</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
+        <Btn variant="accent" onClick={enviarExamen}>Enviar examen</Btn>
+        {resultado && <Btn variant="ghost" onClick={reiniciarExamen}>Empezar de nuevo</Btn>}
+        {resultado && resultado.rangoResultado && (
+          <span style={{ fontSize: 13, fontWeight: 800, color: "#fff", background: resultado.rangoResultado.color, padding: "5px 12px", borderRadius: 999 }}>{resultado.rangoResultado.texto}</span>
+        )}
+        {resultado && <span style={{ fontSize: 14, color: resultado.ok === true ? T.green : resultado.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultado.msg}</span>}
+      </div>
+    </Card>
+  );
+}
+
+// Módulo NICET (Fire Protection — Fire Alarm Systems): preguntas de
+// práctica sobre los conceptos que cubre la certificación NICET de
+// sistemas de alarma contra incendios — circuitos, dispositivos,
+// clases y estilos de cableado, inspección y prueba. La insignia NICET
+// (con la imagen real del sello) se gana con 85% o más.
+const PREGUNTAS_NICET = [
+  { texto: "¿Qué significa NICET?", opciones: ["National Institute for Certification in Engineering Technologies", "National Institute of Codes for Electrical Testing", "National Inspection Council for Engineering Trades", "None of the above"], correcta: 0 },
+  { texto: "Un Circuito Iniciador (IDC) conecta principalmente:", opciones: ["Bocinas y lámparas estrobo", "Detectores de humo, calor y estaciones manuales", "El panel con la central de monitoreo", "Solo las fuentes de poder de respaldo"], correcta: 1 },
+  { texto: "Un Circuito de Notificación (NAC) alimenta principalmente:", opciones: ["Detectores de humo", "Estaciones manuales", "Bocinas, lámparas estrobo y dispositivos de notificación", "Sensores de flujo de agua"], correcta: 2 },
+  { texto: "En un circuito Clase A (Style 6/7), si el cableado se corta en un punto:", opciones: ["Todo el circuito deja de funcionar", "El sistema sigue funcionando porque hay una ruta de retorno (cableado redundante)", "Solo los dispositivos después del corte fallan sin alternativa", "El panel entra en alarma automáticamente"], correcta: 1 },
+  { texto: "En un circuito Clase B (Style 4), si el cableado se corta en un punto:", opciones: ["Los dispositivos más allá del corte quedan sin comunicación", "No pasa nada, hay ruta redundante", "El sistema se apaga por completo", "Se activa la alarma general"], correcta: 0 },
+  { texto: "Un Circuito de Línea de Señal (SLC) se usa típicamente para:", opciones: ["Dispositivos direccionables/addressable que se comunican digitalmente con el panel", "Solo dispositivos convencionales sin dirección", "Alimentar bocinas de alta potencia", "Conectar el panel a la red eléctrica comercial"], correcta: 0 },
+  { texto: "La resistencia de fin de línea (EOL) en un circuito Clase B sirve para:", opciones: ["Aumentar el voltaje del circuito", "Permitir que el panel supervise que el circuito esté íntegro (sin corto ni corte)", "Reducir el consumo de corriente", "Encender las lámparas de prueba"], correcta: 1 },
+  { texto: "Según NFPA 72, ¿con qué frecuencia mínima se debe probar (test) un sistema de detección de humo en la mayoría de las aplicaciones?", opciones: ["Cada 5 años", "Anualmente", "Cada 10 años", "Nunca, solo se prueba una vez al instalar"], correcta: 1 },
+  { texto: "Un detector de humo fotoeléctrico funciona principalmente detectando:", opciones: ["Cambios de temperatura", "La dispersión o bloqueo de un haz de luz por partículas de humo", "Gases tóxicos específicos", "Vibraciones estructurales"], correcta: 1 },
+  { texto: "Un detector térmico (de calor) de tipo 'razón de aumento' (rate-of-rise) se activa cuando:", opciones: ["La temperatura sube más rápido de lo normal, sin importar el punto fijo", "La temperatura alcanza exactamente 135°F sin importar la velocidad", "Detecta humo visible", "Detecta monóxido de carbono"], correcta: 0 },
+  { texto: "¿Qué es una Estación Manual de Alarma (Manual Pull Station)?", opciones: ["Un dispositivo de notificación que hace ruido automáticamente", "Un dispositivo de iniciación que una persona activa manualmente para reportar una emergencia", "Un tipo de detector de humo", "Un panel de control secundario"], correcta: 1 },
+  { texto: "La batería de respaldo de un panel de alarma contra incendio debe mantener el sistema en espera (standby) por al menos:", opciones: ["1 hora", "24 horas, más 5 minutos en alarma (aplicaciones típicas)", "10 minutos", "1 semana"], correcta: 1 },
+  { texto: "¿Qué es un módulo de monitoreo (monitor module) en un sistema direccionable?", opciones: ["Un dispositivo que convierte una señal convencional (como un contacto seco) en una dirección digital para el panel", "Un tipo de bocina de alta potencia", "El componente que enciende las luces del edificio", "Un sensor de temperatura ambiental"], correcta: 0 },
+  { texto: "¿Qué es un módulo de control (control/relay module)?", opciones: ["Un dispositivo que permite al panel activar equipos externos (como elevadores o dampers) mediante un relé", "Un tipo de detector de humo direccionable", "Solo se usa para medir voltaje", "Un componente decorativo del panel"], correcta: 0 },
+  { texto: "La supervisión (supervision) en un sistema de alarma contra incendio significa:", opciones: ["El sistema monitorea continuamente la integridad de sus circuitos y reporta fallas (trouble)", "Una persona debe vigilar el panel las 24 horas", "Solo aplica a los sistemas más antiguos", "Es lo mismo que la señal de alarma"], correcta: 0 },
+];
+const PUNTOS_POR_PREGUNTA_NICET = 10;
+
+function JuegoNICET({ onGanarPuntos }) {
+  const [mostrarIntro, setMostrarIntro] = useState(true);
+  const [respuestas, setRespuestas] = useState({});
+  const [resultado, setResultado] = useState(null);
+  const ganadasRef = React.useRef(new Set());
+  const falladasRef = React.useRef(new Set());
+
+  const responder = (i, valor) => setRespuestas((prev) => ({ ...prev, [i]: valor }));
+  const reiniciarExamen = () => { setRespuestas({}); setResultado(null); };
+
+  const enviarExamen = () => {
+    if (PREGUNTAS_NICET.some((_, i) => respuestas[i] === undefined)) {
+      setResultado({ ok: null, msg: "Debes responder las " + PREGUNTAS_NICET.length + " preguntas antes de enviar el examen." });
+      return;
+    }
+    const detalle = PREGUNTAS_NICET.map((p, i) => respuestas[i] === p.correcta);
+    const correctas = detalle.filter(Boolean).length;
+    const total = PREGUNTAS_NICET.length;
+    const porcentaje = Math.round((correctas / total) * 100);
+    let puntosGanados = 0;
+    detalle.forEach((esCorrecta, i) => {
+      if (esCorrecta && !ganadasRef.current.has(i)) {
+        ganadasRef.current.add(i);
+        falladasRef.current.delete(i);
+        puntosGanados += PUNTOS_POR_PREGUNTA_NICET;
+      } else if (!esCorrecta && !falladasRef.current.has(i) && !ganadasRef.current.has(i)) {
+        falladasRef.current.add(i);
+        puntosGanados -= PUNTOS_POR_PREGUNTA_NICET;
+      }
+    });
+    if (puntosGanados !== 0) onGanarPuntos && onGanarPuntos("Examen de práctica NICET", puntosGanados);
+    const aprobado85 = porcentaje >= 85;
+    const rangoResultado = rangoResultadoExamen(porcentaje);
+    setResultado({
+      ok: porcentaje >= 70, detalle, rangoResultado,
+      msg: aprobado85
+        ? `${correctas}/${total} correctas (${porcentaje}%). ¡85% o más — ganaste la insignia NICET!`
+        : `${correctas}/${total} correctas (${porcentaje}%). La insignia NICET requiere 85% o más. Revisa las preguntas marcadas en rojo y vuelve a intentar.`,
+    });
+  };
+
+  if (mostrarIntro) {
+    const TEMAS_NICET = [
+      {
+        id: "que_es_nicet", titulo: "¿Qué es NICET?",
+        contenido: (
+          <>
+            <p><strong>NICET (National Institute for Certification in Engineering Technologies)</strong> es el organismo que
+            certifica a nivel individual la competencia técnica de personas que diseñan, instalan, prueban e inspeccionan
+            sistemas de protección contra incendios — entre ellos, la especialidad de <strong>Fire Alarm Systems</strong>.</p>
+            <p>A diferencia de una norma como NFPA 72 (que define los requisitos técnicos), la certificación NICET evalúa que
+            <strong> la persona</strong> conoce y sabe aplicar correctamente esos requisitos en el trabajo real.</p>
+          </>
+        ),
+      },
+      {
+        id: "circuitos", titulo: "Tipos de circuitos",
+        contenido: (
+          <>
+            <p><strong>IDC (Initiating Device Circuit):</strong> conecta los dispositivos que detectan la emergencia — detectores
+            de humo/calor, estaciones manuales, sensores de flujo.</p>
+            <p><strong>NAC (Notification Appliance Circuit):</strong> conecta los dispositivos que avisan a las personas —
+            bocinas, lámparas estrobo, paneles anunciadores.</p>
+            <p><strong>SLC (Signaling Line Circuit):</strong> el circuito digital que comunica al panel con los dispositivos
+            direccionables (addressable), donde cada uno tiene su propia dirección.</p>
+          </>
+        ),
+      },
+      {
+        id: "clases", titulo: "Clase A vs Clase B",
+        contenido: (
+          <>
+            <p><strong>Clase B (Style 4):</strong> cableado en una sola dirección — si se corta el cable, todo lo que está
+            después del corte deja de comunicarse con el panel.</p>
+            <p><strong>Clase A (Style 6/7):</strong> el cableado regresa al panel formando un lazo (loop) — si se corta en un
+            punto, el sistema sigue funcionando porque hay una ruta alterna de retorno.</p>
+          </>
+        ),
+      },
+      {
+        id: "supervision", titulo: "Supervisión y resistencia EOL",
+        contenido: (
+          <p>Los sistemas de alarma contra incendio deben <strong>supervisar</strong> continuamente sus propios circuitos, para
+          detectar fallas (trouble) como cables cortados o en corto — no solo esperar a que ocurra un incendio. La
+          <strong> resistencia de fin de línea (EOL)</strong> es lo que le permite al panel "sentir" si el circuito Clase B
+          sigue íntegro de principio a fin.</p>
+        ),
+      },
+      {
+        id: "reglas_examen_nicet", titulo: "Reglas del examen de práctica",
+        contenido: (
+          <>
+            <p>Este examen tiene {PREGUNTAS_NICET.length} preguntas de práctica sobre los temas típicos de la certificación
+            NICET Fire Alarm Systems. Se responde completo de una sola vez.</p>
+            <p>La <strong>insignia NICET</strong> (con el sello oficial) se otorga al alcanzar <strong>85% o más</strong> —
+            un estándar más alto que el 70% de aprobación normal, porque refleja el nivel real que exige la certificación.</p>
+          </>
+        ),
+      },
+    ];
+    return <GuiaPorTemas temas={TEMAS_NICET} onContinuar={() => setMostrarIntro(false)} tituloModulo="los fundamentos de la certificación NICET" />;
+  }
+
+  return (
+    <Card
+      title="Examen de práctica — NICET Fire Alarm Systems"
+      action={<Btn small variant="ghost" onClick={() => setMostrarIntro(true)}>Ver la guía otra vez</Btn>}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        {PREGUNTAS_NICET.map((p, i) => {
+          const correctaMostrada = resultado?.detalle;
+          const esCorrecta = correctaMostrada ? correctaMostrada[i] : null;
+          return (
+            <div key={i} style={{
+              border: `1px solid ${T.line}`, borderRadius: 10, padding: 14,
+              background: correctaMostrada ? (esCorrecta ? T.greenSoft : T.redSoft) : T.graySoft,
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{i + 1}. {p.texto}</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {p.opciones.map((op, j) => (
+                  <label key={j} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+                    <input type="radio" name={`np${i}`} checked={respuestas[i] === j} onChange={() => responder(i, j)} />
                     {op}
                   </label>
                 ))}

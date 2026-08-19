@@ -7,7 +7,8 @@ import * as XLSX from "xlsx";
 import {
   LogOut, Plus, Download, Check, X, Clock, ClipboardList,
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
-  ChevronLeft, ChevronRight, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck, Package, GraduationCap, Award
+  ChevronLeft, ChevronRight, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck, Package, GraduationCap, Award,
+  Star, Trophy, Zap, Target, Medal, Rocket, Crown, Sparkles, ShieldCheck, Gem, Repeat, Lock
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -341,6 +342,102 @@ function IconTrofeo({ tipo, size = 16, color = "#000" }) {
     ),
   };
   return iconos[tipo] || null;
+}
+
+// Insignia estilo "medalla" (inspirado en Duolingo): círculo con
+// degradado de color y brillo cuando está desbloqueada, gris con candado
+// cuando no. Puede mostrar una barra/leyenda de progreso (ej. "3/5").
+function InsigniaMedalla({ nombre, desc, Icono, colorDesde, colorHasta, cumplido, progresoTexto, progresoPct }) {
+  const gradId = "grad-" + nombre.replace(/\s+/g, "-").toLowerCase();
+  return (
+    <div title={desc} style={{
+      display: "flex", flexDirection: "column", alignItems: "center", gap: 6, width: "clamp(85px, 26vw, 108px)",
+      opacity: cumplido ? 1 : 0.55, transition: "opacity 0.2s, transform 0.2s", cursor: "default",
+    }}
+      onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-2px)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; }}
+    >
+      <div style={{ position: "relative", width: 68, height: 68 }}>
+        <svg width="68" height="68" viewBox="0 0 68 68" style={{ position: "absolute", inset: 0 }}>
+          <defs>
+            <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor={colorDesde} />
+              <stop offset="100%" stopColor={colorHasta} />
+            </linearGradient>
+          </defs>
+          <circle cx="34" cy="34" r="32" fill={cumplido ? `url(#${gradId})` : T.graySoft} stroke={cumplido ? colorHasta : T.line} strokeWidth="2" />
+          {cumplido && <circle cx="34" cy="34" r="32" fill="none" stroke="#fff" strokeWidth="1.5" strokeOpacity="0.4" />}
+        </svg>
+        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          {cumplido ? <Icono size={30} color="#fff" strokeWidth={2.2} /> : <Lock size={22} color={T.gray} strokeWidth={2} />}
+        </div>
+      </div>
+      <div style={{ fontSize: 11, fontWeight: 800, color: cumplido ? T.ink : T.gray, textAlign: "center", lineHeight: 1.2 }}>{nombre}</div>
+      {progresoTexto && (
+        <div style={{ width: "100%" }}>
+          <div style={{ height: 5, background: T.graySoft, borderRadius: 99, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${Math.min(100, progresoPct)}%`, background: cumplido ? colorHasta : T.line, transition: "width 0.4s ease" }} />
+          </div>
+          <div style={{ fontSize: 9.5, color: T.gray, textAlign: "center", marginTop: 2 }}>{progresoTexto}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Tarjeta de "misión" para elegir módulo dentro de Entrenamiento — estilo
+// juego: fondo con degradado del color del módulo, ícono grande, lema
+// motivacional, barra de progreso, y un trofeo cuando ya está al 100%.
+function MisionCard({ label, Icono, colorDesde, colorHasta, lema, puntos, max, seleccionada, onClick }) {
+  const pct = max > 0 ? Math.min(100, (puntos / max) * 100) : 0;
+  const completa = max > 0 && puntos >= max;
+  return (
+    <button onClick={onClick} style={{
+      position: "relative", width: "clamp(150px, 44vw, 190px)", textAlign: "left", border: "none", borderRadius: 16, padding: 0, cursor: "pointer",
+      overflow: "hidden", boxShadow: seleccionada ? `0 0 0 3px ${colorHasta}, 0 8px 18px ${colorHasta}55` : "0 2px 8px rgba(0,0,0,0.08)",
+      transform: seleccionada ? "translateY(-3px)" : "translateY(0)", transition: "transform 0.15s, box-shadow 0.15s",
+    }}
+      onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-3px)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.transform = seleccionada ? "translateY(-3px)" : "translateY(0)"; }}
+    >
+      <div style={{ background: `linear-gradient(135deg, ${colorDesde}, ${colorHasta})`, padding: "16px 16px 14px" }}>
+        {completa && (
+          <div style={{ position: "absolute", top: 10, right: 10, background: "rgba(255,255,255,0.9)", borderRadius: "50%", width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Trophy size={14} color="#f59f00" fill="#f59f00" />
+          </div>
+        )}
+        <div style={{ width: 42, height: 42, borderRadius: 12, background: "rgba(255,255,255,0.25)", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 10 }}>
+          <Icono size={22} color="#fff" strokeWidth={2.2} />
+        </div>
+        <div style={{ fontSize: 13.5, fontWeight: 800, color: "#fff", marginBottom: 3 }}>{label}</div>
+        <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.85)", lineHeight: 1.3, minHeight: 26 }}>{lema}</div>
+      </div>
+      <div style={{ background: "#fff", padding: "10px 14px" }}>
+        <div style={{ height: 6, background: T.graySoft, borderRadius: 99, overflow: "hidden", marginBottom: 5 }}>
+          <div style={{ height: "100%", width: `${pct}%`, background: colorHasta, transition: "width 0.4s ease" }} />
+        </div>
+        <div style={{ fontSize: 10.5, color: T.inkSoft, fontWeight: 600 }}>{puntos} pts{max > 0 ? ` · ${Math.round(pct)}%` : ""}</div>
+      </div>
+    </button>
+  );
+}
+
+// Botón de reinicio de módulo — SOLO visible para Admin. Al hacer clic
+// pregunta si además de desbloquear los ejercicios fallados, se debe
+// borrar el ranking (puntos ya ganados) de ese técnico en el módulo.
+function BotonReiniciarModulo({ onReiniciar }) {
+  const [preguntando, setPreguntando] = useState(false);
+  if (preguntando) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", background: T.amberSoft, border: `1px solid ${T.amber}`, borderRadius: 8, padding: "6px 10px" }}>
+        <span style={{ fontSize: 12, color: T.amber, fontWeight: 600 }}>¿Borrar también el ranking (puntos ya ganados) de este técnico en este módulo?</span>
+        <Btn small variant="accent" onClick={() => { onReiniciar(true); setPreguntando(false); }}>Sí, borrar puntos también</Btn>
+        <Btn small variant="ghost" onClick={() => { onReiniciar(false); setPreguntando(false); }}>No, solo desbloquear</Btn>
+        <Btn small variant="ghost" onClick={() => setPreguntando(false)}>Cancelar</Btn>
+      </div>
+    );
+  }
+  return <Btn small variant="ghost" onClick={() => setPreguntando(true)}>🔓 Reiniciar módulo (Admin)</Btn>;
 }
 
 function Card({ title, action, children, style }) {
@@ -4000,18 +4097,17 @@ function Administrativo() {
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <Btn variant={tab === "resumen" ? "accent" : "ghost"} small onClick={() => setTab("resumen")}>Resumen Ejecutivo</Btn>
         <Btn variant={tab === "usuarios" ? "accent" : "ghost"} small onClick={() => setTab("usuarios")}>Gestión de Usuarios</Btn>
-        <Btn variant={tab === "ranking" ? "accent" : "ghost"} small onClick={() => setTab("ranking")}>Ranking de Entrenamiento</Btn>
       </div>
       {tab === "resumen" && <ResumenEjecutivo />}
       {tab === "usuarios" && <GestionUsuarios />}
-      {tab === "ranking" && <RankingEntrenamiento />}
     </div>
   );
 }
 
-// Ranking de Entrenamiento (solo Administrativo): tabla de todo el
-// personal ordenada por puntaje total, con su rango/trofeo y el
-// desglose por módulo — para ver de un vistazo quién va más avanzado.
+// Ranking de Entrenamiento (visible para todos dentro de Entrenamiento):
+// tabla de todo el personal ordenada por puntaje total, con su rango/
+// trofeo, sus insignias, y el desglose por módulo — para generar
+// competitividad sana entre técnicos.
 function RankingEntrenamiento() {
   const [puntajes, setPuntajes] = useState([]);
   useEffect(() => {
@@ -4026,31 +4122,43 @@ function RankingEntrenamiento() {
 
   const porPersona = {};
   puntajes.forEach((p) => {
-    if (!porPersona[p.personal_codigo]) porPersona[p.personal_codigo] = { nombre: p.personal_nombre, total: 0, porSegmento: {} };
+    if (!porPersona[p.personal_codigo]) porPersona[p.personal_codigo] = { nombre: p.personal_nombre, total: 0, porSegmento: {}, repasos: 0 };
     porPersona[p.personal_codigo].total += p.puntos;
     porPersona[p.personal_codigo].porSegmento[p.segmento] = (porPersona[p.personal_codigo].porSegmento[p.segmento] || 0) + p.puntos;
+    if (p.ejercicio && p.ejercicio.includes("(repaso)")) porPersona[p.personal_codigo].repasos += 1;
   });
   const filas = Object.values(porPersona).sort((a, b) => b.total - a.total);
+  const medallas = ["🥇", "🥈", "🥉"];
+  const coloresAvatar = ["#ff8787", "#74c0fc", "#63e6be", "#ffd43b", "#b197fc", "#ffa94d"];
+  const TOTAL_INSIGNIAS = 17;
 
   return (
     <Card title="Ranking de Entrenamiento — todo el personal">
       {filas.length === 0 ? (
         <div style={{ color: T.gray, fontSize: 13 }}>Todavía nadie ha jugado ningún módulo de Entrenamiento.</div>
       ) : (
+        <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
-              <th style={{ padding: "6px 8px" }}>#</th><th>Persona</th><th>Rango</th><th>Puntaje total</th>
+              <th style={{ padding: "8px" }}>#</th><th>Persona</th><th>Rango</th><th>Puntaje total</th><th>Premios</th><th>Repasos</th>
               {SEGMENTOS_ENTRENAMIENTO.map((s) => <th key={s.id}>{s.label}</th>)}
             </tr>
           </thead>
           <tbody>
             {filas.map((f, i) => {
               const rango = calcularRangoUsuario(f.total, f.porSegmento);
+              const iniciales = f.nombre.split(" ").slice(0, 2).map((p) => p[0]).join("").toUpperCase();
+              const premios = contarInsigniasGanadas(f.total, f.porSegmento, f.repasos);
               return (
-                <tr key={f.nombre} style={{ borderTop: `1px solid ${T.line}` }}>
-                  <td style={{ padding: "8px", fontWeight: 700, color: i === 0 ? T.accent : T.ink }}>{i + 1}{i === 0 ? " 🏆" : ""}</td>
-                  <td style={{ fontWeight: 600 }}>{f.nombre}</td>
+                <tr key={f.nombre} style={{ borderTop: `1px solid ${T.line}`, background: i < 3 ? rango.soft + "40" : "transparent" }}>
+                  <td style={{ padding: "10px 8px", fontWeight: 800, fontSize: i < 3 ? 16 : 13, color: i === 0 ? T.accent : T.ink }}>{medallas[i] || i + 1}</td>
+                  <td>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ width: 26, height: 26, borderRadius: "50%", background: coloresAvatar[i % coloresAvatar.length], color: "#fff", fontSize: 10.5, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{iniciales}</div>
+                      <span style={{ fontWeight: 700 }}>{f.nombre}</span>
+                    </div>
+                  </td>
                   <td>
                     <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
                       <Badge color={rango.color} soft={rango.soft}>{rango.nombre}</Badge>
@@ -4058,12 +4166,19 @@ function RankingEntrenamiento() {
                     </div>
                   </td>
                   <td style={{ fontWeight: 800 }}>{f.total} pts</td>
+                  <td style={{ color: T.inkSoft }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontWeight: 700, color: T.ink }}><Medal size={12} color="#f59f00" />{premios}/{TOTAL_INSIGNIAS}</span>
+                  </td>
+                  <td style={{ color: T.inkSoft }}>
+                    {f.repasos > 0 ? <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><Repeat size={11} color={T.turquoise} />{f.repasos}</span> : "—"}
+                  </td>
                   {SEGMENTOS_ENTRENAMIENTO.map((s) => <td key={s.id} style={{ color: T.inkSoft }}>{f.porSegmento[s.id] || 0} pts</td>)}
                 </tr>
               );
             })}
           </tbody>
         </table>
+        </div>
       )}
     </Card>
   );
@@ -5645,13 +5760,13 @@ function Vehiculos() {
 // ecuaciones de símplex, notifier.
 // ---------------------------------------------------------
 const SEGMENTOS_ENTRENAMIENTO = [
-  { id: "compuertas", label: "Compuertas lógicas" },
-  { id: "tablas_verdad", label: "Tablas de la verdad" },
-  { id: "escalera", label: "Lógica en escalera" },
-  { id: "simplex", label: "Ecuaciones de símplex" },
-  { id: "notifier", label: "Ecuaciones Notifier" },
-  { id: "nfpa72", label: "NFPA 72" },
-  { id: "electronica", label: "Electrónica Básica" },
+  { id: "compuertas", label: "Compuertas lógicas", Icono: Zap, colorDesde: "#ff922b", colorHasta: "#e8590c", lema: "Arma el circuito antes de que suene la alarma" },
+  { id: "tablas_verdad", label: "Tablas de la verdad", Icono: Target, colorDesde: "#4dabf7", colorHasta: "#1971c2", lema: "Acierta cada combinación posible" },
+  { id: "escalera", label: "Lógica en escalera", Icono: HardHat, colorDesde: "#da77f2", colorHasta: "#9c36b5", lema: "Cablea el riel como un técnico experto" },
+  { id: "simplex", label: "Ecuaciones de símplex", Icono: Rocket, colorDesde: "#38d9a9", colorHasta: "#0ca678", lema: "Programa la lógica del panel" },
+  { id: "notifier", label: "Ecuaciones Notifier", Icono: AlertCircle, colorDesde: "#f783ac", colorHasta: "#c2255c", lema: "Domina las ecuaciones del panel Notifier" },
+  { id: "nfpa72", label: "NFPA 72", Icono: ShieldCheck, colorDesde: "#ff6b6b", colorHasta: "#c92a2a", lema: "Certifícate en la norma que salva vidas" },
+  { id: "electronica", label: "Electrónica Básica", Icono: Sparkles, colorDesde: "#ffd43b", colorHasta: "#f08c00", lema: "Domina los fundamentos eléctricos" },
 ];
 
 // Rangos de Entrenamiento: cada nivel se representa con un componente
@@ -5691,6 +5806,106 @@ function calcularRangoUsuario(puntosTotal, puntosPorSegmento) {
   return RANGOS_ENTRENAMIENTO[RANGOS_ENTRENAMIENTO.length - 2]; // Módulo Relé
 }
 
+// Cuenta cuántas de las 17 insignias tiene ganadas una persona, dado su
+// puntaje total, su puntaje por segmento, y su cantidad de repasos —
+// misma lista de criterios que las insignias que se muestran en
+// Entrenamiento, para poder mostrar el conteo también en el ranking.
+function contarInsigniasGanadas(puntosTotal, porSegmento, repasos) {
+  const segmentosConContenido = SEGMENTOS_ENTRENAMIENTO.filter((s) => (MAX_PUNTOS_SEGMENTO[s.id] || 0) > 0);
+  const modulosConPuntos = SEGMENTOS_ENTRENAMIENTO.filter((s) => (porSegmento[s.id] || 0) > 0).length;
+  const modulosAl100 = segmentosConContenido.filter((s) => (porSegmento[s.id] || 0) >= MAX_PUNTOS_SEGMENTO[s.id]).length;
+  const rango = calcularRangoUsuario(puntosTotal, porSegmento);
+  let n = 0;
+  if (puntosTotal > 0) n++;
+  if (puntosTotal >= 100) n++;
+  if (puntosTotal >= 300) n++;
+  if (puntosTotal >= 500) n++;
+  if (puntosTotal >= 800) n++;
+  if (repasos >= 1) n++;
+  if (repasos >= 5) n++;
+  if (repasos >= 15) n++;
+  if (repasos >= 30) n++;
+  if (modulosConPuntos >= 3) n++;
+  if (modulosConPuntos >= SEGMENTOS_ENTRENAMIENTO.length) n++;
+  if (segmentosConContenido.length > 0 && modulosAl100 === segmentosConContenido.length) n++;
+  if ((porSegmento.nfpa72 || 0) >= 200) n++;
+  if ((porSegmento.electronica || 0) >= (MAX_PUNTOS_SEGMENTO.electronica || Infinity)) n++;
+  if ((porSegmento.compuertas || 0) >= (MAX_PUNTOS_SEGMENTO.compuertas || Infinity)) n++;
+  if ((porSegmento.escalera || 0) >= (MAX_PUNTOS_SEGMENTO.escalera || Infinity)) n++;
+  if (rango.tipo === "panel") n++;
+  return n;
+}
+
+// Calcula la racha diaria: días consecutivos con al menos una actividad
+// registrada, contando hacia atrás desde hoy (o desde ayer, si hoy
+// todavía no ha jugado — para no "romper" la racha a media noche).
+// Traduce un porcentaje de examen a un rango de resultado, para que la
+// retroalimentación se sienta más como un veredicto que como un número.
+function rangoResultadoExamen(porcentaje) {
+  if (porcentaje >= 90) return { texto: "🌟 EXCELENTE", color: "#2f9e44" };
+  if (porcentaje >= 80) return { texto: "👏 MUY BIEN", color: "#2b8a3e" };
+  if (porcentaje >= 70) return { texto: "✓ APROBADO", color: "#1971c2" };
+  return { texto: "📖 DEBES REPASAR", color: "#e03131" };
+}
+
+function calcularRacha(puntajes) {
+  const fechas = [...new Set(puntajes.map((p) => p.fecha))].filter(Boolean).sort();
+  if (fechas.length === 0) return 0;
+  const msDia = 86400000;
+  const hoy = todayISO();
+  const ultima = fechas[fechas.length - 1];
+  const diffHastaHoy = Math.round((new Date(hoy) - new Date(ultima)) / msDia);
+  if (diffHastaHoy > 1) return 0;
+  let racha = 1;
+  for (let i = fechas.length - 1; i > 0; i--) {
+    const diff = Math.round((new Date(fechas[i]) - new Date(fechas[i - 1])) / msDia);
+    if (diff === 1) racha++;
+    else if (diff === 0) continue;
+    else break;
+  }
+  return racha;
+}
+
+// Misiones diarias: 3 retos simples calculados a partir de lo que la
+// persona ya hizo HOY (sin necesidad de guardar nada nuevo en la base de
+// datos) — dan una razón para volver a entrar cada día.
+function calcularMisionesDiarias(puntajes) {
+  const hoy = todayISO();
+  const deHoy = puntajes.filter((p) => p.fecha === hoy);
+  const aciertosHoy = deHoy.filter((p) => p.puntos > 0).length;
+  const puntosHoy = deHoy.reduce((s, p) => s + p.puntos, 0);
+  const modulosHoy = new Set(deHoy.map((p) => p.segmento)).size;
+  return [
+    { id: "m1", texto: "Acierta 3 ejercicios hoy", meta: 3, progreso: aciertosHoy, cumplida: aciertosHoy >= 3, Icono: Target },
+    { id: "m2", texto: "Gana 50 puntos hoy", meta: 50, progreso: puntosHoy, cumplida: puntosHoy >= 50, Icono: Zap },
+    { id: "m3", texto: "Practica en 2 módulos distintos hoy", meta: 2, progreso: modulosHoy, cumplida: modulosHoy >= 2, Icono: Rocket },
+  ];
+}
+
+// Ráfaga breve de confeti con CSS puro (sin librerías) — se usa al subir
+// de rango o al completar una misión importante.
+function Confeti() {
+  const piezas = React.useMemo(() => Array.from({ length: 36 }).map((_, i) => ({
+    id: i,
+    left: Math.random() * 100,
+    delay: Math.random() * 0.4,
+    duracion: 1.6 + Math.random() * 1,
+    color: ["#ff922b", "#ffd43b", "#51cf66", "#4dabf7", "#f783ac", "#845ef7"][i % 6],
+    rotacion: Math.random() * 360,
+  })), []);
+  return (
+    <div style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none" }}>
+      <style>{`@keyframes caerConfeti { 0% { transform: translateY(-20px) rotate(0deg); opacity: 1; } 100% { transform: translateY(160px) rotate(360deg); opacity: 0; } }`}</style>
+      {piezas.map((p) => (
+        <div key={p.id} style={{
+          position: "absolute", top: 0, left: `${p.left}%`, width: 7, height: 10, background: p.color,
+          animation: `caerConfeti ${p.duracion}s ease-in ${p.delay}s forwards`, transform: `rotate(${p.rotacion}deg)`,
+        }} />
+      ))}
+    </div>
+  );
+}
+
 function Entrenamiento() {
   const currentUser = useContext(CurrentUserContext);
   const esTecnico = currentUser?.categoria === "tecnico";
@@ -5698,7 +5913,7 @@ function Entrenamiento() {
   const [jugadorCodigo, setJugadorCodigo] = useState("");
   const [puntajes, setPuntajes] = useState([]);
   const [modulo, setModulo] = useState(null);
-  const [mostrarRangos, setMostrarRangos] = useState(false);
+  const [mostrarRanking, setMostrarRanking] = useState(false);
   const [subioDeRango, setSubioDeRango] = useState(null);
   const rangoAnteriorRef = React.useRef(null);
 
@@ -5718,7 +5933,7 @@ function Entrenamiento() {
       const score = similitudNombres(emp.nombre, currentUser?.name || "");
       if (score > mejorScore) { mejorScore = score; mejor = emp; }
     });
-    if (mejor && mejorScore >= 0.5) setJugadorCodigo(mejor.codigo);
+    if (mejor && mejorScore >= 0.35) setJugadorCodigo(mejor.codigo);
   }, [esTecnico, empleados, currentUser]);
 
   const jugador = empleados.find((e) => e.codigo === jugadorCodigo);
@@ -5740,12 +5955,28 @@ function Entrenamiento() {
     if (data) setPuntajes((prev) => [...prev, data]);
   };
 
+  // Solo Admin puede reiniciar un módulo bloqueado. Si además decide
+  // borrar el ranking, se eliminan de Supabase los puntos ya ganados por
+  // este técnico en ese segmento (para que pueda ganarlos de nuevo).
+  const reiniciarSegmento = async (segmentoId, borrarRanking) => {
+    if (!jugador) return;
+    if (borrarRanking) {
+      await supabase.from("entrenamiento_puntajes").delete().eq("personal_codigo", jugador.codigo).eq("segmento", segmentoId);
+      setPuntajes((prev) => prev.filter((p) => !(p.personal_codigo === jugador.codigo && p.segmento === segmentoId)));
+    }
+  };
+
   const puntosDeSegmento = (segId) => puntajes.filter((p) => p.segmento === segId).reduce((s, p) => s + p.puntos, 0);
   const puntosTotal = puntajes.reduce((s, p) => s + p.puntos, 0);
   const puntosPorSegmento = {};
   SEGMENTOS_ENTRENAMIENTO.forEach((s) => { puntosPorSegmento[s.id] = puntosDeSegmento(s.id); });
 
   const rangoActual = calcularRangoUsuario(puntosTotal, puntosPorSegmento);
+  const racha = calcularRacha(puntajes);
+  const misionesDiarias = calcularMisionesDiarias(puntajes);
+  const [mostrarPerfil, setMostrarPerfil] = useState(false);
+  const [vistaModo, setVistaModo] = useState("auto"); // "auto" | "movil" | "pc"
+  const [pantallaMovil, setPantallaMovil] = useState("inicio"); // "inicio" | "modulos" | "ranking" | "perfil"
 
   // Detecta cuando el rango sube, para mostrar una celebración — se queda
   // visible hasta que la persona le dé clic a la X, así da tiempo de leerla.
@@ -5762,15 +5993,28 @@ function Entrenamiento() {
   const rangoDeSegmento = (segId) => rangoDeEntrenamiento(puntosDeSegmento(segId));
 
   const repasos = puntajes.filter((p) => p.ejercicio && p.ejercicio.includes("(repaso)")).length;
+  const modulosConPuntos = SEGMENTOS_ENTRENAMIENTO.filter((s) => puntosDeSegmento(s.id) > 0).length;
+  const modulosConContenido = SEGMENTOS_ENTRENAMIENTO.filter((s) => (MAX_PUNTOS_SEGMENTO[s.id] || 0) > 0);
+  const modulosAl100 = modulosConContenido.filter((s) => puntosDeSegmento(s.id) >= MAX_PUNTOS_SEGMENTO[s.id]).length;
 
   const LOGROS = [
-    { id: "primer_punto", nombre: "Primer paso", desc: "Gana tus primeros puntos", cumplido: puntosTotal > 0 },
-    { id: "tres_modulos", nombre: "Explorador", desc: "Suma puntos en 3 módulos distintos", cumplido: SEGMENTOS_ENTRENAMIENTO.filter((s) => puntosDeSegmento(s.id) > 0).length >= 3 },
-    { id: "todos_modulos", nombre: "Todo Terreno", desc: "Suma puntos en todos los módulos", cumplido: SEGMENTOS_ENTRENAMIENTO.every((s) => puntosDeSegmento(s.id) > 0) },
-    { id: "cien_puntos", nombre: "Centurión", desc: "Alcanza 100 puntos en total", cumplido: puntosTotal >= 100 },
-    { id: "nfpa_aprobado", nombre: "Certificado NFPA 72", desc: "Aprueba el Examen Básico de NFPA 72", cumplido: puntosDeSegmento("nfpa72") >= 200 },
-    { id: "senior", nombre: "Senior Experto", desc: "Alcanza el rango máximo (Panel)", cumplido: rangoActual.tipo === "panel" },
-    { id: "perseverancia", nombre: "Perseverancia", desc: "Repite un ejercicio ya acertado, para reforzar lo aprendido", cumplido: repasos >= 1 },
+    { id: "primer_punto", nombre: "Primer Paso", desc: "Gana tus primeros puntos", Icono: Star, colorDesde: "#ffd43b", colorHasta: "#f59f00", cumplido: puntosTotal > 0 },
+    { id: "cien_puntos", nombre: "Centurión", desc: "Alcanza 100 puntos en total", Icono: Medal, colorDesde: "#74c0fc", colorHasta: "#1c7ed6", cumplido: puntosTotal >= 100, progresoTexto: `${Math.min(puntosTotal, 100)}/100 pts`, progresoPct: (puntosTotal / 100) * 100 },
+    { id: "trescientos_puntos", nombre: "Medio Millar", desc: "Alcanza 300 puntos en total", Icono: Trophy, colorDesde: "#b197fc", colorHasta: "#7048e8", cumplido: puntosTotal >= 300, progresoTexto: `${Math.min(puntosTotal, 300)}/300 pts`, progresoPct: (puntosTotal / 300) * 100 },
+    { id: "quinientos_puntos", nombre: "Élite Técnica", desc: "Alcanza 500 puntos en total", Icono: Crown, colorDesde: "#ff8787", colorHasta: "#e03131", cumplido: puntosTotal >= 500, progresoTexto: `${Math.min(puntosTotal, 500)}/500 pts`, progresoPct: (puntosTotal / 500) * 100 },
+    { id: "ochocientos_puntos", nombre: "Leyenda A&D", desc: "Alcanza 800 puntos en total", Icono: Gem, colorDesde: "#63e6be", colorHasta: "#0ca678", cumplido: puntosTotal >= 800, progresoTexto: `${Math.min(puntosTotal, 800)}/800 pts`, progresoPct: (puntosTotal / 800) * 100 },
+    { id: "perseverancia_bronce", nombre: "Constancia I", desc: "Repite 1 ejercicio ya acertado", Icono: Repeat, colorDesde: "#e8b895", colorHasta: "#a9682f", cumplido: repasos >= 1, progresoTexto: `${Math.min(repasos, 1)}/1 repaso`, progresoPct: (repasos / 1) * 100 },
+    { id: "perseverancia_plata", nombre: "Constancia II", desc: "Repite 5 ejercicios ya acertados", Icono: Repeat, colorDesde: "#dee2e6", colorHasta: "#868e96", cumplido: repasos >= 5, progresoTexto: `${Math.min(repasos, 5)}/5 repasos`, progresoPct: (repasos / 5) * 100 },
+    { id: "perseverancia_oro", nombre: "Constancia III", desc: "Repite 15 ejercicios ya acertados", Icono: Repeat, colorDesde: "#ffe066", colorHasta: "#f59f00", cumplido: repasos >= 15, progresoTexto: `${Math.min(repasos, 15)}/15 repasos`, progresoPct: (repasos / 15) * 100 },
+    { id: "perseverancia_diamante", nombre: "Constancia IV", desc: "Repite 30 ejercicios ya acertados", Icono: Repeat, colorDesde: "#99e9f2", colorHasta: "#15aabf", cumplido: repasos >= 30, progresoTexto: `${Math.min(repasos, 30)}/30 repasos`, progresoPct: (repasos / 30) * 100 },
+    { id: "tres_modulos", nombre: "Explorador", desc: "Suma puntos en 3 módulos distintos", Icono: Rocket, colorDesde: "#ffa94d", colorHasta: "#e8590c", cumplido: modulosConPuntos >= 3, progresoTexto: `${Math.min(modulosConPuntos, 3)}/3 módulos`, progresoPct: (modulosConPuntos / 3) * 100 },
+    { id: "todos_modulos", nombre: "Todo Terreno", desc: "Suma puntos en todos los módulos", Icono: Target, colorDesde: "#8ce99a", colorHasta: "#2f9e44", cumplido: SEGMENTOS_ENTRENAMIENTO.every((s) => puntosDeSegmento(s.id) > 0), progresoTexto: `${modulosConPuntos}/${SEGMENTOS_ENTRENAMIENTO.length} módulos`, progresoPct: (modulosConPuntos / SEGMENTOS_ENTRENAMIENTO.length) * 100 },
+    { id: "perfeccionista", nombre: "Perfeccionista", desc: "Alcanza el 100% en todos los módulos con contenido", Icono: Sparkles, colorDesde: "#ffe066", colorHasta: "#fab005", cumplido: modulosConContenido.length > 0 && modulosAl100 === modulosConContenido.length, progresoTexto: `${modulosAl100}/${modulosConContenido.length} al 100%`, progresoPct: modulosConContenido.length > 0 ? (modulosAl100 / modulosConContenido.length) * 100 : 0 },
+    { id: "nfpa_aprobado", nombre: "Certificado NFPA 72", desc: "Aprueba el Examen Básico de NFPA 72", Icono: ShieldCheck, colorDesde: "#ff8787", colorHasta: "#c92a2a", cumplido: puntosDeSegmento("nfpa72") >= 200 },
+    { id: "electronica_aprobada", nombre: "Certificado Electrónica", desc: "Alcanza el 100% en Electrónica Básica", Icono: Zap, colorDesde: "#ffe066", colorHasta: "#f08c00", cumplido: puntosDeSegmento("electronica") >= (MAX_PUNTOS_SEGMENTO.electronica || Infinity) },
+    { id: "compuertas_aprobada", nombre: "Certificado Compuertas", desc: "Alcanza el 100% en Compuertas Lógicas", Icono: GraduationCap, colorDesde: "#a5d8ff", colorHasta: "#1971c2", cumplido: puntosDeSegmento("compuertas") >= (MAX_PUNTOS_SEGMENTO.compuertas || Infinity) },
+    { id: "escalera_aprobada", nombre: "Certificado Escalera", desc: "Alcanza el 100% en Lógica en Escalera", Icono: HardHat, colorDesde: "#eebefa", colorHasta: "#9c36b5", cumplido: puntosDeSegmento("escalera") >= (MAX_PUNTOS_SEGMENTO.escalera || Infinity) },
+    { id: "senior", nombre: "Senior Experto", desc: "Alcanza el rango máximo (Panel) — 100% en todos los módulos", Icono: Crown, colorDesde: "#40c057", colorHasta: "#2b8a3e", cumplido: rangoActual.tipo === "panel" },
   ];
 
   if (!jugadorCodigo) {
@@ -5778,12 +6022,12 @@ function Entrenamiento() {
       <Card title="Entrenamiento — ¿Quién va a jugar?">
         <div style={{ fontSize: 13.5, color: T.inkSoft, marginBottom: 14 }}>
           {esTecnico
-            ? "No pudimos relacionar tu usuario con un nombre en Planilla. Pídele a un Administrativo que verifique que tu nombre esté cargado ahí."
+            ? "No pudimos relacionar automáticamente tu usuario con un nombre en Planilla. Selecciona tu nombre de la lista para continuar (o pídele a un Administrativo que revise que tu nombre esté cargado en Planilla)."
             : "Selecciona tu nombre de la lista de Planilla para empezar a acumular puntos."}
         </div>
         {empleados.length === 0 ? (
           <div style={{ fontSize: 13, color: T.gray }}>Aún no hay personal cargado. Agrégalo desde Planilla.</div>
-        ) : esTecnico ? null : (
+        ) : (
           <select style={{ ...inputStyle, maxWidth: 320 }} value={jugadorCodigo} onChange={(e) => setJugadorCodigo(e.target.value)}>
             <option value="">Selecciona tu nombre…</option>
             {empleados.map((emp) => <option key={emp.codigo} value={emp.codigo}>{emp.nombre}</option>)}
@@ -5793,8 +6037,192 @@ function Entrenamiento() {
     );
   }
 
+  const anchoVista = vistaModo === "pc" ? 1400 : undefined;
+
+  const moduloActivo =
+    modulo === "compuertas" ? (
+      <JuegoCompuertasLogicas
+        onGanarPuntos={(ejercicio, puntos) => registrarPuntos("compuertas", ejercicio, puntos)}
+        esAdmin={currentUser?.categoria === "admin"}
+        onReiniciar={(borrarRanking) => reiniciarSegmento("compuertas", borrarRanking)}
+      />
+    ) : modulo === "escalera" ? (
+      <JuegoLogicaEscalera
+        onGanarPuntos={(ejercicio, puntos) => registrarPuntos("escalera", ejercicio, puntos)}
+        esAdmin={currentUser?.categoria === "admin"}
+        onReiniciar={(borrarRanking) => reiniciarSegmento("escalera", borrarRanking)}
+      />
+    ) : modulo === "tablas_verdad" ? (
+      <JuegoTablasVerdad
+        onGanarPuntos={(ejercicio, puntos) => registrarPuntos("tablas_verdad", ejercicio, puntos)}
+        esAdmin={currentUser?.categoria === "admin"}
+        onReiniciar={(borrarRanking) => reiniciarSegmento("tablas_verdad", borrarRanking)}
+      />
+    ) : modulo === "nfpa72" ? (
+      <JuegoNFPA72 onGanarPuntos={(ejercicio, puntos) => registrarPuntos("nfpa72", ejercicio, puntos)} />
+    ) : modulo === "electronica" ? (
+      <JuegoElectronicaBasica onGanarPuntos={(ejercicio, puntos) => registrarPuntos("electronica", ejercicio, puntos)} />
+    ) : modulo === "simplex" ? (
+      <JuegoSimplex
+        onGanarPuntos={(ejercicio, puntos) => registrarPuntos("simplex", ejercicio, puntos)}
+        esAdmin={currentUser?.categoria === "admin"}
+        onReiniciar={(borrarRanking) => reiniciarSegmento("simplex", borrarRanking)}
+      />
+    ) : modulo ? (
+      <Card title={SEGMENTOS_ENTRENAMIENTO.find((m) => m.id === modulo)?.label}>
+        <div style={{ color: T.gray, fontSize: 13.5 }}>
+          Este módulo todavía no tiene contenido. Comparte el primer ejemplo de "{SEGMENTOS_ENTRENAMIENTO.find((m) => m.id === modulo)?.label}" y lo armamos aquí.
+        </div>
+      </Card>
+    ) : null;
+
+  // ============================================================
+  // VISTA CELULAR: se ve y se comporta como una app nativa — marco de
+  // teléfono, barra de estado propia, navegación inferior por pestañas,
+  // y el contenido de cada pestaña ocupa toda la pantalla con scroll
+  // independiente (como un APK real).
+  // ============================================================
+  if (vistaModo === "movil") {
+    const TABS_MOVIL = [
+      { id: "inicio", icon: "🏠", label: "Inicio" },
+      { id: "modulos", icon: "🎯", label: "Módulos" },
+      { id: "ranking", icon: "🏆", label: "Ranking" },
+      { id: "perfil", icon: "👤", label: "Perfil" },
+    ];
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+        <style>{`@keyframes flameFloatSlow { 0%,100% { transform: translateY(0) rotate(-10deg) scale(1); opacity: 0.12; } 50% { transform: translateY(-8px) rotate(-6deg) scale(1.05); opacity: 0.2; } }`}</style>
+        <div style={{ width: 390, maxWidth: "100%", background: "#111", borderRadius: 34, padding: 8, boxShadow: "0 24px 60px rgba(0,0,0,0.35)" }}>
+          <div style={{ background: "#fff", borderRadius: 26, overflow: "hidden", display: "flex", flexDirection: "column", height: 720 }}>
+            <div style={{ background: "linear-gradient(120deg, #ff922b 0%, #e8590c 45%, #c92a2a 100%)", padding: "16px 16px 12px", color: "#fff", flexShrink: 0, position: "relative", overflow: "hidden" }}>
+              <Flame size={64} color="#fff" style={{ position: "absolute", top: -16, left: -8, opacity: 0.12, transform: "rotate(-10deg)", animation: "flameFloatSlow 5s ease-in-out infinite" }} />
+              <button onClick={() => setVistaModo("auto")} title="Salir de vista celular" style={{ position: "absolute", top: 12, right: 14, background: "rgba(255,255,255,0.22)", border: "none", borderRadius: 8, width: 26, height: 26, color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1 }}>
+                <X size={14} />
+              </button>
+              {modulo ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, paddingRight: 34 }}>
+                  <button onClick={() => setModulo(null)} style={{ background: "rgba(255,255,255,0.22)", border: "none", borderRadius: 8, width: 30, height: 30, color: "#fff", fontSize: 16, cursor: "pointer", flexShrink: 0 }}>←</button>
+                  <div style={{ fontSize: 13.5, fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{SEGMENTOS_ENTRENAMIENTO.find((m) => m.id === modulo)?.label}</div>
+                </div>
+              ) : (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingRight: 34 }}>
+                  <div>
+                    <div style={{ fontSize: 9.5, opacity: 0.85, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>🔥 Entrenamiento</div>
+                    <div style={{ fontSize: 15, fontWeight: 800 }}>¡Vamos, {jugador?.nombre?.split(" ")[0] || "técnico"}!</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <div style={{ background: "rgba(255,255,255,0.2)", borderRadius: 8, padding: "4px 8px", fontSize: 11, fontWeight: 800 }}>{puntosTotal} pts</div>
+                    <div style={{ background: "rgba(255,255,255,0.2)", borderRadius: 8, padding: "4px 8px", fontSize: 11, fontWeight: 800 }}>🔥{racha}</div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={{ flex: 1, overflowY: "auto", padding: 14, background: "#f8f9fa", WebkitOverflowScrolling: "touch" }}>
+              {modulo ? moduloActivo : pantallaMovil === "inicio" ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ background: rangoActual.soft, borderRadius: 14, padding: 14 }}>
+                    <div style={{ fontSize: 10, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase" }}>Rango actual</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                      {rangoActual.tipo && <IconTrofeo tipo={rangoActual.tipo} size={18} color={rangoActual.color} />}
+                      <span style={{ fontSize: 16, fontWeight: 800, color: rangoActual.color }}>{rangoActual.nombre}</span>
+                    </div>
+                    {rangoActual.siguiente && (
+                      <>
+                        <div style={{ height: 6, background: "#fff", borderRadius: 99, overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${Math.min(100, (puntosTotal / rangoActual.siguiente) * 100)}%`, background: rangoActual.color }} />
+                        </div>
+                        <div style={{ fontSize: 10.5, color: T.inkSoft, marginTop: 3 }}>{rangoActual.siguiente - puntosTotal} pts para subir</div>
+                      </>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: T.ink }}>📅 Misiones de hoy</div>
+                  {misionesDiarias.map((m) => (
+                    <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 12, background: m.cumplida ? T.greenSoft : T.graySoft, border: `1px solid ${m.cumplida ? T.green : T.line}` }}>
+                      <div style={{ width: 28, height: 28, borderRadius: "50%", background: m.cumplida ? T.green : "#fff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        {m.cumplida ? <Check size={14} color="#fff" /> : <m.Icono size={13} color={T.gray} />}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 11.5, fontWeight: 700, color: m.cumplida ? T.green : T.ink }}>{m.texto}</div>
+                        <div style={{ height: 4, background: "#fff", borderRadius: 99, overflow: "hidden", marginTop: 3 }}>
+                          <div style={{ height: "100%", width: `${Math.min(100, (m.progreso / m.meta) * 100)}%`, background: m.cumplida ? T.green : T.accent }} />
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, color: m.cumplida ? T.green : T.gray }}>{Math.min(m.progreso, m.meta)}/{m.meta}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : pantallaMovil === "modulos" ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: T.ink }}>🎯 Elige tu misión</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {SEGMENTOS_ENTRENAMIENTO.map((s) => (
+                      <div key={s.id} style={{ width: "100%" }}>
+                        <MisionCard
+                          label={s.label} Icono={s.Icono} colorDesde={s.colorDesde} colorHasta={s.colorHasta} lema={s.lema}
+                          puntos={puntosDeSegmento(s.id)} max={MAX_PUNTOS_SEGMENTO[s.id] || 0}
+                          seleccionada={false}
+                          onClick={() => setModulo(s.id)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : pantallaMovil === "ranking" ? (
+                <RankingEntrenamiento />
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{ width: 50, height: 50, borderRadius: "50%", background: `linear-gradient(135deg, ${rangoActual.color}, ${rangoActual.color}cc)`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 18, fontWeight: 800, flexShrink: 0 }}>
+                      {(jugador?.nombre || "?").split(" ").slice(0, 2).map((p) => p[0]).join("").toUpperCase()}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 15, fontWeight: 800, color: T.ink }}>{jugador?.nombre}</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: rangoActual.color }}>{rangoActual.nombre}</div>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {[
+                      { label: "Puntaje", valor: `${puntosTotal} pts` },
+                      { label: "Racha", valor: `🔥 ${racha}` },
+                      { label: "Insignias", valor: `${LOGROS.filter((l) => l.cumplido).length}/${LOGROS.length}` },
+                      { label: "Repasos", valor: `${repasos}` },
+                    ].map((s) => (
+                      <div key={s.label} style={{ background: T.graySoft, borderRadius: 10, padding: "8px 12px", minWidth: 100 }}>
+                        <div style={{ fontSize: 9.5, color: T.gray, fontWeight: 700, textTransform: "uppercase" }}>{s.label}</div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: T.ink }}>{s.valor}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 12.5, fontWeight: 800, color: T.ink }}>Insignias</div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    {LOGROS.map((l) => (
+                      <InsigniaMedalla key={l.id} nombre={l.nombre} desc={l.desc} Icono={l.Icono} colorDesde={l.colorDesde} colorHasta={l.colorHasta} cumplido={l.cumplido} progresoTexto={l.progresoTexto} progresoPct={l.progresoPct} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {!modulo && (
+              <div style={{ display: "flex", borderTop: `1px solid ${T.line}`, background: "#fff", flexShrink: 0 }}>
+                {TABS_MOVIL.map((t) => (
+                  <button key={t.id} onClick={() => setPantallaMovil(t.id)} style={{ flex: 1, padding: "9px 4px", background: "transparent", border: "none", cursor: "pointer" }}>
+                    <div style={{ fontSize: 18, opacity: pantallaMovil === t.id ? 1 : 0.5 }}>{t.icon}</div>
+                    <div style={{ fontSize: 9.5, fontWeight: 700, color: pantallaMovil === t.id ? T.accent : T.gray }}>{t.label}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        <button onClick={() => setVistaModo("auto")} style={{ marginTop: 10, fontSize: 12, color: T.gray, background: "transparent", border: "none", cursor: "pointer", textDecoration: "underline" }}>Salir de vista celular</button>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: anchoVista, margin: anchoVista ? "0 auto" : undefined, transition: "max-width 0.2s ease" }}>
       {subioDeRango && (
         <>
         <style>{`
@@ -5807,6 +6235,7 @@ function Entrenamiento() {
           borderRadius: 14, padding: "18px 22px", display: "flex", alignItems: "center", gap: 18,
           animation: "bannerGlow 1.8s ease-in-out infinite",
         }}>
+          <Confeti />
           <button
             onClick={() => setSubioDeRango(null)}
             aria-label="Cerrar"
@@ -5833,60 +6262,141 @@ function Entrenamiento() {
         </div>
         </>
       )}
-      <Card
-        title={`Entrenamiento — ${jugador?.nombre || ""}`}
-        action={<div style={{ display: "flex", gap: 8 }}>
-          <Btn small variant="ghost" onClick={() => setMostrarRangos((v) => !v)}>{mostrarRangos ? "Ocultar" : "Ver"} tabla de rangos</Btn>
-          {!esTecnico && <Btn small variant="ghost" onClick={() => setJugadorCodigo("")}>Cambiar jugador</Btn>}
-        </div>}
-      >
-        <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
-          <div style={{ background: T.blueSoft, borderRadius: 10, padding: "10px 16px" }}>
-            <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase" }}>Puntaje total</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: T.blue }}>{puntosTotal} pts</div>
-          </div>
-          <div style={{ background: rangoActual.soft, borderRadius: 10, padding: "10px 16px", minWidth: 210 }}>
-            <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase" }}>Rango</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: rangoActual.siguiente ? 6 : 0 }}>
-              <div style={{ fontSize: 16, fontWeight: 800, color: rangoActual.color }}>{rangoActual.nombre}</div>
-              {rangoActual.tipo && <IconTrofeo tipo={rangoActual.tipo} size={20} color={rangoActual.color} />}
-            </div>
-            {rangoActual.siguiente && (
-              <>
-                <div style={{ height: 6, background: "#fff", borderRadius: 99, overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${Math.min(100, (puntosTotal / rangoActual.siguiente) * 100)}%`, background: rangoActual.color, transition: "width 0.4s ease" }} />
+      <div style={{
+        background: "linear-gradient(120deg, #ff922b 0%, #e8590c 45%, #c92a2a 100%)",
+        borderRadius: 18, padding: "18px clamp(14px, 4vw, 24px)", marginBottom: 16, position: "relative", overflow: "hidden",
+      }}>
+        <style>{`
+          @keyframes flameFloat { 0%,100% { transform: translateY(0) rotate(-4deg); opacity: 0.5; } 50% { transform: translateY(-6px) rotate(4deg); opacity: 0.8; } }
+          @keyframes flameFloatSlow { 0%,100% { transform: translateY(0) rotate(15deg) scale(1); opacity: 0.12; } 50% { transform: translateY(-10px) rotate(20deg) scale(1.05); opacity: 0.2; } }
+          @keyframes flameFlicker { 0%,100% { transform: translateY(0) scale(1) rotate(-6deg); opacity: 0.3; } 25% { transform: translateY(-3px) scale(1.08) rotate(-2deg); opacity: 0.45; } 50% { transform: translateY(-8px) scale(0.95) rotate(-8deg); opacity: 0.55; } 75% { transform: translateY(-3px) scale(1.05) rotate(-3deg); opacity: 0.4; } }
+          @keyframes flameDrift { 0%,100% { transform: translateX(0) translateY(0) rotate(0deg); opacity: 0.18; } 50% { transform: translateX(6px) translateY(-8px) rotate(10deg); opacity: 0.3; } }
+        `}</style>
+        <Flame size={90} color="#fff" style={{ position: "absolute", top: -20, right: -10, opacity: 0.15, transform: "rotate(15deg)", animation: "flameFloatSlow 5s ease-in-out infinite" }} />
+        <Flame size={46} color="#fff" style={{ position: "absolute", bottom: -6, right: 90, opacity: 0.35, animation: "flameFloat 3s ease-in-out infinite" }} />
+        <Flame size={30} color="#fff" style={{ position: "absolute", top: 14, right: 140, opacity: 0.3, animation: "flameFlicker 2.2s ease-in-out infinite" }} />
+        <Flame size={24} color="#fff" style={{ position: "absolute", bottom: 10, left: "38%", opacity: 0.18, animation: "flameDrift 4s ease-in-out infinite 0.5s" }} />
+        <Flame size={18} color="#fff" style={{ position: "absolute", top: "50%", right: "22%", opacity: 0.22, animation: "flameFlicker 2.8s ease-in-out infinite 0.8s" }} />
+        <Flame size={54} color="#fff" style={{ position: "absolute", top: -14, left: "58%", opacity: 0.1, transform: "rotate(-10deg)", animation: "flameFloatSlow 6s ease-in-out infinite 1.2s" }} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, position: "relative" }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "rgba(255,255,255,0.85)", textTransform: "uppercase", letterSpacing: 0.6 }}>🔥 Centro de Entrenamiento</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: "#fff", margin: "2px 0 10px" }}>¡Vamos, {jugador?.nombre?.split(" ")[0] || "técnico"}!</div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ background: "rgba(255,255,255,0.18)", backdropFilter: "blur(4px)", borderRadius: 12, padding: "8px 14px" }}>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.8)", fontWeight: 700, textTransform: "uppercase" }}>Puntaje</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: "#fff" }}>{puntosTotal} pts</div>
+              </div>
+              <div style={{ background: "rgba(255,255,255,0.18)", backdropFilter: "blur(4px)", borderRadius: 12, padding: "8px 14px", minWidth: 190 }}>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.8)", fontWeight: 700, textTransform: "uppercase" }}>Rango</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  {rangoActual.tipo && <IconTrofeo tipo={rangoActual.tipo} size={17} color="#fff" />}
+                  <span style={{ fontSize: 15, fontWeight: 800, color: "#fff" }}>{rangoActual.nombre}</span>
                 </div>
-                <div style={{ fontSize: 10.5, color: T.inkSoft, marginTop: 3 }}>{rangoActual.siguiente - puntosTotal} pts para el siguiente rango</div>
-              </>
-            )}
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-          {SEGMENTOS_ENTRENAMIENTO.map((s) => {
-            const rangoSeg = rangoDeSegmento(s.id);
-            const max = MAX_PUNTOS_SEGMENTO[s.id] || 0;
-            const pts = puntosDeSegmento(s.id);
-            const porcentaje = max > 0 ? Math.round((pts / max) * 100) : 0;
-            const aprobado = max > 0 && porcentaje >= 70;
-            const completo = max > 0 && pts >= max;
-            return (
-              <div key={s.id} style={{ border: `1px solid ${completo ? T.green : (aprobado ? T.greenSoft : T.line)}`, borderRadius: 8, padding: "6px 10px", minWidth: 130 }}>
-                <div style={{ fontSize: 11, color: T.inkSoft }}>{s.label}</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                  <b style={{ color: T.ink, fontSize: 13 }}>{pts} pts{max > 0 ? ` (${porcentaje}%)` : ""}</b>
-                  {rangoSeg.tipo && <IconTrofeo tipo={rangoSeg.tipo} size={13} color={rangoSeg.color} />}
-                </div>
-                {max > 0 && (
-                  <div style={{ fontSize: 10, fontWeight: 700, color: completo ? T.green : (aprobado ? T.turquoise : T.gray), marginTop: 2 }}>
-                    {completo ? "✓ 100% completo" : aprobado ? "✓ Aprobado (70%+)" : "Pendiente de aprobar"}
-                  </div>
+                {rangoActual.siguiente && (
+                  <>
+                    <div style={{ height: 5, background: "rgba(255,255,255,0.3)", borderRadius: 99, overflow: "hidden", marginTop: 4 }}>
+                      <div style={{ height: "100%", width: `${Math.min(100, (puntosTotal / rangoActual.siguiente) * 100)}%`, background: "#fff", transition: "width 0.4s ease" }} />
+                    </div>
+                    <div style={{ fontSize: 9.5, color: "rgba(255,255,255,0.85)", marginTop: 2 }}>{rangoActual.siguiente - puntosTotal} pts para subir</div>
+                  </>
                 )}
               </div>
-            );
-          })}
+              <div style={{ background: "rgba(255,255,255,0.18)", backdropFilter: "blur(4px)", borderRadius: 12, padding: "8px 14px" }}>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.8)", fontWeight: 700, textTransform: "uppercase" }}>Racha</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: "#fff" }}>🔥 {racha}</div>
+              </div>
+              <div style={{ background: "rgba(255,255,255,0.18)", backdropFilter: "blur(4px)", borderRadius: 12, padding: "8px 14px" }}>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.8)", fontWeight: 700, textTransform: "uppercase" }}>Insignias</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: "#fff" }}>{LOGROS.filter((l) => l.cumplido).length}/{LOGROS.length}</div>
+              </div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", background: "rgba(255,255,255,0.2)", borderRadius: 10, padding: 3, gap: 2 }}>
+              <button onClick={() => setVistaModo(vistaModo === "movil" ? "auto" : "movil")} title="Simular vista de celular" style={{ background: vistaModo === "movil" ? "#fff" : "transparent", color: vistaModo === "movil" ? "#e8590c" : "#fff", border: "none", borderRadius: 8, padding: "6px 10px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>📱</button>
+              <button onClick={() => setVistaModo(vistaModo === "pc" ? "auto" : "pc")} title="Simular vista de PC" style={{ background: vistaModo === "pc" ? "#fff" : "transparent", color: vistaModo === "pc" ? "#e8590c" : "#fff", border: "none", borderRadius: 8, padding: "6px 10px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>💻</button>
+            </div>
+            <button onClick={() => setMostrarPerfil((v) => !v)} style={{ background: mostrarPerfil ? "#fff" : "rgba(255,255,255,0.2)", color: mostrarPerfil ? "#e8590c" : "#fff", border: "none", borderRadius: 10, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>👤 Perfil</button>
+            <button onClick={() => setMostrarRanking((v) => !v)} style={{ background: mostrarRanking ? "#fff" : "rgba(255,255,255,0.2)", color: mostrarRanking ? "#e8590c" : "#fff", border: "none", borderRadius: 10, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>🏆 Ranking</button>
+            {!esTecnico && <button onClick={() => setJugadorCodigo("")} style={{ background: "rgba(255,255,255,0.2)", color: "#fff", border: "none", borderRadius: 10, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Cambiar jugador</button>}
+          </div>
         </div>
-        {mostrarRangos && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+      </div>
+
+      {mostrarPerfil && (
+        <Card style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
+            <div style={{ width: 56, height: 56, borderRadius: "50%", background: `linear-gradient(135deg, ${rangoActual.color}, ${rangoActual.color}cc)`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 20, fontWeight: 800, flexShrink: 0 }}>
+              {(jugador?.nombre || "?").split(" ").slice(0, 2).map((p) => p[0]).join("").toUpperCase()}
+            </div>
+            <div>
+              <div style={{ fontSize: 17, fontWeight: 800, color: T.ink }}>{jugador?.nombre}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                {rangoActual.tipo && <IconTrofeo tipo={rangoActual.tipo} size={14} color={rangoActual.color} />}
+                <span style={{ fontSize: 13, fontWeight: 700, color: rangoActual.color }}>{rangoActual.nombre}</span>
+              </div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {[
+              { label: "Puntaje total", valor: `${puntosTotal} pts` },
+              { label: "Racha actual", valor: `🔥 ${racha} día${racha === 1 ? "" : "s"}` },
+              { label: "Insignias", valor: `${LOGROS.filter((l) => l.cumplido).length}/${LOGROS.length}` },
+              { label: "Ejercicios acertados", valor: `${puntajes.filter((p) => p.puntos > 0 && !(p.ejercicio || "").includes("(repaso)")).length}` },
+              { label: "Repasos realizados", valor: `${repasos}` },
+              { label: "Módulos con progreso", valor: `${modulosConPuntos}/${SEGMENTOS_ENTRENAMIENTO.length}` },
+            ].map((s) => (
+              <div key={s.label} style={{ background: T.graySoft, borderRadius: 10, padding: "10px 14px", minWidth: 140 }}>
+                <div style={{ fontSize: 10.5, color: T.gray, fontWeight: 700, textTransform: "uppercase" }}>{s.label}</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: T.ink }}>{s.valor}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: T.ink, marginBottom: 10 }}>📅 Misiones de hoy</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {misionesDiarias.map((m) => (
+            <div key={m.id} style={{
+              display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 12, minWidth: 220,
+              background: m.cumplida ? T.greenSoft : T.graySoft, border: `1px solid ${m.cumplida ? T.green : T.line}`,
+            }}>
+              <div style={{ width: 32, height: 32, borderRadius: "50%", background: m.cumplida ? T.green : "#fff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                {m.cumplida ? <Check size={16} color="#fff" /> : <m.Icono size={15} color={T.gray} />}
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: m.cumplida ? T.green : T.ink }}>{m.texto}</div>
+                <div style={{ height: 4, background: "#fff", borderRadius: 99, overflow: "hidden", marginTop: 4 }}>
+                  <div style={{ height: "100%", width: `${Math.min(100, (m.progreso / m.meta) * 100)}%`, background: m.cumplida ? T.green : T.accent }} />
+                </div>
+              </div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: m.cumplida ? T.green : T.gray }}>{Math.min(m.progreso, m.meta)}/{m.meta}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card>
+        <div style={{ fontSize: 14, fontWeight: 800, color: T.ink, marginBottom: 4 }}>🎯 Elige tu misión</div>
+        <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 14 }}>Cada módulo es una misión — sube el progreso hasta el 100% para ganarte el trofeo.</div>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 20 }}>
+          {SEGMENTOS_ENTRENAMIENTO.map((s) => (
+            <MisionCard
+              key={s.id}
+              label={s.label} Icono={s.Icono} colorDesde={s.colorDesde} colorHasta={s.colorHasta} lema={s.lema}
+              puntos={puntosDeSegmento(s.id)} max={MAX_PUNTOS_SEGMENTO[s.id] || 0}
+              seleccionada={modulo === s.id}
+              onClick={() => setModulo(s.id)}
+            />
+          ))}
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: T.ink, marginBottom: 8 }}>Tabla de rangos</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {RANGOS_ENTRENAMIENTO.map((r) => (
               <div key={r.nombre} style={{ background: rangoActual.nombre === r.nombre ? r.soft : "#fff", border: `1px solid ${rangoActual.nombre === r.nombre ? r.color : T.line}`, borderRadius: 10, padding: "8px 12px", minWidth: 165 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
@@ -5897,68 +6407,26 @@ function Entrenamiento() {
               </div>
             ))}
           </div>
+        </div>
+        <div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: T.ink }}>Insignias</div>
+            <div style={{ fontSize: 11.5, color: T.gray }}>{LOGROS.filter((l) => l.cumplido).length}/{LOGROS.length} desbloqueadas</div>
+          </div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+            {LOGROS.map((l) => (
+              <InsigniaMedalla key={l.id} nombre={l.nombre} desc={l.desc} Icono={l.Icono} colorDesde={l.colorDesde} colorHasta={l.colorHasta} cumplido={l.cumplido} progresoTexto={l.progresoTexto} progresoPct={l.progresoPct} />
+            ))}
+          </div>
+        </div>
+        {mostrarRanking && (
+          <div style={{ marginTop: 18 }}>
+            <RankingEntrenamiento />
+          </div>
         )}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-          {LOGROS.map((l) => (
-            <div key={l.id} title={l.desc} style={{
-              display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", borderRadius: 999,
-              background: l.cumplido ? T.greenSoft : T.graySoft, opacity: l.cumplido ? 1 : 0.55,
-            }}>
-              <Award size={13} color={l.cumplido ? T.green : T.gray} fill={l.cumplido ? T.green : "none"} />
-              <span style={{ fontSize: 11.5, fontWeight: 600, color: l.cumplido ? T.green : T.gray }}>{l.nombre}</span>
-            </div>
-          ))}
-        </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {SEGMENTOS_ENTRENAMIENTO.map((m) => (
-            <Btn key={m.id} variant={modulo === m.id ? "accent" : "ghost"} onClick={() => setModulo(m.id)}>{m.label}</Btn>
-          ))}
-        </div>
       </Card>
 
-      {modulo === "compuertas" && (
-        <JuegoCompuertasLogicas
-          onGanarPuntos={(ejercicio, puntos) => registrarPuntos("compuertas", ejercicio, puntos)}
-        />
-      )}
-
-      {modulo === "escalera" && (
-        <JuegoLogicaEscalera
-          onGanarPuntos={(ejercicio, puntos) => registrarPuntos("escalera", ejercicio, puntos)}
-        />
-      )}
-
-      {modulo === "tablas_verdad" && (
-        <JuegoTablasVerdad
-          onGanarPuntos={(ejercicio, puntos) => registrarPuntos("tablas_verdad", ejercicio, puntos)}
-        />
-      )}
-
-      {modulo === "nfpa72" && (
-        <JuegoNFPA72
-          onGanarPuntos={(ejercicio, puntos) => registrarPuntos("nfpa72", ejercicio, puntos)}
-        />
-      )}
-
-      {modulo === "electronica" && (
-        <JuegoElectronicaBasica
-          onGanarPuntos={(ejercicio, puntos) => registrarPuntos("electronica", ejercicio, puntos)}
-        />
-      )}
-
-      {modulo === "simplex" && (
-        <JuegoSimplex
-          onGanarPuntos={(ejercicio, puntos) => registrarPuntos("simplex", ejercicio, puntos)}
-        />
-      )}
-
-      {modulo && modulo !== "compuertas" && modulo !== "escalera" && modulo !== "tablas_verdad" && modulo !== "nfpa72" && modulo !== "electronica" && modulo !== "simplex" && (
-        <Card title={SEGMENTOS_ENTRENAMIENTO.find((m) => m.id === modulo)?.label}>
-          <div style={{ color: T.gray, fontSize: 13.5 }}>
-            Este módulo todavía no tiene contenido. Comparte el primer ejemplo de "{SEGMENTOS_ENTRENAMIENTO.find((m) => m.id === modulo)?.label}" y lo armamos aquí.
-          </div>
-        </Card>
-      )}
+      {moduloActivo}
     </div>
   );
 }
@@ -5967,11 +6435,38 @@ function Entrenamiento() {
 // conéctalas dibujando el cable a mano, y el fondo cambia de color solo
 // (gris = incompleto, verde = correcto, rojo = incorrecto). Al acertar
 // un ejercicio nuevo, avisa hacia arriba para sumar puntos.
-function JuegoCompuertasLogicas({ onGanarPuntos }) {
+function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
   const contenedorRef = React.useRef(null);
   const ganadosRef = React.useRef(new Set());
   const falladosRef = React.useRef(new Set());
+  const cargarEjercicioRef = React.useRef(null);
+  const ejActualExpuestoRef = React.useRef(0);
+  const nivelActualExpuestoRef = React.useRef("Básico");
+  const nivelLongitudRef = React.useRef(0);
   const [mostrarIntro, setMostrarIntro] = useState(true);
+  const [, forceRender] = useState(0);
+  const bloqueado = (clave) => falladosRef.current.has(clave) && !ganadosRef.current.has(clave);
+  const reiniciarModulo = (borrarRanking) => {
+    falladosRef.current.clear();
+    if (borrarRanking) ganadosRef.current.clear();
+    onReiniciar && onReiniciar(borrarRanking);
+    cargarEjercicioRef.current && cargarEjercicioRef.current(ejActualExpuestoRef.current);
+    forceRender((n) => n + 1);
+  };
+  // Reinicio propio del técnico: solo desbloquea las preguntas falladas
+  // DE ESTE NIVEL para poder recuperarlas — los puntos ya ganados en la
+  // primera ronda se mantienen y no se vuelven a sumar.
+  const reiniciarNivelTecnico = () => {
+    const nv = nivelActualExpuestoRef.current;
+    Array.from(falladosRef.current).forEach((clave) => { if (clave.startsWith(nv + "-")) falladosRef.current.delete(clave); });
+    cargarEjercicioRef.current && cargarEjercicioRef.current(0);
+    forceRender((n) => n + 1);
+  };
+  const hayBloqueadosEnNivelActual = () => {
+    const nv = nivelActualExpuestoRef.current;
+    for (let i = 0; i < nivelLongitudRef.current; i++) { if (bloqueado(nv + "-" + i)) return true; }
+    return false;
+  };
 
   useEffect(() => {
     if (mostrarIntro) return;
@@ -6054,17 +6549,33 @@ function JuegoCompuertasLogicas({ onGanarPuntos }) {
         return;
       }
       ejActual = (i + EJERCICIOS_JUEGO.length) % EJERCICIOS_JUEGO.length;
+      ejActualExpuestoRef.current = ejActual;
       const ej = EJERCICIOS_JUEGO[ejActual];
       elTitulo.textContent = nivelActual + " — Ejercicio #" + (ejActual + 1);
       elFrase.textContent = ej.frase;
       limpiarLienzo();
+      const claveEj = nivelActual + "-" + ejActual;
+      if (bloqueado(claveEj)) {
+        elCanvas.innerHTML = `<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; padding:20px;"><div style="color:${T.red}; font-size:13px; font-weight:600; max-width:340px;">🔒 Bloqueado — fallaste este ejercicio. Llega hasta el último ejercicio del nivel para poder reiniciarlo y recuperarlo.</div></div>`;
+        elCanvas.style.background = T.redSoft;
+        elPalette.style.opacity = "0.4";
+        elPalette.style.pointerEvents = "none";
+        forceRender((n) => n + 1);
+        return;
+      }
+      elPalette.style.opacity = "1";
+      elPalette.style.pointerEvents = "auto";
       ej.terminales.forEach((nombre, i2) => crearNodo("term", nombre, 10, 16 + i2 * 72));
       crearNodo("salida", "Salida", 560, 160);
+      forceRender((n) => n + 1);
     }
+    cargarEjercicioRef.current = cargarEjercicio;
 
     function cambiarNivel(nivel) {
       nivelActual = nivel;
       EJERCICIOS_JUEGO = NIVELES_JUEGO[nivelActual];
+      nivelActualExpuestoRef.current = nivel;
+      nivelLongitudRef.current = EJERCICIOS_JUEGO.length;
       Array.from(cont.querySelectorAll(".je-nivel-btn")).forEach((b) => {
         const activo = b.dataset.nivel === nivel;
         b.style.background = activo ? T.accent : "transparent";
@@ -6303,6 +6814,10 @@ function JuegoCompuertasLogicas({ onGanarPuntos }) {
         fondoNeutral();
         elResultado.textContent = "Circuito incompleto — sigue conectando hasta Salida.";
         elResultado.style.color = T.inkSoft;
+      } else if (bloqueado(nivelActual + "-" + ejActual)) {
+        elCanvas.style.background = T.redSoft;
+        elResultado.textContent = "🔒 Este ejercicio quedó bloqueado por haberlo fallado. Llega hasta el último ejercicio del nivel para poder reiniciarlo y recuperarlo.";
+        elResultado.style.color = T.red;
       } else if (todoCorrecto) {
         elCanvas.style.background = T.greenSoft;
         const clave = nivelActual + "-" + ejActual;
@@ -6311,7 +6826,6 @@ function JuegoCompuertasLogicas({ onGanarPuntos }) {
         elResultado.style.color = T.green;
         if (!yaGanado) {
           ganadosRef.current.add(clave);
-          falladosRef.current.delete(clave);
           onGanarPuntos && onGanarPuntos(nivelActual + " — Ejercicio #" + (ejActual + 1), 10);
         } else {
           onGanarPuntos && onGanarPuntos(nivelActual + " — Ejercicio #" + (ejActual + 1) + " (repaso)", 0);
@@ -6321,7 +6835,7 @@ function JuegoCompuertasLogicas({ onGanarPuntos }) {
         const clave = nivelActual + "-" + ejActual;
         const yaFallado = falladosRef.current.has(clave);
         const yaGanado = ganadosRef.current.has(clave);
-        elResultado.textContent = (yaFallado || yaGanado) ? "✗ No coincide en todos los casos — borra una línea o compuerta y corrige." : "✗ No coincide en todos los casos — borra una línea o compuerta y corrige. -10 puntos.";
+        elResultado.textContent = (yaFallado || yaGanado) ? "✗ No coincide en todos los casos — borra una línea o compuerta y corrige." : "✗ No coincide en todos los casos — borra una línea o compuerta y corrige. -10 puntos, y podrías perder insignias si tu puntaje baja del umbral. Este ejercicio quedará bloqueado — llega hasta el final del nivel para recuperarlo.";
         elResultado.style.color = T.red;
         if (!yaFallado && !yaGanado) {
           falladosRef.current.add(clave);
@@ -6414,11 +6928,18 @@ function JuegoCompuertasLogicas({ onGanarPuntos }) {
   return (
     <Card>
       <div ref={contenedorRef}>
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
           {["Básico", "Intermedio", "Avanzado"].map((niv) => (
             <button key={niv} className="je-nivel-btn" data-nivel={niv} style={{ padding: "6px 14px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>{niv}</button>
           ))}
+          {esAdmin && <div style={{ marginLeft: "auto" }}><BotonReiniciarModulo onReiniciar={reiniciarModulo} /></div>}
         </div>
+        {ejActualExpuestoRef.current === nivelLongitudRef.current - 1 && hayBloqueadosEnNivelActual() && (
+          <div style={{ background: T.amberSoft, border: `1px solid ${T.amber}`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12.5, color: T.amber, fontWeight: 600 }}>Llegaste al final del nivel — tienes ejercicios pendientes de recuperar. Al reiniciar, tus puntos ya ganados se mantienen; solo sumarán los que recuperes.</span>
+            <Btn small variant="accent" onClick={reiniciarNivelTecnico}>🔄 Reiniciar nivel para recuperar</Btn>
+          </div>
+        )}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
           <div>
             <div className="je-titulo" style={{ fontSize: 15, fontWeight: 700 }}>Ejercicio #1</div>
@@ -6436,9 +6957,12 @@ function JuegoCompuertasLogicas({ onGanarPuntos }) {
           <button className="je-limpiar" style={{ padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Limpiar lienzo</button>
           <button onClick={() => setMostrarIntro(true)} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Ver la guía otra vez</button>
         </div>
-        <div className="je-canvas" style={{ position: "relative", height: 400, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s" }}>
-          <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
+        <div style={{ overflowX: "auto", borderRadius: 12, WebkitOverflowScrolling: "touch" }}>
+          <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 650, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s" }}>
+            <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
+          </div>
         </div>
+        <div style={{ fontSize: 10.5, color: T.gray, marginTop: 4 }}>💡 En celular, desliza el lienzo hacia los lados para ver el circuito completo.</div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
           <span className="je-resultado" style={{ fontSize: 14 }}></span>
         </div>
@@ -6451,11 +6975,35 @@ function JuegoCompuertasLogicas({ onGanarPuntos }) {
 // arrastras contactos (OR/AND/NOT dibujados al estilo de riel: rayitas
 // ⊣⊢, NOT con raya diagonal) al lienzo y los conectas cableando a mano,
 // con verificación automática contra todas las combinaciones posibles.
-function JuegoLogicaEscalera({ onGanarPuntos }) {
+function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
   const contenedorRef = React.useRef(null);
   const ganadosRef = React.useRef(new Set());
   const falladosRef = React.useRef(new Set());
+  const cargarEjercicioRef = React.useRef(null);
+  const ejActualExpuestoRef = React.useRef(0);
+  const nivelActualExpuestoRef = React.useRef("Básico");
+  const nivelLongitudRef = React.useRef(0);
   const [mostrarIntro, setMostrarIntro] = useState(true);
+  const [, forceRender] = useState(0);
+  const bloqueado = (clave) => falladosRef.current.has(clave) && !ganadosRef.current.has(clave);
+  const reiniciarModulo = (borrarRanking) => {
+    falladosRef.current.clear();
+    if (borrarRanking) ganadosRef.current.clear();
+    onReiniciar && onReiniciar(borrarRanking);
+    cargarEjercicioRef.current && cargarEjercicioRef.current(ejActualExpuestoRef.current);
+    forceRender((n) => n + 1);
+  };
+  const reiniciarNivelTecnico = () => {
+    const nv = nivelActualExpuestoRef.current;
+    Array.from(falladosRef.current).forEach((clave) => { if (clave.startsWith(nv + "-")) falladosRef.current.delete(clave); });
+    cargarEjercicioRef.current && cargarEjercicioRef.current(0);
+    forceRender((n) => n + 1);
+  };
+  const hayBloqueadosEnNivelActual = () => {
+    const nv = nivelActualExpuestoRef.current;
+    for (let i = 0; i < nivelLongitudRef.current; i++) { if (bloqueado(nv + "-" + i)) return true; }
+    return false;
+  };
 
   useEffect(() => {
     if (mostrarIntro) return;
@@ -6545,17 +7093,33 @@ function JuegoLogicaEscalera({ onGanarPuntos }) {
         return;
       }
       ejActual = (i + EJERCICIOS_JUEGO.length) % EJERCICIOS_JUEGO.length;
+      ejActualExpuestoRef.current = ejActual;
       const ej = EJERCICIOS_JUEGO[ejActual];
       elTitulo.textContent = nivelActual + " — Ejercicio #" + (ejActual + 1);
       elFrase.textContent = ej.frase;
       limpiarLienzo();
+      const claveEj = nivelActual + "-" + ejActual;
+      if (bloqueado(claveEj)) {
+        elCanvas.innerHTML = `<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; padding:20px;"><div style="color:${T.red}; font-size:13px; font-weight:600; max-width:340px;">🔒 Bloqueado — fallaste este ejercicio. Llega hasta el último ejercicio del nivel para poder reiniciarlo y recuperarlo.</div></div>`;
+        elCanvas.style.background = T.redSoft;
+        elPalette.style.opacity = "0.4";
+        elPalette.style.pointerEvents = "none";
+        forceRender((n) => n + 1);
+        return;
+      }
+      elPalette.style.opacity = "1";
+      elPalette.style.pointerEvents = "auto";
       ej.terminales.forEach((nombre, i2) => crearNodo("term", nombre, 10, 16 + i2 * 72));
       crearNodo("salida", "Salida", 560, 160);
+      forceRender((n) => n + 1);
     }
+    cargarEjercicioRef.current = cargarEjercicio;
 
     function cambiarNivel(nivel) {
       nivelActual = nivel;
       EJERCICIOS_JUEGO = NIVELES_JUEGO[nivelActual];
+      nivelActualExpuestoRef.current = nivel;
+      nivelLongitudRef.current = EJERCICIOS_JUEGO.length;
       Array.from(cont.querySelectorAll(".je-nivel-btn")).forEach((b) => {
         const activo = b.dataset.nivel === nivel;
         b.style.background = activo ? T.accent : "transparent";
@@ -6793,6 +7357,10 @@ function JuegoLogicaEscalera({ onGanarPuntos }) {
         fondoNeutral();
         elResultado.textContent = "Circuito incompleto — sigue conectando hasta Salida.";
         elResultado.style.color = T.inkSoft;
+      } else if (bloqueado(nivelActual + "-" + ejActual)) {
+        elCanvas.style.background = T.redSoft;
+        elResultado.textContent = "🔒 Este ejercicio quedó bloqueado por haberlo fallado. Llega hasta el último ejercicio del nivel para poder reiniciarlo y recuperarlo.";
+        elResultado.style.color = T.red;
       } else if (todoCorrecto) {
         elCanvas.style.background = T.greenSoft;
         const clave = nivelActual + "-" + ejActual;
@@ -6801,7 +7369,6 @@ function JuegoLogicaEscalera({ onGanarPuntos }) {
         elResultado.style.color = T.green;
         if (!yaGanado) {
           ganadosRef.current.add(clave);
-          falladosRef.current.delete(clave);
           onGanarPuntos && onGanarPuntos(nivelActual + " — Ejercicio #" + (ejActual + 1), 10);
         } else {
           onGanarPuntos && onGanarPuntos(nivelActual + " — Ejercicio #" + (ejActual + 1) + " (repaso)", 0);
@@ -6811,7 +7378,7 @@ function JuegoLogicaEscalera({ onGanarPuntos }) {
         const clave = nivelActual + "-" + ejActual;
         const yaFallado = falladosRef.current.has(clave);
         const yaGanado = ganadosRef.current.has(clave);
-        elResultado.textContent = (yaFallado || yaGanado) ? "✗ No coincide en todos los casos — borra una línea o contacto y corrige." : "✗ No coincide en todos los casos — borra una línea o contacto y corrige. -10 puntos.";
+        elResultado.textContent = (yaFallado || yaGanado) ? "✗ No coincide en todos los casos — borra una línea o contacto y corrige." : "✗ No coincide en todos los casos — borra una línea o contacto y corrige. -10 puntos, y podrías perder insignias si tu puntaje baja del umbral. Este ejercicio quedará bloqueado — llega hasta el final del nivel para recuperarlo.";
         elResultado.style.color = T.red;
         if (!yaFallado && !yaGanado) {
           falladosRef.current.add(clave);
@@ -6917,11 +7484,18 @@ function JuegoLogicaEscalera({ onGanarPuntos }) {
   return (
     <Card>
       <div ref={contenedorRef}>
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
           {["Básico", "Intermedio", "Avanzado"].map((niv) => (
             <button key={niv} className="je-nivel-btn" data-nivel={niv} style={{ padding: "6px 14px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>{niv}</button>
           ))}
+          {esAdmin && <div style={{ marginLeft: "auto" }}><BotonReiniciarModulo onReiniciar={reiniciarModulo} /></div>}
         </div>
+        {ejActualExpuestoRef.current === nivelLongitudRef.current - 1 && hayBloqueadosEnNivelActual() && (
+          <div style={{ background: T.amberSoft, border: `1px solid ${T.amber}`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12.5, color: T.amber, fontWeight: 600 }}>Llegaste al final del nivel — tienes ejercicios pendientes de recuperar. Al reiniciar, tus puntos ya ganados se mantienen; solo sumarán los que recuperes.</span>
+            <Btn small variant="accent" onClick={reiniciarNivelTecnico}>🔄 Reiniciar nivel para recuperar</Btn>
+          </div>
+        )}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
           <div>
             <div className="je-titulo" style={{ fontSize: 15, fontWeight: 700 }}>Ejercicio #1</div>
@@ -6939,9 +7513,12 @@ function JuegoLogicaEscalera({ onGanarPuntos }) {
           <button className="je-limpiar" style={{ padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Limpiar lienzo</button>
           <button onClick={() => setMostrarIntro(true)} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Ver la guía otra vez</button>
         </div>
-        <div className="je-canvas" style={{ position: "relative", height: 400, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s" }}>
-          <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
+        <div style={{ overflowX: "auto", borderRadius: 12, WebkitOverflowScrolling: "touch" }}>
+          <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 650, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s" }}>
+            <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
+          </div>
         </div>
+        <div style={{ fontSize: 10.5, color: T.gray, marginTop: 4 }}>💡 En celular, desliza el lienzo hacia los lados para ver el circuito completo.</div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
           <span className="je-resultado" style={{ fontSize: 14 }}></span>
         </div>
@@ -6955,7 +7532,7 @@ function JuegoLogicaEscalera({ onGanarPuntos }) {
 // salidas de sistemas de alarma contra incendio) y hay que llenar TODA la
 // tabla de verdad — una fila por cada combinación posible de entradas —
 // marcando 0 o 1 en la columna de salida.
-function JuegoTablasVerdad({ onGanarPuntos }) {
+function JuegoTablasVerdad({ onGanarPuntos, esAdmin, onReiniciar }) {
   const [mostrarIntro, setMostrarIntro] = useState(true);
   const [nivel, setNivel] = useState("Básico");
   const [ejActual, setEjActual] = useState(0);
@@ -6963,6 +7540,29 @@ function JuegoTablasVerdad({ onGanarPuntos }) {
   const [resultado, setResultado] = useState(null);
   const ganadosRef = React.useRef(new Set());
   const falladosRef = React.useRef(new Set());
+  const [, forceRender] = useState(0);
+  const bloqueado = (clave) => falladosRef.current.has(clave) && !ganadosRef.current.has(clave);
+  const reiniciarModulo = (borrarRanking) => {
+    falladosRef.current.clear();
+    if (borrarRanking) ganadosRef.current.clear();
+    onReiniciar && onReiniciar(borrarRanking);
+    setResultado(null);
+    forceRender((n) => n + 1);
+  };
+  // Reinicio propio del técnico: solo desbloquea las preguntas falladas
+  // DE ESTE NIVEL para poder recuperarlas — los puntos ya ganados en la
+  // primera ronda se mantienen y no se vuelven a sumar.
+  const reiniciarNivelTecnico = (nv) => {
+    Array.from(falladosRef.current).forEach((clave) => { if (clave.startsWith(nv + "-")) falladosRef.current.delete(clave); });
+    setEjActual(0);
+    setRespuestas({});
+    setResultado(null);
+    forceRender((n) => n + 1);
+  };
+  const hayBloqueadosEnNivel = (nv, cantidad) => {
+    for (let i = 0; i < cantidad; i++) { if (bloqueado(nv + "-" + i)) return true; }
+    return false;
+  };
 
   const NIVELES_TABLA = {
     "Básico": [
@@ -7006,18 +7606,21 @@ function JuegoTablasVerdad({ onGanarPuntos }) {
   const limpiar = () => { setRespuestas({}); setResultado(null); };
 
   const verificar = () => {
+    const clave = nivel + "-" + ejActual;
+    if (bloqueado(clave)) {
+      setResultado({ ok: false, msg: "🔒 Este ejercicio quedó bloqueado por haberlo fallado. Llega hasta el último ejercicio del módulo para poder reiniciarlo y recuperarlo." });
+      return;
+    }
     if (filas.some((_, i) => respuestas[i] === undefined)) {
       setResultado({ ok: null, msg: "Completa todas las filas de la tabla primero." });
       return;
     }
     const correcto = filas.every((combo, i) => (respuestas[i] === 1) === !!ej.evaluar(combo));
-    const clave = nivel + "-" + ejActual;
     if (correcto) {
       const yaGanado = ganadosRef.current.has(clave);
       setResultado({ ok: true, msg: yaGanado ? "✓ Correcto (ya ganaste los puntos de este ejercicio)." : "✓ ¡Correcto! +10 puntos." });
       if (!yaGanado) {
         ganadosRef.current.add(clave);
-        falladosRef.current.delete(clave);
         onGanarPuntos && onGanarPuntos(nivel + " — Ejercicio #" + (ejActual + 1), 10);
       } else {
         onGanarPuntos && onGanarPuntos(nivel + " — Ejercicio #" + (ejActual + 1) + " (repaso)", 0);
@@ -7027,7 +7630,7 @@ function JuegoTablasVerdad({ onGanarPuntos }) {
       const yaGanado = ganadosRef.current.has(clave);
       setResultado({
         ok: false,
-        msg: (yaFallado || yaGanado) ? "✗ Hay filas incorrectas — revisa cada combinación." : "✗ Hay filas incorrectas — revisa cada combinación. -10 puntos.",
+        msg: (yaFallado || yaGanado) ? "✗ Hay filas incorrectas — revisa cada combinación." : "✗ Hay filas incorrectas — revisa cada combinación. -10 puntos, y podrías perder insignias si tu puntaje baja del umbral. Este ejercicio quedará bloqueado — llega hasta el final del nivel para recuperarlo.",
       });
       if (!yaFallado && !yaGanado) {
         falladosRef.current.add(clave);
@@ -7141,6 +7744,7 @@ function JuegoTablasVerdad({ onGanarPuntos }) {
         {Object.keys(NIVELES_TABLA).map((nv) => (
           <Btn key={nv} small variant={nivel === nv ? "accent" : "ghost"} onClick={() => cambiarNivel(nv)}>{nv}</Btn>
         ))}
+        {esAdmin && <div style={{ marginLeft: "auto" }}><BotonReiniciarModulo onReiniciar={reiniciarModulo} /></div>}
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
         <div>
@@ -7155,10 +7759,22 @@ function JuegoTablasVerdad({ onGanarPuntos }) {
         </div>
       </div>
 
-      <table style={{ width: "100%", fontSize: 12.5, borderCollapse: "collapse" }}>
+      {bloqueado(nivel + "-" + ejActual) && (
+        <div style={{ background: T.redSoft, border: `1px solid ${T.red}`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12.5, color: T.red, fontWeight: 600 }}>
+          🔒 Bloqueado — fallaste este ejercicio. Llega hasta el último ejercicio del nivel para poder reiniciarlo y recuperarlo.
+        </div>
+      )}
+      {ejActual === ejercicios.length - 1 && hayBloqueadosEnNivel(nivel, ejercicios.length) && (
+        <div style={{ background: T.amberSoft, border: `1px solid ${T.amber}`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12.5, color: T.amber, fontWeight: 600 }}>Llegaste al final del nivel — tienes ejercicios pendientes de recuperar. Al reiniciar, tus puntos ya ganados se mantienen; solo sumarán los que recuperes.</span>
+          <Btn small variant="accent" onClick={() => reiniciarNivelTecnico(nivel)}>🔄 Reiniciar nivel para recuperar</Btn>
+        </div>
+      )}
+      <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", minWidth: 320, fontSize: 12.5, borderCollapse: "collapse", opacity: bloqueado(nivel + "-" + ejActual) ? 0.5 : 1, pointerEvents: bloqueado(nivel + "-" + ejActual) ? "none" : "auto" }}>
         <thead>
           <tr style={{ color: T.inkSoft, textAlign: "left" }}>
-            {ej.vars.map((v) => <th key={v} style={{ padding: "6px 10px" }}>{v}</th>)}
+            {ej.vars.map((v) => <th key={v} style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>{v}</th>)}
             <th style={{ padding: "6px 10px" }}>Salida</th>
           </tr>
         </thead>
@@ -7179,9 +7795,10 @@ function JuegoTablasVerdad({ onGanarPuntos }) {
           })}
         </tbody>
       </table>
+      </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
-        <Btn variant="accent" onClick={verificar}>Verificar</Btn>
+        <Btn variant="accent" onClick={verificar} disabled={bloqueado(nivel + "-" + ejActual)}>Verificar</Btn>
         {resultado && <span style={{ fontSize: 14, color: resultado.ok === true ? T.green : resultado.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultado.msg}</span>}
       </div>
     </Card>
@@ -7249,11 +7866,12 @@ function JuegoNFPA72({ onGanarPuntos }) {
     });
     if (puntosGanados !== 0) onGanarPuntos && onGanarPuntos("Examen Básico NFPA 72", puntosGanados);
     const aprobado = porcentaje >= 70;
+    const rangoResultado = rangoResultadoExamen(porcentaje);
     setResultado({
-      ok: aprobado, detalle,
+      ok: aprobado, detalle, rangoResultado,
       msg: aprobado
-        ? `✓ ¡Examen aprobado! ${correctas}/${total} correctas (${porcentaje}%).${porcentaje < 100 ? " Para llegar al rango Senior necesitas 100% en todos los módulos." : ""}`
-        : `✗ Examen no aprobado — ${correctas}/${total} correctas (${porcentaje}%). Se necesita al menos 70% para aprobar. Revisa las preguntas marcadas en rojo y vuelve a intentar.`,
+        ? `${correctas}/${total} correctas (${porcentaje}%).${porcentaje < 100 ? " Para llegar al rango Senior necesitas 100% en todos los módulos." : ""}`
+        : `${correctas}/${total} correctas (${porcentaje}%). Se necesita al menos 70% para aprobar. Las preguntas falladas restan puntos y podrían hacerte perder insignias si tu puntaje baja del umbral. Revisa las preguntas marcadas en rojo y vuelve a intentar.`,
     });
   };
 
@@ -7388,6 +8006,9 @@ function JuegoNFPA72({ onGanarPuntos }) {
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
         <Btn variant="accent" onClick={enviarExamen}>Enviar examen</Btn>
         {resultado && <Btn variant="ghost" onClick={reiniciarExamen}>Empezar de nuevo</Btn>}
+        {resultado && resultado.rangoResultado && (
+          <span style={{ fontSize: 13, fontWeight: 800, color: "#fff", background: resultado.rangoResultado.color, padding: "5px 12px", borderRadius: 999 }}>{resultado.rangoResultado.texto}</span>
+        )}
         {resultado && <span style={{ fontSize: 14, color: resultado.ok === true ? T.green : resultado.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultado.msg}</span>}
       </div>
     </Card>
@@ -7471,11 +8092,12 @@ function JuegoElectronicaBasica({ onGanarPuntos }) {
     });
     if (puntosGanados !== 0) onGanarPuntos && onGanarPuntos(nivel, puntosGanados);
     const aprobado = porcentaje >= 70;
+    const rangoResultado = rangoResultadoExamen(porcentaje);
     setResultado({
-      ok: aprobado, detalle,
+      ok: aprobado, detalle, rangoResultado,
       msg: aprobado
-        ? `✓ ¡Nivel ${nivel} aprobado! ${correctas}/${total} correctas (${porcentaje}%).${porcentaje < 100 ? " Para el rango Senior necesitas 100% en todos los módulos." : ""}`
-        : `✗ ${correctas}/${total} correctas (${porcentaje}%) — se necesita al menos 70% para aprobar. Revisa las marcadas en rojo y vuelve a intentar.`,
+        ? `Nivel ${nivel} — ${correctas}/${total} correctas (${porcentaje}%).${porcentaje < 100 ? " Para el rango Senior necesitas 100% en todos los módulos." : ""}`
+        : `${correctas}/${total} correctas (${porcentaje}%) — se necesita al menos 70% para aprobar. Las preguntas falladas restan puntos y podrían hacerte perder insignias si tu puntaje baja del umbral. Revisa las marcadas en rojo y vuelve a intentar.`,
     });
   };
   const reiniciarNivel = () => { setRespuestas({}); setResultado(null); };
@@ -7721,6 +8343,9 @@ function JuegoElectronicaBasica({ onGanarPuntos }) {
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
         <Btn variant="accent" onClick={enviarNivel}>Enviar nivel</Btn>
         {resultado && <Btn variant="ghost" onClick={reiniciarNivel}>Empezar de nuevo</Btn>}
+        {resultado && resultado.rangoResultado && (
+          <span style={{ fontSize: 13, fontWeight: 800, color: "#fff", background: resultado.rangoResultado.color, padding: "5px 12px", borderRadius: 999 }}>{resultado.rangoResultado.texto}</span>
+        )}
         {resultado && <span style={{ fontSize: 14, color: resultado.ok === true ? T.green : resultado.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultado.msg}</span>}
       </div>
     </Card>
@@ -8010,7 +8635,7 @@ function DiagramaLogicoSimplex({ inputsColocados }) {
   );
 }
 
-function JuegoSimplex({ onGanarPuntos }) {
+function JuegoSimplex({ onGanarPuntos, esAdmin, onReiniciar }) {
   const [mostrarIntro, setMostrarIntro] = useState(true);
   const [ejActual, setEjActual] = useState(0);
   const [inputsColocados, setInputsColocados] = useState([]);
@@ -8018,6 +8643,30 @@ function JuegoSimplex({ onGanarPuntos }) {
   const [resultado, setResultado] = useState(null);
   const ganadosRef = React.useRef(new Set());
   const falladosRef = React.useRef(new Set());
+  const [, forceRender] = useState(0);
+  const bloqueado = (clave) => falladosRef.current.has(clave) && !ganadosRef.current.has(clave);
+  const reiniciarModulo = (borrarRanking) => {
+    falladosRef.current.clear();
+    if (borrarRanking) ganadosRef.current.clear();
+    onReiniciar && onReiniciar(borrarRanking);
+    setResultado(null);
+    forceRender((n) => n + 1);
+  };
+  // Reinicio propio del técnico: desbloquea los ejercicios fallados para
+  // poder recuperarlos — los puntos ya ganados en la primera ronda se
+  // mantienen y no se vuelven a sumar.
+  const reiniciarNivelTecnico = () => {
+    falladosRef.current.clear();
+    setEjActual(0);
+    setInputsColocados([]);
+    setOutputsColocados([]);
+    setResultado(null);
+    forceRender((n) => n + 1);
+  };
+  const hayBloqueados = () => {
+    for (let i = 0; i < EJERCICIOS_SIMPLEX.length; i++) { if (bloqueado("ej" + i)) return true; }
+    return false;
+  };
 
   const ej = EJERCICIOS_SIMPLEX[ejActual];
 
@@ -8038,16 +8687,19 @@ function JuegoSimplex({ onGanarPuntos }) {
   };
 
   const verificar = () => {
+    const clave = "ej" + ejActual;
+    if (bloqueado(clave)) {
+      setResultado({ ok: false, msg: "🔒 Este ejercicio quedó bloqueado por haberlo fallado. Llega hasta el último ejercicio del módulo para poder reiniciarlo y recuperarlo." });
+      return;
+    }
     const inputsOk = JSON.stringify(inputsColocados) === JSON.stringify(ej.inputsRef);
     const outputsOk = JSON.stringify(outputsColocados) === JSON.stringify(ej.outputsRef);
     const correcto = inputsOk && outputsOk;
-    const clave = "ej" + ejActual;
     if (correcto) {
       const yaGanado = ganadosRef.current.has(clave);
       setResultado({ ok: true, msg: yaGanado ? "✓ Correcto (ya ganaste los puntos de este ejercicio)." : `✓ ¡Ecuación correcta! +${PUNTOS_POR_EJERCICIO_SIMPLEX} puntos.` });
       if (!yaGanado) {
         ganadosRef.current.add(clave);
-        falladosRef.current.delete(clave);
         onGanarPuntos && onGanarPuntos(ej.titulo, PUNTOS_POR_EJERCICIO_SIMPLEX);
       } else {
         onGanarPuntos && onGanarPuntos(ej.titulo + " (repaso)", 0);
@@ -8058,7 +8710,7 @@ function JuegoSimplex({ onGanarPuntos }) {
       let detalle = [];
       if (!inputsOk) detalle.push("revisa los elementos, el orden y las compuertas (OR/AND/NOT) de INPUTS");
       if (!outputsOk) detalle.push("revisa la acción y el argumento de OUTPUTS");
-      setResultado({ ok: false, msg: `✗ Todavía no — ${detalle.join("; ")}.${(yaFallado || yaGanado) ? "" : ` -${PUNTOS_POR_EJERCICIO_SIMPLEX} puntos.`}` });
+      setResultado({ ok: false, msg: `✗ Todavía no — ${detalle.join("; ")}.${(yaFallado || yaGanado) ? "" : ` -${PUNTOS_POR_EJERCICIO_SIMPLEX} puntos, y podrías perder insignias si tu puntaje baja del umbral. Este ejercicio quedará bloqueado — llega hasta el final del módulo para recuperarlo.`}` });
       if (!yaFallado && !yaGanado) {
         falladosRef.current.add(clave);
         onGanarPuntos && onGanarPuntos(ej.titulo + " (fallo)", -PUNTOS_POR_EJERCICIO_SIMPLEX);
@@ -8131,15 +8783,27 @@ TRACK ON PRI=2,2 P3 | DIGITAL | UTILITY | FIRE ALARM DETECT`}
           <div style={{ fontSize: 15, fontWeight: 700 }}>{ej.titulo}</div>
           <div style={{ fontSize: 13, color: T.inkSoft }}>{ej.explicacion}</div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <Btn small variant="ghost" onClick={() => cambiarEjercicio(-1)}>← Anterior</Btn>
           <Btn small variant="ghost" onClick={() => cambiarEjercicio(1)}>Siguiente →</Btn>
           <Btn small variant="ghost" onClick={limpiar}>Limpiar</Btn>
           <Btn small variant="ghost" onClick={() => setMostrarIntro(true)}>Ver la guía otra vez</Btn>
+          {esAdmin && <BotonReiniciarModulo onReiniciar={reiniciarModulo} />}
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+      {bloqueado("ej" + ejActual) && (
+        <div style={{ background: T.redSoft, border: `1px solid ${T.red}`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 12.5, color: T.red, fontWeight: 600 }}>
+          🔒 Bloqueado — fallaste este ejercicio. Llega hasta el último ejercicio del módulo para poder reiniciarlo y recuperarlo.
+        </div>
+      )}
+      {ejActual === EJERCICIOS_SIMPLEX.length - 1 && hayBloqueados() && (
+        <div style={{ background: T.amberSoft, border: `1px solid ${T.amber}`, borderRadius: 10, padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12.5, color: T.amber, fontWeight: 600 }}>Llegaste al final del módulo — tienes ejercicios pendientes de recuperar. Al reiniciar, tus puntos ya ganados se mantienen; solo sumarán los que recuperes.</span>
+          <Btn small variant="accent" onClick={reiniciarNivelTecnico}>🔄 Reiniciar módulo para recuperar</Btn>
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12, marginBottom: 14, opacity: bloqueado("ej" + ejActual) ? 0.5 : 1, pointerEvents: bloqueado("ej" + ejActual) ? "none" : "auto" }}>
         <div>
           <div style={{ fontSize: 10.5, fontWeight: 700, color: T.inkSoft, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.4 }}>Herramientas de Inputs</div>
           <div
@@ -8173,7 +8837,7 @@ TRACK ON PRI=2,2 P3 | DIGITAL | UTILITY | FIRE ALARM DETECT`}
       </div>
 
       <div style={{ fontSize: 11, color: T.gray, marginBottom: 6 }}>Arrastra o haz clic en una herramienta para agregarla. Haz clic sobre un elemento ya colocado abajo para quitarlo.</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 14 }}>
         <PanelEcuacionSimplex inputsColocados={inputsColocados} outputsColocados={outputsColocados} onQuitarIndices={quitarIndices} />
         <div>
           <div style={{ fontSize: 10.5, fontWeight: 700, color: T.inkSoft, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.4 }}>Diagrama de compuertas (INPUTS)</div>
@@ -8182,7 +8846,7 @@ TRACK ON PRI=2,2 P3 | DIGITAL | UTILITY | FIRE ALARM DETECT`}
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginTop: 16 }}>
-        <Btn variant="accent" onClick={verificar}>Verificar</Btn>
+        <Btn variant="accent" onClick={verificar} disabled={bloqueado("ej" + ejActual)}>Verificar</Btn>
         {resultado && <span style={{ fontSize: 14, color: resultado.ok === true ? T.green : resultado.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultado.msg}</span>}
       </div>
     </Card>

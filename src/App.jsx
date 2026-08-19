@@ -347,6 +347,31 @@ function IconTrofeo({ tipo, size = 16, color = "#000" }) {
 // Insignia estilo "medalla" (inspirado en Duolingo): círculo con
 // degradado de color y brillo cuando está desbloqueada, gris con candado
 // cuando no. Puede mostrar una barra/leyenda de progreso (ej. "3/5").
+// Anima un número contando desde su valor anterior hasta el nuevo (en vez
+// de saltar directo) — le da sensación de "marcador" real cuando suman
+// puntos.
+function NumeroAnimado({ valor }) {
+  const [mostrado, setMostrado] = useState(valor);
+  const prevRef = React.useRef(valor);
+  useEffect(() => {
+    const inicio = prevRef.current;
+    const fin = valor;
+    if (inicio === fin) return;
+    const duracion = 600;
+    const t0 = performance.now();
+    let raf;
+    const tick = (t) => {
+      const p = Math.min(1, (t - t0) / duracion);
+      setMostrado(Math.round(inicio + (fin - inicio) * p));
+      if (p < 1) raf = requestAnimationFrame(tick);
+      else prevRef.current = fin;
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [valor]);
+  return <>{mostrado}</>;
+}
+
 function InsigniaMedalla({ nombre, desc, Icono, colorDesde, colorHasta, cumplido, progresoTexto, progresoPct }) {
   const gradId = "grad-" + nombre.replace(/\s+/g, "-").toLowerCase();
   return (
@@ -357,7 +382,9 @@ function InsigniaMedalla({ nombre, desc, Icono, colorDesde, colorHasta, cumplido
       onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-2px)"; }}
       onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; }}
     >
-      <div style={{ position: "relative", width: 68, height: 68 }}>
+      <style>{`@keyframes insigniaGlow { 0%,100% { filter: drop-shadow(0 0 0px ${colorHasta}); } 50% { filter: drop-shadow(0 0 6px ${colorHasta}); } }
+        @keyframes brilloBarra { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }`}</style>
+      <div style={{ position: "relative", width: 68, height: 68, animation: cumplido ? "insigniaGlow 2.5s ease-in-out infinite" : "none" }}>
         <svg width="68" height="68" viewBox="0 0 68 68" style={{ position: "absolute", inset: 0 }}>
           <defs>
             <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
@@ -375,8 +402,12 @@ function InsigniaMedalla({ nombre, desc, Icono, colorDesde, colorHasta, cumplido
       <div style={{ fontSize: 11, fontWeight: 800, color: cumplido ? T.ink : T.gray, textAlign: "center", lineHeight: 1.2 }}>{nombre}</div>
       {progresoTexto && (
         <div style={{ width: "100%" }}>
-          <div style={{ height: 5, background: T.graySoft, borderRadius: 99, overflow: "hidden" }}>
-            <div style={{ height: "100%", width: `${Math.min(100, progresoPct)}%`, background: cumplido ? colorHasta : T.line, transition: "width 0.4s ease" }} />
+          <div style={{ height: 5, background: T.graySoft, borderRadius: 99, overflow: "hidden", position: "relative" }}>
+            <div style={{ height: "100%", width: `${Math.min(100, progresoPct)}%`, background: cumplido ? colorHasta : T.line, transition: "width 0.4s ease", position: "relative", overflow: "hidden" }}>
+              {progresoPct > 0 && progresoPct < 100 && (
+                <div style={{ position: "absolute", inset: 0, width: "30%", background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.7), transparent)", animation: "brilloBarra 1.8s ease-in-out infinite" }} />
+              )}
+            </div>
           </div>
           <div style={{ fontSize: 9.5, color: T.gray, textAlign: "center", marginTop: 2 }}>{progresoTexto}</div>
         </div>
@@ -391,15 +422,19 @@ function InsigniaMedalla({ nombre, desc, Icono, colorDesde, colorHasta, cumplido
 function MisionCard({ label, Icono, colorDesde, colorHasta, lema, puntos, max, seleccionada, onClick }) {
   const pct = max > 0 ? Math.min(100, (puntos / max) * 100) : 0;
   const completa = max > 0 && puntos >= max;
+  const casiCompleta = max > 0 && pct >= 90 && !completa;
   return (
     <button onClick={onClick} style={{
       position: "relative", width: "clamp(150px, 44vw, 190px)", textAlign: "left", border: "none", borderRadius: 16, padding: 0, cursor: "pointer",
       overflow: "hidden", boxShadow: seleccionada ? `0 0 0 3px ${colorHasta}, 0 8px 18px ${colorHasta}55` : "0 2px 8px rgba(0,0,0,0.08)",
       transform: seleccionada ? "translateY(-3px)" : "translateY(0)", transition: "transform 0.15s, box-shadow 0.15s",
+      animation: casiCompleta ? "misionCasiLista 1.6s ease-in-out infinite" : "none",
     }}
       onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-3px)"; }}
       onMouseLeave={(e) => { e.currentTarget.style.transform = seleccionada ? "translateY(-3px)" : "translateY(0)"; }}
     >
+      <style>{`@keyframes misionCasiLista { 0%,100% { box-shadow: 0 2px 8px rgba(0,0,0,0.08), 0 0 0px ${colorHasta}00; } 50% { box-shadow: 0 2px 8px rgba(0,0,0,0.08), 0 0 14px ${colorHasta}99; } }
+        @keyframes brilloBarraMision { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }`}</style>
       <div style={{ background: `linear-gradient(135deg, ${colorDesde}, ${colorHasta})`, padding: "16px 16px 14px" }}>
         {completa && (
           <div style={{ position: "absolute", top: 10, right: 10, background: "rgba(255,255,255,0.9)", borderRadius: "50%", width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -413,8 +448,12 @@ function MisionCard({ label, Icono, colorDesde, colorHasta, lema, puntos, max, s
         <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.85)", lineHeight: 1.3, minHeight: 26 }}>{lema}</div>
       </div>
       <div style={{ background: "#fff", padding: "10px 14px" }}>
-        <div style={{ height: 6, background: T.graySoft, borderRadius: 99, overflow: "hidden", marginBottom: 5 }}>
-          <div style={{ height: "100%", width: `${pct}%`, background: colorHasta, transition: "width 0.4s ease" }} />
+        <div style={{ height: 6, background: T.graySoft, borderRadius: 99, overflow: "hidden", marginBottom: 5, position: "relative" }}>
+          <div style={{ height: "100%", width: `${pct}%`, background: colorHasta, transition: "width 0.4s ease", position: "relative", overflow: "hidden" }}>
+            {pct > 0 && pct < 100 && (
+              <div style={{ position: "absolute", inset: 0, width: "30%", background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.7), transparent)", animation: "brilloBarraMision 1.8s ease-in-out infinite" }} />
+            )}
+          </div>
         </div>
         <div style={{ fontSize: 10.5, color: T.inkSoft, fontWeight: 600 }}>{puntos} pts{max > 0 ? ` · ${Math.round(pct)}%` : ""}</div>
       </div>
@@ -4138,6 +4177,7 @@ function RankingEntrenamiento() {
         <div style={{ color: T.gray, fontSize: 13 }}>Todavía nadie ha jugado ningún módulo de Entrenamiento.</div>
       ) : (
         <div style={{ overflowX: "auto" }}>
+        <style>{`@keyframes oroShimmer { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }`}</style>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
@@ -4151,7 +4191,12 @@ function RankingEntrenamiento() {
               const iniciales = f.nombre.split(" ").slice(0, 2).map((p) => p[0]).join("").toUpperCase();
               const premios = contarInsigniasGanadas(f.total, f.porSegmento, f.repasos);
               return (
-                <tr key={f.nombre} style={{ borderTop: `1px solid ${T.line}`, background: i < 3 ? rango.soft + "40" : "transparent" }}>
+                <tr key={f.nombre} style={{
+                  borderTop: `1px solid ${T.line}`,
+                  background: i === 0 ? "linear-gradient(90deg, #fff9db, #ffe066aa, #fff9db)" : i < 3 ? rango.soft + "40" : "transparent",
+                  backgroundSize: i === 0 ? "200% 100%" : undefined,
+                  animation: i === 0 ? "oroShimmer 3s ease-in-out infinite" : "none",
+                }}>
                   <td style={{ padding: "10px 8px", fontWeight: 800, fontSize: i < 3 ? 16 : 13, color: i === 0 ? T.accent : T.ink }}>{medallas[i] || i + 1}</td>
                   <td>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -6090,10 +6135,15 @@ function Entrenamiento() {
       { id: "perfil", icon: "👤", label: "Perfil" },
     ];
     return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-        <style>{`@keyframes flameFloatSlow { 0%,100% { transform: translateY(0) rotate(-10deg) scale(1); opacity: 0.12; } 50% { transform: translateY(-8px) rotate(-6deg) scale(1.05); opacity: 0.2; } }`}</style>
-        <div style={{ width: 390, maxWidth: "100%", background: "#111", borderRadius: 34, padding: 8, boxShadow: "0 24px 60px rgba(0,0,0,0.35)" }}>
-          <div style={{ background: "#fff", borderRadius: 26, overflow: "hidden", display: "flex", flexDirection: "column", height: 720 }}>
+      <div style={{
+        position: "fixed", inset: 0, zIndex: 9999, background: "rgba(20,20,20,0.85)",
+        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+        padding: "16px 0", overflowY: "auto",
+      }}>
+        <style>{`@keyframes flameFloatSlow { 0%,100% { transform: translateY(0) rotate(-10deg) scale(1); opacity: 0.12; } 50% { transform: translateY(-8px) rotate(-6deg) scale(1.05); opacity: 0.2; } }
+          @keyframes rachaPulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.15); opacity: 0.75; } }`}</style>
+        <div style={{ width: 390, maxWidth: "94vw", background: "#111", borderRadius: 34, padding: 8, boxShadow: "0 24px 60px rgba(0,0,0,0.5)", flexShrink: 0 }}>
+          <div style={{ background: "#fff", borderRadius: 26, overflow: "hidden", display: "flex", flexDirection: "column", height: "min(760px, 88vh)" }}>
             <div style={{ background: "linear-gradient(120deg, #ff922b 0%, #e8590c 45%, #c92a2a 100%)", padding: "16px 16px 12px", color: "#fff", flexShrink: 0, position: "relative", overflow: "hidden" }}>
               <Flame size={64} color="#fff" style={{ position: "absolute", top: -16, left: -8, opacity: 0.12, transform: "rotate(-10deg)", animation: "flameFloatSlow 5s ease-in-out infinite" }} />
               <button onClick={() => setVistaModo("auto")} title="Salir de vista celular" style={{ position: "absolute", top: 12, right: 14, background: "rgba(255,255,255,0.22)", border: "none", borderRadius: 8, width: 26, height: 26, color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1 }}>
@@ -6111,8 +6161,10 @@ function Entrenamiento() {
                     <div style={{ fontSize: 15, fontWeight: 800 }}>¡Vamos, {jugador?.nombre?.split(" ")[0] || "técnico"}!</div>
                   </div>
                   <div style={{ display: "flex", gap: 6 }}>
-                    <div style={{ background: "rgba(255,255,255,0.2)", borderRadius: 8, padding: "4px 8px", fontSize: 11, fontWeight: 800 }}>{puntosTotal} pts</div>
-                    <div style={{ background: "rgba(255,255,255,0.2)", borderRadius: 8, padding: "4px 8px", fontSize: 11, fontWeight: 800 }}>🔥{racha}</div>
+                    <div style={{ background: "rgba(255,255,255,0.2)", borderRadius: 8, padding: "4px 8px", fontSize: 11, fontWeight: 800 }}><NumeroAnimado valor={puntosTotal} /> pts</div>
+                    <div style={{ background: "rgba(255,255,255,0.2)", borderRadius: 8, padding: "4px 8px", fontSize: 11, fontWeight: 800 }}>
+                      <span style={{ display: "inline-block", animation: racha > 0 ? "rachaPulse 1.4s ease-in-out infinite" : "none" }}>🔥</span><NumeroAnimado valor={racha} />
+                    </div>
                   </div>
                 </div>
               )}
@@ -6216,7 +6268,7 @@ function Entrenamiento() {
             )}
           </div>
         </div>
-        <button onClick={() => setVistaModo("auto")} style={{ marginTop: 10, fontSize: 12, color: T.gray, background: "transparent", border: "none", cursor: "pointer", textDecoration: "underline" }}>Salir de vista celular</button>
+        <button onClick={() => setVistaModo("auto")} style={{ marginTop: 12, fontSize: 12.5, fontWeight: 600, color: "rgba(255,255,255,0.85)", background: "rgba(255,255,255,0.12)", border: "none", borderRadius: 8, padding: "6px 14px", cursor: "pointer", flexShrink: 0 }}>✕ Salir de vista celular</button>
       </div>
     );
   }
@@ -6278,6 +6330,8 @@ function Entrenamiento() {
         <Flame size={24} color="#fff" style={{ position: "absolute", bottom: 10, left: "38%", opacity: 0.18, animation: "flameDrift 4s ease-in-out infinite 0.5s" }} />
         <Flame size={18} color="#fff" style={{ position: "absolute", top: "50%", right: "22%", opacity: 0.22, animation: "flameFlicker 2.8s ease-in-out infinite 0.8s" }} />
         <Flame size={54} color="#fff" style={{ position: "absolute", top: -14, left: "58%", opacity: 0.1, transform: "rotate(-10deg)", animation: "flameFloatSlow 6s ease-in-out infinite 1.2s" }} />
+        <style>{`@keyframes rachaPulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.15); opacity: 0.75; } }
+          @keyframes brilloBarraRango { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }`}</style>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, position: "relative" }}>
           <div>
             <div style={{ fontSize: 12, fontWeight: 700, color: "rgba(255,255,255,0.85)", textTransform: "uppercase", letterSpacing: 0.6 }}>🔥 Centro de Entrenamiento</div>
@@ -6285,7 +6339,7 @@ function Entrenamiento() {
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <div style={{ background: "rgba(255,255,255,0.18)", backdropFilter: "blur(4px)", borderRadius: 12, padding: "8px 14px" }}>
                 <div style={{ fontSize: 10, color: "rgba(255,255,255,0.8)", fontWeight: 700, textTransform: "uppercase" }}>Puntaje</div>
-                <div style={{ fontSize: 20, fontWeight: 800, color: "#fff" }}>{puntosTotal} pts</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: "#fff" }}><NumeroAnimado valor={puntosTotal} /> pts</div>
               </div>
               <div style={{ background: "rgba(255,255,255,0.18)", backdropFilter: "blur(4px)", borderRadius: 12, padding: "8px 14px", minWidth: 190 }}>
                 <div style={{ fontSize: 10, color: "rgba(255,255,255,0.8)", fontWeight: 700, textTransform: "uppercase" }}>Rango</div>
@@ -6295,8 +6349,10 @@ function Entrenamiento() {
                 </div>
                 {rangoActual.siguiente && (
                   <>
-                    <div style={{ height: 5, background: "rgba(255,255,255,0.3)", borderRadius: 99, overflow: "hidden", marginTop: 4 }}>
-                      <div style={{ height: "100%", width: `${Math.min(100, (puntosTotal / rangoActual.siguiente) * 100)}%`, background: "#fff", transition: "width 0.4s ease" }} />
+                    <div style={{ height: 5, background: "rgba(255,255,255,0.3)", borderRadius: 99, overflow: "hidden", marginTop: 4, position: "relative" }}>
+                      <div style={{ height: "100%", width: `${Math.min(100, (puntosTotal / rangoActual.siguiente) * 100)}%`, background: "#fff", transition: "width 0.4s ease", position: "relative", overflow: "hidden" }}>
+                        <div style={{ position: "absolute", inset: 0, width: "30%", background: "linear-gradient(90deg, transparent, rgba(255,146,43,0.7), transparent)", animation: "brilloBarraRango 2s ease-in-out infinite" }} />
+                      </div>
                     </div>
                     <div style={{ fontSize: 9.5, color: "rgba(255,255,255,0.85)", marginTop: 2 }}>{rangoActual.siguiente - puntosTotal} pts para subir</div>
                   </>
@@ -6304,7 +6360,9 @@ function Entrenamiento() {
               </div>
               <div style={{ background: "rgba(255,255,255,0.18)", backdropFilter: "blur(4px)", borderRadius: 12, padding: "8px 14px" }}>
                 <div style={{ fontSize: 10, color: "rgba(255,255,255,0.8)", fontWeight: 700, textTransform: "uppercase" }}>Racha</div>
-                <div style={{ fontSize: 20, fontWeight: 800, color: "#fff" }}>🔥 {racha}</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: "#fff" }}>
+                  <span style={{ display: "inline-block", animation: racha > 0 ? "rachaPulse 1.4s ease-in-out infinite" : "none" }}>🔥</span> <NumeroAnimado valor={racha} />
+                </div>
               </div>
               <div style={{ background: "rgba(255,255,255,0.18)", backdropFilter: "blur(4px)", borderRadius: 12, padding: "8px 14px" }}>
                 <div style={{ fontSize: 10, color: "rgba(255,255,255,0.8)", fontWeight: 700, textTransform: "uppercase" }}>Insignias</div>
@@ -6521,7 +6579,7 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
       return `<svg width="66" height="40" viewBox="-10 0 76 40" style="display:block; color:${T.ink};">${shapes[tipo]}</svg>`;
     }
 
-    let ejActual = 0, nodos = {}, conexiones = [], nodoIdSeq = 1, conexionIdSeq = 1, arrastreCable = null;
+    let ejActual = 0, nodos = {}, conexiones = [], nodoIdSeq = 1, conexionIdSeq = 1, arrastreCable = null, circuitoCorrecto = false;
 
     const elTitulo = cont.querySelector(".je-titulo");
     const elFrase = cont.querySelector(".je-frase");
@@ -6731,8 +6789,15 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
         hit.style.pointerEvents = "stroke";
         const visible = document.createElementNS("http://www.w3.org/2000/svg", "path");
         visible.setAttribute("d", curva(p1, p2));
-        visible.setAttribute("stroke", T.inkSoft);
-        visible.setAttribute("stroke-width", "2");
+        if (circuitoCorrecto) {
+          visible.setAttribute("stroke", T.green);
+          visible.setAttribute("stroke-width", "2.5");
+          visible.setAttribute("stroke-dasharray", "6 4");
+          visible.setAttribute("class", "je-corriente");
+        } else {
+          visible.setAttribute("stroke", T.inkSoft);
+          visible.setAttribute("stroke-width", "2");
+        }
         visible.setAttribute("fill", "none");
         visible.style.pointerEvents = "none";
         hit.addEventListener("click", () => {
@@ -6740,8 +6805,8 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
           dibujarConexiones();
           actualizarEstado();
         });
-        hit.addEventListener("mouseenter", () => visible.setAttribute("stroke", T.red));
-        hit.addEventListener("mouseleave", () => visible.setAttribute("stroke", T.inkSoft));
+        hit.addEventListener("mouseenter", () => { if (!circuitoCorrecto) visible.setAttribute("stroke", T.red); });
+        hit.addEventListener("mouseleave", () => { if (!circuitoCorrecto) visible.setAttribute("stroke", T.inkSoft); });
         grupo.appendChild(hit); grupo.appendChild(visible);
         elSvg.appendChild(grupo);
       });
@@ -6811,15 +6876,18 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
       Object.keys(valoresGuardados).forEach((id) => { nodos[id].valorFijo = valoresGuardados[id]; });
 
       if (incompleto) {
+        circuitoCorrecto = false;
         fondoNeutral();
         elResultado.textContent = "Circuito incompleto — sigue conectando hasta Salida.";
         elResultado.style.color = T.inkSoft;
       } else if (bloqueado(nivelActual + "-" + ejActual)) {
+        circuitoCorrecto = false;
         elCanvas.style.background = T.redSoft;
         elResultado.textContent = "🔒 Este ejercicio quedó bloqueado por haberlo fallado. Llega hasta el último ejercicio del nivel para poder reiniciarlo y recuperarlo.";
         elResultado.style.color = T.red;
       } else if (todoCorrecto) {
         elCanvas.style.background = T.greenSoft;
+        circuitoCorrecto = true;
         const clave = nivelActual + "-" + ejActual;
         const yaGanado = ganadosRef.current.has(clave);
         elResultado.textContent = yaGanado ? "✓ Correcto (ya ganaste los puntos de este ejercicio)." : "✓ ¡Correcto! +10 puntos.";
@@ -6831,6 +6899,7 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
           onGanarPuntos && onGanarPuntos(nivelActual + " — Ejercicio #" + (ejActual + 1) + " (repaso)", 0);
         }
       } else {
+        circuitoCorrecto = false;
         elCanvas.style.background = T.redSoft;
         const clave = nivelActual + "-" + ejActual;
         const yaFallado = falladosRef.current.has(clave);
@@ -6842,6 +6911,7 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
           onGanarPuntos && onGanarPuntos(nivelActual + " — Ejercicio #" + (ejActual + 1) + " (fallo)", -10);
         }
       }
+      dibujarConexiones();
     }
 
     Array.from(cont.querySelectorAll(".je-nivel-btn")).forEach((b) => {
@@ -6960,6 +7030,7 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
         <div style={{ overflowX: "auto", borderRadius: 12, WebkitOverflowScrolling: "touch" }}>
           <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 650, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s" }}>
             <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
+            <style>{`@keyframes marchHormigas { to { stroke-dashoffset: -20; } } .je-corriente { animation: marchHormigas 0.6s linear infinite; }`}</style>
           </div>
         </div>
         <div style={{ fontSize: 10.5, color: T.gray, marginTop: 4 }}>💡 En celular, desliza el lienzo hacia los lados para ver el circuito completo.</div>
@@ -7065,7 +7136,7 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
       return `<svg width="66" height="40" viewBox="-10 0 76 40" style="display:block; color:${T.ink};">${shapes[tipo]}</svg>`;
     }
 
-    let ejActual = 0, nodos = {}, conexiones = [], nodoIdSeq = 1, conexionIdSeq = 1, arrastreCable = null;
+    let ejActual = 0, nodos = {}, conexiones = [], nodoIdSeq = 1, conexionIdSeq = 1, arrastreCable = null, circuitoCorrecto = false;
 
     const elTitulo = cont.querySelector(".je-titulo");
     const elFrase = cont.querySelector(".je-frase");
@@ -7275,8 +7346,15 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
         hit.style.pointerEvents = "stroke";
         const visible = document.createElementNS("http://www.w3.org/2000/svg", "path");
         visible.setAttribute("d", curva(p1, p2));
-        visible.setAttribute("stroke", T.inkSoft);
-        visible.setAttribute("stroke-width", "2");
+        if (circuitoCorrecto) {
+          visible.setAttribute("stroke", T.green);
+          visible.setAttribute("stroke-width", "2.5");
+          visible.setAttribute("stroke-dasharray", "6 4");
+          visible.setAttribute("class", "je-corriente");
+        } else {
+          visible.setAttribute("stroke", T.inkSoft);
+          visible.setAttribute("stroke-width", "2");
+        }
         visible.setAttribute("fill", "none");
         visible.style.pointerEvents = "none";
         hit.addEventListener("click", () => {
@@ -7284,8 +7362,8 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
           dibujarConexiones();
           actualizarEstado();
         });
-        hit.addEventListener("mouseenter", () => visible.setAttribute("stroke", T.red));
-        hit.addEventListener("mouseleave", () => visible.setAttribute("stroke", T.inkSoft));
+        hit.addEventListener("mouseenter", () => { if (!circuitoCorrecto) visible.setAttribute("stroke", T.red); });
+        hit.addEventListener("mouseleave", () => { if (!circuitoCorrecto) visible.setAttribute("stroke", T.inkSoft); });
         grupo.appendChild(hit); grupo.appendChild(visible);
         elSvg.appendChild(grupo);
       });
@@ -7354,15 +7432,18 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
       Object.keys(valoresGuardados).forEach((id) => { nodos[id].valorFijo = valoresGuardados[id]; });
 
       if (incompleto) {
+        circuitoCorrecto = false;
         fondoNeutral();
         elResultado.textContent = "Circuito incompleto — sigue conectando hasta Salida.";
         elResultado.style.color = T.inkSoft;
       } else if (bloqueado(nivelActual + "-" + ejActual)) {
+        circuitoCorrecto = false;
         elCanvas.style.background = T.redSoft;
         elResultado.textContent = "🔒 Este ejercicio quedó bloqueado por haberlo fallado. Llega hasta el último ejercicio del nivel para poder reiniciarlo y recuperarlo.";
         elResultado.style.color = T.red;
       } else if (todoCorrecto) {
         elCanvas.style.background = T.greenSoft;
+        circuitoCorrecto = true;
         const clave = nivelActual + "-" + ejActual;
         const yaGanado = ganadosRef.current.has(clave);
         elResultado.textContent = yaGanado ? "✓ Correcto (ya ganaste los puntos de este ejercicio)." : "✓ ¡Correcto! +10 puntos.";
@@ -7374,6 +7455,7 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
           onGanarPuntos && onGanarPuntos(nivelActual + " — Ejercicio #" + (ejActual + 1) + " (repaso)", 0);
         }
       } else {
+        circuitoCorrecto = false;
         elCanvas.style.background = T.redSoft;
         const clave = nivelActual + "-" + ejActual;
         const yaFallado = falladosRef.current.has(clave);
@@ -7385,6 +7467,7 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
           onGanarPuntos && onGanarPuntos(nivelActual + " — Ejercicio #" + (ejActual + 1) + " (fallo)", -10);
         }
       }
+      dibujarConexiones();
     }
 
     Array.from(cont.querySelectorAll(".je-nivel-btn")).forEach((b) => {
@@ -7516,6 +7599,7 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
         <div style={{ overflowX: "auto", borderRadius: 12, WebkitOverflowScrolling: "touch" }}>
           <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 650, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s" }}>
             <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
+            <style>{`@keyframes marchHormigas { to { stroke-dashoffset: -20; } } .je-corriente { animation: marchHormigas 0.6s linear infinite; }`}</style>
           </div>
         </div>
         <div style={{ fontSize: 10.5, color: T.gray, marginTop: 4 }}>💡 En celular, desliza el lienzo hacia los lados para ver el circuito completo.</div>

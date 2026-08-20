@@ -4074,7 +4074,15 @@ function GestionUsuarios() {
   const del = async (id) => {
     if (!(await confirmar("¿Está seguro que desea eliminar este usuario?"))) return;
     setBusy(true);
+    const usuario = users.find((u) => u.id === id);
     const { error } = await supabase.rpc("eliminar_usuario", { p_id: id });
+    if (!error && usuario?.categoria === "entrenamiento") {
+      // Los usuarios "entrenamiento" no pertenecen a Planilla — su progreso
+      // solo vive en entrenamiento_puntajes bajo el código "usuario_<id>".
+      // Al borrar la cuenta, también se borra ese historial para que no
+      // quede nada huérfano en el ranking.
+      await supabase.from("entrenamiento_puntajes").delete().eq("personal_codigo", "usuario_" + id);
+    }
     setBusy(false);
     if (error) { setErrorMsg("No se pudo eliminar el usuario."); return; }
     refetchUsers();
@@ -6185,6 +6193,7 @@ function Confeti() {
 function Entrenamiento() {
   const currentUser = useContext(CurrentUserContext);
   const esTecnico = currentUser?.categoria === "tecnico";
+  const esSoloEntrenamiento = currentUser?.categoria === "entrenamiento";
   const [empleados, setEmpleados] = useState([]);
   const [jugadorCodigo, setJugadorCodigo] = useState("");
   const [puntajes, setPuntajes] = useState([]);
@@ -6212,7 +6221,19 @@ function Entrenamiento() {
     if (mejor && mejorScore >= 0.35) setJugadorCodigo(mejor.codigo);
   }, [esTecnico, empleados, currentUser]);
 
-  const jugador = empleados.find((e) => e.codigo === jugadorCodigo);
+  // Un usuario con perfil "entrenamiento" NO necesita existir en Planilla —
+  // entra directo con su propia cuenta de usuario (mismas características
+  // que cualquier técnico, pero su registro solo vive en
+  // entrenamiento_puntajes, no en la tabla de empleados). Un Admin puede
+  // borrarlo desde el botón "A cero" del ranking igual que a cualquiera.
+  useEffect(() => {
+    if (!esSoloEntrenamiento || !currentUser?.id || jugadorCodigo) return;
+    setJugadorCodigo("usuario_" + currentUser.id);
+  }, [esSoloEntrenamiento, currentUser, jugadorCodigo]);
+
+  const jugador = esSoloEntrenamiento
+    ? (jugadorCodigo ? { codigo: jugadorCodigo, nombre: currentUser?.name || "Técnico" } : null)
+    : empleados.find((e) => e.codigo === jugadorCodigo);
 
   const cargarPuntajes = async (codigo) => {
     const { data } = await supabase.from("entrenamiento_puntajes").select("*").eq("personal_codigo", codigo);
@@ -6317,6 +6338,9 @@ function Entrenamiento() {
   ];
 
   if (!jugadorCodigo) {
+    if (esSoloEntrenamiento) {
+      return <Card title="Entrenamiento"><div style={{ fontSize: 13.5, color: T.gray }}>Cargando tu perfil…</div></Card>;
+    }
     return (
       <Card title="Entrenamiento — ¿Quién va a jugar?">
         <div style={{ fontSize: 13.5, color: T.inkSoft, marginBottom: 14 }}>
@@ -6636,7 +6660,7 @@ function Entrenamiento() {
             </div>
             <button onClick={() => setMostrarPerfil((v) => !v)} style={{ background: mostrarPerfil ? "#fff" : "rgba(255,255,255,0.2)", color: mostrarPerfil ? "#e8590c" : "#fff", border: "none", borderRadius: 10, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>👤 Perfil</button>
             <button onClick={() => setMostrarRanking((v) => !v)} style={{ background: mostrarRanking ? "#fff" : "rgba(255,255,255,0.2)", color: mostrarRanking ? "#e8590c" : "#fff", border: "none", borderRadius: 10, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>🏆 Ranking</button>
-            {!esTecnico && <button onClick={() => setJugadorCodigo("")} style={{ background: "rgba(255,255,255,0.2)", color: "#fff", border: "none", borderRadius: 10, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Cambiar jugador</button>}
+            {!esTecnico && !esSoloEntrenamiento && <button onClick={() => setJugadorCodigo("")} style={{ background: "rgba(255,255,255,0.2)", color: "#fff", border: "none", borderRadius: 10, padding: "8px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Cambiar jugador</button>}
           </div>
         </div>
       </div>
@@ -8867,6 +8891,49 @@ function JuegoFASNivel1({ onGanarPuntos }) {
     </Card>
   );
 }
+
+
+// Módulo Electrónica Básica: guía con los fundamentos (Ley de Ohm,
+// resistencias y código de colores, diodos, tensión/corriente DC-AC,
+// Ley de Watt) y un examen clasificado por nivel — Básico e Intermedio
+// cubren fundamentos y cálculos; Avanzado cubre las leyes de circuitos
+// (Kirchhoff, Superposición, Norton, Thevenin). Usa la misma regla de
+// "todo o nada por nivel" que los demás módulos de ejercicios.
+const CODIGO_COLORES_RESISTENCIAS = [
+  { color: "Negro", valor: 0 }, { color: "Marrón", valor: 1 }, { color: "Rojo", valor: 2 },
+  { color: "Naranja", valor: 3 }, { color: "Amarillo", valor: 4 }, { color: "Verde", valor: 5 },
+  { color: "Azul", valor: 6 }, { color: "Violeta", valor: 7 }, { color: "Gris", valor: 8 }, { color: "Blanco", valor: 9 },
+];
+
+// Datos de preguntas de Electrónica Básica (recuperado — se había perdido).
+const NIVELES_ELECTRONICA = {
+  "Básico": [
+    { texto: "La Ley de Ohm relaciona Voltaje (V), Corriente (I) y Resistencia (R). ¿Cuál es la fórmula correcta?", tipo: "mc", opciones: ["V = I / R", "V = I × R", "V = R / I", "I = V × R"], correcta: 1 },
+    { texto: "¿Qué es una resistencia (componente electrónico)?", tipo: "mc", opciones: ["Un componente que se opone/limita al paso de la corriente eléctrica.", "Un componente que genera corriente eléctrica.", "Un componente que almacena carga eléctrica.", "Un componente que convierte AC en DC."], correcta: 0 },
+    { texto: "En el código de colores, una resistencia con bandas Marrón–Negro–Rojo representa:", tipo: "mc", opciones: ["10 Ω", "100 Ω", "1,000 Ω (1 kΩ)", "10,000 Ω (10 kΩ)"], correcta: 2 },
+    { texto: "¿Cuál es la unidad de medida de la Tensión (diferencia de potencial)?", tipo: "mc", opciones: ["Amperio (A)", "Voltio (V)", "Watt (W)", "Ohmio (Ω)"], correcta: 1 },
+    { texto: "¿Cuál es la unidad de medida de la Corriente eléctrica?", tipo: "mc", opciones: ["Voltio (V)", "Ohmio (Ω)", "Amperio (A)", "Watt (W)"], correcta: 2 },
+    { texto: "¿Qué es un diodo y cuál es su función principal?", tipo: "mc", opciones: ["Un semiconductor que permite el paso de corriente en un solo sentido.", "Un componente que aumenta el voltaje del circuito.", "Un componente que mide la corriente.", "Un tipo de resistencia variable."], correcta: 0 },
+    { texto: "La corriente DC (directa) cambia de polaridad periódicamente con el tiempo.", tipo: "vf", opciones: ["Falso", "Verdadero"], correcta: 0 },
+    { texto: "¿Cómo se conecta un multímetro para medir Corriente en un circuito?", tipo: "mc", opciones: ["En paralelo con el componente.", "En serie con el circuito, en modo amperímetro.", "Directamente a la fuente sin el circuito.", "No se puede medir la corriente con un multímetro."], correcta: 1 },
+  ],
+  "Intermedio": [
+    { texto: "En una conexión de resistencias en SERIE, la resistencia total se calcula como:", tipo: "mc", opciones: ["Rt = R1 + R2 + R3 ...", "Rt = 1 / (1/R1 + 1/R2)", "Rt = R1 × R2", "Rt = (R1 + R2) / 2"], correcta: 0 },
+    { texto: "En una conexión de DOS resistencias en PARALELO, la resistencia total se calcula como:", tipo: "mc", opciones: ["Rt = R1 + R2", "Rt = (R1 × R2) / (R1 + R2)", "Rt = R1 - R2", "Rt = R1 × R2 × 2"], correcta: 1 },
+    { texto: "¿Cómo se conecta un multímetro para medir Voltaje respecto a un componente o circuito?", tipo: "mc", opciones: ["En serie con el circuito.", "En paralelo con el componente o circuito.", "Se debe abrir el circuito primero.", "No se puede medir con multímetro."], correcta: 1 },
+    { texto: "La Ley de Watt (potencia eléctrica) se calcula como:", tipo: "mc", opciones: ["P = V / I", "P = V + I", "P = V × I", "P = I / V"], correcta: 2 },
+    { texto: "Si un circuito tiene 12V y consume 2A, ¿cuál es su potencia?", tipo: "mc", opciones: ["6 W", "14 W", "24 W", "48 W"], correcta: 2 },
+    { texto: "Si un circuito tiene una resistencia de 100Ω y se le aplican 12V, ¿cuál es la corriente (usando I = V/R)?", tipo: "mc", opciones: ["0.12 A", "1.2 A", "12 A", "120 A"], correcta: 0 },
+  ],
+  "Avanzado": [
+    { texto: "La Ley de Corrientes de Kirchhoff (LKC) establece que en un nodo:", tipo: "mc", opciones: ["La suma de corrientes que entran es igual a la suma de las que salen.", "El voltaje siempre es cero.", "La resistencia total es infinita.", "La corriente siempre se duplica."], correcta: 0 },
+    { texto: "La Ley de Voltajes de Kirchhoff (LKV) establece que en una malla cerrada:", tipo: "mc", opciones: ["La suma de las caídas de voltaje es igual a cero.", "La corriente siempre es cero.", "El voltaje se duplica en cada componente.", "Solo aplica a corriente DC."], correcta: 0 },
+    { texto: "El Teorema de Superposición permite analizar un circuito con varias fuentes:", tipo: "mc", opciones: ["Calculando el efecto de cada fuente por separado y sumando los resultados.", "Eliminando todas las fuentes menos una para siempre.", "Solo funciona con una fuente a la vez sin poder sumar.", "No aplica a circuitos con más de una fuente."], correcta: 0 },
+    { texto: "El Teorema de Thevenin simplifica un circuito complejo a:", tipo: "mc", opciones: ["Una fuente de corriente en paralelo con una resistencia.", "Una fuente de voltaje equivalente en serie con una resistencia equivalente.", "Solo una resistencia, sin fuente.", "Un circuito abierto."], correcta: 1 },
+    { texto: "El Teorema de Norton simplifica un circuito complejo a:", tipo: "mc", opciones: ["Una fuente de voltaje en serie con una resistencia.", "Un circuito en cortocircuito.", "Una fuente de corriente equivalente en paralelo con una resistencia equivalente.", "Solo un capacitor."], correcta: 2 },
+  ],
+};
+const PUNTOS_POR_PREGUNTA_ELECTRONICA = 10;
 
 function JuegoElectronicaBasica({ onGanarPuntos }) {
   const [mostrarIntro, setMostrarIntro] = useState(true);

@@ -411,6 +411,7 @@ function InsigniaMedalla({ nombre, desc, Icono, imagenUrl, colorDesde = "#868e96
             <Lock size={20} color="#fff" strokeWidth={2} />
           </div>
         )}
+      </div>
       <div style={{ fontSize: 11, fontWeight: 800, color: cumplido ? T.ink : T.gray, textAlign: "center", lineHeight: 1.2 }}>{nombre}</div>
       {progresoTexto && (
         <div style={{ width: "100%" }}>

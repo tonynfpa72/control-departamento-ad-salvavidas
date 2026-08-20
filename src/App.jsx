@@ -4214,7 +4214,6 @@ function RankingEntrenamiento() {
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
               <th style={{ padding: "8px" }}>#</th><th>Persona</th><th>Rango</th><th>Puntaje total</th><th>Premios</th><th>Repasos</th>
               {SEGMENTOS_ENTRENAMIENTO.map((s) => <th key={s.id}>{s.label}</th>)}
-              {esAdmin && <th></th>}
             </tr>
           </thead>
           <tbody>
@@ -4234,6 +4233,17 @@ function RankingEntrenamiento() {
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <div style={{ width: 26, height: 26, borderRadius: "50%", background: coloresAvatar[i % coloresAvatar.length], color: "#fff", fontSize: 10.5, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{iniciales}</div>
                       <span style={{ fontWeight: 700 }}>{f.nombre}</span>
+                      {esAdmin && (
+                        confirmando === f.codigo ? (
+                          <div style={{ display: "flex", gap: 4, alignItems: "center", whiteSpace: "nowrap" }}>
+                            <span style={{ fontSize: 10.5, color: T.red, fontWeight: 700 }}>¿Seguro?</span>
+                            <button onClick={() => reiniciarPersona(f.codigo)} style={{ background: T.red, color: "#fff", border: "none", borderRadius: 6, padding: "3px 8px", fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}>Sí</button>
+                            <button onClick={() => setConfirmando(null)} style={{ background: T.graySoft, color: T.inkSoft, border: "none", borderRadius: 6, padding: "3px 8px", fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}>No</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => setConfirmando(f.codigo)} title="Volver a cero todo el ranking de esta persona" style={{ background: "transparent", border: `1px solid ${T.line}`, borderRadius: 6, padding: "3px 7px", fontSize: 10, fontWeight: 700, color: T.red, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>↺ A cero</button>
+                        )
+                      )}
                     </div>
                   </td>
                   <td>
@@ -4250,19 +4260,6 @@ function RankingEntrenamiento() {
                     {f.repasos > 0 ? <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><Repeat size={11} color={T.turquoise} />{f.repasos}</span> : "—"}
                   </td>
                   {SEGMENTOS_ENTRENAMIENTO.map((s) => <td key={s.id} style={{ color: T.inkSoft }}>{f.porSegmento[s.id] || 0} pts</td>)}
-                  {esAdmin && (
-                    <td>
-                      {confirmando === f.codigo ? (
-                        <div style={{ display: "flex", gap: 4, alignItems: "center", whiteSpace: "nowrap" }}>
-                          <span style={{ fontSize: 10.5, color: T.red, fontWeight: 700 }}>¿Seguro?</span>
-                          <button onClick={() => reiniciarPersona(f.codigo)} style={{ background: T.red, color: "#fff", border: "none", borderRadius: 6, padding: "3px 8px", fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}>Sí</button>
-                          <button onClick={() => setConfirmando(null)} style={{ background: T.graySoft, color: T.inkSoft, border: "none", borderRadius: 6, padding: "3px 8px", fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}>No</button>
-                        </div>
-                      ) : (
-                        <button onClick={() => setConfirmando(f.codigo)} title="Volver a cero todo el ranking de esta persona" style={{ background: "transparent", border: `1px solid ${T.line}`, borderRadius: 6, padding: "4px 8px", fontSize: 10.5, fontWeight: 700, color: T.red, cursor: "pointer", whiteSpace: "nowrap" }}>↺ A cero</button>
-                      )}
-                    </td>
-                  )}
                 </tr>
               );
             })}

@@ -6292,7 +6292,7 @@ function Entrenamiento() {
                           label={s.label} Icono={s.Icono} colorDesde={s.colorDesde} colorHasta={s.colorHasta} lema={s.lema}
                           puntos={puntosDeSegmento(s.id)} max={MAX_PUNTOS_SEGMENTO[s.id] || 0}
                           seleccionada={false}
-                          bloqueada={!modulosDesbloqueados[s.id]} moduloAnterior={labelModuloAnterior(s.id)}
+                          bloqueada={currentUser?.categoria !== "admin" && !modulosDesbloqueados[s.id]} moduloAnterior={labelModuloAnterior(s.id)}
                           onClick={() => setModulo(s.id)}
                         />
                       </div>
@@ -6526,7 +6526,7 @@ function Entrenamiento() {
               label={s.label} Icono={s.Icono} colorDesde={s.colorDesde} colorHasta={s.colorHasta} lema={s.lema}
               puntos={puntosDeSegmento(s.id)} max={MAX_PUNTOS_SEGMENTO[s.id] || 0}
               seleccionada={modulo === s.id}
-              bloqueada={!modulosDesbloqueados[s.id]} moduloAnterior={labelModuloAnterior(s.id)}
+              bloqueada={currentUser?.categoria !== "admin" && !modulosDesbloqueados[s.id]} moduloAnterior={labelModuloAnterior(s.id)}
               onClick={() => setModulo(s.id)}
             />
           ))}
@@ -9841,7 +9841,3 @@ export default function App() {
     </LogoContext.Provider>
   );
 }
-
-// trigger redeploy
-
-// trigger redeploy

@@ -4054,7 +4054,7 @@ function GestionUsuarios() {
       p_email: form.email, p_pin: form.pin, p_categoria: form.categoria, p_name: form.name, p_area: form.area || null,
     });
     setBusy(false);
-    if (error) { setErrorMsg("No se pudo crear el usuario (¿correo repetido?)."); return; }
+    if (error) { setErrorMsg("No se pudo crear el usuario: " + error.message); return; }
     setForm({ name: "", email: "", pin: "", categoria: "asistente" });
     refetchUsers();
   };
@@ -4160,13 +4160,73 @@ function GestionUsuarios() {
   );
 }
 
+// Toma una muestra al azar de un arreglo, sin repetir.
+function muestraAlAzar(arr, n) {
+  const copia = [...arr];
+  const resultado = [];
+  while (copia.length > 0 && resultado.length < n) {
+    const i = Math.floor(Math.random() * copia.length);
+    resultado.push(copia.splice(i, 1)[0]);
+  }
+  return resultado;
+}
+
+// Genera un examen de práctica de 40 preguntas (10 de NFPA 72, 10 de
+// Electrónica Básica, 10 de NICET, 10 de FAS Nivel I) y lo descarga como
+// un archivo de texto con las preguntas + una clave de respuestas al final.
+function descargarExamen40() {
+  const preguntasNfpa = muestraAlAzar(PREGUNTAS_NFPA72, 10).map((p) => ({
+    modulo: "NFPA 72", texto: p.texto, opciones: p.opciones, correctas: [p.correcta],
+  }));
+  const todasElectronica = Object.values(NIVELES_ELECTRONICA).flat();
+  const preguntasElectronica = muestraAlAzar(todasElectronica, 10).map((p) => ({
+    modulo: "Electrónica Básica", texto: p.texto, opciones: p.opciones, correctas: [p.correcta],
+  }));
+  const preguntasNicet = muestraAlAzar(PREGUNTAS_NICET, 10).map((p) => ({
+    modulo: "NICET", texto: p.es.texto, opciones: p.es.opciones,
+    correctas: p.multiple ? p.correctas : [p.correcta],
+  }));
+  const todasFas1 = FAS_NIVEL1_QUIZZES.flatMap((q) => q.preguntas);
+  const preguntasFas1 = muestraAlAzar(todasFas1, 10).map((p) => ({
+    modulo: "FAS Nivel I", texto: p.es.texto, opciones: p.es.opciones,
+    correctas: p.multiple ? p.correctas : [p.correcta],
+  }));
+
+  const todas = [...preguntasNfpa, ...preguntasElectronica, ...preguntasNicet, ...preguntasFas1];
+  const letras = ["a", "b", "c", "d"];
+
+  let texto = "EXAMEN DE PRÁCTICA — 40 PREGUNTAS\n";
+  texto += "Departamento A&D Salvavidas — Generado " + new Date().toLocaleDateString("es-CR") + "\n";
+  texto += "=".repeat(60) + "\n\n";
+  todas.forEach((p, i) => {
+    texto += `${i + 1}. (${p.modulo}) ${p.texto}\n`;
+    p.opciones.forEach((op, j) => { texto += `   ${letras[j]}) ${op}\n`; });
+    texto += "\n";
+  });
+  texto += "=".repeat(60) + "\nCLAVE DE RESPUESTAS\n" + "=".repeat(60) + "\n";
+  todas.forEach((p, i) => {
+    texto += `${i + 1}. ${p.correctas.map((c) => letras[c]).join(", ")}\n`;
+  });
+
+  const blob = new Blob([texto], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "examen_practica_40_preguntas.txt";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function Administrativo() {
   const [tab, setTab] = useState("resumen");
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <Btn variant={tab === "resumen" ? "accent" : "ghost"} small onClick={() => setTab("resumen")}>Resumen Ejecutivo</Btn>
         <Btn variant={tab === "usuarios" ? "accent" : "ghost"} small onClick={() => setTab("usuarios")}>Gestión de Usuarios</Btn>
+        <Btn variant="ghost" small onClick={descargarExamen40} style={{ marginLeft: "auto" }}><Download size={13} /> Descargar examen de 40 preguntas</Btn>
       </div>
       {tab === "resumen" && <ResumenEjecutivo />}
       {tab === "usuarios" && <GestionUsuarios />}
@@ -8808,10 +8868,8 @@ function JuegoFASNivel1({ onGanarPuntos }) {
         id: "intro_fas1", titulo: "FAS Nivel I — 12 Quizzes",
         contenido: (
           <p>Este es el banco oficial de preguntas de práctica <strong>NTC (National Training Center)</strong> para
-          <strong> Fire Alarm Systems — Nivel I</strong>, organizado en <strong>12 quizzes de 10 preguntas cada uno</strong> —
-          tal como vienen divididos en el documento original. Elige el quiz que quieras practicar, responde sus 10
-          preguntas, y envíalo para ver tu resultado. Puedes cambiar entre inglés y español con el selector arriba de
-          cada quiz.</p>
+          <strong> Fire Alarm Systems — Nivel I</strong>, organizado en <strong>12 quizzes de 10 preguntas cada uno</strong>.
+          Puedes cambiar entre inglés y español con el selector arriba de cada quiz.</p>
         ),
       },
     ];

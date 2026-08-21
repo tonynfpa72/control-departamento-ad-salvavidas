@@ -4219,194 +4219,500 @@ function descargarExamen40() {
   URL.revokeObjectURL(url);
 }
 
+
 // Genera un arreglo de preguntas de opción única (sin multi-selección,
 // para que el modo Reto tipo Kahoot sea simple: un clic = responder)
 // tomadas de todos los módulos con preguntas de opción múltiple.
+// Conserva la imagen de la pregunta cuando la tiene (algunas de FAS
+// Nivel I y NICET dependen de una figura para poder responderse).
 function generarPreguntasAlAzar(n) {
-  const todasNfpa = PREGUNTAS_NFPA72.filter((p) => !p.multiple).map((p) => ({ modulo: "NFPA 72", texto: p.texto, opciones: p.opciones, correcta: p.correcta }));
-  const todasElectronica = Object.values(NIVELES_ELECTRONICA).flat().filter((p) => !p.multiple).map((p) => ({ modulo: "Electrónica Básica", texto: p.texto, opciones: p.opciones, correcta: p.correcta }));
-  const todasNicet = PREGUNTAS_NICET.filter((p) => !p.multiple).map((p) => ({ modulo: "NICET", texto: p.es.texto, opciones: p.es.opciones, correcta: p.correcta }));
-  const todasFas1 = FAS_NIVEL1_QUIZZES.flatMap((q) => q.preguntas).filter((p) => !p.multiple).map((p) => ({ modulo: "FAS Nivel I", texto: p.es.texto, opciones: p.es.opciones, correcta: p.correcta }));
+  const todasNfpa = PREGUNTAS_NFPA72.filter((p) => !p.multiple).map((p) => ({ modulo: "NFPA 72", texto: p.texto, opciones: p.opciones, correcta: p.correcta, imagen: p.imagen || null }));
+  const todasElectronica = Object.values(NIVELES_ELECTRONICA).flat().filter((p) => !p.multiple).map((p) => ({ modulo: "Electrónica Básica", texto: p.texto, opciones: p.opciones, correcta: p.correcta, imagen: p.imagen || null }));
+  const todasNicet = PREGUNTAS_NICET.filter((p) => !p.multiple).map((p) => ({ modulo: "NICET", texto: p.es.texto, opciones: p.es.opciones, correcta: p.correcta, imagen: p.imagen || null }));
+  const todasFas1 = FAS_NIVEL1_QUIZZES.flatMap((q) => q.preguntas).filter((p) => !p.multiple).map((p) => ({ modulo: "FAS Nivel I", texto: p.es.texto, opciones: p.es.opciones, correcta: p.correcta, imagen: p.imagen || null }));
   const pool = [...todasNfpa, ...todasElectronica, ...todasNicet, ...todasFas1];
   return muestraAlAzar(pool, n);
 }
 
-const SEGUNDOS_POR_PREGUNTA_RETO = 20;
+// Panel de control del Reto — solo para Admin. Prepara (borrador),
+// configura, activa, monitorea en vivo, y finaliza.
+function PanelAdminReto({ reto, onCambio }) {
+  const [preparando, setPreparando] = useState(false);
+  const [confSegundos, setConfSegundos] = useState(20);
+  const [confPuntosMax, setConfPuntosMax] = useState(1000);
+  const [confMostrarRanking, setConfMostrarRanking] = useState(true);
+  const [participantes, setParticipantes] = useState(0);
+  const [finalizados, setFinalizados] = useState(0);
+  const [rankingVivo, setRankingVivo] = useState([]);
+  const [verPreguntas, setVerPreguntas] = useState(false);
 
-// Módulo "Reto": solo Admin puede activar uno nuevo (30 preguntas al azar
-// de todos los módulos, sin repetir con retos anteriores gracias al
-// muestreo aleatorio). Cada pregunta tiene tiempo límite tipo Kahoot y
-// una sola oportunidad de respuesta — al elegir o agotarse el tiempo,
-// la pregunta queda bloqueada para siempre. Al terminar, los aciertos se
-// suman como puntos y quedan guardados como "Reto #N".
+  const refrescarMonitor = async () => {
+    if (!reto) return;
+    const { data: resp } = await supabase.from("entrenamiento_reto_respuestas").select("personal_codigo").eq("reto_id", reto.id);
+    setParticipantes(new Set((resp || []).map((r) => r.personal_codigo)).size);
+    const { data: comp } = await supabase.from("entrenamiento_reto_completados").select("*").eq("reto_id", reto.id).order("puntos", { ascending: false });
+    setFinalizados((comp || []).length);
+    setRankingVivo(comp || []);
+  };
+
+  useEffect(() => {
+    refrescarMonitor();
+    if (reto?.estado === "activo") {
+      const t = setInterval(refrescarMonitor, 5000);
+      return () => clearInterval(t);
+    }
+  }, [reto?.id, reto?.estado]);
+
+  const prepararNuevoReto = async () => {
+    setPreparando(true);
+    const { count } = await supabase.from("entrenamiento_retos").select("*", { count: "exact", head: true });
+    const numero = (count || 0) + 1;
+    const preguntas = generarPreguntasAlAzar(30);
+    await supabase.from("entrenamiento_retos").update({ estado: "finalizado" }).neq("estado", "finalizado");
+    await supabase.from("entrenamiento_retos").insert({
+      numero, preguntas, activo: false, estado: "borrador",
+      segundos_por_pregunta: confSegundos, puntos_max_por_pregunta: confPuntosMax, mostrar_ranking_intermedio: confMostrarRanking,
+    });
+    setPreparando(false);
+    onCambio();
+  };
+
+  const activarReto = async () => {
+    await supabase.from("entrenamiento_retos").update({ estado: "activo", activo: true }).eq("id", reto.id);
+    onCambio();
+  };
+
+  const finalizarReto = async () => {
+    await supabase.from("entrenamiento_retos").update({ estado: "finalizado", activo: false }).eq("id", reto.id);
+    onCambio();
+  };
+
+  return (
+    <div style={{ marginBottom: 20, padding: 16, background: T.amberSoft, borderRadius: 12, border: `1px solid ${T.amber}` }}>
+      <div style={{ fontSize: 13, color: T.amber, fontWeight: 800, marginBottom: 12, textTransform: "uppercase", letterSpacing: 0.4 }}>⚙️ Panel de Admin — Reto</div>
+
+      {(!reto || reto.estado === "finalizado") && (
+        <div>
+          <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 10 }}>No hay ningún reto en preparación. Configura uno nuevo:</div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 12 }}>
+            <label style={{ fontSize: 12, color: T.inkSoft }}>Segundos por pregunta
+              <input type="number" min="5" max="90" value={confSegundos} onChange={(e) => setConfSegundos(Number(e.target.value))} style={{ ...inputStyle, width: 80, marginLeft: 8 }} />
+            </label>
+            <label style={{ fontSize: 12, color: T.inkSoft }}>Puntos máx. por pregunta
+              <input type="number" min="100" max="5000" step="100" value={confPuntosMax} onChange={(e) => setConfPuntosMax(Number(e.target.value))} style={{ ...inputStyle, width: 90, marginLeft: 8 }} />
+            </label>
+            <label style={{ fontSize: 12, color: T.inkSoft, display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="checkbox" checked={confMostrarRanking} onChange={(e) => setConfMostrarRanking(e.target.checked)} /> Mostrar ranking intermedio cada 3 preguntas
+            </label>
+          </div>
+          <Btn variant="accent" onClick={prepararNuevoReto} disabled={preparando}>{preparando ? "Generando…" : "🎯 Preparar nuevo Reto (30 preguntas)"}</Btn>
+        </div>
+      )}
+
+      {reto && reto.estado === "borrador" && (
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.ink, marginBottom: 6 }}>Reto #{reto.numero} — en borrador (todavía no lo ve nadie más)</div>
+          <div style={{ fontSize: 11.5, color: T.inkSoft, marginBottom: 10 }}>
+            {reto.preguntas.length} preguntas · {reto.segundos_por_pregunta}s c/u · hasta {reto.puntos_max_por_pregunta} pts c/u · ranking intermedio: {reto.mostrar_ranking_intermedio ? "sí" : "no"}
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Btn variant="accent" onClick={activarReto}>🚀 Activar Reto</Btn>
+            <Btn variant="ghost" onClick={() => setVerPreguntas((v) => !v)}>{verPreguntas ? "Ocultar preguntas" : "Ver preguntas"}</Btn>
+          </div>
+          {verPreguntas && (
+            <div style={{ marginTop: 12, maxHeight: 260, overflowY: "auto", background: "#fff", borderRadius: 8, padding: 10 }}>
+              {reto.preguntas.map((p, i) => (
+                <div key={i} style={{ fontSize: 11, borderBottom: `1px solid ${T.line}`, padding: "6px 0" }}>
+                  <strong>{i + 1}.</strong> [{p.modulo}] {p.texto}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {reto && reto.estado === "activo" && (
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.green, marginBottom: 6 }}>🔴 Reto #{reto.numero} — EN VIVO</div>
+          <div style={{ display: "flex", gap: 14, marginBottom: 10, flexWrap: "wrap" }}>
+            <div style={{ background: "#fff", borderRadius: 8, padding: "6px 12px" }}><b>{participantes}</b> jugando</div>
+            <div style={{ background: "#fff", borderRadius: 8, padding: "6px 12px" }}><b>{finalizados}</b> terminaron</div>
+          </div>
+          {rankingVivo.length > 0 && (
+            <div style={{ background: "#fff", borderRadius: 8, padding: 10, marginBottom: 10, maxHeight: 180, overflowY: "auto" }}>
+              {rankingVivo.slice(0, 10).map((r, i) => (
+                <div key={r.personal_codigo} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "3px 0" }}>
+                  <span>{i + 1}. {r.personal_nombre}</span><b>{r.puntos} pts</b>
+                </div>
+              ))}
+            </div>
+          )}
+          <Btn variant="danger" onClick={finalizarReto}>⏹ Finalizar Reto</Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Módulo "Reto": experiencia tipo Kahoot con estados
+// borrador→activo→finalizado, cuenta regresiva, preguntas una por una
+// con temporizador y puntaje por velocidad CALCULADO EN EL BACKEND (la
+// función responder_pregunta_reto en Supabase decide si es correcta y
+// cuántos puntos vale — el navegador nunca lo calcula ni lo envía),
+// ranking intermedio cada 3 preguntas, resultados finales y podio.
 function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
   const [cargando, setCargando] = useState(true);
-  const [retoActivo, setRetoActivo] = useState(null);
-  const [yaCompletado, setYaCompletado] = useState(null);
-  const [activando, setActivando] = useState(false);
-  const [jugando, setJugando] = useState(false);
+  const [reto, setReto] = useState(null);
+  const [pantalla, setPantalla] = useState("sin_reto");
+  const [cuenta, setCuenta] = useState(3);
   const [indice, setIndice] = useState(0);
-  const [respuestasDadas, setRespuestasDadas] = useState({});
-  const [bloqueadas, setBloqueadas] = useState({});
-  const [tiempoRestante, setTiempoRestante] = useState(SEGUNDOS_POR_PREGUNTA_RETO);
-  const [puntajeFinal, setPuntajeFinal] = useState(null);
+  const [bloqueada, setBloqueada] = useState(false);
+  const [feedback, setFeedback] = useState(null);
+  const [respuestaElegida, setRespuestaElegida] = useState(null);
+  const [segundosRestantes, setSegundosRestantes] = useState(0);
+  const inicioPreguntaRef = React.useRef(0);
+  const [puntajeAcumulado, setPuntajeAcumulado] = useState(0);
+  const [correctasCount, setCorrectasCount] = useState(0);
+  const [tiemposRespuesta, setTiemposRespuesta] = useState([]);
+  const [rankingIntermedio, setRankingIntermedio] = useState([]);
+  const [statsFinal, setStatsFinal] = useState(null);
+  const [podio, setPodio] = useState([]);
 
-  const cargarRetoActivo = async () => {
+  const cargarEstado = async () => {
     setCargando(true);
-    const { data } = await supabase.from("entrenamiento_retos").select("*").eq("activo", true).order("creado_en", { ascending: false }).limit(1);
-    const reto = (data && data[0]) || null;
-    setRetoActivo(reto);
-    if (reto && jugador?.codigo) {
-      const { data: completados } = await supabase.from("entrenamiento_reto_completados").select("*").eq("reto_id", reto.id).eq("personal_codigo", jugador.codigo);
-      setYaCompletado((completados && completados[0]) || null);
-    } else {
-      setYaCompletado(null);
+    const { data } = await supabase.from("entrenamiento_retos").select("*").neq("estado", "finalizado").order("creado_en", { ascending: false }).limit(1);
+    const actual = (data && data[0]) || null;
+    setReto(actual);
+    if (!actual) {
+      setPantalla("sin_reto");
+    } else if (actual.estado === "borrador") {
+      setPantalla(esAdmin ? "admin" : "sin_reto");
+    } else if (actual.estado === "activo" && jugador?.codigo) {
+      const { data: yaCompleto } = await supabase.from("entrenamiento_reto_completados").select("*").eq("reto_id", actual.id).eq("personal_codigo", jugador.codigo);
+      if (yaCompleto && yaCompleto[0]) {
+        await armarResultados(actual, yaCompleto[0]);
+      } else {
+        // ¿Ya había respondido algunas preguntas antes de que se recargara
+        // la página? Si es así, se reanuda justo en la siguiente pregunta
+        // sin contestar, con el puntaje y aciertos ya acumulados.
+        const { data: previas } = await supabase.from("entrenamiento_reto_respuestas").select("*").eq("reto_id", actual.id).eq("personal_codigo", jugador.codigo).order("pregunta_indice", { ascending: true });
+        if (previas && previas.length > 0) {
+          const puntos = previas.reduce((s, r) => s + r.puntos, 0);
+          const correctas = previas.filter((r) => r.correcta).length;
+          const tiempos = previas.map((r) => r.tiempo_ms);
+          const siguienteIndice = Math.max(...previas.map((r) => r.pregunta_indice)) + 1;
+          setPuntajeAcumulado(puntos);
+          setCorrectasCount(correctas);
+          setTiemposRespuesta(tiempos);
+          if (siguienteIndice >= actual.preguntas.length) {
+            // Ya había respondido las 30 pero no se alcanzó a guardar el
+            // resultado final (por ejemplo, se cerró justo ahí) — se
+            // termina el reto automáticamente con lo que ya tiene.
+            await supabase.from("entrenamiento_puntajes").delete().eq("personal_codigo", jugador.codigo).eq("segmento", "reto");
+            await supabase.from("entrenamiento_reto_completados").insert({
+              reto_id: actual.id, personal_codigo: jugador.codigo, personal_nombre: jugador.nombre, puntos, correctas,
+            });
+            onGanarPuntos && onGanarPuntos("Reto #" + actual.numero, puntos);
+            const { data: completado } = await supabase.from("entrenamiento_reto_completados").select("*").eq("reto_id", actual.id).eq("personal_codigo", jugador.codigo);
+            await armarResultados(actual, completado[0]);
+          } else {
+            setIndice(siguienteIndice);
+            setPantalla("jugando");
+          }
+        } else {
+          setPantalla("anuncio");
+        }
+      }
     }
     setCargando(false);
   };
 
-  useEffect(() => { cargarRetoActivo(); }, [jugador?.codigo]);
+  useEffect(() => { cargarEstado(); }, [jugador?.codigo]);
+  // Revisa cada 8s si cambió el estado del reto (nuevo activado, etc.)
+  useEffect(() => {
+    const t = setInterval(() => { if (pantalla === "sin_reto" || pantalla === "admin") cargarEstado(); }, 8000);
+    return () => clearInterval(t);
+  }, [pantalla, jugador?.codigo]);
 
-  const activarNuevoReto = async () => {
-    setActivando(true);
-    const { count } = await supabase.from("entrenamiento_retos").select("*", { count: "exact", head: true });
-    const numero = (count || 0) + 1;
-    const preguntas = generarPreguntasAlAzar(30);
-    await supabase.from("entrenamiento_retos").update({ activo: false }).eq("activo", true);
-    await supabase.from("entrenamiento_retos").insert({ numero, preguntas, activo: true });
-    await cargarRetoActivo();
-    setActivando(false);
+  const armarResultados = async (retoRow, completado) => {
+    const { data: respuestas } = await supabase.from("entrenamiento_reto_respuestas").select("*").eq("reto_id", retoRow.id).eq("personal_codigo", jugador.codigo);
+    const tiempos = (respuestas || []).map((r) => r.tiempo_ms);
+    const promedio = tiempos.length ? Math.round(tiempos.reduce((a, b) => a + b, 0) / tiempos.length / 100) / 10 : 0;
+    const { data: todos } = await supabase.from("entrenamiento_reto_completados").select("*").eq("reto_id", retoRow.id).order("puntos", { ascending: false });
+    const posicion = (todos || []).findIndex((r) => r.personal_codigo === jugador.codigo) + 1;
+    setStatsFinal({
+      puntos: completado.puntos, correctas: completado.correctas, total: retoRow.preguntas.length,
+      incorrectas: retoRow.preguntas.length - completado.correctas, promedioSeg: promedio, posicion, totalJugadores: (todos || []).length,
+    });
+    setPodio((todos || []).slice(0, 3));
+    setPantalla("resultados");
   };
 
-  const empezarJuego = () => {
-    setJugando(true);
-    setIndice(0);
-    setRespuestasDadas({});
-    setBloqueadas({});
-    setTiempoRestante(SEGUNDOS_POR_PREGUNTA_RETO);
-    setPuntajeFinal(null);
+  const empezarCuentaRegresiva = () => {
+    setPantalla("cuenta_regresiva");
+    setCuenta(3);
   };
 
   useEffect(() => {
-    if (!jugando) return;
-    if (bloqueadas[indice]) return;
-    if (tiempoRestante <= 0) {
-      setBloqueadas((prev) => ({ ...prev, [indice]: true }));
-      setRespuestasDadas((prev) => ({ ...prev, [indice]: -1 }));
+    if (pantalla !== "cuenta_regresiva") return;
+    if (cuenta <= 0) {
+      setIndice(0); setPuntajeAcumulado(0); setCorrectasCount(0); setTiemposRespuesta([]);
+      setPantalla("jugando");
       return;
     }
-    const t = setTimeout(() => setTiempoRestante((s) => s - 1), 1000);
+    const t = setTimeout(() => setCuenta((c) => c - 1), 800);
     return () => clearTimeout(t);
-  }, [jugando, tiempoRestante, indice, bloqueadas]);
+  }, [pantalla, cuenta]);
 
-  const responder = (i, j) => {
-    if (bloqueadas[i]) return;
-    setBloqueadas((prev) => ({ ...prev, [i]: true }));
-    setRespuestasDadas((prev) => ({ ...prev, [i]: j }));
+  // Arranca el cronómetro de cada pregunta nueva.
+  useEffect(() => {
+    if (pantalla !== "jugando") return;
+    setBloqueada(false);
+    setFeedback(null);
+    setRespuestaElegida(null);
+    setSegundosRestantes(reto.segundos_por_pregunta);
+    inicioPreguntaRef.current = Date.now();
+  }, [pantalla, indice]);
+
+  useEffect(() => {
+    if (pantalla !== "jugando" || bloqueada) return;
+    if (segundosRestantes <= 0) { responder(-1); return; }
+    const t = setTimeout(() => setSegundosRestantes((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [pantalla, segundosRestantes, bloqueada]);
+
+  const responder = async (opcionIdx) => {
+    if (bloqueada) return;
+    setBloqueada(true);
+    setRespuestaElegida(opcionIdx);
+    const tiempoMs = Date.now() - inicioPreguntaRef.current;
+    const { data, error } = await supabase.rpc("responder_pregunta_reto", {
+      p_reto_id: reto.id, p_pregunta_indice: indice, p_respuesta: opcionIdx, p_tiempo_ms: tiempoMs,
+      p_personal_codigo: jugador.codigo, p_personal_nombre: jugador.nombre,
+    });
+    if (error || !data || data.error) {
+      setFeedback({ error: true, msg: "No se pudo registrar la respuesta." });
+      return;
+    }
+    setFeedback({ correcta: data.correcta, puntos: data.puntos, correcta_idx: data.correcta_idx });
+    setPuntajeAcumulado((p) => p + data.puntos);
+    if (data.correcta) setCorrectasCount((c) => c + 1);
+    setTiemposRespuesta((t) => [...t, tiempoMs]);
   };
 
-  const siguientePregunta = async () => {
-    if (indice + 1 >= retoActivo.preguntas.length) {
-      const preguntas = retoActivo.preguntas;
-      let correctas = 0;
-      preguntas.forEach((p, i) => { if (respuestasDadas[i] === p.correcta) correctas++; });
-      const puntos = correctas * 10;
+  const avanzar = async () => {
+    const siguienteIndice = indice + 1;
+    if (siguienteIndice >= reto.preguntas.length) {
+      // Solo cuenta el ÚLTIMO reto en el ranking general: se borran los
+      // puntos de un reto anterior de esta persona antes de guardar el nuevo.
+      await supabase.from("entrenamiento_puntajes").delete().eq("personal_codigo", jugador.codigo).eq("segmento", "reto");
       await supabase.from("entrenamiento_reto_completados").insert({
-        reto_id: retoActivo.id, personal_codigo: jugador.codigo, personal_nombre: jugador.nombre, puntos, correctas,
+        reto_id: reto.id, personal_codigo: jugador.codigo, personal_nombre: jugador.nombre,
+        puntos: puntajeAcumulado, correctas: correctasCount,
       });
-      onGanarPuntos && onGanarPuntos("Reto #" + retoActivo.numero, puntos);
-      setPuntajeFinal({ puntos, correctas, total: preguntas.length });
-      setYaCompletado({ puntos, correctas });
-      setJugando(false);
+      onGanarPuntos && onGanarPuntos("Reto #" + reto.numero, puntajeAcumulado);
+      const { data: completado } = await supabase.from("entrenamiento_reto_completados").select("*").eq("reto_id", reto.id).eq("personal_codigo", jugador.codigo);
+      await armarResultados(reto, completado[0]);
+      return;
+    }
+    if (reto.mostrar_ranking_intermedio && siguienteIndice > 0 && siguienteIndice % 3 === 0) {
+      const { data: enVivo } = await supabase.from("entrenamiento_reto_completados").select("*").eq("reto_id", reto.id).order("puntos", { ascending: false }).limit(5);
+      setRankingIntermedio(enVivo || []);
+      setPantalla("ranking_intermedio");
+      setTimeout(() => { setIndice(siguienteIndice); setPantalla("jugando"); }, 4000);
     } else {
-      setIndice(indice + 1);
-      setTiempoRestante(SEGUNDOS_POR_PREGUNTA_RETO);
+      setIndice(siguienteIndice);
     }
   };
 
-  if (cargando) {
-    return <Card title="⚡ Reto"><div style={{ color: T.gray, fontSize: 13 }}>Cargando…</div></Card>;
+  if (cargando) return <Card title="⚡ Reto"><div style={{ color: T.gray, fontSize: 13 }}>Cargando…</div></Card>;
+
+  if (pantalla === "admin" || (esAdmin && (!reto || reto.estado !== "activo"))) {
+    return (
+      <Card title="⚡ Reto">
+        <PanelAdminReto reto={reto} onCambio={cargarEstado} />
+        {reto && reto.estado === "activo" && <div style={{ fontSize: 12.5, color: T.inkSoft }}>El reto ya está activo — baja para verlo como jugador también, o espera a que termine.</div>}
+      </Card>
+    );
   }
 
-  if (jugando && retoActivo) {
-    const p = retoActivo.preguntas[indice];
-    const bloqueada = bloqueadas[indice];
-    const dada = respuestasDadas[indice];
-    const pct = (tiempoRestante / SEGUNDOS_POR_PREGUNTA_RETO) * 100;
+  if (pantalla === "sin_reto") {
     return (
-      <Card title={`⚡ Reto #${retoActivo.numero} — Pregunta ${indice + 1} de ${retoActivo.preguntas.length}`}>
+      <Card title="⚡ Reto">
+        {esAdmin && <PanelAdminReto reto={reto} onCambio={cargarEstado} />}
+        <div style={{ color: T.gray, fontSize: 13.5, textAlign: "center", padding: "20px 0" }}>No hay ningún Reto activo en este momento. Espera a que un Admin active uno nuevo.</div>
+      </Card>
+    );
+  }
+
+  if (pantalla === "anuncio") {
+    return (
+      <Card>
+        <div style={{ textAlign: "center", padding: "30px 10px" }}>
+          <style>{`@keyframes retoPulso { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }`}</style>
+          <div style={{ fontSize: 48, marginBottom: 10, animation: "retoPulso 1.4s ease-in-out infinite" }}>⚡</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: T.ink, marginBottom: 6 }}>¡Nuevo reto disponible!</div>
+          <div style={{ fontSize: 14, color: T.inkSoft, marginBottom: 24 }}>
+            Reto #{reto.numero} — {reto.preguntas.length} preguntas, {reto.segundos_por_pregunta}s cada una. ¡Entre más rápido respondas, más puntos ganas!
+          </div>
+          <button onClick={empezarCuentaRegresiva} style={{
+            padding: "16px 40px", fontSize: 18, fontWeight: 800, color: "#fff", background: `linear-gradient(120deg, #ffd43b, #f08c00)`,
+            border: "none", borderRadius: 16, cursor: "pointer", boxShadow: "0 6px 16px rgba(240,140,0,0.35)",
+          }}>Entrar al reto</button>
+        </div>
+      </Card>
+    );
+  }
+
+  if (pantalla === "cuenta_regresiva") {
+    return (
+      <Card>
+        <div style={{ textAlign: "center", padding: "60px 10px" }}>
+          <style>{`@keyframes retoZoom { 0% { transform: scale(0.5); opacity: 0; } 50% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }`}</style>
+          <div key={cuenta} style={{ fontSize: 90, fontWeight: 800, color: T.accent, animation: "retoZoom 0.7s ease-out" }}>
+            {cuenta > 0 ? cuenta : "¡Comenzar!"}
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
+  if (pantalla === "ranking_intermedio") {
+    return (
+      <Card>
+        <div style={{ textAlign: "center", padding: "20px 10px" }}>
+          <div style={{ fontSize: 28, marginBottom: 12 }}>🏆</div>
+          <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>Ranking actual</div>
+          <div style={{ maxWidth: 360, margin: "0 auto" }}>
+            {rankingIntermedio.map((r, i) => (
+              <div key={r.personal_codigo} style={{ display: "flex", justifyContent: "space-between", padding: "8px 14px", background: i === 0 ? T.amberSoft : T.graySoft, borderRadius: 8, marginBottom: 6, fontSize: 13.5, fontWeight: 700 }}>
+                <span>{["🥇", "🥈", "🥉"][i] || (i + 1) + "."} {r.personal_nombre}</span>
+                <span>{r.puntos.toLocaleString()} pts</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 11.5, color: T.gray, marginTop: 16 }}>Continuando en unos segundos…</div>
+        </div>
+      </Card>
+    );
+  }
+
+  if (pantalla === "jugando") {
+    const p = reto.preguntas[indice];
+    const pct = (segundosRestantes / reto.segundos_por_pregunta) * 100;
+    return (
+      <Card>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <Badge color={T.blue} soft={T.blueSoft}>{p.modulo}</Badge>
-          <div style={{ fontSize: 22, fontWeight: 800, color: tiempoRestante <= 5 ? T.red : T.ink }}>{tiempoRestante}s</div>
+          <Badge color={T.blue} soft={T.blueSoft}>Pregunta {indice + 1} de {reto.preguntas.length}</Badge>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.inkSoft }}>{puntajeAcumulado.toLocaleString()} pts</div>
+        </div>
+        <div style={{ height: 6, background: T.graySoft, borderRadius: 99, overflow: "hidden", marginBottom: 12 }}>
+          <div style={{ height: "100%", width: `${((indice) / reto.preguntas.length) * 100}%`, background: T.accent, transition: "width 0.3s ease" }} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <Badge color={T.turquoise} soft="#e6fcf5">{p.modulo}</Badge>
+          <div style={{ fontSize: 22, fontWeight: 800, color: segundosRestantes <= 5 ? T.red : T.ink }}>{segundosRestantes}s</div>
         </div>
         <div style={{ height: 8, background: T.graySoft, borderRadius: 99, overflow: "hidden", marginBottom: 16 }}>
-          <div style={{ height: "100%", width: `${pct}%`, background: tiempoRestante <= 5 ? T.red : T.accent, transition: "width 1s linear" }} />
+          <div style={{ height: "100%", width: `${pct}%`, background: segundosRestantes <= 5 ? T.red : T.accent, transition: "width 1s linear" }} />
         </div>
-        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>{p.texto}</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 14 }}>{p.texto}</div>
+        {p.imagen && (
+          <div style={{ marginBottom: 14, background: "#fff", border: `1px solid ${T.line}`, borderRadius: 8, padding: 8, display: "inline-block" }}>
+            <img src={p.imagen} alt="Figura de la pregunta" style={{ maxWidth: "100%", width: "auto", maxHeight: 300, display: "block" }} />
+          </div>
+        )}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
           {p.opciones.map((op, j) => {
             let bg = "#fff", borde = T.line, color = T.ink;
             if (bloqueada) {
-              if (j === p.correcta) { bg = T.greenSoft; borde = T.green; color = T.green; }
-              else if (j === dada) { bg = T.redSoft; borde = T.red; color = T.red; }
+              if (feedback && j === feedback.correcta_idx) { bg = T.greenSoft; borde = T.green; color = T.green; }
+              else if (j === respuestaElegida) { bg = T.redSoft; borde = T.red; color = T.red; }
             }
             return (
-              <button key={j} onClick={() => responder(indice, j)} disabled={bloqueada} style={{
-                textAlign: "left", padding: "12px 16px", borderRadius: 10, border: `2px solid ${borde}`, background: bg, color,
-                fontSize: 13.5, fontWeight: 600, cursor: bloqueada ? "default" : "pointer",
-              }}>{op}</button>
+              <button key={j} onClick={() => responder(j)} disabled={bloqueada} style={{
+                textAlign: "left", padding: "16px 18px", borderRadius: 12, border: `2px solid ${borde}`, background: bg, color,
+                fontSize: 14, fontWeight: 700, cursor: bloqueada ? "default" : "pointer", transition: "transform 0.1s",
+              }}
+                onMouseDown={(e) => { if (!bloqueada) e.currentTarget.style.transform = "scale(0.97)"; }}
+                onMouseUp={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
+              >{op}</button>
             );
           })}
         </div>
-        {bloqueada && (
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 16 }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: dada === p.correcta ? T.green : T.red }}>
-              {dada === -1 ? "⏱️ Se acabó el tiempo" : dada === p.correcta ? "✓ ¡Correcto!" : "✗ Incorrecto"}
-            </span>
-            <Btn variant="accent" onClick={siguientePregunta}>{indice + 1 >= retoActivo.preguntas.length ? "Ver resultado final" : "Siguiente pregunta →"}</Btn>
+        {feedback && (
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
+            {feedback.error ? (
+              <span style={{ fontSize: 14, fontWeight: 700, color: T.red }}>{feedback.msg}</span>
+            ) : (
+              <span style={{ fontSize: 15, fontWeight: 800, color: feedback.correcta ? T.green : T.red }}>
+                {respuestaElegida === -1 ? "⏱️ Se acabó el tiempo" : feedback.correcta ? `✓ ¡Correcto! +${feedback.puntos.toLocaleString()} puntos` : "✗ Respuesta incorrecta"}
+              </span>
+            )}
+            <Btn variant="accent" onClick={avanzar}>{indice + 1 >= reto.preguntas.length ? "Ver resultado final" : "Siguiente pregunta →"}</Btn>
           </div>
         )}
       </Card>
     );
   }
 
-  return (
-    <Card title="⚡ Reto">
-      {esAdmin && (
-        <div style={{ marginBottom: 16, padding: 12, background: T.amberSoft, borderRadius: 10 }}>
-          <div style={{ fontSize: 12.5, color: T.amber, fontWeight: 700, marginBottom: 8 }}>Panel de Admin</div>
-          <Btn variant="accent" onClick={activarNuevoReto} disabled={activando}>
-            {activando ? "Generando…" : "🎯 Activar nuevo Reto (30 preguntas nuevas)"}
-          </Btn>
-          {retoActivo && <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 6 }}>Reto activo actual: #{retoActivo.numero}</div>}
-        </div>
-      )}
-
-      {!retoActivo ? (
-        <div style={{ color: T.gray, fontSize: 13.5 }}>No hay ningún Reto activo en este momento. Espera a que un Admin active uno nuevo.</div>
-      ) : puntajeFinal ? (
-        <div style={{ textAlign: "center", padding: "20px 0" }}>
-          <div style={{ fontSize: 40, marginBottom: 8 }}>🏆</div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: T.ink, marginBottom: 4 }}>¡Reto #{retoActivo.numero} completado!</div>
-          <div style={{ fontSize: 15, color: T.inkSoft }}>{puntajeFinal.correctas}/{puntajeFinal.total} correctas — +{puntajeFinal.puntos} puntos</div>
-        </div>
-      ) : yaCompletado ? (
-        <div style={{ color: T.inkSoft, fontSize: 13.5 }}>
-          Ya jugaste el <strong>Reto #{retoActivo.numero}</strong> — {yaCompletado.correctas}/{retoActivo.preguntas.length} correctas ({yaCompletado.puntos} puntos). Espera al siguiente Reto para volver a jugar.
-        </div>
-      ) : (
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>🔥 ¡Reto #{retoActivo.numero} está activo!</div>
-          <div style={{ fontSize: 13, color: T.inkSoft, marginBottom: 16 }}>
-            {retoActivo.preguntas.length} preguntas de todos los módulos, {SEGUNDOS_POR_PREGUNTA_RETO} segundos por pregunta. Una sola oportunidad de responder — si fallas o se acaba el tiempo, la pregunta queda perdida para siempre.
+  if (pantalla === "resultados" && statsFinal) {
+    return (
+      <Card>
+        <div style={{ textAlign: "center", padding: "20px 10px" }}>
+          <div style={{ fontSize: 44, marginBottom: 8 }}>🎉</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: T.ink, marginBottom: 16 }}>¡Reto completado!</div>
+          <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap", marginBottom: 20 }}>
+            {[
+              { label: "Correctas", valor: `${statsFinal.correctas} / ${statsFinal.total}` },
+              { label: "Puntos", valor: statsFinal.puntos.toLocaleString() },
+              { label: "Incorrectas", valor: statsFinal.incorrectas },
+              { label: "Tiempo prom.", valor: statsFinal.promedioSeg + "s" },
+              { label: "Posición", valor: "#" + statsFinal.posicion + " de " + statsFinal.totalJugadores },
+            ].map((s) => (
+              <div key={s.label} style={{ background: T.graySoft, borderRadius: 10, padding: "10px 16px", minWidth: 100 }}>
+                <div style={{ fontSize: 10, color: T.gray, fontWeight: 700, textTransform: "uppercase" }}>{s.label}</div>
+                <div style={{ fontSize: 17, fontWeight: 800, color: T.ink }}>{s.valor}</div>
+              </div>
+            ))}
           </div>
-          <Btn variant="accent" onClick={empezarJuego}>▶ Jugar ahora</Btn>
+          <Btn variant="accent" onClick={() => setPantalla("podio")}>Ver podio 🏆</Btn>
         </div>
-      )}
-    </Card>
-  );
-}
+      </Card>
+    );
+  }
 
+  if (pantalla === "podio") {
+    const orden = [1, 0, 2];
+    return (
+      <Card>
+        <div style={{ textAlign: "center", padding: "24px 10px" }}>
+          <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 24 }}>🏆 Podio — Reto #{reto.numero}</div>
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "flex-end", gap: 14, marginBottom: 24 }}>
+            {orden.map((pos) => {
+              const p = podio[pos];
+              if (!p) return null;
+              const alturas = [110, 150, 90];
+              const medallas = ["🥈", "🥇", "🥉"];
+              const colores = ["#adb5bd", "#f59f00", "#d9822b"];
+              return (
+                <div key={pos} style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 100 }}>
+                  <div style={{ fontSize: 30 }}>{medallas[orden.indexOf(pos)]}</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, textAlign: "center" }}>{p.personal_nombre}</div>
+                  <div style={{ fontSize: 11, color: T.inkSoft, marginBottom: 6 }}>{p.puntos.toLocaleString()} pts</div>
+                  <div style={{ width: "100%", height: alturas[orden.indexOf(pos)], background: colores[orden.indexOf(pos)], borderRadius: "8px 8px 0 0" }} />
+                </div>
+              );
+            })}
+          </div>
+          <Btn variant="ghost" onClick={() => setPantalla("resultados")}>← Ver mi resultado</Btn>
+        </div>
+      </Card>
+    );
+  }
+
+  return null;
+}
 function Administrativo() {
   const [tab, setTab] = useState("resumen");
   return (
@@ -6542,6 +6848,16 @@ function Entrenamiento() {
   const [mostrarPerfil, setMostrarPerfil] = useState(false);
   const [vistaModo, setVistaModo] = useState("auto"); // "auto" | "movil" | "pc"
   const [pantallaMovil, setPantallaMovil] = useState("inicio"); // "inicio" | "modulos" | "ranking" | "perfil"
+  // Detecta si el dispositivo REAL ya es angosto (un celular de verdad),
+  // para no ponerle encima el marco de teléfono simulado — en un celular
+  // real eso solo desperdicia espacio y hace todo más chico e incómodo.
+  const [anchoReal, setAnchoReal] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 1024));
+  useEffect(() => {
+    const onResize = () => setAnchoReal(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const esMovilReal = anchoReal <= 480;
 
   // Detecta cuando el rango sube, para mostrar una celebración — se queda
   // visible hasta que la persona le dé clic a la X, así da tiempo de leerla.
@@ -6669,14 +6985,17 @@ function Entrenamiento() {
     ];
     return (
       <div style={{
-        position: "fixed", inset: 0, zIndex: 9999, background: "rgba(20,20,20,0.85)",
+        position: "fixed", inset: 0, zIndex: 9999, background: esMovilReal ? "#fff" : "rgba(20,20,20,0.85)",
         display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-        padding: "16px 0", overflowY: "auto",
+        padding: esMovilReal ? 0 : "16px 0", overflowY: "auto",
       }}>
         <style>{`@keyframes flameFloatSlow { 0%,100% { transform: translateY(0) rotate(-10deg) scale(1); opacity: 0.12; } 50% { transform: translateY(-8px) rotate(-6deg) scale(1.05); opacity: 0.2; } }
           @keyframes rachaPulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.15); opacity: 0.75; } }`}</style>
-        <div style={{ width: 390, maxWidth: "94vw", background: "#111", borderRadius: 34, padding: 8, boxShadow: "0 24px 60px rgba(0,0,0,0.5)", flexShrink: 0 }}>
-          <div style={{ background: "#fff", borderRadius: 26, overflow: "hidden", display: "flex", flexDirection: "column", height: "min(760px, 88vh)" }}>
+        <div style={esMovilReal
+          ? { width: "100%", height: "100%", background: "#fff", flexShrink: 0 }
+          : { width: 390, maxWidth: "94vw", background: "#111", borderRadius: 34, padding: 8, boxShadow: "0 24px 60px rgba(0,0,0,0.5)", flexShrink: 0 }
+        }>
+          <div style={{ background: "#fff", overflow: "hidden", display: "flex", flexDirection: "column", height: esMovilReal ? "100%" : "min(760px, 88vh)", borderRadius: esMovilReal ? 0 : 26 }}>
             <div style={{ background: "linear-gradient(120deg, #ff922b 0%, #e8590c 45%, #c92a2a 100%)", padding: "16px 16px 12px", color: "#fff", flexShrink: 0, position: "relative", overflow: "hidden" }}>
               <Flame size={64} color="#fff" style={{ position: "absolute", top: -16, left: -8, opacity: 0.12, transform: "rotate(-10deg)", animation: "flameFloatSlow 5s ease-in-out infinite" }} />
               <button onClick={() => setVistaModo("auto")} title="Salir de vista celular" style={{ position: "absolute", top: 12, right: 14, background: "rgba(255,255,255,0.22)", border: "none", borderRadius: 8, width: 26, height: 26, color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1 }}>
@@ -6802,7 +7121,9 @@ function Entrenamiento() {
             )}
           </div>
         </div>
-        <button onClick={() => setVistaModo("auto")} style={{ marginTop: 12, fontSize: 12.5, fontWeight: 600, color: "rgba(255,255,255,0.85)", background: "rgba(255,255,255,0.12)", border: "none", borderRadius: 8, padding: "6px 14px", cursor: "pointer", flexShrink: 0 }}>✕ Salir de vista celular</button>
+        {!esMovilReal && (
+          <button onClick={() => setVistaModo("auto")} style={{ marginTop: 12, fontSize: 12.5, fontWeight: 600, color: "rgba(255,255,255,0.85)", background: "rgba(255,255,255,0.12)", border: "none", borderRadius: 8, padding: "6px 14px", cursor: "pointer", flexShrink: 0 }}>✕ Salir de vista celular</button>
+        )}
       </div>
     );
   }

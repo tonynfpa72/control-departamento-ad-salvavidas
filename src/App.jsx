@@ -6686,6 +6686,9 @@ function calcularModulosDesbloqueados(puntosPorSegmento) {
   const resultado = {};
   let previoAprobado = true;
   SEGMENTOS_ENTRENAMIENTO.forEach((s) => {
+    // NICET siempre está disponible, sin importar el progreso — no se
+    // le exige nada al anterior, y tampoco afecta lo que viene después.
+    if (s.id === "nicet") { resultado[s.id] = true; return; }
     const max = MAX_PUNTOS_SEGMENTO[s.id] || 0;
     if (max === 0) { resultado[s.id] = true; return; }
     resultado[s.id] = previoAprobado;
@@ -7515,9 +7518,37 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
     const elTitulo = cont.querySelector(".je-titulo");
     const elFrase = cont.querySelector(".je-frase");
     const elCanvas = cont.querySelector(".je-canvas");
+    const elWrapper = cont.querySelector(".je-wrapper");
     const elSvg = cont.querySelector(".je-wires");
     const elResultado = cont.querySelector(".je-resultado");
     const elPalette = cont.querySelector(".je-palette");
+
+    // Gesto de 2 dedos para deslizar el lienzo (como en apps de diseño):
+    // con 1 dedo se arrastran las compuertas/cables normalmente; al
+    // detectar un SEGUNDO dedo, en vez de arrastrar se desliza la vista
+    // completa hacia los lados.
+    let dosDedosX = null;
+    function onWrapperTouchStart(e) {
+      if (e.touches.length === 2) {
+        dosDedosX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      }
+    }
+    function onWrapperTouchMove(e) {
+      if (e.touches.length === 2 && dosDedosX !== null) {
+        e.preventDefault();
+        const nuevaX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        elWrapper.scrollLeft -= (nuevaX - dosDedosX);
+        dosDedosX = nuevaX;
+      }
+    }
+    function onWrapperTouchEnd(e) {
+      if (e.touches.length < 2) dosDedosX = null;
+    }
+    if (elWrapper) {
+      elWrapper.addEventListener("touchstart", onWrapperTouchStart, { passive: true });
+      elWrapper.addEventListener("touchmove", onWrapperTouchMove, { passive: false });
+      elWrapper.addEventListener("touchend", onWrapperTouchEnd, { passive: true });
+    }
 
     function fondoNeutral() { elCanvas.style.background = T.graySoft; }
 
@@ -7886,6 +7917,11 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
     return () => {
       document.removeEventListener("pointermove", onDocPointerMove);
       document.removeEventListener("pointerup", onDocPointerUp);
+      if (elWrapper) {
+        elWrapper.removeEventListener("touchstart", onWrapperTouchStart);
+        elWrapper.removeEventListener("touchmove", onWrapperTouchMove);
+        elWrapper.removeEventListener("touchend", onWrapperTouchEnd);
+      }
     };
   }, [mostrarIntro]);
 
@@ -7991,13 +8027,13 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
           <button className="je-limpiar" style={{ padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Limpiar lienzo</button>
           <button onClick={() => setMostrarIntro(true)} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Ver la guía otra vez</button>
         </div>
-        <div style={{ overflowX: "auto", borderRadius: 12, WebkitOverflowScrolling: "touch" }}>
-          <div className="je-canvas" style={{ position: "relative", height: 400, width: "100%", background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s", touchAction: "pan-x" }}>
+        <div className="je-wrapper" style={{ overflowX: "auto", borderRadius: 12, WebkitOverflowScrolling: "touch", touchAction: "pan-x" }}>
+          <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 900, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s" }}>
             <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
             <style>{`@keyframes marchHormigas { to { stroke-dashoffset: -20; } } .je-corriente { animation: marchHormigas 0.6s linear infinite; }`}</style>
           </div>
         </div>
-        <div style={{ fontSize: 10.5, color: T.gray, marginTop: 4 }}>💡 En celular, desliza el lienzo hacia los lados para ver el circuito completo.</div>
+        <div style={{ fontSize: 10.5, color: T.gray, marginTop: 4 }}>💡 En celular: 1 dedo mueve las compuertas y conecta los cables. 2 dedos deslizan el lienzo hacia los lados para ver todo el circuito.</div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
           <span className="je-resultado" style={{ fontSize: 14 }}></span>
         </div>
@@ -8105,9 +8141,37 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
     const elTitulo = cont.querySelector(".je-titulo");
     const elFrase = cont.querySelector(".je-frase");
     const elCanvas = cont.querySelector(".je-canvas");
+    const elWrapper = cont.querySelector(".je-wrapper");
     const elSvg = cont.querySelector(".je-wires");
     const elResultado = cont.querySelector(".je-resultado");
     const elPalette = cont.querySelector(".je-palette");
+
+    // Gesto de 2 dedos para deslizar el lienzo (como en apps de diseño):
+    // con 1 dedo se arrastran las compuertas/cables normalmente; al
+    // detectar un SEGUNDO dedo, en vez de arrastrar se desliza la vista
+    // completa hacia los lados.
+    let dosDedosX = null;
+    function onWrapperTouchStart(e) {
+      if (e.touches.length === 2) {
+        dosDedosX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      }
+    }
+    function onWrapperTouchMove(e) {
+      if (e.touches.length === 2 && dosDedosX !== null) {
+        e.preventDefault();
+        const nuevaX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        elWrapper.scrollLeft -= (nuevaX - dosDedosX);
+        dosDedosX = nuevaX;
+      }
+    }
+    function onWrapperTouchEnd(e) {
+      if (e.touches.length < 2) dosDedosX = null;
+    }
+    if (elWrapper) {
+      elWrapper.addEventListener("touchstart", onWrapperTouchStart, { passive: true });
+      elWrapper.addEventListener("touchmove", onWrapperTouchMove, { passive: false });
+      elWrapper.addEventListener("touchend", onWrapperTouchEnd, { passive: true });
+    }
 
     function fondoNeutral() { elCanvas.style.background = T.graySoft; }
 
@@ -8475,6 +8539,11 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
     return () => {
       document.removeEventListener("pointermove", onDocPointerMove);
       document.removeEventListener("pointerup", onDocPointerUp);
+      if (elWrapper) {
+        elWrapper.removeEventListener("touchstart", onWrapperTouchStart);
+        elWrapper.removeEventListener("touchmove", onWrapperTouchMove);
+        elWrapper.removeEventListener("touchend", onWrapperTouchEnd);
+      }
     };
   }, [mostrarIntro]);
 
@@ -8593,13 +8662,13 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
           <button className="je-limpiar" style={{ padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Limpiar lienzo</button>
           <button onClick={() => setMostrarIntro(true)} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Ver la guía otra vez</button>
         </div>
-        <div style={{ overflowX: "auto", borderRadius: 12, WebkitOverflowScrolling: "touch" }}>
-          <div className="je-canvas" style={{ position: "relative", height: 400, width: "100%", background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s", touchAction: "pan-x" }}>
+        <div className="je-wrapper" style={{ overflowX: "auto", borderRadius: 12, WebkitOverflowScrolling: "touch", touchAction: "pan-x" }}>
+          <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 900, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s" }}>
             <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
             <style>{`@keyframes marchHormigas { to { stroke-dashoffset: -20; } } .je-corriente { animation: marchHormigas 0.6s linear infinite; }`}</style>
           </div>
         </div>
-        <div style={{ fontSize: 10.5, color: T.gray, marginTop: 4 }}>💡 En celular, desliza el lienzo hacia los lados para ver el circuito completo.</div>
+        <div style={{ fontSize: 10.5, color: T.gray, marginTop: 4 }}>💡 En celular: 1 dedo mueve las compuertas y conecta los cables. 2 dedos deslizan el lienzo hacia los lados para ver todo el circuito.</div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
           <span className="je-resultado" style={{ fontSize: 14 }}></span>
         </div>

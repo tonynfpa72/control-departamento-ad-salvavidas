@@ -6685,10 +6685,12 @@ const MAX_PUNTOS_SEGMENTO = {
 function calcularModulosDesbloqueados(puntosPorSegmento) {
   const resultado = {};
   let previoAprobado = true;
+  const SIEMPRE_DESBLOQUEADOS = ["nicet", "fas_nivel1"];
   SEGMENTOS_ENTRENAMIENTO.forEach((s) => {
-    // NICET siempre está disponible, sin importar el progreso — no se
-    // le exige nada al anterior, y tampoco afecta lo que viene después.
-    if (s.id === "nicet") { resultado[s.id] = true; return; }
+    // NICET y FAS Nivel I siempre están disponibles, sin importar el
+    // progreso — no se les exige nada al anterior, y tampoco afectan
+    // lo que viene después en la cadena.
+    if (SIEMPRE_DESBLOQUEADOS.includes(s.id)) { resultado[s.id] = true; return; }
     const max = MAX_PUNTOS_SEGMENTO[s.id] || 0;
     if (max === 0) { resultado[s.id] = true; return; }
     resultado[s.id] = previoAprobado;

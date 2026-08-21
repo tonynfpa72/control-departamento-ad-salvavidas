@@ -4239,7 +4239,7 @@ function generarPreguntasAlAzar(n) {
 function PanelAdminReto({ reto, onCambio }) {
   const confirmar = useContext(ConfirmContext);
   const [preparando, setPreparando] = useState(false);
-  const [confSegundos, setConfSegundos] = useState(60);
+  const [confSegundos, setConfSegundos] = useState(50);
   const [confPuntosMax, setConfPuntosMax] = useState(1000);
   const [confMostrarRanking, setConfMostrarRanking] = useState(true);
   const [participantes, setParticipantes] = useState(0);
@@ -4311,8 +4311,8 @@ function PanelAdminReto({ reto, onCambio }) {
         <div>
           <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 10 }}>No hay ningún reto en preparación. Configura uno nuevo:</div>
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 12 }}>
-            <label style={{ fontSize: 12, color: T.inkSoft }}>Segundos totales del reto (todas las preguntas)
-              <input type="number" min="20" max="600" value={confSegundos} onChange={(e) => setConfSegundos(Number(e.target.value))} style={{ ...inputStyle, width: 80, marginLeft: 8 }} />
+            <label style={{ fontSize: 12, color: T.inkSoft }}>Segundos por pregunta
+              <input type="number" min="10" max="120" value={confSegundos} onChange={(e) => setConfSegundos(Number(e.target.value))} style={{ ...inputStyle, width: 80, marginLeft: 8 }} />
             </label>
             <label style={{ fontSize: 12, color: T.inkSoft }}>Puntos máx. por pregunta
               <input type="number" min="100" max="5000" step="100" value={confPuntosMax} onChange={(e) => setConfPuntosMax(Number(e.target.value))} style={{ ...inputStyle, width: 90, marginLeft: 8 }} />
@@ -4329,7 +4329,7 @@ function PanelAdminReto({ reto, onCambio }) {
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, color: T.ink, marginBottom: 6 }}>Reto #{reto.numero} — en borrador (todavía no lo ve nadie más)</div>
           <div style={{ fontSize: 11.5, color: T.inkSoft, marginBottom: 10 }}>
-            {reto.preguntas.length} preguntas · {reto.segundos_por_pregunta}s en total · hasta {reto.puntos_max_por_pregunta} pts c/u · ranking intermedio: {reto.mostrar_ranking_intermedio ? "sí" : "no"}
+            {reto.preguntas.length} preguntas · {reto.segundos_por_pregunta}s c/u · hasta {reto.puntos_max_por_pregunta} pts c/u · ranking intermedio: {reto.mostrar_ranking_intermedio ? "sí" : "no"}
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <Btn variant="accent" onClick={activarReto}>🚀 Activar Reto</Btn>
@@ -4390,7 +4390,7 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
   const [bloqueada, setBloqueada] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [respuestaElegida, setRespuestaElegida] = useState(null);
-  const [segundosRestantes, setSegundosRestantes] = useState(60);
+  const [segundosRestantes, setSegundosRestantes] = useState(50);
   const [iniciadoEn, setIniciadoEn] = useState(null);
   const inicioPreguntaRef = React.useRef(0);
   const [puntajeAcumulado, setPuntajeAcumulado] = useState(0);
@@ -4480,7 +4480,6 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
     if (pantalla !== "cuenta_regresiva") return;
     if (cuenta <= 0) {
       setIndice(0); setPuntajeAcumulado(0); setCorrectasCount(0);
-      setSegundosRestantes(reto.segundos_por_pregunta || 60);
       finalizandoRef.current = false;
       setPantalla("jugando");
       return;
@@ -4489,26 +4488,28 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
     return () => clearTimeout(t);
   }, [pantalla, cuenta]);
 
-  // Un solo cronómetro para TODO el reto — no se reinicia entre
-  // preguntas. Al llegar a 0, termina automáticamente sin importar en
-  // qué pregunta iba.
-  useEffect(() => {
-    if (pantalla !== "jugando") return;
-    if (segundosRestantes <= 0) {
-      finalizarPorTiempo();
-      return;
-    }
-    const t = setTimeout(() => setSegundosRestantes((s) => s - 1), 1000);
-    return () => clearTimeout(t);
-  }, [pantalla, segundosRestantes]);
-
+  // Cronómetro POR PREGUNTA (50s por defecto) — se reinicia cada vez
+  // que cambia la pregunta. Si llega a 0 sin responder, se envía
+  // automáticamente como no respondida (no termina el reto completo,
+  // solo se pierde esa pregunta).
   useEffect(() => {
     if (pantalla !== "jugando") return;
     setBloqueada(false);
     setFeedback(null);
     setRespuestaElegida(null);
+    setSegundosRestantes(reto.segundos_por_pregunta || 50);
     inicioPreguntaRef.current = Date.now();
   }, [pantalla, indice]);
+
+  useEffect(() => {
+    if (pantalla !== "jugando" || bloqueada) return;
+    if (segundosRestantes <= 0) {
+      responder(-1);
+      return;
+    }
+    const t = setTimeout(() => setSegundosRestantes((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [pantalla, segundosRestantes, bloqueada]);
 
   const finalizarPorTiempo = async () => {
     if (finalizandoRef.current) return;
@@ -4531,12 +4532,8 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
       p_reto_id: reto.id, p_pregunta_indice: indice, p_respuesta: opcionIdx, p_tiempo_ms: tiempoMs,
       p_personal_codigo: jugador.codigo, p_personal_nombre: jugador.nombre,
     });
-    if (error || !data || data.error === "tiempo_agotado") {
-      finalizarPorTiempo();
-      return;
-    }
-    if (data.error) {
-      setFeedback({ error: true, msg: "No se pudo registrar la respuesta." });
+    if (error || !data || data.error) {
+      setFeedback({ error: true, msg: opcionIdx === -1 ? "⏱️ Se acabó el tiempo de esta pregunta." : "No se pudo registrar la respuesta.", correcta_idx: data?.correcta_idx });
       return;
     }
     setFeedback({ correcta: data.correcta, puntos: data.puntos, correcta_idx: data.correcta_idx });
@@ -4602,7 +4599,7 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
           <div style={{ fontSize: 48, marginBottom: 10, animation: "retoPulso 1.4s ease-in-out infinite" }}>⚡</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: T.ink, marginBottom: 6 }}>¡Nuevo reto disponible!</div>
           <div style={{ fontSize: 14, color: T.inkSoft, marginBottom: 10 }}>
-            Reto #{reto.numero} — {reto.preguntas.length} preguntas, <strong>{reto.segundos_por_pregunta || 60} segundos en total</strong> para responder las que puedas.
+            Reto #{reto.numero} — {reto.preguntas.length} preguntas, <strong>{reto.segundos_por_pregunta || 50} segundos por pregunta</strong>. ¡Entre más rápido respondas, más puntos ganas!
           </div>
           <div style={{ fontSize: 12, color: T.red, fontWeight: 700, marginBottom: 24 }}>
             ⚠️ Una vez que entres, no podrás pausar, salir, ni reintentar — si recargas o sales de esta pantalla, pierdes el reto.
@@ -4705,7 +4702,7 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
               <span style={{ fontSize: 14, fontWeight: 700, color: T.red }}>{feedback.msg}</span>
             ) : (
               <span style={{ fontSize: 15, fontWeight: 800, color: feedback.correcta ? T.green : T.red }}>
-                {feedback.correcta ? `✓ ¡Correcto! +${feedback.puntos.toLocaleString()} puntos` : "✗ Respuesta incorrecta"}
+                {feedback.correcta ? `✓ ¡Correcto! +${feedback.puntos.toLocaleString()} puntos` : (respuestaElegida === -1 ? "⏱️ Se acabó el tiempo de esta pregunta" : "✗ Respuesta incorrecta")}
               </span>
             )}
             <Btn variant="accent" onClick={avanzar}>{indice + 1 >= reto.preguntas.length ? "Ver resultado final" : "Siguiente pregunta →"}</Btn>
@@ -9477,12 +9474,14 @@ function JuegoNICET({ onGanarPuntos }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
         {PREGUNTAS_NICET.map((p, i) => {
           const t = p[idioma];
+          const yaRespondida = p.multiple ? (Array.isArray(respuestas[i]) && respuestas[i].length > 0) : respuestas[i] !== undefined;
           const correctaMostrada = resultado?.detalle;
-          const ok = correctaMostrada ? correctaMostrada[i] : null;
+          const ok = correctaMostrada ? correctaMostrada[i] : (yaRespondida ? esCorrecta(p, i) : null);
+          const mostrarColor = correctaMostrada || yaRespondida;
           return (
             <div key={i} style={{
               border: `1px solid ${T.line}`, borderRadius: 10, padding: 14,
-              background: correctaMostrada ? (ok ? T.greenSoft : T.redSoft) : T.graySoft,
+              background: mostrarColor ? (ok ? T.greenSoft : T.redSoft) : T.graySoft,
             }}>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{i + 1}. {t.texto}</div>
               {p.imagen && (
@@ -9502,7 +9501,7 @@ function JuegoNICET({ onGanarPuntos }) {
                   </label>
                 ))}
               </div>
-              {correctaMostrada && !ok && (
+              {mostrarColor && !ok && (
                 <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>
                   {idioma === "en" ? "Correct answer" : "Respuesta correcta"}: {p.multiple ? p.correctas.map((c) => t.opciones[c]).join(", ") : t.opciones[p.correcta]}
                 </div>
@@ -9629,12 +9628,14 @@ function JuegoFASNivel1({ onGanarPuntos }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
         {preguntas.map((p, i) => {
           const t = p[idioma];
+          const yaRespondida = p.multiple ? (Array.isArray(respuestas[i]) && respuestas[i].length > 0) : respuestas[i] !== undefined;
           const correctaMostrada = resultado?.detalle;
-          const ok = correctaMostrada ? correctaMostrada[i] : null;
+          const ok = correctaMostrada ? correctaMostrada[i] : (yaRespondida ? esCorrecta(p, i) : null);
+          const mostrarColor = correctaMostrada || yaRespondida;
           return (
             <div key={i} style={{
               border: `1px solid ${T.line}`, borderRadius: 10, padding: 14,
-              background: correctaMostrada ? (ok ? T.greenSoft : T.redSoft) : T.graySoft,
+              background: mostrarColor ? (ok ? T.greenSoft : T.redSoft) : T.graySoft,
             }}>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{i + 1}. {t.texto}</div>
               {p.imagen && (
@@ -9654,7 +9655,7 @@ function JuegoFASNivel1({ onGanarPuntos }) {
                   </label>
                 ))}
               </div>
-              {correctaMostrada && !ok && (
+              {mostrarColor && !ok && (
                 <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>
                   {idioma === "en" ? "Correct answer" : "Respuesta correcta"}: {p.multiple ? p.correctas.map((c) => t.opciones[c]).join(", ") : t.opciones[p.correcta]}
                 </div>

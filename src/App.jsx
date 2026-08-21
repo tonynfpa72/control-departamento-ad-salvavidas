@@ -4619,6 +4619,7 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
   if (pantalla === "cuenta_regresiva") {
     return (
       <Card>
+        {panelAdmin}
         <div style={{ textAlign: "center", padding: "60px 10px" }}>
           <style>{`@keyframes retoZoom { 0% { transform: scale(0.5); opacity: 0; } 50% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }`}</style>
           <div key={cuenta} style={{ fontSize: 90, fontWeight: 800, color: T.accent, animation: "retoZoom 0.7s ease-out" }}>
@@ -4632,6 +4633,7 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
   if (pantalla === "ranking_intermedio") {
     return (
       <Card>
+        {panelAdmin}
         <div style={{ textAlign: "center", padding: "20px 10px" }}>
           <div style={{ fontSize: 28, marginBottom: 12 }}>🏆</div>
           <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16 }}>Ranking actual</div>
@@ -4743,6 +4745,7 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
     const orden = [1, 0, 2];
     return (
       <Card>
+        {panelAdmin}
         <div style={{ textAlign: "center", padding: "24px 10px" }}>
           <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 24 }}>🏆 Podio — Reto #{reto.numero}</div>
           <div style={{ display: "flex", justifyContent: "center", alignItems: "flex-end", gap: 14, marginBottom: 24 }}>

@@ -7514,7 +7514,7 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
       const el = document.createElement("div");
       el.className = "je-nodo";
       el.dataset.id = id;
-      el.style.cssText = "position:absolute; cursor:grab; user-select:none;";
+      el.style.cssText = "position:absolute; cursor:grab; user-select:none; touch-action:none;";
       el.style.left = x + "px"; el.style.top = y + "px";
 
       if (tipo === "gate") {
@@ -7553,13 +7553,18 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
     function altoNodo(tipo) { return tipo === "gate" ? 40 : 34; }
 
     function crearPuerto(nodoEl, nodoId, puertoId, dir, idx, total, tipo) {
+      // El contenedor es un área de toque grande (28x28) — mucho más fácil
+      // de tocar en celular — con un puntito visible más chico adentro.
       const dot = document.createElement("div");
       dot.className = "je-puerto";
       dot.dataset.nodo = nodoId; dot.dataset.puerto = puertoId; dot.dataset.dir = dir;
       const h = altoNodo(tipo);
       const offsetY = total > 1 ? (idx === 0 ? h * 0.28 : h * 0.72) : h / 2;
-      dot.style.cssText = `position:absolute; width:11px; height:11px; border-radius:50%; background:${T.steel}; cursor:crosshair; top:${offsetY}px; transform:translate(-50%,-50%); z-index:2;`;
+      dot.style.cssText = `position:absolute; width:28px; height:28px; display:flex; align-items:center; justify-content:center; cursor:crosshair; top:${offsetY}px; transform:translate(-50%,-50%); z-index:2; touch-action:none;`;
       dot.style.left = dir === "in" ? "0px" : (tipo === "gate" ? "62px" : "100%");
+      const puntoVisible = document.createElement("div");
+      puntoVisible.style.cssText = `width:12px; height:12px; border-radius:50%; background:${T.steel}; pointer-events:none;`;
+      dot.appendChild(puntoVisible);
       nodoEl.appendChild(dot);
 
       dot.addEventListener("pointerdown", (e) => {
@@ -7587,8 +7592,27 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
       arrastreCable.curY = e.clientY - cr.top;
       dibujarConexiones();
     }
-    function onDocPointerUp() {
-      if (arrastreCable) { arrastreCable = null; dibujarConexiones(); }
+    function onDocPointerUp(e) {
+      if (!arrastreCable) return;
+      // Si el dedo no soltó justo encima de un puerto de entrada, busca el
+      // más cercano dentro de una tolerancia generosa (40px) — así no hace
+      // falta tanta precisión al tocar la pantalla.
+      const candidatos = Array.from(elCanvas.querySelectorAll('.je-puerto[data-dir="in"]'));
+      let mejor = null, mejorDist = 40;
+      candidatos.forEach((el2) => {
+        const r = el2.getBoundingClientRect();
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        const dist = Math.hypot(e.clientX - cx, e.clientY - cy);
+        if (dist < mejorDist) { mejorDist = dist; mejor = el2; }
+      });
+      if (mejor) {
+        const nodoId = mejor.dataset.nodo, puertoId = mejor.dataset.puerto;
+        conexiones = conexiones.filter((c) => !(c.aNodo === nodoId && c.aPuerto === puertoId));
+        conexiones.push({ id: "c" + (conexionIdSeq++), deNodo: arrastreCable.deNodo, dePuerto: arrastreCable.dePuerto, aNodo: nodoId, aPuerto: puertoId });
+        actualizarEstado();
+      }
+      arrastreCable = null;
+      dibujarConexiones();
     }
     document.addEventListener("pointermove", onDocPointerMove);
     document.addEventListener("pointerup", onDocPointerUp);
@@ -7884,7 +7908,7 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
           <button onClick={() => setMostrarIntro(true)} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Ver la guía otra vez</button>
         </div>
         <div style={{ overflowX: "auto", borderRadius: 12, WebkitOverflowScrolling: "touch" }}>
-          <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 650, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s" }}>
+          <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 650, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s", touchAction: "none" }}>
             <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
             <style>{`@keyframes marchHormigas { to { stroke-dashoffset: -20; } } .je-corriente { animation: marchHormigas 0.6s linear infinite; }`}</style>
           </div>
@@ -8071,7 +8095,7 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
       const el = document.createElement("div");
       el.className = "je-nodo";
       el.dataset.id = id;
-      el.style.cssText = "position:absolute; cursor:grab; user-select:none;";
+      el.style.cssText = "position:absolute; cursor:grab; user-select:none; touch-action:none;";
       el.style.left = x + "px"; el.style.top = y + "px";
 
       if (tipo === "gate") {
@@ -8110,13 +8134,18 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
     function altoNodo(tipo) { return tipo === "gate" ? 40 : 34; }
 
     function crearPuerto(nodoEl, nodoId, puertoId, dir, idx, total, tipo) {
+      // El contenedor es un área de toque grande (28x28) — mucho más fácil
+      // de tocar en celular — con un puntito visible más chico adentro.
       const dot = document.createElement("div");
       dot.className = "je-puerto";
       dot.dataset.nodo = nodoId; dot.dataset.puerto = puertoId; dot.dataset.dir = dir;
       const h = altoNodo(tipo);
       const offsetY = total > 1 ? (idx === 0 ? h * 0.28 : h * 0.72) : h / 2;
-      dot.style.cssText = `position:absolute; width:11px; height:11px; border-radius:50%; background:${T.steel}; cursor:crosshair; top:${offsetY}px; transform:translate(-50%,-50%); z-index:2;`;
+      dot.style.cssText = `position:absolute; width:28px; height:28px; display:flex; align-items:center; justify-content:center; cursor:crosshair; top:${offsetY}px; transform:translate(-50%,-50%); z-index:2; touch-action:none;`;
       dot.style.left = dir === "in" ? "0px" : (tipo === "gate" ? "62px" : "100%");
+      const puntoVisible = document.createElement("div");
+      puntoVisible.style.cssText = `width:12px; height:12px; border-radius:50%; background:${T.steel}; pointer-events:none;`;
+      dot.appendChild(puntoVisible);
       nodoEl.appendChild(dot);
 
       dot.addEventListener("pointerdown", (e) => {
@@ -8144,8 +8173,27 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
       arrastreCable.curY = e.clientY - cr.top;
       dibujarConexiones();
     }
-    function onDocPointerUp() {
-      if (arrastreCable) { arrastreCable = null; dibujarConexiones(); }
+    function onDocPointerUp(e) {
+      if (!arrastreCable) return;
+      // Si el dedo no soltó justo encima de un puerto de entrada, busca el
+      // más cercano dentro de una tolerancia generosa (40px) — así no hace
+      // falta tanta precisión al tocar la pantalla.
+      const candidatos = Array.from(elCanvas.querySelectorAll('.je-puerto[data-dir="in"]'));
+      let mejor = null, mejorDist = 40;
+      candidatos.forEach((el2) => {
+        const r = el2.getBoundingClientRect();
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        const dist = Math.hypot(e.clientX - cx, e.clientY - cy);
+        if (dist < mejorDist) { mejorDist = dist; mejor = el2; }
+      });
+      if (mejor) {
+        const nodoId = mejor.dataset.nodo, puertoId = mejor.dataset.puerto;
+        conexiones = conexiones.filter((c) => !(c.aNodo === nodoId && c.aPuerto === puertoId));
+        conexiones.push({ id: "c" + (conexionIdSeq++), deNodo: arrastreCable.deNodo, dePuerto: arrastreCable.dePuerto, aNodo: nodoId, aPuerto: puertoId });
+        actualizarEstado();
+      }
+      arrastreCable = null;
+      dibujarConexiones();
     }
     document.addEventListener("pointermove", onDocPointerMove);
     document.addEventListener("pointerup", onDocPointerUp);
@@ -8453,7 +8501,7 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
           <button onClick={() => setMostrarIntro(true)} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Ver la guía otra vez</button>
         </div>
         <div style={{ overflowX: "auto", borderRadius: 12, WebkitOverflowScrolling: "touch" }}>
-          <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 650, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s" }}>
+          <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 650, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s", touchAction: "none" }}>
             <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
             <style>{`@keyframes marchHormigas { to { stroke-dashoffset: -20; } } .je-corriente { animation: marchHormigas 0.6s linear infinite; }`}</style>
           </div>

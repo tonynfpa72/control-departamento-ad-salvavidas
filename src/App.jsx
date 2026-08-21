@@ -4237,8 +4237,9 @@ function generarPreguntasAlAzar(n) {
 // Panel de control del Reto — solo para Admin. Prepara (borrador),
 // configura, activa, monitorea en vivo, y finaliza.
 function PanelAdminReto({ reto, onCambio }) {
+  const confirmar = useContext(ConfirmContext);
   const [preparando, setPreparando] = useState(false);
-  const [confSegundos, setConfSegundos] = useState(20);
+  const [confSegundos, setConfSegundos] = useState(60);
   const [confPuntosMax, setConfPuntosMax] = useState(1000);
   const [confMostrarRanking, setConfMostrarRanking] = useState(true);
   const [participantes, setParticipantes] = useState(0);
@@ -4282,7 +4283,22 @@ function PanelAdminReto({ reto, onCambio }) {
     onCambio();
   };
 
+  const desactivarReto = async () => {
+    // Vuelve a "borrador" — desaparece para todos menos Admin, sin
+    // borrar nada. Se puede reactivar después con el mismo reto.
+    await supabase.from("entrenamiento_retos").update({ estado: "borrador", activo: false }).eq("id", reto.id);
+    onCambio();
+  };
+
   const finalizarReto = async () => {
+    await supabase.from("entrenamiento_retos").update({ estado: "finalizado", activo: false }).eq("id", reto.id);
+    onCambio();
+  };
+
+  const resetearReto = async () => {
+    if (!(await confirmar("¿Resetear este reto? Se borra el progreso en curso de todos. El último puntaje ya guardado de cada persona en la columna \"Reto\" NO se toca."))) return;
+    await supabase.from("entrenamiento_reto_respuestas").delete().eq("reto_id", reto.id);
+    await supabase.from("entrenamiento_reto_completados").delete().eq("reto_id", reto.id);
     await supabase.from("entrenamiento_retos").update({ estado: "finalizado", activo: false }).eq("id", reto.id);
     onCambio();
   };
@@ -4295,8 +4311,8 @@ function PanelAdminReto({ reto, onCambio }) {
         <div>
           <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 10 }}>No hay ningún reto en preparación. Configura uno nuevo:</div>
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 12 }}>
-            <label style={{ fontSize: 12, color: T.inkSoft }}>Segundos por pregunta
-              <input type="number" min="5" max="90" value={confSegundos} onChange={(e) => setConfSegundos(Number(e.target.value))} style={{ ...inputStyle, width: 80, marginLeft: 8 }} />
+            <label style={{ fontSize: 12, color: T.inkSoft }}>Segundos totales del reto (todas las preguntas)
+              <input type="number" min="20" max="600" value={confSegundos} onChange={(e) => setConfSegundos(Number(e.target.value))} style={{ ...inputStyle, width: 80, marginLeft: 8 }} />
             </label>
             <label style={{ fontSize: 12, color: T.inkSoft }}>Puntos máx. por pregunta
               <input type="number" min="100" max="5000" step="100" value={confPuntosMax} onChange={(e) => setConfPuntosMax(Number(e.target.value))} style={{ ...inputStyle, width: 90, marginLeft: 8 }} />
@@ -4313,11 +4329,12 @@ function PanelAdminReto({ reto, onCambio }) {
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, color: T.ink, marginBottom: 6 }}>Reto #{reto.numero} — en borrador (todavía no lo ve nadie más)</div>
           <div style={{ fontSize: 11.5, color: T.inkSoft, marginBottom: 10 }}>
-            {reto.preguntas.length} preguntas · {reto.segundos_por_pregunta}s c/u · hasta {reto.puntos_max_por_pregunta} pts c/u · ranking intermedio: {reto.mostrar_ranking_intermedio ? "sí" : "no"}
+            {reto.preguntas.length} preguntas · {reto.segundos_por_pregunta}s en total · hasta {reto.puntos_max_por_pregunta} pts c/u · ranking intermedio: {reto.mostrar_ranking_intermedio ? "sí" : "no"}
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <Btn variant="accent" onClick={activarReto}>🚀 Activar Reto</Btn>
             <Btn variant="ghost" onClick={() => setVerPreguntas((v) => !v)}>{verPreguntas ? "Ocultar preguntas" : "Ver preguntas"}</Btn>
+            <Btn variant="danger" onClick={resetearReto}>🗑 Resetear</Btn>
           </div>
           {verPreguntas && (
             <div style={{ marginTop: 12, maxHeight: 260, overflowY: "auto", background: "#fff", borderRadius: 8, padding: 10 }}>
@@ -4347,7 +4364,11 @@ function PanelAdminReto({ reto, onCambio }) {
               ))}
             </div>
           )}
-          <Btn variant="danger" onClick={finalizarReto}>⏹ Finalizar Reto</Btn>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Btn variant="ghost" onClick={desactivarReto}>⏸ Desactivar (ocultar de nuevo)</Btn>
+            <Btn variant="danger" onClick={finalizarReto}>⏹ Finalizar Reto</Btn>
+            <Btn variant="danger" onClick={resetearReto}>🗑 Resetear</Btn>
+          </div>
         </div>
       )}
     </div>
@@ -4369,14 +4390,15 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
   const [bloqueada, setBloqueada] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [respuestaElegida, setRespuestaElegida] = useState(null);
-  const [segundosRestantes, setSegundosRestantes] = useState(0);
+  const [segundosRestantes, setSegundosRestantes] = useState(60);
+  const [iniciadoEn, setIniciadoEn] = useState(null);
   const inicioPreguntaRef = React.useRef(0);
   const [puntajeAcumulado, setPuntajeAcumulado] = useState(0);
   const [correctasCount, setCorrectasCount] = useState(0);
-  const [tiemposRespuesta, setTiemposRespuesta] = useState([]);
   const [rankingIntermedio, setRankingIntermedio] = useState([]);
   const [statsFinal, setStatsFinal] = useState(null);
   const [podio, setPodio] = useState([]);
+  const finalizandoRef = React.useRef(false);
 
   const cargarEstado = async () => {
     setCargando(true);
@@ -4388,67 +4410,68 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
     } else if (actual.estado === "borrador") {
       setPantalla(esAdmin ? "admin" : "sin_reto");
     } else if (actual.estado === "activo" && jugador?.codigo) {
-      const { data: yaCompleto } = await supabase.from("entrenamiento_reto_completados").select("*").eq("reto_id", actual.id).eq("personal_codigo", jugador.codigo);
-      if (yaCompleto && yaCompleto[0]) {
-        await armarResultados(actual, yaCompleto[0]);
+      const { data: parts } = await supabase.from("entrenamiento_reto_participantes").select("*").eq("reto_id", actual.id).eq("personal_codigo", jugador.codigo);
+      const part = parts && parts[0];
+      if (!part) {
+        setPantalla("anuncio");
+      } else if (part.estado === "completado") {
+        await armarResultados(actual, part);
+      } else if (part.estado === "perdido") {
+        setPantalla("perdido");
       } else {
-        // ¿Ya había respondido algunas preguntas antes de que se recargara
-        // la página? Si es así, se reanuda justo en la siguiente pregunta
-        // sin contestar, con el puntaje y aciertos ya acumulados.
-        const { data: previas } = await supabase.from("entrenamiento_reto_respuestas").select("*").eq("reto_id", actual.id).eq("personal_codigo", jugador.codigo).order("pregunta_indice", { ascending: true });
-        if (previas && previas.length > 0) {
-          const puntos = previas.reduce((s, r) => s + r.puntos, 0);
-          const correctas = previas.filter((r) => r.correcta).length;
-          const tiempos = previas.map((r) => r.tiempo_ms);
-          const siguienteIndice = Math.max(...previas.map((r) => r.pregunta_indice)) + 1;
-          setPuntajeAcumulado(puntos);
-          setCorrectasCount(correctas);
-          setTiemposRespuesta(tiempos);
-          if (siguienteIndice >= actual.preguntas.length) {
-            // Ya había respondido las 30 pero no se alcanzó a guardar el
-            // resultado final (por ejemplo, se cerró justo ahí) — se
-            // termina el reto automáticamente con lo que ya tiene.
-            await supabase.from("entrenamiento_puntajes").delete().eq("personal_codigo", jugador.codigo).eq("segmento", "reto");
-            await supabase.from("entrenamiento_reto_completados").insert({
-              reto_id: actual.id, personal_codigo: jugador.codigo, personal_nombre: jugador.nombre, puntos, correctas,
-            });
-            onGanarPuntos && onGanarPuntos("Reto #" + actual.numero, puntos);
-            const { data: completado } = await supabase.from("entrenamiento_reto_completados").select("*").eq("reto_id", actual.id).eq("personal_codigo", jugador.codigo);
-            await armarResultados(actual, completado[0]);
-          } else {
-            setIndice(siguienteIndice);
-            setPantalla("jugando");
-          }
-        } else {
-          setPantalla("anuncio");
-        }
+        // Estaba "en_curso" pero el componente se acaba de montar —
+        // significa que se recargó la página, se cerró la pestaña, o
+        // salió de la pantalla del reto. Por reglas del reto, eso se
+        // cuenta como PERDIDO y no se puede reintentar. Esto lo decide
+        // el backend (iniciar_reto_participacion), no el navegador.
+        await supabase.rpc("iniciar_reto_participacion", {
+          p_reto_id: actual.id, p_personal_codigo: jugador.codigo, p_personal_nombre: jugador.nombre,
+        });
+        setPantalla("perdido");
       }
     }
     setCargando(false);
   };
 
   useEffect(() => { cargarEstado(); }, [jugador?.codigo]);
-  // Revisa cada 8s si cambió el estado del reto (nuevo activado, etc.)
   useEffect(() => {
     const t = setInterval(() => { if (pantalla === "sin_reto" || pantalla === "admin") cargarEstado(); }, 8000);
     return () => clearInterval(t);
   }, [pantalla, jugador?.codigo]);
 
-  const armarResultados = async (retoRow, completado) => {
-    const { data: respuestas } = await supabase.from("entrenamiento_reto_respuestas").select("*").eq("reto_id", retoRow.id).eq("personal_codigo", jugador.codigo);
-    const tiempos = (respuestas || []).map((r) => r.tiempo_ms);
-    const promedio = tiempos.length ? Math.round(tiempos.reduce((a, b) => a + b, 0) / tiempos.length / 100) / 10 : 0;
+  // Salir de la pantalla del Reto mientras está "en_curso" también
+  // cuenta como abandonar — se avisa al backend al desmontar.
+  useEffect(() => {
+    return () => {
+      if (pantalla === "jugando" && reto?.id && jugador?.codigo && !finalizandoRef.current) {
+        supabase.rpc("finalizar_reto_participacion", {
+          p_reto_id: reto.id, p_personal_codigo: jugador.codigo, p_personal_nombre: jugador.nombre,
+        });
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pantalla, reto?.id, jugador?.codigo]);
+
+  const armarResultados = async (retoRow, part) => {
     const { data: todos } = await supabase.from("entrenamiento_reto_completados").select("*").eq("reto_id", retoRow.id).order("puntos", { ascending: false });
     const posicion = (todos || []).findIndex((r) => r.personal_codigo === jugador.codigo) + 1;
     setStatsFinal({
-      puntos: completado.puntos, correctas: completado.correctas, total: retoRow.preguntas.length,
-      incorrectas: retoRow.preguntas.length - completado.correctas, promedioSeg: promedio, posicion, totalJugadores: (todos || []).length,
+      puntos: part.puntos, correctas: part.correctas, total: retoRow.preguntas.length,
+      incorrectas: retoRow.preguntas.length - part.correctas, posicion: posicion || (todos ? todos.length + 1 : 1), totalJugadores: (todos || []).length,
     });
     setPodio((todos || []).slice(0, 3));
     setPantalla("resultados");
   };
 
-  const empezarCuentaRegresiva = () => {
+  const empezarCuentaRegresiva = async () => {
+    const { data, error } = await supabase.rpc("iniciar_reto_participacion", {
+      p_reto_id: reto.id, p_personal_codigo: jugador.codigo, p_personal_nombre: jugador.nombre,
+    });
+    if (error || !data || !data.ok) {
+      await cargarEstado();
+      return;
+    }
+    setIniciadoEn(data.iniciado_en);
     setPantalla("cuenta_regresiva");
     setCuenta(3);
   };
@@ -4456,7 +4479,9 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
   useEffect(() => {
     if (pantalla !== "cuenta_regresiva") return;
     if (cuenta <= 0) {
-      setIndice(0); setPuntajeAcumulado(0); setCorrectasCount(0); setTiemposRespuesta([]);
+      setIndice(0); setPuntajeAcumulado(0); setCorrectasCount(0);
+      setSegundosRestantes(reto.segundos_por_pregunta || 60);
+      finalizandoRef.current = false;
       setPantalla("jugando");
       return;
     }
@@ -4464,22 +4489,38 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
     return () => clearTimeout(t);
   }, [pantalla, cuenta]);
 
-  // Arranca el cronómetro de cada pregunta nueva.
+  // Un solo cronómetro para TODO el reto — no se reinicia entre
+  // preguntas. Al llegar a 0, termina automáticamente sin importar en
+  // qué pregunta iba.
+  useEffect(() => {
+    if (pantalla !== "jugando") return;
+    if (segundosRestantes <= 0) {
+      finalizarPorTiempo();
+      return;
+    }
+    const t = setTimeout(() => setSegundosRestantes((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [pantalla, segundosRestantes]);
+
   useEffect(() => {
     if (pantalla !== "jugando") return;
     setBloqueada(false);
     setFeedback(null);
     setRespuestaElegida(null);
-    setSegundosRestantes(reto.segundos_por_pregunta);
     inicioPreguntaRef.current = Date.now();
   }, [pantalla, indice]);
 
-  useEffect(() => {
-    if (pantalla !== "jugando" || bloqueada) return;
-    if (segundosRestantes <= 0) { responder(-1); return; }
-    const t = setTimeout(() => setSegundosRestantes((s) => s - 1), 1000);
-    return () => clearTimeout(t);
-  }, [pantalla, segundosRestantes, bloqueada]);
+  const finalizarPorTiempo = async () => {
+    if (finalizandoRef.current) return;
+    finalizandoRef.current = true;
+    const { data } = await supabase.rpc("finalizar_reto_participacion", {
+      p_reto_id: reto.id, p_personal_codigo: jugador.codigo, p_personal_nombre: jugador.nombre,
+    });
+    if (data && data.ok) {
+      onGanarPuntos && onGanarPuntos("Reto #" + reto.numero, data.puntos);
+      await armarResultados(reto, { puntos: data.puntos, correctas: data.correctas });
+    }
+  };
 
   const responder = async (opcionIdx) => {
     if (bloqueada) return;
@@ -4490,36 +4531,37 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
       p_reto_id: reto.id, p_pregunta_indice: indice, p_respuesta: opcionIdx, p_tiempo_ms: tiempoMs,
       p_personal_codigo: jugador.codigo, p_personal_nombre: jugador.nombre,
     });
-    if (error || !data || data.error) {
+    if (error || !data || data.error === "tiempo_agotado") {
+      finalizarPorTiempo();
+      return;
+    }
+    if (data.error) {
       setFeedback({ error: true, msg: "No se pudo registrar la respuesta." });
       return;
     }
     setFeedback({ correcta: data.correcta, puntos: data.puntos, correcta_idx: data.correcta_idx });
     setPuntajeAcumulado((p) => p + data.puntos);
     if (data.correcta) setCorrectasCount((c) => c + 1);
-    setTiemposRespuesta((t) => [...t, tiempoMs]);
   };
 
   const avanzar = async () => {
     const siguienteIndice = indice + 1;
     if (siguienteIndice >= reto.preguntas.length) {
-      // Solo cuenta el ÚLTIMO reto en el ranking general: se borran los
-      // puntos de un reto anterior de esta persona antes de guardar el nuevo.
-      await supabase.from("entrenamiento_puntajes").delete().eq("personal_codigo", jugador.codigo).eq("segmento", "reto");
-      await supabase.from("entrenamiento_reto_completados").insert({
-        reto_id: reto.id, personal_codigo: jugador.codigo, personal_nombre: jugador.nombre,
-        puntos: puntajeAcumulado, correctas: correctasCount,
+      finalizandoRef.current = true;
+      const { data } = await supabase.rpc("finalizar_reto_participacion", {
+        p_reto_id: reto.id, p_personal_codigo: jugador.codigo, p_personal_nombre: jugador.nombre,
       });
-      onGanarPuntos && onGanarPuntos("Reto #" + reto.numero, puntajeAcumulado);
-      const { data: completado } = await supabase.from("entrenamiento_reto_completados").select("*").eq("reto_id", reto.id).eq("personal_codigo", jugador.codigo);
-      await armarResultados(reto, completado[0]);
+      if (data && data.ok) {
+        onGanarPuntos && onGanarPuntos("Reto #" + reto.numero, data.puntos);
+        await armarResultados(reto, { puntos: data.puntos, correctas: data.correctas });
+      }
       return;
     }
     if (reto.mostrar_ranking_intermedio && siguienteIndice > 0 && siguienteIndice % 3 === 0) {
       const { data: enVivo } = await supabase.from("entrenamiento_reto_completados").select("*").eq("reto_id", reto.id).order("puntos", { ascending: false }).limit(5);
       setRankingIntermedio(enVivo || []);
       setPantalla("ranking_intermedio");
-      setTimeout(() => { setIndice(siguienteIndice); setPantalla("jugando"); }, 4000);
+      setTimeout(() => { setIndice(siguienteIndice); setPantalla("jugando"); }, 3000);
     } else {
       setIndice(siguienteIndice);
     }
@@ -4527,20 +4569,26 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
 
   if (cargando) return <Card title="⚡ Reto"><div style={{ color: T.gray, fontSize: 13 }}>Cargando…</div></Card>;
 
-  if (pantalla === "admin" || (esAdmin && (!reto || reto.estado !== "activo"))) {
+  const panelAdmin = esAdmin ? <PanelAdminReto reto={reto} onCambio={cargarEstado} /> : null;
+
+  if (pantalla === "admin" || pantalla === "sin_reto") {
     return (
       <Card title="⚡ Reto">
-        <PanelAdminReto reto={reto} onCambio={cargarEstado} />
-        {reto && reto.estado === "activo" && <div style={{ fontSize: 12.5, color: T.inkSoft }}>El reto ya está activo — baja para verlo como jugador también, o espera a que termine.</div>}
+        {panelAdmin}
+        {!reto && <div style={{ color: T.gray, fontSize: 13.5, textAlign: "center", padding: "20px 0" }}>No hay ningún Reto activo en este momento. Espera a que un Admin active uno nuevo.</div>}
       </Card>
     );
   }
 
-  if (pantalla === "sin_reto") {
+  if (pantalla === "perdido") {
     return (
       <Card title="⚡ Reto">
-        {esAdmin && <PanelAdminReto reto={reto} onCambio={cargarEstado} />}
-        <div style={{ color: T.gray, fontSize: 13.5, textAlign: "center", padding: "20px 0" }}>No hay ningún Reto activo en este momento. Espera a que un Admin active uno nuevo.</div>
+        {panelAdmin}
+        <div style={{ textAlign: "center", padding: "24px 10px" }}>
+          <div style={{ fontSize: 40, marginBottom: 8 }}>💔</div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: T.red, marginBottom: 6 }}>Perdiste este Reto</div>
+          <div style={{ fontSize: 13, color: T.inkSoft }}>Una vez iniciado, el Reto no se puede reintentar si se interrumpe (recargar la página, cerrar la pestaña, o salir de esta pantalla). Espera al siguiente Reto que active un Admin.</div>
+        </div>
       </Card>
     );
   }
@@ -4548,12 +4596,16 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
   if (pantalla === "anuncio") {
     return (
       <Card>
+        {panelAdmin}
         <div style={{ textAlign: "center", padding: "30px 10px" }}>
           <style>{`@keyframes retoPulso { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }`}</style>
           <div style={{ fontSize: 48, marginBottom: 10, animation: "retoPulso 1.4s ease-in-out infinite" }}>⚡</div>
           <div style={{ fontSize: 24, fontWeight: 800, color: T.ink, marginBottom: 6 }}>¡Nuevo reto disponible!</div>
-          <div style={{ fontSize: 14, color: T.inkSoft, marginBottom: 24 }}>
-            Reto #{reto.numero} — {reto.preguntas.length} preguntas, {reto.segundos_por_pregunta}s cada una. ¡Entre más rápido respondas, más puntos ganas!
+          <div style={{ fontSize: 14, color: T.inkSoft, marginBottom: 10 }}>
+            Reto #{reto.numero} — {reto.preguntas.length} preguntas, <strong>{reto.segundos_por_pregunta || 60} segundos en total</strong> para responder las que puedas.
+          </div>
+          <div style={{ fontSize: 12, color: T.red, fontWeight: 700, marginBottom: 24 }}>
+            ⚠️ Una vez que entres, no podrás pausar, salir, ni reintentar — si recargas o sales de esta pantalla, pierdes el reto.
           </div>
           <button onClick={empezarCuentaRegresiva} style={{
             padding: "16px 40px", fontSize: 18, fontWeight: 800, color: "#fff", background: `linear-gradient(120deg, #ffd43b, #f08c00)`,
@@ -4591,7 +4643,7 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
               </div>
             ))}
           </div>
-          <div style={{ fontSize: 11.5, color: T.gray, marginTop: 16 }}>Continuando en unos segundos…</div>
+          <div style={{ fontSize: 11.5, color: T.gray, marginTop: 16 }}>Continuando en unos segundos… ¡el reloj sigue corriendo!</div>
         </div>
       </Card>
     );
@@ -4599,22 +4651,27 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
 
   if (pantalla === "jugando") {
     const p = reto.preguntas[indice];
-    const pct = (segundosRestantes / reto.segundos_por_pregunta) * 100;
+    const pct = (segundosRestantes / (reto.segundos_por_pregunta || 60)) * 100;
     return (
       <Card>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
           <Badge color={T.blue} soft={T.blueSoft}>Pregunta {indice + 1} de {reto.preguntas.length}</Badge>
           <div style={{ fontSize: 13, fontWeight: 700, color: T.inkSoft }}>{puntajeAcumulado.toLocaleString()} pts</div>
         </div>
-        <div style={{ height: 6, background: T.graySoft, borderRadius: 99, overflow: "hidden", marginBottom: 12 }}>
-          <div style={{ height: "100%", width: `${((indice) / reto.preguntas.length) * 100}%`, background: T.accent, transition: "width 0.3s ease" }} />
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <Badge color={T.turquoise} soft="#e6fcf5">{p.modulo}</Badge>
-          <div style={{ fontSize: 22, fontWeight: 800, color: segundosRestantes <= 5 ? T.red : T.ink }}>{segundosRestantes}s</div>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
+          <div style={{
+            fontSize: 38, fontWeight: 800, color: segundosRestantes <= 10 ? T.red : T.ink,
+            animation: segundosRestantes <= 10 ? "retoPulso 0.6s ease-in-out infinite" : "none",
+          }}>
+            <style>{`@keyframes retoPulso { 0%,100% { transform: scale(1); } 50% { transform: scale(1.12); } }`}</style>
+            ⏱ {String(Math.floor(segundosRestantes / 60)).padStart(2, "0")}:{String(segundosRestantes % 60).padStart(2, "0")}
+          </div>
         </div>
         <div style={{ height: 8, background: T.graySoft, borderRadius: 99, overflow: "hidden", marginBottom: 16 }}>
-          <div style={{ height: "100%", width: `${pct}%`, background: segundosRestantes <= 5 ? T.red : T.accent, transition: "width 1s linear" }} />
+          <div style={{ height: "100%", width: `${pct}%`, background: segundosRestantes <= 10 ? T.red : T.accent, transition: "width 1s linear" }} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-start", marginBottom: 10 }}>
+          <Badge color={T.turquoise} soft="#e6fcf5">{p.modulo}</Badge>
         </div>
         <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 14 }}>{p.texto}</div>
         {p.imagen && (
@@ -4646,7 +4703,7 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
               <span style={{ fontSize: 14, fontWeight: 700, color: T.red }}>{feedback.msg}</span>
             ) : (
               <span style={{ fontSize: 15, fontWeight: 800, color: feedback.correcta ? T.green : T.red }}>
-                {respuestaElegida === -1 ? "⏱️ Se acabó el tiempo" : feedback.correcta ? `✓ ¡Correcto! +${feedback.puntos.toLocaleString()} puntos` : "✗ Respuesta incorrecta"}
+                {feedback.correcta ? `✓ ¡Correcto! +${feedback.puntos.toLocaleString()} puntos` : "✗ Respuesta incorrecta"}
               </span>
             )}
             <Btn variant="accent" onClick={avanzar}>{indice + 1 >= reto.preguntas.length ? "Ver resultado final" : "Siguiente pregunta →"}</Btn>
@@ -4659,6 +4716,7 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
   if (pantalla === "resultados" && statsFinal) {
     return (
       <Card>
+        {panelAdmin}
         <div style={{ textAlign: "center", padding: "20px 10px" }}>
           <div style={{ fontSize: 44, marginBottom: 8 }}>🎉</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: T.ink, marginBottom: 16 }}>¡Reto completado!</div>
@@ -4667,7 +4725,6 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
               { label: "Correctas", valor: `${statsFinal.correctas} / ${statsFinal.total}` },
               { label: "Puntos", valor: statsFinal.puntos.toLocaleString() },
               { label: "Incorrectas", valor: statsFinal.incorrectas },
-              { label: "Tiempo prom.", valor: statsFinal.promedioSeg + "s" },
               { label: "Posición", valor: "#" + statsFinal.posicion + " de " + statsFinal.totalJugadores },
             ].map((s) => (
               <div key={s.label} style={{ background: T.graySoft, borderRadius: 10, padding: "10px 16px", minWidth: 100 }}>
@@ -4713,6 +4770,7 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
 
   return null;
 }
+
 function Administrativo() {
   const [tab, setTab] = useState("resumen");
   return (
@@ -4750,7 +4808,9 @@ function RankingEntrenamiento() {
   const porPersona = {};
   puntajes.forEach((p) => {
     if (!porPersona[p.personal_codigo]) porPersona[p.personal_codigo] = { codigo: p.personal_codigo, nombre: p.personal_nombre, total: 0, porSegmento: {}, repasos: 0 };
-    porPersona[p.personal_codigo].total += p.puntos;
+    // El puntaje de Reto NUNCA se suma al total general — solo se
+    // muestra en su propia columna (porSegmento.reto).
+    if (p.segmento !== "reto") porPersona[p.personal_codigo].total += p.puntos;
     porPersona[p.personal_codigo].porSegmento[p.segmento] = (porPersona[p.personal_codigo].porSegmento[p.segmento] || 0) + p.puntos;
     if (p.ejercicio && p.ejercicio.includes("(repaso)")) porPersona[p.personal_codigo].repasos += 1;
   });
@@ -6830,7 +6890,9 @@ function Entrenamiento() {
   };
 
   const puntosDeSegmento = (segId) => puntajes.filter((p) => p.segmento === segId).reduce((s, p) => s + p.puntos, 0);
-  const puntosTotal = puntajes.reduce((s, p) => s + p.puntos, 0);
+  // El puntaje del Reto NUNCA debe sumarse al ranking general — solo
+  // vive en su propia columna. Por eso se excluye aquí explícitamente.
+  const puntosTotal = puntajes.filter((p) => p.segmento !== "reto").reduce((s, p) => s + p.puntos, 0);
   const puntosPorSegmento = {};
   SEGMENTOS_ENTRENAMIENTO.forEach((s) => { puntosPorSegmento[s.id] = puntosDeSegmento(s.id); });
 
@@ -6927,7 +6989,20 @@ function Entrenamiento() {
 
   const anchoVista = vistaModo === "pc" ? 1400 : undefined;
 
-  const moduloActivo =
+  // Segunda barrera de seguridad: aunque el clic en la tarjeta ya está
+  // bloqueado, si por cualquier vía (celular, back del navegador, etc.)
+  // se llega a poner `modulo` en un id bloqueado, esto lo intercepta
+  // aquí mismo y no deja renderizar el juego — salvo Admin.
+  const moduloEstaBloqueado = modulo && currentUser?.categoria !== "admin" && !modulosDesbloqueados[modulo];
+
+  const moduloActivo = moduloEstaBloqueado ? (
+    <Card title="Módulo bloqueado">
+      <div style={{ fontSize: 13.5, color: T.inkSoft }}>
+        🔒 Todavía no puedes entrar a "{SEGMENTOS_ENTRENAMIENTO.find((m) => m.id === modulo)?.label}". Aprueba (70% o más) "{labelModuloAnterior(modulo)}" primero para desbloquearlo.
+      </div>
+      <Btn variant="ghost" style={{ marginTop: 12 }} onClick={() => setModulo(null)}>← Volver</Btn>
+    </Card>
+  ) :
     modulo === "compuertas" ? (
       <JuegoCompuertasLogicas
         onGanarPuntos={(ejercicio, puntos) => registrarPuntos("compuertas", ejercicio, puntos)}

@@ -7479,8 +7479,12 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
       }
       elPalette.style.opacity = "1";
       elPalette.style.pointerEvents = "auto";
+      // La Salida se posiciona según el ancho REAL del lienzo (no un
+      // número fijo), para que siempre quede visible sin tener que
+      // deslizar en pantallas angostas.
+      const anchoLienzo = Math.max(elCanvas.getBoundingClientRect().width, 320);
       ej.terminales.forEach((nombre, i2) => crearNodo("term", nombre, 10, 16 + i2 * 72));
-      crearNodo("salida", "Salida", 560, 160);
+      crearNodo("salida", "Salida", anchoLienzo - 90, 160);
       forceRender((n) => n + 1);
     }
     cargarEjercicioRef.current = cargarEjercicio;
@@ -7707,7 +7711,12 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
       const btn = document.createElement("button");
       btn.style.cssText = "padding:4px 10px; display:flex; align-items:center; gap:6px; border:1px solid " + T.line + "; border-radius:8px; background:#fff; cursor:pointer;";
       btn.innerHTML = svgGate(key) + `<span style="display:flex; flex-direction:column; align-items:flex-start;"><span style="font-size:11px; font-weight:600;">${key}</span><span style="font-size:9.5px; color:${T.gray};">${ECUACION_GATE[key]}</span></span>`;
-      btn.onclick = () => { crearNodo("gate", key, 200 + Math.random() * 140, 30 + Math.random() * 220); actualizarEstado(); };
+      btn.onclick = () => {
+        const anchoLienzo = Math.max(elCanvas.getBoundingClientRect().width, 320);
+        const maxX = Math.max(60, anchoLienzo - 140);
+        crearNodo("gate", key, Math.min(200, maxX * 0.5) + Math.random() * (maxX - Math.min(200, maxX * 0.5)), 30 + Math.random() * 220);
+        actualizarEstado();
+      };
       elPalette.appendChild(btn);
     });
 
@@ -7908,7 +7917,7 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
           <button onClick={() => setMostrarIntro(true)} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Ver la guía otra vez</button>
         </div>
         <div style={{ overflowX: "auto", borderRadius: 12, WebkitOverflowScrolling: "touch" }}>
-          <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 650, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s", touchAction: "pan-x" }}>
+          <div className="je-canvas" style={{ position: "relative", height: 400, width: "100%", background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s", touchAction: "pan-x" }}>
             <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
             <style>{`@keyframes marchHormigas { to { stroke-dashoffset: -20; } } .je-corriente { animation: marchHormigas 0.6s linear infinite; }`}</style>
           </div>
@@ -8060,8 +8069,12 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
       }
       elPalette.style.opacity = "1";
       elPalette.style.pointerEvents = "auto";
+      // La Salida se posiciona según el ancho REAL del lienzo (no un
+      // número fijo), para que siempre quede visible sin tener que
+      // deslizar en pantallas angostas.
+      const anchoLienzo = Math.max(elCanvas.getBoundingClientRect().width, 320);
       ej.terminales.forEach((nombre, i2) => crearNodo("term", nombre, 10, 16 + i2 * 72));
-      crearNodo("salida", "Salida", 560, 160);
+      crearNodo("salida", "Salida", anchoLienzo - 90, 160);
       forceRender((n) => n + 1);
     }
     cargarEjercicioRef.current = cargarEjercicio;
@@ -8287,7 +8300,12 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
       const btn = document.createElement("button");
       btn.style.cssText = "padding:4px 10px; display:flex; align-items:center; gap:6px; border:1px solid " + T.line + "; border-radius:8px; background:#fff; cursor:pointer;";
       btn.innerHTML = svgGate(key) + `<span style="font-size:11px; font-weight:600;">${key}</span>`;
-      btn.onclick = () => { crearNodo("gate", key, 200 + Math.random() * 140, 30 + Math.random() * 220); actualizarEstado(); };
+      btn.onclick = () => {
+        const anchoLienzo = Math.max(elCanvas.getBoundingClientRect().width, 320);
+        const maxX = Math.max(60, anchoLienzo - 140);
+        crearNodo("gate", key, Math.min(200, maxX * 0.5) + Math.random() * (maxX - Math.min(200, maxX * 0.5)), 30 + Math.random() * 220);
+        actualizarEstado();
+      };
       elPalette.appendChild(btn);
     });
 
@@ -8501,7 +8519,7 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
           <button onClick={() => setMostrarIntro(true)} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Ver la guía otra vez</button>
         </div>
         <div style={{ overflowX: "auto", borderRadius: 12, WebkitOverflowScrolling: "touch" }}>
-          <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 650, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s", touchAction: "pan-x" }}>
+          <div className="je-canvas" style={{ position: "relative", height: 400, width: "100%", background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s", touchAction: "pan-x" }}>
             <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
             <style>{`@keyframes marchHormigas { to { stroke-dashoffset: -20; } } .je-corriente { animation: marchHormigas 0.6s linear infinite; }`}</style>
           </div>

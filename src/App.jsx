@@ -7908,7 +7908,7 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
           <button onClick={() => setMostrarIntro(true)} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Ver la guía otra vez</button>
         </div>
         <div style={{ overflowX: "auto", borderRadius: 12, WebkitOverflowScrolling: "touch" }}>
-          <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 650, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s", touchAction: "none" }}>
+          <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 650, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s", touchAction: "pan-x" }}>
             <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
             <style>{`@keyframes marchHormigas { to { stroke-dashoffset: -20; } } .je-corriente { animation: marchHormigas 0.6s linear infinite; }`}</style>
           </div>
@@ -8501,7 +8501,7 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
           <button onClick={() => setMostrarIntro(true)} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Ver la guía otra vez</button>
         </div>
         <div style={{ overflowX: "auto", borderRadius: 12, WebkitOverflowScrolling: "touch" }}>
-          <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 650, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s", touchAction: "none" }}>
+          <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 650, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s", touchAction: "pan-x" }}>
             <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
             <style>{`@keyframes marchHormigas { to { stroke-dashoffset: -20; } } .je-corriente { animation: marchHormigas 0.6s linear infinite; }`}</style>
           </div>

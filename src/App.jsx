@@ -7068,7 +7068,11 @@ function Entrenamiento() {
         onReiniciar={(borrarRanking) => reiniciarSegmento("simplex", borrarRanking)}
       />
     ) : modulo === "notifier" ? (
-      <JuegoNotifier onGanarPuntos={(ejercicio, puntos) => registrarPuntos("notifier", ejercicio, puntos)} />
+      <JuegoNotifier
+        onGanarPuntos={(ejercicio, puntos) => registrarPuntos("notifier", ejercicio, puntos)}
+        esAdmin={currentUser?.categoria === "admin"}
+        onReiniciar={(borrarRanking) => reiniciarSegmento("notifier", borrarRanking)}
+      />
     ) : modulo === "nicet" ? (
       <JuegoNICET onGanarPuntos={(ejercicio, puntos) => registrarPuntos("nicet", ejercicio, puntos)} />
     ) : modulo === "fas_nivel1" ? (
@@ -9085,82 +9089,67 @@ const PREGUNTAS_MANTENIMIENTO_NOTIFIER = [
   { texto: "Para un fotodetector o fotodetector con calor, ¿cuál es el rango de \"MAINTENANCE REQ\" (mantenimiento requerido)?", opciones: ["0 – 5", "6 – 45", "83 – 99", "92 – 99"], correcta: 3 },
 ];
 
-function JuegoNotifier({ onGanarPuntos }) {
+function JuegoNotifier({ onGanarPuntos, esAdmin, onReiniciar }) {
   const [mostrarIntro, setMostrarIntro] = useState(true);
   const [tabNotifier, setTabNotifier] = useState("examen"); // "examen" | "mantenimiento"
+  // Cada pregunta permite un máximo de 2 intentos. Si acierta, queda
+  // marcada en VERDE de inmediato y suma puntos al instante. Si falla
+  // los 2 intentos, queda marcada en ROJO y fija, sin puntos — en
+  // ambos casos, fija hasta que Admin la reinicie.
+  const MAX_INTENTOS_PREGUNTA = 2;
+  const [intentosExamen, setIntentosExamen] = useState({});
+  const [intentosMant, setIntentosMant] = useState({});
 
   // --- Examen principal (37 preguntas) ---
   const [respuestas, setRespuestas] = useState({});
-  const [resultado, setResultado] = useState(null);
-  const ganadasRef = React.useRef(new Set());
-  const falladasRef = React.useRef(new Set());
+  const [estadoExamen, setEstadoExamen] = useState({}); // { [i]: "correcta" | "bloqueada" }
 
-  const responder = (i, valor) => setRespuestas((prev) => ({ ...prev, [i]: valor }));
-  const reiniciarExamen = () => { setRespuestas({}); setResultado(null); };
-
-  const enviarExamen = () => {
-    if (PREGUNTAS_NOTIFIER.some((_, i) => respuestas[i] === undefined)) {
-      setResultado({ ok: null, msg: "Debes responder las " + PREGUNTAS_NOTIFIER.length + " preguntas antes de enviar el examen." });
-      return;
+  const responder = (i, valor) => {
+    if (estadoExamen[i]) return; // ya está fija (acertada o bloqueada)
+    const intentoActual = (intentosExamen[i] || 0) + 1;
+    setIntentosExamen((prev) => ({ ...prev, [i]: intentoActual }));
+    setRespuestas((prev) => ({ ...prev, [i]: valor }));
+    if (valor === PREGUNTAS_NOTIFIER[i].correcta) {
+      setEstadoExamen((prev) => ({ ...prev, [i]: "correcta" }));
+      onGanarPuntos && onGanarPuntos("Examen de práctica Notifier", PUNTOS_POR_PREGUNTA_NOTIFIER);
+    } else if (intentoActual >= MAX_INTENTOS_PREGUNTA) {
+      setEstadoExamen((prev) => ({ ...prev, [i]: "bloqueada" }));
     }
-    const detalle = PREGUNTAS_NOTIFIER.map((p, i) => respuestas[i] === p.correcta);
-    const correctas = detalle.filter(Boolean).length;
-    const total = PREGUNTAS_NOTIFIER.length;
-    const porcentaje = Math.round((correctas / total) * 100);
-    let puntosGanados = 0;
-    detalle.forEach((esCorrecta, i) => {
-      if (esCorrecta && !ganadasRef.current.has(i)) {
-        ganadasRef.current.add(i);
-        falladasRef.current.delete(i);
-        puntosGanados += PUNTOS_POR_PREGUNTA_NOTIFIER;
-      } else if (!esCorrecta && !falladasRef.current.has(i) && !ganadasRef.current.has(i)) {
-        falladasRef.current.add(i);
-        puntosGanados -= PUNTOS_POR_PREGUNTA_NOTIFIER;
-      }
-    });
-    if (puntosGanados !== 0) onGanarPuntos && onGanarPuntos("Examen de práctica Notifier", puntosGanados);
-    const rangoResultado = rangoResultadoExamen(porcentaje);
-    setResultado({
-      ok: porcentaje >= 70, detalle, rangoResultado,
-      msg: `${correctas}/${total} correctas (${porcentaje}%). ${porcentaje >= 70 ? "¡Aprobado!" : "Necesitas 70% o más para aprobar — revisa las preguntas marcadas en rojo."}`,
-    });
   };
+
+  const correctasExamen = Object.values(estadoExamen).filter((e) => e === "correcta").length;
+  const bloqueadasExamen = Object.values(estadoExamen).filter((e) => e === "bloqueada").length;
+  const pendientesExamen = PREGUNTAS_NOTIFIER.length - correctasExamen - bloqueadasExamen;
 
   // --- Pestaña de Mantenimiento (preguntas cortas) ---
   const [respuestasMant, setRespuestasMant] = useState({});
-  const [resultadoMant, setResultadoMant] = useState(null);
-  const ganadasMantRef = React.useRef(new Set());
-  const falladasMantRef = React.useRef(new Set());
+  const [estadoMant, setEstadoMant] = useState({});
 
-  const responderMant = (i, valor) => setRespuestasMant((prev) => ({ ...prev, [i]: valor }));
-  const reiniciarMant = () => { setRespuestasMant({}); setResultadoMant(null); };
-
-  const enviarMant = () => {
-    if (PREGUNTAS_MANTENIMIENTO_NOTIFIER.some((_, i) => respuestasMant[i] === undefined)) {
-      setResultadoMant({ ok: null, msg: "Debes responder las " + PREGUNTAS_MANTENIMIENTO_NOTIFIER.length + " preguntas antes de enviar." });
-      return;
+  const responderMant = (i, valor) => {
+    if (estadoMant[i]) return;
+    const intentoActual = (intentosMant[i] || 0) + 1;
+    setIntentosMant((prev) => ({ ...prev, [i]: intentoActual }));
+    setRespuestasMant((prev) => ({ ...prev, [i]: valor }));
+    if (valor === PREGUNTAS_MANTENIMIENTO_NOTIFIER[i].correcta) {
+      setEstadoMant((prev) => ({ ...prev, [i]: "correcta" }));
+      onGanarPuntos && onGanarPuntos("Mantenimiento Notifier", PUNTOS_POR_PREGUNTA_NOTIFIER);
+    } else if (intentoActual >= MAX_INTENTOS_PREGUNTA) {
+      setEstadoMant((prev) => ({ ...prev, [i]: "bloqueada" }));
     }
-    const detalle = PREGUNTAS_MANTENIMIENTO_NOTIFIER.map((p, i) => respuestasMant[i] === p.correcta);
-    const correctas = detalle.filter(Boolean).length;
-    const total = PREGUNTAS_MANTENIMIENTO_NOTIFIER.length;
-    const porcentaje = Math.round((correctas / total) * 100);
-    let puntosGanados = 0;
-    detalle.forEach((esCorrecta, i) => {
-      if (esCorrecta && !ganadasMantRef.current.has(i)) {
-        ganadasMantRef.current.add(i);
-        falladasMantRef.current.delete(i);
-        puntosGanados += PUNTOS_POR_PREGUNTA_NOTIFIER;
-      } else if (!esCorrecta && !falladasMantRef.current.has(i) && !ganadasMantRef.current.has(i)) {
-        falladasMantRef.current.add(i);
-        puntosGanados -= PUNTOS_POR_PREGUNTA_NOTIFIER;
-      }
-    });
-    if (puntosGanados !== 0) onGanarPuntos && onGanarPuntos("Mantenimiento Notifier", puntosGanados);
-    const rangoResultado = rangoResultadoExamen(porcentaje);
-    setResultadoMant({
-      ok: porcentaje >= 70, detalle, rangoResultado,
-      msg: `${correctas}/${total} correctas (${porcentaje}%). ${porcentaje >= 70 ? "¡Aprobado!" : "Necesitas 70% o más para aprobar."}`,
-    });
+  };
+
+  const correctasMant = Object.values(estadoMant).filter((e) => e === "correcta").length;
+  const bloqueadasMant = Object.values(estadoMant).filter((e) => e === "bloqueada").length;
+  const pendientesMant = PREGUNTAS_MANTENIMIENTO_NOTIFIER.length - correctasMant - bloqueadasMant;
+
+  // Reinicio de Admin: desbloquea TODAS las preguntas (examen y
+  // mantenimiento) — para las personas que ya se quedaron sin intentos.
+  // No revierte los puntos ya ganados a menos que Admin elija borrar
+  // también el ranking de este módulo.
+  const reiniciarTodoNotifier = (borrarRanking) => {
+    setRespuestas({}); setIntentosExamen({}); setEstadoExamen({});
+    setRespuestasMant({}); setIntentosMant({}); setEstadoMant({});
+    onReiniciar && onReiniciar(borrarRanking);
   };
 
   if (mostrarIntro) {
@@ -9297,12 +9286,71 @@ function JuegoNotifier({ onGanarPuntos }) {
         ),
       },
       {
+        id: "mantenimiento_notifier", titulo: "D.2.2 Advertencias de mantenimiento — Tres niveles",
+        contenido: (
+          <>
+            <p>El software del panel monitorea continuamente la <strong>compensación de deriva</strong> (drift compensation)
+            de cada detector inteligente — el ajuste automático que compensa la acumulación gradual de polvo. Cuando esa
+            compensación llega a un nivel <strong>inaceptable</strong> que puede comprometer el rendimiento del detector, el
+            panel de control indica una <strong>advertencia de mantenimiento</strong>.</p>
+            <div style={{ overflowX: "auto", marginBottom: 8 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5, background: T.graySoft, borderRadius: 8, overflow: "hidden" }}>
+                <thead>
+                  <tr style={{ background: "#fff", textAlign: "left" }}>
+                    <th style={{ padding: "6px 8px" }}>Mensaje</th>
+                    <th style={{ padding: "6px 8px" }}>Indica</th>
+                    <th style={{ padding: "6px 8px" }}>Iónico</th>
+                    <th style={{ padding: "6px 8px" }}>Fotodetector / Foto+calor</th>
+                    <th style={{ padding: "6px 8px" }}>Láser</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style={{ borderTop: `1px solid ${T.line}` }}>
+                    <td style={{ padding: "6px 8px", fontWeight: 700 }}>N/C</td>
+                    <td style={{ padding: "6px 8px" }}>La compensación está dentro del rango aceptable.</td>
+                    <td style={{ padding: "6px 8px" }}>6 – 80</td>
+                    <td style={{ padding: "6px 8px" }}>6 – 45</td>
+                    <td style={{ padding: "6px 8px" }}>3 – 50</td>
+                  </tr>
+                  <tr style={{ borderTop: `1px solid ${T.line}` }}>
+                    <td style={{ padding: "6px 8px", fontWeight: 700 }}>LOW THRESHOLD<br />(umbral bajo)</td>
+                    <td style={{ padding: "6px 8px" }}>Un problema de hardware en el detector.</td>
+                    <td style={{ padding: "6px 8px" }}>0 – 5</td>
+                    <td style={{ padding: "6px 8px" }}>0 – 5</td>
+                    <td style={{ padding: "6px 8px" }}>0 – 2</td>
+                  </tr>
+                  <tr style={{ borderTop: `1px solid ${T.line}` }}>
+                    <td style={{ padding: "6px 8px", fontWeight: 700 }}>MAINTENANCE REQ<br />(mantenimiento requerido)</td>
+                    <td style={{ padding: "6px 8px" }}>Acumulación de polvo cercana pero por debajo del límite permitido — alerta para dar mantenimiento antes de que se comprometa el rendimiento.</td>
+                    <td style={{ padding: "6px 8px" }}>92 – 99</td>
+                    <td style={{ padding: "6px 8px" }}>92 – 99</td>
+                    <td style={{ padding: "6px 8px" }}>83 – 99</td>
+                  </tr>
+                  <tr style={{ borderTop: `1px solid ${T.line}` }}>
+                    <td style={{ padding: "6px 8px", fontWeight: 700 }}>MAINT. URGENT<br />(mantenimiento urgente)</td>
+                    <td style={{ padding: "6px 8px" }}>La acumulación de polvo supera el límite permitido.</td>
+                    <td style={{ padding: "6px 8px" }}>100</td>
+                    <td style={{ padding: "6px 8px" }}>100</td>
+                    <td style={{ padding: "6px 8px" }}>100</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p style={{ margin: 0, fontSize: 12 }}>Los <strong>tres niveles de advertencia</strong> son LOW THRESHOLD,
+            MAINTENANCE REQ y MAINT. URGENT — N/C es el estado normal, no una advertencia. Una advertencia de mantenimiento es
+            <strong> preventiva</strong>, distinta de una condición de falla (trouble) activa del sistema. Este tema se
+            practica en la pestaña <strong>🔧 Mantenimiento</strong> del módulo.</p>
+          </>
+        ),
+      },
+      {
         id: "reglas_notifier", titulo: "Reglas del examen",
         contenido: (
           <p>El módulo tiene dos partes: el <strong>Examen</strong> principal ({PREGUNTAS_NOTIFIER.length} preguntas sobre
           ecuaciones y paneles) y una pestaña de <strong>Mantenimiento</strong> (advertencias de detección inteligente). En
-          ambas, el color (verde o rojo) aparece de inmediato al elegir una respuesta. Necesitas 70% o más para aprobar cada
-          una.</p>
+          ambas, cada pregunta permite 2 intentos: si aciertas queda fija en verde y suma puntos al instante; si fallas los 2
+          intentos queda fija en rojo. Solo Admin puede reiniciar una pregunta ya bloqueada. Necesitas 70% o más para aprobar
+          cada pestaña.</p>
         ),
       },
     ];
@@ -9321,28 +9369,39 @@ function JuegoNotifier({ onGanarPuntos }) {
 
       {tabNotifier === "examen" && (
         <>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16, flexWrap: "wrap", fontSize: 12.5 }}>
+            <span style={{ fontWeight: 800, color: T.green }}>✓ {correctasExamen} correctas</span>
+            <span style={{ fontWeight: 800, color: T.red }}>✗ {bloqueadasExamen} falladas</span>
+            <span style={{ fontWeight: 700, color: T.gray }}>· {pendientesExamen} pendientes</span>
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             {PREGUNTAS_NOTIFIER.map((p, i) => {
-              const yaRespondida = respuestas[i] !== undefined;
-              const correctaMostrada = resultado?.detalle;
-              const ok = correctaMostrada ? correctaMostrada[i] : (yaRespondida ? respuestas[i] === p.correcta : null);
-              const mostrarColor = correctaMostrada || yaRespondida;
+              const estado = estadoExamen[i]; // "correcta" | "bloqueada" | undefined
+              const fija = !!estado;
+              const intentosUsados = intentosExamen[i] || 0;
               return (
                 <div key={i} style={{
                   border: `1px solid ${T.line}`, borderRadius: 10, padding: 14,
-                  background: mostrarColor ? (ok ? T.greenSoft : T.redSoft) : T.graySoft,
+                  background: estado === "correcta" ? T.greenSoft : estado === "bloqueada" ? T.redSoft : T.graySoft,
                 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{i + 1}. {p.texto}</div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 10 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{i + 1}. {p.texto}</div>
+                    {!fija && (
+                      <span style={{ fontSize: 10.5, color: T.gray, whiteSpace: "nowrap", flexShrink: 0 }}>{intentosUsados}/{MAX_INTENTOS_PREGUNTA} intentos</span>
+                    )}
+                    {estado === "correcta" && <span style={{ fontSize: 10.5, color: T.green, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>✓ +{PUNTOS_POR_PREGUNTA_NOTIFIER} pts</span>}
+                    {estado === "bloqueada" && <span style={{ fontSize: 10.5, color: T.red, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>🔒 sin más intentos</span>}
+                  </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                     {p.opciones.map((op, j) => (
-                      <label key={j} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
-                        <input type="radio" name={`ntf${i}`} checked={respuestas[i] === j} onChange={() => responder(i, j)} />
+                      <label key={j} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: fija ? "default" : "pointer", opacity: fija && respuestas[i] !== j ? 0.5 : 1 }}>
+                        <input type="radio" name={`ntf${i}`} checked={respuestas[i] === j} onChange={() => responder(i, j)} disabled={fija} />
                         {op}
                       </label>
                     ))}
                   </div>
-                  {mostrarColor && !ok && (
-                    <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>Respuesta correcta: {p.opciones[p.correcta]}</div>
+                  {estado === "bloqueada" && (
+                    <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>Respuesta correcta: {p.opciones[p.correcta]} — quedó fija, sin más intentos disponibles.</div>
                   )}
                 </div>
               );
@@ -9350,12 +9409,12 @@ function JuegoNotifier({ onGanarPuntos }) {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
-            <Btn variant="accent" onClick={enviarExamen}>Enviar examen</Btn>
-            {resultado && <Btn variant="ghost" onClick={reiniciarExamen}>Empezar de nuevo</Btn>}
-            {resultado && resultado.rangoResultado && (
-              <span style={{ fontSize: 13, fontWeight: 800, color: "#fff", background: resultado.rangoResultado.color, padding: "5px 12px", borderRadius: 999 }}>{resultado.rangoResultado.texto}</span>
+            {pendientesExamen === 0 && (
+              <span style={{ fontSize: 13, fontWeight: 800, color: "#fff", background: (correctasExamen / PREGUNTAS_NOTIFIER.length) >= 0.7 ? T.green : T.red, padding: "5px 12px", borderRadius: 999 }}>
+                {correctasExamen}/{PREGUNTAS_NOTIFIER.length} correctas — {(correctasExamen / PREGUNTAS_NOTIFIER.length) >= 0.7 ? "¡Aprobado!" : "No aprobado"}
+              </span>
             )}
-            {resultado && <span style={{ fontSize: 14, color: resultado.ok === true ? T.green : resultado.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultado.msg}</span>}
+            {esAdmin && <BotonReiniciarModulo onReiniciar={reiniciarTodoNotifier} />}
           </div>
         </>
       )}
@@ -9416,28 +9475,39 @@ function JuegoNotifier({ onGanarPuntos }) {
             mantenimiento es <strong>preventiva</strong>, distinta de una condición de falla (trouble) activa del sistema.</p>
           </div>
 
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16, flexWrap: "wrap", fontSize: 12.5 }}>
+            <span style={{ fontWeight: 800, color: T.green }}>✓ {correctasMant} correctas</span>
+            <span style={{ fontWeight: 800, color: T.red }}>✗ {bloqueadasMant} falladas</span>
+            <span style={{ fontWeight: 700, color: T.gray }}>· {pendientesMant} pendientes</span>
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             {PREGUNTAS_MANTENIMIENTO_NOTIFIER.map((p, i) => {
-              const yaRespondida = respuestasMant[i] !== undefined;
-              const correctaMostrada = resultadoMant?.detalle;
-              const ok = correctaMostrada ? correctaMostrada[i] : (yaRespondida ? respuestasMant[i] === p.correcta : null);
-              const mostrarColor = correctaMostrada || yaRespondida;
+              const estado = estadoMant[i];
+              const fija = !!estado;
+              const intentosUsados = intentosMant[i] || 0;
               return (
                 <div key={i} style={{
                   border: `1px solid ${T.line}`, borderRadius: 10, padding: 14,
-                  background: mostrarColor ? (ok ? T.greenSoft : T.redSoft) : T.graySoft,
+                  background: estado === "correcta" ? T.greenSoft : estado === "bloqueada" ? T.redSoft : T.graySoft,
                 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{i + 1}. {p.texto}</div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 10 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{i + 1}. {p.texto}</div>
+                    {!fija && (
+                      <span style={{ fontSize: 10.5, color: T.gray, whiteSpace: "nowrap", flexShrink: 0 }}>{intentosUsados}/{MAX_INTENTOS_PREGUNTA} intentos</span>
+                    )}
+                    {estado === "correcta" && <span style={{ fontSize: 10.5, color: T.green, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>✓ +{PUNTOS_POR_PREGUNTA_NOTIFIER} pts</span>}
+                    {estado === "bloqueada" && <span style={{ fontSize: 10.5, color: T.red, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>🔒 sin más intentos</span>}
+                  </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                     {p.opciones.map((op, j) => (
-                      <label key={j} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
-                        <input type="radio" name={`mant${i}`} checked={respuestasMant[i] === j} onChange={() => responderMant(i, j)} />
+                      <label key={j} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: fija ? "default" : "pointer", opacity: fija && respuestasMant[i] !== j ? 0.5 : 1 }}>
+                        <input type="radio" name={`mant${i}`} checked={respuestasMant[i] === j} onChange={() => responderMant(i, j)} disabled={fija} />
                         {op}
                       </label>
                     ))}
                   </div>
-                  {mostrarColor && !ok && (
-                    <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>Respuesta correcta: {p.opciones[p.correcta]}</div>
+                  {estado === "bloqueada" && (
+                    <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>Respuesta correcta: {p.opciones[p.correcta]} — quedó fija, sin más intentos disponibles.</div>
                   )}
                 </div>
               );
@@ -9445,12 +9515,12 @@ function JuegoNotifier({ onGanarPuntos }) {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
-            <Btn variant="accent" onClick={enviarMant}>Enviar respuestas</Btn>
-            {resultadoMant && <Btn variant="ghost" onClick={reiniciarMant}>Empezar de nuevo</Btn>}
-            {resultadoMant && resultadoMant.rangoResultado && (
-              <span style={{ fontSize: 13, fontWeight: 800, color: "#fff", background: resultadoMant.rangoResultado.color, padding: "5px 12px", borderRadius: 999 }}>{resultadoMant.rangoResultado.texto}</span>
+            {pendientesMant === 0 && (
+              <span style={{ fontSize: 13, fontWeight: 800, color: "#fff", background: (correctasMant / PREGUNTAS_MANTENIMIENTO_NOTIFIER.length) >= 0.7 ? T.green : T.red, padding: "5px 12px", borderRadius: 999 }}>
+                {correctasMant}/{PREGUNTAS_MANTENIMIENTO_NOTIFIER.length} correctas — {(correctasMant / PREGUNTAS_MANTENIMIENTO_NOTIFIER.length) >= 0.7 ? "¡Aprobado!" : "No aprobado"}
+              </span>
             )}
-            {resultadoMant && <span style={{ fontSize: 14, color: resultadoMant.ok === true ? T.green : resultadoMant.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultadoMant.msg}</span>}
+            {esAdmin && <BotonReiniciarModulo onReiniciar={reiniciarTodoNotifier} />}
           </div>
         </>
       )}

@@ -9116,8 +9116,35 @@ function JuegoNotifier({ onGanarPuntos }) {
             <p>Este módulo cubre las <strong>ecuaciones lógicas</strong> usadas para programar zonas lógicas en paneles
             <strong> Notifier</strong> (funciones como AND, OR, NOT, DEL, SDEL), y conceptos de programación de los paneles
             <strong> NFS2-640</strong> y <strong>NFS2-3030</strong> (VeriFire Tools, AMPS-24, SLC, módulos direccionables).</p>
-            <p>Una ecuación lógica siempre empieza con una <strong>función</strong> (por ejemplo <code>AND(...)</code> o
-            <code> OR(...)</code>), seguida de sus argumentos entre paréntesis.</p>
+            <p>Las ecuaciones lógicas y de problemas pueden definir relaciones complejas entre dispositivos de entrada y de
+            salida. Están formadas por dos componentes básicos: las <strong>funciones</strong> (ya sea lógicas o de retardo
+            de tiempo) y los <strong>argumentos</strong>. Una ecuación siempre empieza con una función (por ejemplo
+            <code> AND(...)</code> o <code>OR(...)</code>), seguida de sus argumentos entre paréntesis.</p>
+          </>
+        ),
+      },
+      {
+        id: "limites_notifier", titulo: "Límites y reglas oficiales de las ecuaciones",
+        contenido: (
+          <>
+            <p>El FACP admite hasta <strong>1000 ecuaciones lógicas</strong> (ZL1 a ZL1000) y hasta <strong>100 zonas de
+            problemas</strong> (ZT001 a ZT100). Una vez creadas, se pueden incluir en la asignación de zonas de
+            entrada/salida. Reglas clave:</p>
+            <ul style={{ margin: "8px 0 8px 20px", padding: 0, lineHeight: 1.7 }}>
+              <li>Las ecuaciones siempre comienzan con una <strong>función lógica</strong>.</li>
+              <li>Longitud máxima: <strong>80 caracteres</strong>, incluyendo paréntesis y comas.</li>
+              <li>Máximo <strong>10 funciones lógicas</strong> por ecuación — a menos que se use una función de retardo de
+              tiempo (DEL/SDEL), que debe ser la <strong>única función</strong> en esa ecuación.</li>
+              <li>Las ecuaciones se evalúan <strong>después</strong> de que todos los demás dispositivos ya fueron evaluados.</li>
+              <li>Una ecuación lógica puede usarse como argumento de otra, pero <strong>solo si ya fue evaluada antes</strong>
+              — es decir, solo zonas con número <strong>inferior</strong> a la que se está editando pueden usarse como
+              argumento.</li>
+              <li>Una función lógica admite <strong>máximo 20 argumentos</strong> (incluyendo dirección de inicio y parada).</li>
+              <li>El temporizador de retardo máximo es <strong>23:59:59</strong> (23 horas, 59 minutos, 59 segundos).</li>
+            </ul>
+            <p>Las ecuaciones se ingresan con <strong>Point Programming</strong> para zonas lógicas o de problemas. El panel
+            revisa errores solo después de que la ecuación completa fue ingresada — errores comunes: paréntesis de más o de
+            menos, argumentos de más o de menos, función desconocida, o tipo de dispositivo desconocido.</p>
           </>
         ),
       },

@@ -374,6 +374,9 @@ function NumeroAnimado({ valor }) {
 
 function InsigniaMedalla({ nombre, desc, Icono, imagenUrl, colorDesde = "#868e96", colorHasta = "#495057", cumplido, progresoTexto, progresoPct }) {
   const gradId = "grad-" + nombre.replace(/\s+/g, "-").toLowerCase();
+  // Salvaguarda: si por cualquier motivo no llega ni Icono ni
+  // imagenUrl, usa un ícono genérico en vez de tronar la pantalla.
+  const IconoFinal = Icono || Award;
   return (
     <div title={desc} style={{
       display: "flex", flexDirection: "column", alignItems: "center", gap: 6, width: "clamp(85px, 26vw, 108px)",
@@ -403,7 +406,7 @@ function InsigniaMedalla({ nombre, desc, Icono, imagenUrl, colorDesde = "#868e96
         )}
         {!imagenUrl && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            {cumplido ? <Icono size={30} color="#fff" strokeWidth={2.2} /> : <Lock size={22} color={T.gray} strokeWidth={2} />}
+            {cumplido ? <IconoFinal size={30} color="#fff" strokeWidth={2.2} /> : <Lock size={22} color={T.gray} strokeWidth={2} />}
           </div>
         )}
         {imagenUrl && !cumplido && (
@@ -6810,6 +6813,34 @@ function Confeti() {
   );
 }
 
+// Red de seguridad: si algo dentro truena (un dato viejo/raro guardado
+// en Supabase, por ejemplo), esto evita la pantalla en blanco y muestra
+// un mensaje útil en su lugar, además de imprimir el error real y
+// completo en la consola del navegador (F12) para poder diagnosticarlo.
+class ErrorBoundaryEntrenamiento extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) {
+    console.error("Error real dentro de Entrenamiento:", error);
+    console.error("Dónde ocurrió:", info.componentStack);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ background: "#fff", border: `1px solid ${T.line}`, borderRadius: 14, padding: 24, textAlign: "center" }}>
+          <div style={{ fontSize: 32, marginBottom: 10 }}>⚠️</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: T.ink, marginBottom: 6 }}>Algo salió mal cargando Entrenamiento</div>
+          <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 14 }}>
+            Abre la consola del navegador (F12 → Console) y comparte el mensaje en rojo que empiece con "Error real dentro de Entrenamiento" — eso dice exactamente qué falló.
+          </div>
+          <button onClick={() => this.setState({ error: null })} style={{ background: T.accent, color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Reintentar</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function Entrenamiento() {
   const currentUser = useContext(CurrentUserContext);
   const esTecnico = currentUser?.categoria === "tecnico";
@@ -7182,7 +7213,7 @@ function Entrenamiento() {
                   <div style={{ fontSize: 12.5, fontWeight: 800, color: T.ink }}>Insignias</div>
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                     {LOGROS.map((l) => (
-                      <InsigniaMedalla key={l.id} nombre={l.nombre} desc={l.desc} Icono={l.Icono} colorDesde={l.colorDesde} colorHasta={l.colorHasta} cumplido={l.cumplido} progresoTexto={l.progresoTexto} progresoPct={l.progresoPct} />
+                      <InsigniaMedalla key={l.id} nombre={l.nombre} desc={l.desc} Icono={l.Icono} imagenUrl={l.imagenUrl} colorDesde={l.colorDesde} colorHasta={l.colorHasta} cumplido={l.cumplido} progresoTexto={l.progresoTexto} progresoPct={l.progresoPct} />
                     ))}
                   </div>
                 </div>
@@ -7409,7 +7440,7 @@ function Entrenamiento() {
           </div>
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
             {LOGROS.map((l) => (
-              <InsigniaMedalla key={l.id} nombre={l.nombre} desc={l.desc} Icono={l.Icono} colorDesde={l.colorDesde} colorHasta={l.colorHasta} cumplido={l.cumplido} progresoTexto={l.progresoTexto} progresoPct={l.progresoPct} />
+              <InsigniaMedalla key={l.id} nombre={l.nombre} desc={l.desc} Icono={l.Icono} imagenUrl={l.imagenUrl} colorDesde={l.colorDesde} colorHasta={l.colorHasta} cumplido={l.cumplido} progresoTexto={l.progresoTexto} progresoPct={l.progresoPct} />
             ))}
           </div>
         </div>
@@ -10791,7 +10822,7 @@ function AppInner() {
         {tab === "vehiculos" && <Vehiculos />}
         {tab === "equipos" && <EquiposCorrectivos irInicial={odParaEquipos} onIrConsumido={() => setOdParaEquipos(null)} />}
         {tab === "planilla" && <Planilla />}
-        {tab === "entrenamiento" && <Entrenamiento />}
+        {tab === "entrenamiento" && <ErrorBoundaryEntrenamiento><Entrenamiento /></ErrorBoundaryEntrenamiento>}
         {tab === "admin" && <Administrativo />}
       </div>
     </div>

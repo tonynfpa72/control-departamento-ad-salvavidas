@@ -6675,7 +6675,7 @@ function rangoDeEntrenamiento(pts) {
 // 10 puntos cada uno). Los segmentos en 0 todavía no tienen contenido y no
 // bloquean el rango Senior mientras sigan vacíos.
 const MAX_PUNTOS_SEGMENTO = {
-  compuertas: 160, tablas_verdad: 120, escalera: 50, simplex: 80, notifier: 0, nfpa72: 200, electronica: 190, nicet: 500, fas_nivel1: 1200,
+  compuertas: 160, tablas_verdad: 120, escalera: 50, simplex: 80, notifier: 370, nfpa72: 200, electronica: 190, nicet: 500, fas_nivel1: 1200,
 };
 
 // El rango Senior (el más alto) SOLO se otorga si el usuario tiene 100% en
@@ -7067,6 +7067,8 @@ function Entrenamiento() {
         esAdmin={currentUser?.categoria === "admin"}
         onReiniciar={(borrarRanking) => reiniciarSegmento("simplex", borrarRanking)}
       />
+    ) : modulo === "notifier" ? (
+      <JuegoNotifier onGanarPuntos={(ejercicio, puntos) => registrarPuntos("notifier", ejercicio, puntos)} />
     ) : modulo === "nicet" ? (
       <JuegoNICET onGanarPuntos={(ejercicio, puntos) => registrarPuntos("nicet", ejercicio, puntos)} />
     ) : modulo === "fas_nivel1" ? (
@@ -9016,6 +9018,165 @@ const PREGUNTAS_NFPA72 = [
   { texto: "¿Cuál de las siguientes normas establece los requerimientos mínimos para la instalación, prueba y mantenimiento de los sistemas de alarma y detección?", tipo: "mc", opciones: ["NFPA 72", "NFPA 70", "NFPA 101"], correcta: 0 },
 ];
 const PUNTOS_POR_PREGUNTA_NFPA72 = 10;
+
+// Módulo Notifier: 37 preguntas reales de práctica sobre ecuaciones
+// lógicas y programación de paneles Notifier (NFS2-640, NFS2-3030,
+// VeriFire Tools), con color inmediato al responder (igual que NICET
+// y FAS Nivel I).
+const PREGUNTAS_NOTIFIER = [
+  { texto: "¿Qué función tendría que implementarse para activar una salida si cualquier número de entradas se activan en alarma?", opciones: ["AND", "XZONE", "NOT", "OR"], correcta: 3 },
+  { texto: "Las ecuaciones lógicas son usadas a menudo para agrupar eventos predeterminados. ¿Cuál de las siguientes afirmaciones es más consistente con la programación de las ecuaciones lógicas?", opciones: ["Una zona lógica debe ser programada tanto en dispositivos de Entrada como de Salida", "Los dispositivos programados en zonas lógicas SIEMPRE están activados", "Una zona lógica solo puede ser asignada a dispositivos de Salida", "Las zonas lógicas pueden ser programadas en una FACP local desde cualquier otro punto de la red"], correcta: 2 },
+  { texto: "Cuando se usa la función especial Zona F0, la selección del PAS (Secuencia de Alarma Positiva) requiere el reconocimiento del evento dentro de los ___ de la activación para que el temporizador de retardo del pre-signal funcione.", opciones: ["10 segundos", "60 segundos", "30 segundos", "15 segundos"], correcta: 3 },
+  { texto: "Las ecuaciones están conformadas por dos componentes básicos:", opciones: ["Zonas Generales y Especiales", "Funciones (lógicas o de retardo temporal) y argumentos.", "Direcciones de Detectores y Modulos", "Zonas de Falla y Logicas"], correcta: 1 },
+  { texto: "En este ejemplo de zona lógica, ¿cuál es la función lógica? ZLY = AND(Z12,L2D2).", opciones: ["Los \"( )\"", "Z12, L2D2", "ZLY", "AND"], correcta: 3 },
+  { texto: "Ciertos type codes para detectores y/o módulos direccionables no activan condiciones de control por eventos.", opciones: ["FALSO, todos los types codes deben activar CBE por definición", "VERDADERO"], correcta: 1 },
+  { texto: "Las ecuaciones lógicas siempre deben empezar con:", opciones: ["Una dirección de dispositivo", "Un argumento", "Un paréntesis a la izquierda \"(\"", "Una Función"], correcta: 3 },
+  { texto: "Las ecuaciones lógicas tienen operadores y argumentos. Para la ecuación: ANY3(argumento), el número mínimo de argumentos que pueden ser usados es de ___ para que sea una ecuación valida.", opciones: ["2", "3", "5", "4"], correcta: 3 },
+  { texto: "Dados: tres detectores que están asignados a la zona de software 1. Una estación manual que está asignada a la zona de software 2. ¿Qué zona lógica activará una salida cuando cualquiera de las entradas esté en alarma?", opciones: ["OR(Z1,Z2)", "OR(L01D1,L01D2,L01D3,AND(Z2))", "EITHER(L01D1,L01D2,L01D3,L01M1)", "ANY(L01D1,L01D2,L01D3,L01M1)"], correcta: 0 },
+  { texto: "¿Cuál de las siguientes NO es una ecuación lógica valida?", opciones: ["OR(L01Z2,L2D1,L2D3,L01D5)", "OR(Z5,Z2)", "OR(L01D3,L01D2)", "OR(Z2,Z5,L01D3,L01D2)"], correcta: 0 },
+  { texto: "Los dispositivos del SLC tienen una etiqueta de Type Code y un Flashscan Type. El Flashscan Type puede ser cambiado desde el panel en cualquiera de los paneles ONYX.", opciones: ["VERDADERO", "FALSO"], correcta: 1 },
+  { texto: "Los detectores de ducto de humo pueden ser usados como reemplazo del servicio de detección de incendio regular en un edificio no ocupado.", opciones: ["VERDADERO", "FALSO"], correcta: 1 },
+  { texto: "Cuando se instala un módulo FCM-1 o un FCM-1-REL, los terminales T10 y T11 deben ser conectados a una alimentación de 24VDC no reseteable.", opciones: ["VERDADERO", "FALSO"], correcta: 0 },
+  { texto: "El módulo FCM-1-REL solo funcionara en un SLC programado para modo CLIP, si se direcciona dentro de las primeras 20 direcciones.", opciones: ["VERDADERO", "FALSO"], correcta: 1 },
+  { texto: "¿Cuál es el máximo número de dispositivos que pueden ser instalados entre módulos aisladores en un lazo SLC?", opciones: ["5", "10", "25", "Sin límites, hasta el número de dispositivos instalados"], correcta: 2 },
+  { texto: "En la ecuación lógica: ZT3=OR(T385), un display remoto no tendría que responder para que la ZT3 sea verdadera.", opciones: ["VERDADERO", "FALSO"], correcta: 0 },
+  { texto: "¿Cuántas derivaciones en T (T-taps) son permitidas en una instalación del lazo SLC, NFPA estilo 7?", opciones: ["1", "4, Máximo", "NONE", "3"], correcta: 2 },
+  { texto: "En la ecuación: ZL01=AND(L01D1,OR(L01M1,L01M2),NOT(L01M3)) ¿qué entradas deben estar encendidas/activadas para que la ZL01 encienda la salida a la que ha sido asignada?", opciones: ["L01D1 y cualquiera de L01M1 ó L01M2", "L01D1, L01M1 y L01M2", "Tanto L01M1 ó L01M2 y L01M3", "L01D1, L01M1, L01M2 y L01M3"], correcta: 0 },
+  { texto: "¿Cuál de las siguientes afirmaciones describe la principal diferencia entre las funciones DEL y SDEL?", opciones: ["SDEL requiere mas de 5 argumentos", "DEL no puede usar un tiempo de suración", "DEL requiere mas de un argumento", "SDEL se enclava, DEL no"], correcta: 3 },
+  { texto: "¿Cuál ecuación activará un relé luego de un retardo de 30 segundos y permanecerá activa hasta un reinicio del panel de incendio?", opciones: ["SDEL(00:00:30,30:00:00,Z57)", "DEL(00:00:00,00:00:30,Z57)", "SDEL(00:00:30,**:**:**,Z57)", "DEL(00:00:30, 00:00:30,Z57)"], correcta: 2 },
+  { texto: "La NFS2-640 continuará monitoreando y reportando alarmas en modo de programación, excepto en autoprogramación.", opciones: ["VERDADERO", "FALSO"], correcta: 0 },
+  { texto: "En una NFS2-640, mientras esté en el modo \"Lectura de Estados\" (\"Read Status\"), cuando ocurra una falla o una alarma, la central de incendios automáticamente se sale del \"Read Status\" y muestra la alarma o falla.", opciones: ["VERDADERO", "FALSO"], correcta: 0 },
+  { texto: "Cuando se programa una NFS2-3030, las ecuaciones lógicas solo pueden ser programadas con el VeriFire Tools.", opciones: ["VERDADERO", "FALSO"], correcta: 1 },
+  { texto: "Con la NFS2-3030 (o NCA-2), las zonas generales pueden ser usadas en aplicaciones de CCBE cuando un número de nodo es ingresado antes del numero de zona.", opciones: ["VERDADERO", "FALSO"], correcta: 0 },
+  { texto: "Con la NFS2-3030, ¿qué posición de la lista de un CBE se usa para vincular la etiqueta de la zona al detector y para la inhabilitación grupal de zonas?", opciones: ["No Aplica", "9na", "1era", "10ma"], correcta: 2 },
+  { texto: "La NFS2-3030 usa la AMPS-24 como su fuente de alimentación principal. Para configurar la AMPS-24 para un retardo de falla AC de 8-horas tendría que:", opciones: ["Configurar el DIP Switch SW 1.1 Encendido - SW 1.2 Apagado", "Configurar el DIP Switch SW 1.1 Apagado - SW 1.2 Apagado", "El retardo de la Falla AC solamente puede ser configurado para 24 horas", "Usar la utilidad de programación PK-PPS"], correcta: 3 },
+  { texto: "Al utilizar la opción de autoprogramación con un programa existente, el panel de control no cambia la información del programa de los dispositivos instalados y programados.", opciones: ["VERDADERO", "FALSO"], correcta: 0 },
+  { texto: "¿Cuántos niveles de contraseña tiene el NFS2-3030?", opciones: ["4", "2", "3", "1"], correcta: 1 },
+  { texto: "Un anunciador conectado a la NFS2-3030 configurado como 96PT-SYS tendrá anunciación de 96 puntos, con los primeros 8 puntos reservados para:", opciones: ["Las primeras 8 zonas de alarma", "Puntos del sistema", "Para múltiples puntos XPIQ para modernizar una aplicación", "Mapeo automático de los primeros 8 detectores para la operación con el UDACT"], correcta: 1 },
+  { texto: "Las únicas opciones para IP Access (Acceso IP), en una NFS2-3030 son: ON (encendido), OFF (apagado), TIMED (con temporización 2 horas).", opciones: ["VERDADERO", "FALSO"], correcta: 0 },
+  { texto: "Una AMPS-24, direccionada en L01M06, tendrá el monitor de batería direccionado en qué dirección:", opciones: ["No se puede hacer esto ya que la NFS2-3030 no puede monitorear la batería.", "L01M08 (B + 2)", "Permanecerá en la dirección L01M06", "L01M159 por defecto"], correcta: 1 },
+  { texto: "Para poder utilizar el software de programación VeriFire Tool (VFT), se debe generar un archivo HostID (HID). Esto se hace:", opciones: ["Automáticamente, en cualquier momento que se inicie el VFT", "Normalmente no, a menos que se necesite comunicarse con una Central de Incendios.", "Se debe generar el HID por el usuario en la pantalla de \"HID Generator\" en el VFT", "Cada vez que se abra el VFT y el usuario vaya a la pantalla de \"HID Generator\""], correcta: 2 },
+  { texto: "Con el VFT, descargar una base de datos a una central de incendios (FACP) requiere introducir una contraseña, pero subirla a la computadora no lo requiere.", opciones: ["VERDADERO", "FALSO"], correcta: 0 },
+  { texto: "¿Cuál es la configuración que indica una ubicación de pantalla (u otra central), cuando tiene el control de las funciones Aceptar, Silenciar Señal, Reinicio del Sistema y Simulacro?", opciones: ["DCC (Centro de pantalla y control)", "Configuraciones por Defecto", "Modo de Ahorro de Energía", "Configuraciones Regionales"], correcta: 0 },
+  { texto: "¿La programación de la NFS2-3030, en la pantalla de Temporizadores del panel, le permite que algunas salidas activadas se silencien automáticamente luego de un periodo de tiempo?", opciones: ["SI", "NO, todas las salidas deben ser silenciadas manualmente."], correcta: 0 },
+  { texto: "En la pantalla de Network Mapping (Mapeo de Red), con Auto Program (Autoprogramar) se consulta el mapa interno de qué nodos se encuentran en la red y se configuran automáticamente los 240 nodos según el mapa, independientemente de qué pantalla se visualice.", opciones: ["NO", "SI"], correcta: 1 },
+  { texto: "¿Cuántos tipos de contraseñas seleccionables nos proporciona la NFS2-640?", opciones: ["4", "1", "2", "3"], correcta: 2 },
+];
+
+const PUNTOS_POR_PREGUNTA_NOTIFIER = 10;
+
+// Módulo Notifier: examen único de opción simple sobre ecuaciones
+// lógicas y programación de paneles Notifier. El color (verde/rojo)
+// aparece de inmediato al responder cada pregunta, sin esperar a
+// enviar el examen completo.
+function JuegoNotifier({ onGanarPuntos }) {
+  const [mostrarIntro, setMostrarIntro] = useState(true);
+  const [respuestas, setRespuestas] = useState({});
+  const [resultado, setResultado] = useState(null);
+  const ganadasRef = React.useRef(new Set());
+  const falladasRef = React.useRef(new Set());
+
+  const responder = (i, valor) => setRespuestas((prev) => ({ ...prev, [i]: valor }));
+  const reiniciarExamen = () => { setRespuestas({}); setResultado(null); };
+
+  const enviarExamen = () => {
+    if (PREGUNTAS_NOTIFIER.some((_, i) => respuestas[i] === undefined)) {
+      setResultado({ ok: null, msg: "Debes responder las " + PREGUNTAS_NOTIFIER.length + " preguntas antes de enviar el examen." });
+      return;
+    }
+    const detalle = PREGUNTAS_NOTIFIER.map((p, i) => respuestas[i] === p.correcta);
+    const correctas = detalle.filter(Boolean).length;
+    const total = PREGUNTAS_NOTIFIER.length;
+    const porcentaje = Math.round((correctas / total) * 100);
+    let puntosGanados = 0;
+    detalle.forEach((esCorrecta, i) => {
+      if (esCorrecta && !ganadasRef.current.has(i)) {
+        ganadasRef.current.add(i);
+        falladasRef.current.delete(i);
+        puntosGanados += PUNTOS_POR_PREGUNTA_NOTIFIER;
+      } else if (!esCorrecta && !falladasRef.current.has(i) && !ganadasRef.current.has(i)) {
+        falladasRef.current.add(i);
+        puntosGanados -= PUNTOS_POR_PREGUNTA_NOTIFIER;
+      }
+    });
+    if (puntosGanados !== 0) onGanarPuntos && onGanarPuntos("Examen de práctica Notifier", puntosGanados);
+    const rangoResultado = rangoResultadoExamen(porcentaje);
+    setResultado({
+      ok: porcentaje >= 70, detalle, rangoResultado,
+      msg: `${correctas}/${total} correctas (${porcentaje}%). ${porcentaje >= 70 ? "¡Aprobado!" : "Necesitas 70% o más para aprobar — revisa las preguntas marcadas en rojo."}`,
+    });
+  };
+
+  if (mostrarIntro) {
+    const TEMAS_NOTIFIER = [
+      {
+        id: "intro_notifier", titulo: "Ecuaciones y paneles Notifier",
+        contenido: (
+          <>
+            <p>Este módulo cubre las <strong>ecuaciones lógicas</strong> usadas para programar zonas lógicas en paneles
+            <strong> Notifier</strong> (funciones como AND, OR, NOT, DEL, SDEL), y conceptos de programación de los paneles
+            <strong> NFS2-640</strong> y <strong>NFS2-3030</strong> (VeriFire Tools, AMPS-24, SLC, módulos direccionables).</p>
+            <p>Una ecuación lógica siempre empieza con una <strong>función</strong> (por ejemplo <code>AND(...)</code> o
+            <code> OR(...)</code>), seguida de sus argumentos entre paréntesis.</p>
+          </>
+        ),
+      },
+      {
+        id: "reglas_notifier", titulo: "Reglas del examen",
+        contenido: (
+          <p>El examen tiene {PREGUNTAS_NOTIFIER.length} preguntas de opción única. A diferencia de otros exámenes, aquí
+          <strong> el color (verde o rojo) aparece de inmediato</strong> al elegir una respuesta — no hace falta esperar a
+          enviar todo el examen para saber si acertaste. Necesitas 70% o más para aprobar el módulo.</p>
+        ),
+      },
+    ];
+    return <GuiaPorTemas temas={TEMAS_NOTIFIER} onContinuar={() => setMostrarIntro(false)} tituloModulo="las ecuaciones y paneles Notifier" />;
+  }
+
+  return (
+    <Card
+      title="Examen de práctica — Ecuaciones Notifier"
+      action={<Btn small variant="ghost" onClick={() => setMostrarIntro(true)}>Ver la guía otra vez</Btn>}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        {PREGUNTAS_NOTIFIER.map((p, i) => {
+          const yaRespondida = respuestas[i] !== undefined;
+          const correctaMostrada = resultado?.detalle;
+          const ok = correctaMostrada ? correctaMostrada[i] : (yaRespondida ? respuestas[i] === p.correcta : null);
+          const mostrarColor = correctaMostrada || yaRespondida;
+          return (
+            <div key={i} style={{
+              border: `1px solid ${T.line}`, borderRadius: 10, padding: 14,
+              background: mostrarColor ? (ok ? T.greenSoft : T.redSoft) : T.graySoft,
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{i + 1}. {p.texto}</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {p.opciones.map((op, j) => (
+                  <label key={j} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+                    <input type="radio" name={`ntf${i}`} checked={respuestas[i] === j} onChange={() => responder(i, j)} />
+                    {op}
+                  </label>
+                ))}
+              </div>
+              {mostrarColor && !ok && (
+                <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>Respuesta correcta: {p.opciones[p.correcta]}</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
+        <Btn variant="accent" onClick={enviarExamen}>Enviar examen</Btn>
+        {resultado && <Btn variant="ghost" onClick={reiniciarExamen}>Empezar de nuevo</Btn>}
+        {resultado && resultado.rangoResultado && (
+          <span style={{ fontSize: 13, fontWeight: 800, color: "#fff", background: resultado.rangoResultado.color, padding: "5px 12px", borderRadius: 999 }}>{resultado.rangoResultado.texto}</span>
+        )}
+        {resultado && <span style={{ fontSize: 14, color: resultado.ok === true ? T.green : resultado.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultado.msg}</span>}
+      </div>
+    </Card>
+  );
+}
 
 function JuegoNFPA72({ onGanarPuntos }) {
   const [mostrarIntro, setMostrarIntro] = useState(true);

@@ -6675,7 +6675,7 @@ function rangoDeEntrenamiento(pts) {
 // 10 puntos cada uno). Los segmentos en 0 todavía no tienen contenido y no
 // bloquean el rango Senior mientras sigan vacíos.
 const MAX_PUNTOS_SEGMENTO = {
-  compuertas: 160, tablas_verdad: 120, escalera: 50, simplex: 80, notifier: 370, nfpa72: 200, electronica: 190, nicet: 500, fas_nivel1: 1200,
+  compuertas: 160, tablas_verdad: 120, escalera: 50, simplex: 80, notifier: 450, nfpa72: 200, electronica: 190, nicet: 500, fas_nivel1: 1200,
 };
 
 // El rango Senior (el más alto) SOLO se otorga si el usuario tiene 100% en
@@ -9069,8 +9069,27 @@ const PUNTOS_POR_PREGUNTA_NOTIFIER = 10;
 // lógicas y programación de paneles Notifier. El color (verde/rojo)
 // aparece de inmediato al responder cada pregunta, sin esperar a
 // enviar el examen completo.
+const PREGUNTAS_MANTENIMIENTO_NOTIFIER = [
+  { texto: "¿Qué mide el software del panel para determinar si un detector necesita una advertencia de mantenimiento?", opciones: ["El voltaje de la batería de respaldo", "La compensación de deriva (drift compensation) del detector", "La cantidad de detectores en el lazo SLC", "El tiempo desde la última prueba de sensibilidad"], correcta: 1 },
+  { texto: "¿Cuáles son los tres niveles de advertencia de mantenimiento (sin contar el estado normal N/C)?", opciones: ["BAJO, MEDIO, ALTO", "LOW THRESHOLD, MAINTENANCE REQ, MAINT. URGENT", "VERIFY, WARNING, CRITICAL", "NIVEL 1, NIVEL 2, NIVEL 3"], correcta: 1 },
+  { texto: "¿Qué indica el mensaje \"LOW THRESHOLD\" (umbral bajo) en un detector?", opciones: ["Que el detector está sucio y necesita limpieza", "Un problema de hardware en el detector", "Que la batería está baja", "Que el detector fue desconectado"], correcta: 1 },
+  { texto: "Para un detector iónico, ¿en qué rango de porcentaje de compensación se activa \"MAINTENANCE REQ\" (mantenimiento requerido)?", opciones: ["0 – 5", "6 – 80", "92 – 99", "100"], correcta: 2 },
+  { texto: "¿Qué porcentaje de compensación indica \"MAINT. URGENT\" (mantenimiento urgente), sin importar el tipo de detector?", opciones: ["83", "92", "99", "100"], correcta: 3 },
+  { texto: "Para un detector láser, ¿cuál es el rango de compensación considerado normal (N/C)?", opciones: ["3 – 50", "6 – 45", "6 – 80", "0 – 2"], correcta: 0 },
+  { texto: "¿Cuál es la diferencia entre \"MAINTENANCE REQ\" y \"MAINT. URGENT\"?", opciones: [
+      "No hay ninguna diferencia real, son el mismo mensaje",
+      "MAINTENANCE REQ es una alerta preventiva (acumulación cercana pero debajo del límite); MAINT. URGENT significa que el polvo ya superó el límite permitido",
+      "MAINTENANCE REQ solo aplica a detectores láser",
+      "MAINT. URGENT indica una falla de hardware, no de polvo"
+    ], correcta: 1 },
+  { texto: "Para un fotodetector o fotodetector con calor, ¿cuál es el rango de \"MAINTENANCE REQ\" (mantenimiento requerido)?", opciones: ["0 – 5", "6 – 45", "83 – 99", "92 – 99"], correcta: 3 },
+];
+
 function JuegoNotifier({ onGanarPuntos }) {
   const [mostrarIntro, setMostrarIntro] = useState(true);
+  const [tabNotifier, setTabNotifier] = useState("examen"); // "examen" | "mantenimiento"
+
+  // --- Examen principal (37 preguntas) ---
   const [respuestas, setRespuestas] = useState({});
   const [resultado, setResultado] = useState(null);
   const ganadasRef = React.useRef(new Set());
@@ -9104,6 +9123,43 @@ function JuegoNotifier({ onGanarPuntos }) {
     setResultado({
       ok: porcentaje >= 70, detalle, rangoResultado,
       msg: `${correctas}/${total} correctas (${porcentaje}%). ${porcentaje >= 70 ? "¡Aprobado!" : "Necesitas 70% o más para aprobar — revisa las preguntas marcadas en rojo."}`,
+    });
+  };
+
+  // --- Pestaña de Mantenimiento (preguntas cortas) ---
+  const [respuestasMant, setRespuestasMant] = useState({});
+  const [resultadoMant, setResultadoMant] = useState(null);
+  const ganadasMantRef = React.useRef(new Set());
+  const falladasMantRef = React.useRef(new Set());
+
+  const responderMant = (i, valor) => setRespuestasMant((prev) => ({ ...prev, [i]: valor }));
+  const reiniciarMant = () => { setRespuestasMant({}); setResultadoMant(null); };
+
+  const enviarMant = () => {
+    if (PREGUNTAS_MANTENIMIENTO_NOTIFIER.some((_, i) => respuestasMant[i] === undefined)) {
+      setResultadoMant({ ok: null, msg: "Debes responder las " + PREGUNTAS_MANTENIMIENTO_NOTIFIER.length + " preguntas antes de enviar." });
+      return;
+    }
+    const detalle = PREGUNTAS_MANTENIMIENTO_NOTIFIER.map((p, i) => respuestasMant[i] === p.correcta);
+    const correctas = detalle.filter(Boolean).length;
+    const total = PREGUNTAS_MANTENIMIENTO_NOTIFIER.length;
+    const porcentaje = Math.round((correctas / total) * 100);
+    let puntosGanados = 0;
+    detalle.forEach((esCorrecta, i) => {
+      if (esCorrecta && !ganadasMantRef.current.has(i)) {
+        ganadasMantRef.current.add(i);
+        falladasMantRef.current.delete(i);
+        puntosGanados += PUNTOS_POR_PREGUNTA_NOTIFIER;
+      } else if (!esCorrecta && !falladasMantRef.current.has(i) && !ganadasMantRef.current.has(i)) {
+        falladasMantRef.current.add(i);
+        puntosGanados -= PUNTOS_POR_PREGUNTA_NOTIFIER;
+      }
+    });
+    if (puntosGanados !== 0) onGanarPuntos && onGanarPuntos("Mantenimiento Notifier", puntosGanados);
+    const rangoResultado = rangoResultadoExamen(porcentaje);
+    setResultadoMant({
+      ok: porcentaje >= 70, detalle, rangoResultado,
+      msg: `${correctas}/${total} correctas (${porcentaje}%). ${porcentaje >= 70 ? "¡Aprobado!" : "Necesitas 70% o más para aprobar."}`,
     });
   };
 
@@ -9149,11 +9205,104 @@ function JuegoNotifier({ onGanarPuntos }) {
         ),
       },
       {
+        id: "funciones_logicas_notifier", titulo: "Funciones lógicas",
+        contenido: (
+          <>
+            <p><strong>AND</strong> — requiere que <strong>cada</strong> argumento esté activo. Ej: <code>AND(Z02,Z05,L2D12)</code> — los
+            tres deben estar activos para que la zona lógica se active.</p>
+            <p><strong>OR</strong> — requiere que <strong>cualquier</strong> argumento esté activo. Ej: <code>OR(Z02,Z05,L2D12)</code> — si
+            alguno de los tres está activo, la zona lógica se activa.</p>
+            <p><strong>NOT</strong> — invierte el estado del argumento. Ej: <code>NOT(Z02)</code> — la zona lógica permanece activada
+            hasta que el argumento se active; si el argumento se activa, la zona lógica se desactiva.</p>
+            <p><strong>ONLY1</strong> — requiere que <strong>solo un</strong> argumento esté activo. Ej: <code>ONLY1(Z02,Z05,Z09)</code> —
+            si solo uno se activa, la zona lógica se activa (si se activan dos o más, no).</p>
+            <p><strong>ANYX</strong> — requiere que la <strong>cantidad</strong> especificada por el número que precede a los
+            argumentos esté activa. Ej: <code>ANYX(2,Z02,Z05,Z09)</code> — si dos o más de los tres están en alarma, se activa. X
+            puede ser de 1 a 9.</p>
+            <p><strong>XZONE</strong> — requiere <strong>cualquier combinación de dos o más</strong> dispositivos de entrada
+            programados hacia una zona. Ej: <code>XZONE(Z02)</code> — si dos o más dispositivos asignados (CBE) a esa zona de
+            software entran en alarma, las salidas asignadas se activan.</p>
+            <p><strong>RANGE</strong> — cada argumento dentro del rango debe cumplir los requisitos de la función que lo
+            gobierna. Límite: 20 argumentos consecutivos. Ej: <code>AND(RANGE(Z1,Z20))</code> — las zonas 1 a 20 deben estar
+            todas activas para activar la zona lógica.</p>
+          </>
+        ),
+      },
+      {
+        id: "funciones_tiempo_notifier", titulo: "Funciones basadas en el tiempo (DEL, SDEL, TIM)",
+        contenido: (
+          <>
+            <p>El panel admite tres funciones de tiempo: <strong>DEL</strong>, <strong>SDEL</strong> y <strong>TIM</strong>. Reglas
+            especiales: solo <strong>una</strong> función de tiempo por ecuación, debe ser la <strong>primera entrada</strong> de
+            la ecuación, y <strong>no va entre paréntesis</strong>. Las funciones lógicas sí pueden usarse después, pero deben ir
+            entre paréntesis siguiendo a la función de tiempo. Los tiempos usan formato 24 horas (HH:MM:SS), rango 00:00:00 a
+            23:59:59.</p>
+            <p><strong>DEL</strong> (retardo, no enclavada) — Ej: <code>DEL(HH.MM.SS, HH.MM.SS, AND(L1M1,L1M140))</code>. El
+            primer tiempo es el <strong>retardo</strong>, el segundo es la <strong>duración</strong>. Se vuelve verdadera después
+            de que el argumento estuvo activo durante el retardo, y sigue verdadera mientras el argumento siga activo. Si el
+            argumento se desactiva durante el retardo o la duración, la función vuelve a falso y el conteo reinicia si se
+            reactiva. Con duración cero, evalúa verdadero al expirar el retardo (si el argumento se mantuvo activo todo ese
+            tiempo). Sin retardo ni duración especificados, sigue al argumento en vivo. DEL vuelve a falso tras un reinicio del
+            panel.</p>
+            <p><strong>SDEL</strong> (retardo, enclavada) — Ej: <code>SDEL(HH.MM.SS, HH.MM.SS, L1M140)</code>. Igual estructura,
+            pero una vez que se activa tras el retardo, <strong>permanece activa por la duración completa aunque el argumento se
+            desactive</strong> en el camino. Con retardo cero, se activa apenas el argumento se activa y dura lo especificado
+            aunque el argumento se apague. Sin retardo ni duración, no se desactiva hasta un reinicio del panel, aunque el
+            argumento se desactive.</p>
+            <p><strong>TIM</strong> — activa según días/horarios específicos. Ejemplos:</p>
+            <ul style={{ margin: "8px 0 8px 20px", padding: 0, lineHeight: 1.7 }}>
+              <li><code>TIM(7-11-05)</code> → verdadero las 24h del 11 de julio de 2005.</li>
+              <li><code>TIM(MO,TU,WE,TH,FR,08:00:00,23:00:00)</code> → verdadero de 8:00 AM a 11:00 PM esos días.</li>
+              <li><code>TIM(MO,TU,WE,TH,FR,08:00:00)</code> → verdadero de 8:00 AM hasta las 23:59:59 del mismo día.</li>
+              <li><code>TIM(TU,07:45:00,18:30:00)</code> → verdadero todos los martes de 7:45 AM a 6:30 PM.</li>
+              <li><code>TIM(MO,TU,WE,TH,FR)</code> → verdadero desde el lunes 12:01 AM hasta el viernes 11:59 PM.</li>
+            </ul>
+          </>
+        ),
+      },
+      {
+        id: "ejemplo_sintaxis_notifier", titulo: "Ejemplo completo de sintaxis",
+        contenido: (
+          <>
+            <p style={{ fontFamily: "monospace", background: T.graySoft, padding: "8px 10px", borderRadius: 6, fontSize: 12.5 }}>
+              OR(AND(L1D1,L1D4),AND(L2D6,L2M3,NOT(L2M4)),ANYX(2,L1M13,L1M14,L1M15))
+            </p>
+            <ul style={{ margin: "8px 0 8px 20px", padding: 0, lineHeight: 1.7 }}>
+              <li>Comienza con una función lógica: <strong>OR</strong>.</li>
+              <li><strong>67 caracteres</strong> (máximo 80) — incluye paréntesis y comas.</li>
+              <li><strong>5 funciones lógicas</strong> (máximo 10) — OR, AND, AND, NOT y ANYX.</li>
+              <li><strong>8 argumentos</strong> (máximo 20 por función) — L1D1, L1D4, L2D6, L2M3, L2M4, L1M13, L1M14, L1M15.</li>
+              <li>La ecuación <strong>no contiene espacios</strong>.</li>
+            </ul>
+            <p>Para evaluarla, se empieza desde la parte más interna hacia afuera: L1D1 y L1D4 deben estar en ON para que el
+            primer AND sea TRUE; L2D6 y L2M3 en ON y L2M4 en OFF para que el segundo AND sea TRUE; y dos cualquiera de L1M13,
+            L1M14, L1M15 en ON para que el ANYX sea TRUE. Basta con que <strong>una</strong> de esas tres partes sea TRUE para
+            que el OR completo active todas las salidas programadas con esta ecuación.</p>
+          </>
+        ),
+      },
+      {
+        id: "ecuaciones_problemas_notifier", titulo: "Ecuaciones de problemas (ZT)",
+        contenido: (
+          <>
+            <p>Siguen las mismas reglas de sintaxis que las ecuaciones lógicas. El sistema permite hasta <strong>100</strong>
+            ({"ZT001"} a {"ZT100"}). Se diferencian en que:</p>
+            <ul style={{ margin: "8px 0 8px 20px", padding: 0, lineHeight: 1.7 }}>
+              <li>Evalúan verdadero cuando los argumentos entran en <strong>problema</strong> (trouble), no en alarma.</li>
+              <li>Los argumentos pueden ser códigos de problema del sistema (Apéndice H del manual).</li>
+            </ul>
+            <p>Ejemplos: <code>AND(L1M149,L2M110)</code> evalúa verdadero cuando ambos argumentos entran en problema.
+            <code> OR(ZT049,ZT050)</code> evalúa verdadero cuando cualquiera de las dos entra en problema.</p>
+          </>
+        ),
+      },
+      {
         id: "reglas_notifier", titulo: "Reglas del examen",
         contenido: (
-          <p>El examen tiene {PREGUNTAS_NOTIFIER.length} preguntas de opción única. A diferencia de otros exámenes, aquí
-          <strong> el color (verde o rojo) aparece de inmediato</strong> al elegir una respuesta — no hace falta esperar a
-          enviar todo el examen para saber si acertaste. Necesitas 70% o más para aprobar el módulo.</p>
+          <p>El módulo tiene dos partes: el <strong>Examen</strong> principal ({PREGUNTAS_NOTIFIER.length} preguntas sobre
+          ecuaciones y paneles) y una pestaña de <strong>Mantenimiento</strong> (advertencias de detección inteligente). En
+          ambas, el color (verde o rojo) aparece de inmediato al elegir una respuesta. Necesitas 70% o más para aprobar cada
+          una.</p>
         ),
       },
     ];
@@ -9162,45 +9311,149 @@ function JuegoNotifier({ onGanarPuntos }) {
 
   return (
     <Card
-      title="Examen de práctica — Ecuaciones Notifier"
+      title={tabNotifier === "examen" ? "Examen de práctica — Ecuaciones Notifier" : "Mantenimiento — Detección Inteligente"}
       action={<Btn small variant="ghost" onClick={() => setMostrarIntro(true)}>Ver la guía otra vez</Btn>}
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-        {PREGUNTAS_NOTIFIER.map((p, i) => {
-          const yaRespondida = respuestas[i] !== undefined;
-          const correctaMostrada = resultado?.detalle;
-          const ok = correctaMostrada ? correctaMostrada[i] : (yaRespondida ? respuestas[i] === p.correcta : null);
-          const mostrarColor = correctaMostrada || yaRespondida;
-          return (
-            <div key={i} style={{
-              border: `1px solid ${T.line}`, borderRadius: 10, padding: 14,
-              background: mostrarColor ? (ok ? T.greenSoft : T.redSoft) : T.graySoft,
-            }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{i + 1}. {p.texto}</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {p.opciones.map((op, j) => (
-                  <label key={j} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
-                    <input type="radio" name={`ntf${i}`} checked={respuestas[i] === j} onChange={() => responder(i, j)} />
-                    {op}
-                  </label>
-                ))}
-              </div>
-              {mostrarColor && !ok && (
-                <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>Respuesta correcta: {p.opciones[p.correcta]}</div>
-              )}
-            </div>
-          );
-        })}
+      <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+        <Btn variant={tabNotifier === "examen" ? "accent" : "ghost"} small onClick={() => setTabNotifier("examen")}>📋 Examen</Btn>
+        <Btn variant={tabNotifier === "mantenimiento" ? "accent" : "ghost"} small onClick={() => setTabNotifier("mantenimiento")}>🔧 Mantenimiento</Btn>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
-        <Btn variant="accent" onClick={enviarExamen}>Enviar examen</Btn>
-        {resultado && <Btn variant="ghost" onClick={reiniciarExamen}>Empezar de nuevo</Btn>}
-        {resultado && resultado.rangoResultado && (
-          <span style={{ fontSize: 13, fontWeight: 800, color: "#fff", background: resultado.rangoResultado.color, padding: "5px 12px", borderRadius: 999 }}>{resultado.rangoResultado.texto}</span>
-        )}
-        {resultado && <span style={{ fontSize: 14, color: resultado.ok === true ? T.green : resultado.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultado.msg}</span>}
-      </div>
+      {tabNotifier === "examen" && (
+        <>
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            {PREGUNTAS_NOTIFIER.map((p, i) => {
+              const yaRespondida = respuestas[i] !== undefined;
+              const correctaMostrada = resultado?.detalle;
+              const ok = correctaMostrada ? correctaMostrada[i] : (yaRespondida ? respuestas[i] === p.correcta : null);
+              const mostrarColor = correctaMostrada || yaRespondida;
+              return (
+                <div key={i} style={{
+                  border: `1px solid ${T.line}`, borderRadius: 10, padding: 14,
+                  background: mostrarColor ? (ok ? T.greenSoft : T.redSoft) : T.graySoft,
+                }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{i + 1}. {p.texto}</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {p.opciones.map((op, j) => (
+                      <label key={j} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+                        <input type="radio" name={`ntf${i}`} checked={respuestas[i] === j} onChange={() => responder(i, j)} />
+                        {op}
+                      </label>
+                    ))}
+                  </div>
+                  {mostrarColor && !ok && (
+                    <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>Respuesta correcta: {p.opciones[p.correcta]}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
+            <Btn variant="accent" onClick={enviarExamen}>Enviar examen</Btn>
+            {resultado && <Btn variant="ghost" onClick={reiniciarExamen}>Empezar de nuevo</Btn>}
+            {resultado && resultado.rangoResultado && (
+              <span style={{ fontSize: 13, fontWeight: 800, color: "#fff", background: resultado.rangoResultado.color, padding: "5px 12px", borderRadius: 999 }}>{resultado.rangoResultado.texto}</span>
+            )}
+            {resultado && <span style={{ fontSize: 14, color: resultado.ok === true ? T.green : resultado.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultado.msg}</span>}
+          </div>
+        </>
+      )}
+
+      {tabNotifier === "mantenimiento" && (
+        <>
+          <div style={{ background: T.blueSoft, borderRadius: 10, padding: 14, marginBottom: 18, fontSize: 13, lineHeight: 1.6, color: T.ink }}>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>D.2.2 Advertencias de mantenimiento — Tres niveles</div>
+            <p style={{ margin: "0 0 8px" }}>El software del panel monitorea continuamente la <strong>compensación de deriva</strong>
+            (drift compensation) de cada detector inteligente — el ajuste automático que compensa la acumulación gradual de
+            polvo. Cuando esa compensación llega a un nivel <strong>inaceptable</strong> que puede comprometer el rendimiento
+            del detector, el panel de control indica una <strong>advertencia de mantenimiento</strong>.</p>
+            <div style={{ overflowX: "auto", marginBottom: 8 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5, background: "#fff", borderRadius: 8, overflow: "hidden" }}>
+                <thead>
+                  <tr style={{ background: T.graySoft, textAlign: "left" }}>
+                    <th style={{ padding: "6px 8px" }}>Mensaje</th>
+                    <th style={{ padding: "6px 8px" }}>Indica</th>
+                    <th style={{ padding: "6px 8px" }}>Iónico</th>
+                    <th style={{ padding: "6px 8px" }}>Fotodetector / Foto+calor</th>
+                    <th style={{ padding: "6px 8px" }}>Láser</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style={{ borderTop: `1px solid ${T.line}` }}>
+                    <td style={{ padding: "6px 8px", fontWeight: 700 }}>N/C</td>
+                    <td style={{ padding: "6px 8px" }}>La compensación está dentro del rango aceptable.</td>
+                    <td style={{ padding: "6px 8px" }}>6 – 80</td>
+                    <td style={{ padding: "6px 8px" }}>6 – 45</td>
+                    <td style={{ padding: "6px 8px" }}>3 – 50</td>
+                  </tr>
+                  <tr style={{ borderTop: `1px solid ${T.line}` }}>
+                    <td style={{ padding: "6px 8px", fontWeight: 700 }}>LOW THRESHOLD<br />(umbral bajo)</td>
+                    <td style={{ padding: "6px 8px" }}>Un problema de hardware en el detector.</td>
+                    <td style={{ padding: "6px 8px" }}>0 – 5</td>
+                    <td style={{ padding: "6px 8px" }}>0 – 5</td>
+                    <td style={{ padding: "6px 8px" }}>0 – 2</td>
+                  </tr>
+                  <tr style={{ borderTop: `1px solid ${T.line}` }}>
+                    <td style={{ padding: "6px 8px", fontWeight: 700 }}>MAINTENANCE REQ<br />(mantenimiento requerido)</td>
+                    <td style={{ padding: "6px 8px" }}>Acumulación de polvo cercana pero por debajo del límite permitido — alerta para dar mantenimiento antes de que se comprometa el rendimiento.</td>
+                    <td style={{ padding: "6px 8px" }}>92 – 99</td>
+                    <td style={{ padding: "6px 8px" }}>92 – 99</td>
+                    <td style={{ padding: "6px 8px" }}>83 – 99</td>
+                  </tr>
+                  <tr style={{ borderTop: `1px solid ${T.line}` }}>
+                    <td style={{ padding: "6px 8px", fontWeight: 700 }}>MAINT. URGENT<br />(mantenimiento urgente)</td>
+                    <td style={{ padding: "6px 8px" }}>La acumulación de polvo supera el límite permitido.</td>
+                    <td style={{ padding: "6px 8px" }}>100</td>
+                    <td style={{ padding: "6px 8px" }}>100</td>
+                    <td style={{ padding: "6px 8px" }}>100</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p style={{ margin: 0, fontSize: 11.5, color: T.inkSoft }}>Los <strong>tres niveles de advertencia</strong> son LOW
+            THRESHOLD, MAINTENANCE REQ y MAINT. URGENT — N/C es el estado normal, no una advertencia. Una advertencia de
+            mantenimiento es <strong>preventiva</strong>, distinta de una condición de falla (trouble) activa del sistema.</p>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            {PREGUNTAS_MANTENIMIENTO_NOTIFIER.map((p, i) => {
+              const yaRespondida = respuestasMant[i] !== undefined;
+              const correctaMostrada = resultadoMant?.detalle;
+              const ok = correctaMostrada ? correctaMostrada[i] : (yaRespondida ? respuestasMant[i] === p.correcta : null);
+              const mostrarColor = correctaMostrada || yaRespondida;
+              return (
+                <div key={i} style={{
+                  border: `1px solid ${T.line}`, borderRadius: 10, padding: 14,
+                  background: mostrarColor ? (ok ? T.greenSoft : T.redSoft) : T.graySoft,
+                }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{i + 1}. {p.texto}</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {p.opciones.map((op, j) => (
+                      <label key={j} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+                        <input type="radio" name={`mant${i}`} checked={respuestasMant[i] === j} onChange={() => responderMant(i, j)} />
+                        {op}
+                      </label>
+                    ))}
+                  </div>
+                  {mostrarColor && !ok && (
+                    <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>Respuesta correcta: {p.opciones[p.correcta]}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
+            <Btn variant="accent" onClick={enviarMant}>Enviar respuestas</Btn>
+            {resultadoMant && <Btn variant="ghost" onClick={reiniciarMant}>Empezar de nuevo</Btn>}
+            {resultadoMant && resultadoMant.rangoResultado && (
+              <span style={{ fontSize: 13, fontWeight: 800, color: "#fff", background: resultadoMant.rangoResultado.color, padding: "5px 12px", borderRadius: 999 }}>{resultadoMant.rangoResultado.texto}</span>
+            )}
+            {resultadoMant && <span style={{ fontSize: 14, color: resultadoMant.ok === true ? T.green : resultadoMant.ok === false ? T.red : T.inkSoft, fontWeight: 600 }}>{resultadoMant.msg}</span>}
+          </div>
+        </>
+      )}
     </Card>
   );
 }

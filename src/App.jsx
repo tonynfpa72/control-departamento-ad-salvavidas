@@ -6495,6 +6495,7 @@ const SEGMENTOS_ENTRENAMIENTO = [
   { id: "nicet", label: "NICET", Icono: GraduationCap, colorDesde: "#495057", colorHasta: "#212529", lema: "Certifícate al nivel de un profesional NICET" },
   { id: "fas_nivel1", label: "FAS Nivel I", Icono: ShieldCheck, colorDesde: "#7048e8", colorHasta: "#4c2889", lema: "12 quizzes reales del banco oficial NTC" },
   { id: "reto", label: "Reto", Icono: Zap, colorDesde: "#ffd43b", colorHasta: "#f08c00", lema: "Desafío tipo Kahoot — solo Admin lo activa" },
+  { id: "equipos_medicion", label: "Equipos de Medición", Icono: Gem, colorDesde: "#20c997", colorHasta: "#0b7285", lema: "Domina el multímetro y el megóhmetro" },
 ];
 
 // Rangos de Entrenamiento: cada nivel se representa con un componente
@@ -6675,7 +6676,7 @@ function rangoDeEntrenamiento(pts) {
 // 10 puntos cada uno). Los segmentos en 0 todavía no tienen contenido y no
 // bloquean el rango Senior mientras sigan vacíos.
 const MAX_PUNTOS_SEGMENTO = {
-  compuertas: 160, tablas_verdad: 120, escalera: 50, simplex: 80, notifier: 450, nfpa72: 200, electronica: 190, nicet: 500, fas_nivel1: 1200,
+  compuertas: 160, tablas_verdad: 120, escalera: 50, simplex: 80, notifier: 450, nfpa72: 200, electronica: 190, nicet: 500, fas_nivel1: 1200, equipos_medicion: 320,
 };
 
 // El rango Senior (el más alto) SOLO se otorga si el usuario tiene 100% en
@@ -6688,7 +6689,7 @@ const MAX_PUNTOS_SEGMENTO = {
 function calcularModulosDesbloqueados(puntosPorSegmento) {
   const resultado = {};
   let previoAprobado = true;
-  const SIEMPRE_DESBLOQUEADOS = ["nicet", "fas_nivel1"];
+  const SIEMPRE_DESBLOQUEADOS = ["nicet", "fas_nivel1", "equipos_medicion"];
   SEGMENTOS_ENTRENAMIENTO.forEach((s) => {
     // NICET y FAS Nivel I siempre están disponibles, sin importar el
     // progreso — no se les exige nada al anterior, y tampoco afectan
@@ -7072,6 +7073,12 @@ function Entrenamiento() {
         onGanarPuntos={(ejercicio, puntos) => registrarPuntos("notifier", ejercicio, puntos)}
         esAdmin={currentUser?.categoria === "admin"}
         onReiniciar={(borrarRanking) => reiniciarSegmento("notifier", borrarRanking)}
+      />
+    ) : modulo === "equipos_medicion" ? (
+      <JuegoEquiposMedicion
+        onGanarPuntos={(ejercicio, puntos) => registrarPuntos("equipos_medicion", ejercicio, puntos)}
+        esAdmin={currentUser?.categoria === "admin"}
+        onReiniciar={(borrarRanking) => reiniciarSegmento("equipos_medicion", borrarRanking)}
       />
     ) : modulo === "nicet" ? (
       <JuegoNICET onGanarPuntos={(ejercicio, puntos) => registrarPuntos("nicet", ejercicio, puntos)} />
@@ -9521,6 +9528,311 @@ function JuegoNotifier({ onGanarPuntos, esAdmin, onReiniciar }) {
               </span>
             )}
             {esAdmin && <BotonReiniciarModulo onReiniciar={reiniciarTodoNotifier} />}
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
+// Módulo Equipos de Medición: multímetro (25 preguntas) y megóhmetro
+// (7 preguntas), con guía y color inmediato al responder (mismo patrón
+// que Notifier — 2 intentos por pregunta, luego queda fija hasta que
+// Admin reinicie).
+const PREGUNTAS_MULTIMETRO = [
+  { texto: "¿Cuál es la diferencia principal entre un multímetro de rango manual y uno de rango automático?", opciones: ["El de rango manual requiere que el usuario seleccione la escala correcta; el automático la detecta solo", "El de rango automático no puede medir corriente", "El de rango manual solo sirve para medir resistencia", "No hay ninguna diferencia real"], correcta: 0 },
+  { texto: "Para medir voltaje, ¿cómo se deben conectar las puntas del multímetro con respecto al circuito?", opciones: ["En serie", "En paralelo", "No importa la conexión", "Solo se puede medir con el circuito apagado"], correcta: 1 },
+  { texto: "Para medir corriente, ¿cómo se debe conectar el multímetro con respecto al circuito?", opciones: ["En paralelo", "En serie", "En cualquier punto sin importar la conexión", "Nunca se debe medir corriente directamente"], correcta: 1 },
+  { texto: "Si no conocemos el voltaje a medir en un multímetro de rango manual, ¿por dónde debemos comenzar?", opciones: ["Por la escala más baja", "Por la escala más alta, y bajar hasta obtener una lectura clara", "Por 0V siempre", "Por la escala de resistencia"], correcta: 1 },
+  { texto: "En un multímetro de rango manual, si la pantalla marca \"1\" al medir voltaje, ¿qué significa?", opciones: ["Que la medición es exactamente 1 voltio", "Que el rango seleccionado es demasiado bajo y hay que subir de escala", "Que el multímetro está dañado", "Que hay continuidad"], correcta: 1 },
+  { texto: "¿Cuál es el voltaje y la frecuencia típicos de un tomacorriente en América?", opciones: ["120VAC, 50Hz", "220VAC, 60Hz", "120VAC, 60Hz", "240VAC, 50Hz"], correcta: 2 },
+  { texto: "¿Cuál es la frecuencia estándar de la red eléctrica en Europa?", opciones: ["50Hz", "60Hz", "100Hz", "25Hz"], correcta: 0 },
+  { texto: "¿Qué mide la resistencia (Ω) de un material?", opciones: ["La cantidad de corriente que puede almacenar", "La facilidad con la que los electrones fluyen a través de un conductor", "El voltaje máximo soportado", "La frecuencia de la señal"], correcta: 1 },
+  { texto: "¿Por qué se recomienda medir la resistencia con el circuito desconectado y desenergizado?", opciones: ["Para evitar lecturas falsas", "Porque el multímetro se puede sobrecalentar", "No es necesario, se puede medir siempre energizado", "Para que dure más la batería del multímetro"], correcta: 0 },
+  { texto: "En el código de colores de resistencias, ¿qué tolerancia representa el color dorado?", opciones: ["±1%", "±2%", "±5%", "±10%"], correcta: 2 },
+  { texto: "En el código de colores de resistencias, ¿qué tolerancia representa el color plateado?", opciones: ["±5%", "±10%", "±20%", "±0.5%"], correcta: 1 },
+  { texto: "¿En qué unidad se mide la corriente eléctrica?", opciones: ["Voltios (V)", "Ohmios (Ω)", "Amperios (A)", "Faradios (F)"], correcta: 2 },
+  { texto: "¿Qué puerto del multímetro se usa normalmente para medir corriente hasta 10A?", opciones: ["El puerto \"COM\"", "El puerto \"VΩ\"", "El puerto \"A\" o \"10A FUSED\"", "El puerto \"mA\""], correcta: 2 },
+  { texto: "¿Qué indica una etiqueta como \"200mA MAX FUSIBLE\" en el puerto mA de un multímetro?", opciones: ["Que ese puerto tiene un fusible que protege hasta 200mA como máximo", "Que el multímetro siempre mide en miliamperios", "Que el puerto no tiene protección", "Que ese puerto es solo para voltaje"], correcta: 0 },
+  { texto: "¿Qué ventaja tiene un amperímetro de gancho (clamp meter) sobre un multímetro convencional para medir corriente?", opciones: ["Es más económico", "No requiere abrir ni interrumpir el circuito para medir", "Mide con mayor precisión siempre", "Solo se usa para medir voltaje"], correcta: 1 },
+  { texto: "Al usar un amperímetro de gancho, si se pinza el cable completo (ida y vuelta, ambos conductores) en vez de uno solo, ¿qué ocurre con la lectura?", opciones: ["Se duplica la lectura real", "Da una lectura cercana a cero, porque los campos magnéticos se cancelan", "Se daña el equipo", "No cambia nada"], correcta: 1 },
+  { texto: "En la prueba de continuidad, ¿qué indica el multímetro cuando el circuito está abierto?", opciones: ["Marca \"0\"", "Marca \"OL\"", "Suena un pitido continuo", "Muestra la resistencia exacta del cable"], correcta: 1 },
+  { texto: "En la prueba de continuidad, ¿qué indica el multímetro cuando SÍ hay continuidad?", opciones: ["Marca \"OL\" y no suena nada", "Marca una resistencia baja y suena un pitido", "Muestra un símbolo de batería", "No muestra ningún cambio"], correcta: 1 },
+  { texto: "¿Se puede medir continuidad de forma confiable en un circuito con resistencias muy altas?", opciones: ["Sí, siempre", "No", "Solo si el circuito está energizado", "Solo con amperímetros de gancho"], correcta: 1 },
+  { texto: "Al medir un diodo en modo de prueba de diodos, con la polaridad correcta (polarización directa), ¿qué lectura típica se espera?", opciones: ["Entre 0.5V y 0.8V aproximadamente", "Siempre marca \"OL\"", "Exactamente 0V", "Más de 5V"], correcta: 0 },
+  { texto: "Si al medir un diodo en un sentido el multímetro marca \"OL\" y al invertir las puntas marca un voltaje (0.5-0.8V), ¿qué indica esto?", opciones: ["Que el diodo está dañado", "Que el diodo está en buen estado (conduce en un solo sentido)", "Que el multímetro está mal configurado", "Que se debe cambiar la batería del multímetro"], correcta: 1 },
+  { texto: "¿En qué unidad se mide la capacitancia de un capacitor?", opciones: ["Ohmios (Ω)", "Amperios (A)", "Faradios (F)", "Henrios (H)"], correcta: 2 },
+  { texto: "Antes de medir un transistor, ¿qué se debe consultar para saber si es NPN o PNP y cuáles son sus terminales?", opciones: ["No hace falta consultar nada, todos son iguales", "La hoja de datos (datasheet) del fabricante", "El color del transistor", "El precio del componente"], correcta: 1 },
+  { texto: "¿Cuáles son las tres terminales de un transistor BJT?", opciones: ["Ánodo, Cátodo, Compuerta", "Base, Colector, Emisor", "Positivo, Negativo, Tierra", "Entrada, Salida, Común"], correcta: 1 },
+  { texto: "¿Qué parámetro relacionado con la ganancia de corriente de un transistor se puede medir con el multímetro?", opciones: ["Voltaje Zener", "hFE (β)", "Capacitancia", "Frecuencia de corte"], correcta: 1 },
+];
+
+const PREGUNTAS_MEGOMETRO = [
+  { texto: "Antes de medir un circuito con un megóhmetro, ¿en qué condición debe estar el circuito?", opciones: ["Energizado al máximo voltaje", "Desenergizado", "Solo parcialmente energizado", "No importa el estado"], correcta: 1 },
+  { texto: "¿Cuál de las siguientes es una consideración de seguridad correcta al usar un megóhmetro?", opciones: ["Se puede usar en áreas con clasificación explosiva sin problema", "No se debe trabajar solo", "Se puede modificar la electrónica del equipo si es necesario", "Se puede usar bajo lluvia sin protección"], correcta: 1 },
+  { texto: "Si la lectura de resistencia de aislamiento de un cable es baja (por ejemplo, menos de 1 MΩ), ¿qué indica?", opciones: ["Que el aislamiento está en excelentes condiciones", "Que el aislamiento está dañado o tiene un defecto", "Que el cable está sobredimensionado", "Que el megóhmetro necesita calibrarse"], correcta: 1 },
+  { texto: "Si la resistencia de aislamiento medida es muy alta, ¿qué indica?", opciones: ["Que el aislamiento está en buenas condiciones", "Que hay un cortocircuito", "Que el cable está roto", "Que la prueba fue inválida"], correcta: 0 },
+  { texto: "Antes de realizar la prueba de aislamiento con el megóhmetro, ¿qué se recomienda verificar primero (usando el modo de voltaje del mismo equipo)?", opciones: ["Que el circuito tenga la mayor cantidad de voltaje posible", "Que no haya voltaje presente — que el circuito esté desenergizado", "La resistencia de las puntas de prueba únicamente", "El color del cable"], correcta: 1 },
+  { texto: "¿Qué función cumple el botón/función \"ZERO Ω\" en un megóhmetro?", opciones: ["Apaga el equipo", "Pone en cero la resistencia de las puntas de prueba antes de medir", "Reinicia la memoria del equipo", "Cambia el rango de voltaje"], correcta: 1 },
+  { texto: "¿Qué botón se presiona para iniciar la prueba de aislamiento en un megóhmetro?", opciones: ["\"ZERO\"", "\"TEST\"", "\"HOLD\"", "\"COMPARE\""], correcta: 1 },
+];
+
+const PUNTOS_POR_PREGUNTA_EQUIPOS = 10;
+const MAX_INTENTOS_EQUIPOS = 2;
+
+// Módulo Equipos de Medición: Multímetro y Megóhmetro. Cada pregunta
+// permite 2 intentos; al acertar queda fija en verde y suma puntos al
+// instante; al fallar los 2 intentos queda fija en rojo. Solo Admin
+// puede reiniciar una pregunta ya bloqueada.
+function JuegoEquiposMedicion({ onGanarPuntos, esAdmin, onReiniciar }) {
+  const [mostrarIntro, setMostrarIntro] = useState(true);
+  const [tabEquipos, setTabEquipos] = useState("multimetro"); // "multimetro" | "megometro"
+
+  const [respuestasMM, setRespuestasMM] = useState({});
+  const [intentosMM, setIntentosMM] = useState({});
+  const [estadoMM, setEstadoMM] = useState({});
+
+  const responderMM = (i, valor) => {
+    if (estadoMM[i]) return;
+    const intentoActual = (intentosMM[i] || 0) + 1;
+    setIntentosMM((prev) => ({ ...prev, [i]: intentoActual }));
+    setRespuestasMM((prev) => ({ ...prev, [i]: valor }));
+    if (valor === PREGUNTAS_MULTIMETRO[i].correcta) {
+      setEstadoMM((prev) => ({ ...prev, [i]: "correcta" }));
+      onGanarPuntos && onGanarPuntos("Multímetro", PUNTOS_POR_PREGUNTA_EQUIPOS);
+    } else if (intentoActual >= MAX_INTENTOS_EQUIPOS) {
+      setEstadoMM((prev) => ({ ...prev, [i]: "bloqueada" }));
+    }
+  };
+
+  const correctasMM = Object.values(estadoMM).filter((e) => e === "correcta").length;
+  const bloqueadasMM = Object.values(estadoMM).filter((e) => e === "bloqueada").length;
+  const pendientesMM = PREGUNTAS_MULTIMETRO.length - correctasMM - bloqueadasMM;
+
+  const [respuestasMG, setRespuestasMG] = useState({});
+  const [intentosMG, setIntentosMG] = useState({});
+  const [estadoMG, setEstadoMG] = useState({});
+
+  const responderMG = (i, valor) => {
+    if (estadoMG[i]) return;
+    const intentoActual = (intentosMG[i] || 0) + 1;
+    setIntentosMG((prev) => ({ ...prev, [i]: intentoActual }));
+    setRespuestasMG((prev) => ({ ...prev, [i]: valor }));
+    if (valor === PREGUNTAS_MEGOMETRO[i].correcta) {
+      setEstadoMG((prev) => ({ ...prev, [i]: "correcta" }));
+      onGanarPuntos && onGanarPuntos("Megóhmetro", PUNTOS_POR_PREGUNTA_EQUIPOS);
+    } else if (intentoActual >= MAX_INTENTOS_EQUIPOS) {
+      setEstadoMG((prev) => ({ ...prev, [i]: "bloqueada" }));
+    }
+  };
+
+  const correctasMG = Object.values(estadoMG).filter((e) => e === "correcta").length;
+  const bloqueadasMG = Object.values(estadoMG).filter((e) => e === "bloqueada").length;
+  const pendientesMG = PREGUNTAS_MEGOMETRO.length - correctasMG - bloqueadasMG;
+
+  const reiniciarTodoEquipos = (borrarRanking) => {
+    setRespuestasMM({}); setIntentosMM({}); setEstadoMM({});
+    setRespuestasMG({}); setIntentosMG({}); setEstadoMG({});
+    onReiniciar && onReiniciar(borrarRanking);
+  };
+
+  if (mostrarIntro) {
+    const TEMAS_EQUIPOS = [
+      {
+        id: "intro_multimetro", titulo: "El multímetro",
+        contenido: (
+          <>
+            <p>El <strong>multímetro</strong> puede ser <strong>analógico</strong> (aguja) o <strong>digital</strong>. Los
+            digitales, a su vez, pueden ser de <strong>rango manual</strong> (hay que seleccionar la escala correcta) o de
+            <strong> rango automático</strong> (autorango — el equipo la detecta solo).</p>
+            <p>Puertos típicos: <strong>COM</strong> (común/negativo), <strong>VΩ</strong> (voltaje y resistencia, hasta CAT
+            III 600V), <strong>A / 10A FUSED</strong> (corrientes altas, con fusible), y <strong>mA</strong> (corrientes
+            pequeñas — por ejemplo, protegido hasta 200mA fusible).</p>
+          </>
+        ),
+      },
+      {
+        id: "voltaje_multimetro", titulo: "Medición de voltaje (DC y AC)",
+        contenido: (
+          <>
+            <p>Para medir voltaje, las puntas del multímetro se conectan <strong>en paralelo</strong> con el circuito o
+            componente.</p>
+            <p>En un multímetro de <strong>rango manual</strong>, si no se conoce el voltaje a medir, se debe comenzar por la
+            <strong> escala más alta</strong> y bajar hasta obtener una lectura clara. Si la pantalla marca <code>"1"</code>,
+            significa que el rango seleccionado es <strong>demasiado bajo</strong> y hay que subir de escala.</p>
+            <p>En corriente alterna (AC), un tomacorriente típico en <strong>América</strong> es de <strong>120VAC a
+            60Hz</strong>; en <strong>Europa</strong> es distinto (230V a <strong>50Hz</strong>). Nunca se debe sobrepasar el
+            voltaje máximo indicado en el medidor (por ejemplo, 600V CAT III).</p>
+          </>
+        ),
+      },
+      {
+        id: "resistencia_multimetro", titulo: "Medición de resistencia",
+        contenido: (
+          <>
+            <p>La <strong>resistencia (Ω)</strong> mide la facilidad con la que los electrones fluyen a través de un
+            material conductor. Se recomienda medirla con el circuito <strong>desconectado y desenergizado</strong>, para
+            evitar lecturas falsas.</p>
+            <p>El <strong>código de colores</strong> de las resistencias usa bandas para el valor y la tolerancia — por
+            ejemplo, <strong>dorado = ±5%</strong> y <strong>plateado = ±10%</strong>.</p>
+          </>
+        ),
+      },
+      {
+        id: "corriente_multimetro", titulo: "Medición de corriente (DC y AC)",
+        contenido: (
+          <>
+            <p>La <strong>corriente</strong> es el flujo de electrones a través de un conductor, y se mide en
+            <strong> amperios (A)</strong>. A diferencia del voltaje, para medir corriente el multímetro se conecta
+            <strong> en serie</strong> con el circuito (hay que "abrir" el circuito e insertar el medidor en la ruta de la
+            corriente).</p>
+            <p>Los <strong>amperímetros de gancho</strong> (clamp meters) evitan tener que abrir el circuito: se pinza
+            alrededor de un solo conductor. Si se pinzan <strong>ambos conductores</strong> (ida y vuelta) a la vez, los
+            campos magnéticos se cancelan y la lectura da cerca de <strong>cero</strong>, aunque sí esté circulando
+            corriente.</p>
+          </>
+        ),
+      },
+      {
+        id: "continuidad_frecuencia", titulo: "Continuidad y frecuencia",
+        contenido: (
+          <>
+            <p>En la prueba de <strong>continuidad</strong>: si el circuito está <strong>abierto</strong>, el multímetro
+            marca <code>OL</code>; si <strong>hay continuidad</strong>, marca una resistencia baja y <strong>suena un
+            pitido</strong>. No se puede medir continuidad de forma confiable en circuitos con resistencias muy altas.</p>
+            <p>La <strong>frecuencia (Hz)</strong> de la red eléctrica también se puede medir — recuerda: 60Hz en América,
+            50Hz en Europa.</p>
+          </>
+        ),
+      },
+      {
+        id: "diodos_capacitores_transistores", titulo: "Diodos, capacitores y transistores",
+        contenido: (
+          <>
+            <p><strong>Diodos:</strong> permiten el paso de corriente en un solo sentido. En modo de prueba de diodos, con
+            polarización directa (correcta), la lectura típica es entre <strong>0.5V y 0.8V</strong>; en el sentido contrario,
+            marca <code>OL</code> (no conduce) — así se confirma que el diodo está en buen estado.</p>
+            <p><strong>Capacitores:</strong> almacenan carga en forma de energía (como una batería pequeña). Su capacitancia
+            se mide en <strong>faradios (F)</strong>.</p>
+            <p><strong>Transistores (BJT):</strong> son un tipo de interruptor electrónico, con tres terminales — <strong>
+            Base, Colector y Emisor</strong>. Antes de medirlos hay que consultar la hoja de datos del fabricante para saber
+            si son NPN o PNP. El multímetro también puede medir su ganancia de corriente, <strong>hFE (β)</strong>.</p>
+          </>
+        ),
+      },
+      {
+        id: "intro_megometro", titulo: "El megóhmetro (Megger)",
+        contenido: (
+          <>
+            <p>El <strong>megóhmetro</strong> se usa para medir la <strong>resistencia de aislamiento</strong> de cables y
+            equipos, aplicando un voltaje elevado. Consideraciones de seguridad importantes: el circuito a medir debe estar
+            <strong> desenergizado</strong>, no se debe usar en áreas con clasificación explosiva, ni en lugares húmedos o
+            bajo lluvia, no se debe trabajar solo, y nunca se debe modificar la electrónica del equipo.</p>
+            <p>Antes de la prueba de aislamiento, se recomienda usar el modo de <strong>voltaje (V)</strong> del mismo equipo
+            (con las puntas en COM e INSULATION) para verificar que <strong>no haya voltaje</strong> presente. La función
+            <strong> "ZERO Ω"</strong> pone en cero la resistencia de las puntas antes de medir, y el botón <strong>
+            "TEST"</strong> inicia la prueba de aislamiento.</p>
+          </>
+        ),
+      },
+      {
+        id: "interpretacion_megometro", titulo: "Interpretación de resultados",
+        contenido: (
+          <p>Si la lectura de resistencia de aislamiento es <strong>baja</strong> (por ejemplo, menos de 1 MΩ), el
+          aislamiento está <strong>dañado o tiene un defecto</strong>. Si la resistencia es <strong>muy alta</strong>, el
+          aislamiento está en <strong>buenas condiciones</strong>.</p>
+        ),
+      },
+      {
+        id: "reglas_equipos", titulo: "Reglas del examen",
+        contenido: (
+          <p>El módulo tiene dos pestañas: <strong>Multímetro</strong> ({PREGUNTAS_MULTIMETRO.length} preguntas) y
+          <strong> Megóhmetro</strong> ({PREGUNTAS_MEGOMETRO.length} preguntas). En ambas, cada pregunta permite 2 intentos:
+          si aciertas queda fija en verde y suma puntos al instante; si fallas los 2 intentos queda fija en rojo. Solo Admin
+          puede reiniciar una pregunta ya bloqueada.</p>
+        ),
+      },
+    ];
+    return <GuiaPorTemas temas={TEMAS_EQUIPOS} onContinuar={() => setMostrarIntro(false)} tituloModulo="el multímetro y el megóhmetro" />;
+  }
+
+  const renderPregunta = (p, i, estado, intentos, respuestas, responder, nombrePrefijo) => {
+    const fija = !!estado[i];
+    const intentosUsados = intentos[i] || 0;
+    return (
+      <div key={i} style={{
+        border: `1px solid ${T.line}`, borderRadius: 10, padding: 14,
+        background: estado[i] === "correcta" ? T.greenSoft : estado[i] === "bloqueada" ? T.redSoft : T.graySoft,
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{i + 1}. {p.texto}</div>
+          {!fija && <span style={{ fontSize: 10.5, color: T.gray, whiteSpace: "nowrap", flexShrink: 0 }}>{intentosUsados}/{MAX_INTENTOS_EQUIPOS} intentos</span>}
+          {estado[i] === "correcta" && <span style={{ fontSize: 10.5, color: T.green, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>✓ +{PUNTOS_POR_PREGUNTA_EQUIPOS} pts</span>}
+          {estado[i] === "bloqueada" && <span style={{ fontSize: 10.5, color: T.red, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>🔒 sin más intentos</span>}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {p.opciones.map((op, j) => (
+            <label key={j} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: fija ? "default" : "pointer", opacity: fija && respuestas[i] !== j ? 0.5 : 1 }}>
+              <input type="radio" name={`${nombrePrefijo}${i}`} checked={respuestas[i] === j} onChange={() => responder(i, j)} disabled={fija} />
+              {op}
+            </label>
+          ))}
+        </div>
+        {estado[i] === "bloqueada" && (
+          <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>Respuesta correcta: {p.opciones[p.correcta]} — quedó fija, sin más intentos disponibles.</div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <Card
+      title={tabEquipos === "multimetro" ? "Examen — Multímetro" : "Examen — Megóhmetro"}
+      action={<Btn small variant="ghost" onClick={() => setMostrarIntro(true)}>Ver la guía otra vez</Btn>}
+    >
+      <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+        <Btn variant={tabEquipos === "multimetro" ? "accent" : "ghost"} small onClick={() => setTabEquipos("multimetro")}>🔌 Multímetro</Btn>
+        <Btn variant={tabEquipos === "megometro" ? "accent" : "ghost"} small onClick={() => setTabEquipos("megometro")}>🧯 Megóhmetro</Btn>
+      </div>
+
+      {tabEquipos === "multimetro" && (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16, flexWrap: "wrap", fontSize: 12.5 }}>
+            <span style={{ fontWeight: 800, color: T.green }}>✓ {correctasMM} correctas</span>
+            <span style={{ fontWeight: 800, color: T.red }}>✗ {bloqueadasMM} falladas</span>
+            <span style={{ fontWeight: 700, color: T.gray }}>· {pendientesMM} pendientes</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            {PREGUNTAS_MULTIMETRO.map((p, i) => renderPregunta(p, i, estadoMM, intentosMM, respuestasMM, responderMM, "mm"))}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
+            {pendientesMM === 0 && (
+              <span style={{ fontSize: 13, fontWeight: 800, color: "#fff", background: (correctasMM / PREGUNTAS_MULTIMETRO.length) >= 0.7 ? T.green : T.red, padding: "5px 12px", borderRadius: 999 }}>
+                {correctasMM}/{PREGUNTAS_MULTIMETRO.length} correctas — {(correctasMM / PREGUNTAS_MULTIMETRO.length) >= 0.7 ? "¡Aprobado!" : "No aprobado"}
+              </span>
+            )}
+            {esAdmin && <BotonReiniciarModulo onReiniciar={reiniciarTodoEquipos} />}
+          </div>
+        </>
+      )}
+
+      {tabEquipos === "megometro" && (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16, flexWrap: "wrap", fontSize: 12.5 }}>
+            <span style={{ fontWeight: 800, color: T.green }}>✓ {correctasMG} correctas</span>
+            <span style={{ fontWeight: 800, color: T.red }}>✗ {bloqueadasMG} falladas</span>
+            <span style={{ fontWeight: 700, color: T.gray }}>· {pendientesMG} pendientes</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            {PREGUNTAS_MEGOMETRO.map((p, i) => renderPregunta(p, i, estadoMG, intentosMG, respuestasMG, responderMG, "mg"))}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
+            {pendientesMG === 0 && (
+              <span style={{ fontSize: 13, fontWeight: 800, color: "#fff", background: (correctasMG / PREGUNTAS_MEGOMETRO.length) >= 0.7 ? T.green : T.red, padding: "5px 12px", borderRadius: 999 }}>
+                {correctasMG}/{PREGUNTAS_MEGOMETRO.length} correctas — {(correctasMG / PREGUNTAS_MEGOMETRO.length) >= 0.7 ? "¡Aprobado!" : "No aprobado"}
+              </span>
+            )}
+            {esAdmin && <BotonReiniciarModulo onReiniciar={reiniciarTodoEquipos} />}
           </div>
         </>
       )}

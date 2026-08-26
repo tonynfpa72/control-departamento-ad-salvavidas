@@ -6676,7 +6676,7 @@ function rangoDeEntrenamiento(pts) {
 // 10 puntos cada uno). Los segmentos en 0 todavía no tienen contenido y no
 // bloquean el rango Senior mientras sigan vacíos.
 const MAX_PUNTOS_SEGMENTO = {
-  compuertas: 160, tablas_verdad: 120, escalera: 50, simplex: 80, notifier: 450, nfpa72: 200, electronica: 190, nicet: 500, fas_nivel1: 1200, equipos_medicion: 320,
+  compuertas: 160, tablas_verdad: 120, escalera: 50, simplex: 80, notifier: 450, nfpa72: 200, electronica: 190, nicet: 500, fas_nivel1: 1200, equipos_medicion: 360,
 };
 
 // El rango Senior (el más alto) SOLO se otorga si el usuario tiene 100% en
@@ -9584,9 +9584,260 @@ const MAX_INTENTOS_EQUIPOS = 2;
 // permite 2 intentos; al acertar queda fija en verde y suma puntos al
 // instante; al fallar los 2 intentos queda fija en rojo. Solo Admin
 // puede reiniciar una pregunta ya bloqueada.
+// Colores de resistencias con su valor 0-9 (para el ejercicio de código
+// de colores) y su representación visual.
+const COLORES_RESISTENCIA = [
+  { nombre: "Negro", valor: 0, hex: "#1a1a1a" },
+  { nombre: "Marrón", valor: 1, hex: "#7b4a2d" },
+  { nombre: "Rojo", valor: 2, hex: "#e03131" },
+  { nombre: "Naranja", valor: 3, hex: "#f76707" },
+  { nombre: "Amarillo", valor: 4, hex: "#f7c948" },
+  { nombre: "Verde", valor: 5, hex: "#2f9e44" },
+  { nombre: "Azul", valor: 6, hex: "#1971c2" },
+  { nombre: "Violeta", valor: 7, hex: "#9c36b5" },
+  { nombre: "Gris", valor: 8, hex: "#868e96" },
+  { nombre: "Blanco", valor: 9, hex: "#f1f3f5" },
+];
+const COLORES_TOLERANCIA = [
+  { nombre: "Dorado", pct: "±5%", hex: "#d4a017" },
+  { nombre: "Plateado", pct: "±10%", hex: "#adb5bd" },
+];
+// { valor, bandas: [b1,b2,multiplicadorIdxEnColoresResistencia,tolIdx] }
+const RETOS_CODIGO_COLORES = [
+  { texto: "220 Ω ±5%", b1: "Rojo", b2: "Rojo", mult: "Marrón", tol: "Dorado" },
+  { texto: "4,700 Ω ±5%", b1: "Amarillo", b2: "Violeta", mult: "Rojo", tol: "Dorado" },
+  { texto: "1,000 Ω ±10%", b1: "Marrón", b2: "Negro", mult: "Rojo", tol: "Plateado" },
+];
+
+// Circuito simple en serie (batería + R1 + R2 + R3) reutilizado tanto
+// para el ejercicio de voltaje como el de corriente, con 4 nodos
+// clicables: A (antes de R1), B (entre R1 y R2), C (entre R2 y R3), D
+// (después de R3).
+function CircuitoSerieSVG({ nodosSeleccionados, onClickNodo, resaltar }) {
+  const nodos = [
+    { id: "A", x: 90, y: 40 },
+    { id: "B", x: 260, y: 40 },
+    { id: "C", x: 430, y: 40 },
+    { id: "D", x: 600, y: 40 },
+  ];
+  return (
+    <svg viewBox="0 0 680 200" style={{ width: "100%", maxWidth: 560, height: "auto", background: "#fff", borderRadius: 10, border: `1px solid ${T.line}` }}>
+      {/* Batería */}
+      <line x1="30" y1="40" x2="30" y2="160" stroke="#495057" strokeWidth="2" />
+      <line x1="15" y1="60" x2="45" y2="60" stroke="#495057" strokeWidth="4" />
+      <line x1="20" y1="140" x2="40" y2="140" stroke="#495057" strokeWidth="2" />
+      <text x="10" y="100" fontSize="12" fill="#495057">12V</text>
+      {/* Cable superior con R1, R2, R3 */}
+      <line x1="30" y1="40" x2="650" y2="40" stroke="#495057" strokeWidth="2" />
+      {/* Resistores como zigzag simplificado con etiqueta */}
+      {[{ x: 150, label: "R1" }, { x: 320, label: "R2" }, { x: 490, label: "R3" }].map((r) => (
+        <g key={r.label}>
+          <rect x={r.x - 30} y="28" width="60" height="24" fill="#fff" stroke="#495057" strokeWidth="2" />
+          <text x={r.x} y="44" fontSize="13" fontWeight="700" textAnchor="middle" fill="#495057">{r.label}</text>
+        </g>
+      ))}
+      {/* Cable de retorno */}
+      <line x1="650" y1="40" x2="650" y2="160" stroke="#495057" strokeWidth="2" />
+      <line x1="30" y1="160" x2="650" y2="160" stroke="#495057" strokeWidth="2" />
+      {/* Nodos clicables */}
+      {nodos.map((n) => {
+        const seleccionado = nodosSeleccionados.includes(n.id);
+        return (
+          <g key={n.id} onClick={() => onClickNodo(n.id)} style={{ cursor: "pointer" }}>
+            <circle cx={n.x} cy={n.y} r="14" fill={seleccionado ? T.accent : "#fff"} stroke={T.accent} strokeWidth="2.5" />
+            <text x={n.x} y={n.y + 5} fontSize="12" fontWeight="800" textAnchor="middle" fill={seleccionado ? "#fff" : T.accent}>{n.id}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function EjercicioVoltaje({ onGanar }) {
+  const [seleccionados, setSeleccionados] = useState([]);
+  const [feedback, setFeedback] = useState(null);
+  const ganadoRef = React.useRef(false);
+
+  const clickNodo = (id) => {
+    if (feedback?.ok) return;
+    setFeedback(null);
+    setSeleccionados((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id);
+      if (prev.length >= 2) return [id];
+      return [...prev, id];
+    });
+  };
+
+  const verificar = () => {
+    const par = [...seleccionados].sort().join("");
+    const ok = par === "BC";
+    if (ok && !ganadoRef.current) { ganadoRef.current = true; onGanar(); }
+    setFeedback({ ok, msg: ok ? "¡Correcto! Las puntas quedaron en paralelo con R2 — así se mide su voltaje." : "Incorrecto. Para medir el voltaje EN R2, las dos puntas deben ir en los dos extremos de R2 (en paralelo), no en otro lado." });
+  };
+
+  return (
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, background: T.graySoft }}>
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>🔴⚫ Coloca las puntas para medir el VOLTAJE en R2</div>
+      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 12 }}>Haz clic en los 2 nodos donde colocarías las puntas del multímetro (recuerda: el voltaje se mide en paralelo).</div>
+      <CircuitoSerieSVG nodosSeleccionados={seleccionados} onClickNodo={clickNodo} />
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+        <Btn small variant="accent" onClick={verificar} disabled={seleccionados.length !== 2}>Verificar</Btn>
+        <Btn small variant="ghost" onClick={() => { setSeleccionados([]); setFeedback(null); }}>Limpiar</Btn>
+        {feedback && <span style={{ fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+function EjercicioCorriente({ onGanar }) {
+  const [seleccionados, setSeleccionados] = useState([]);
+  const [feedback, setFeedback] = useState(null);
+  const ganadoRef = React.useRef(false);
+
+  const clickNodo = (id) => {
+    if (feedback?.ok) return;
+    setFeedback(null);
+    setSeleccionados((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id);
+      if (prev.length >= 2) return [id];
+      return [...prev, id];
+    });
+  };
+
+  const sonAdyacentes = (a, b) => {
+    const orden = ["A", "B", "C", "D"];
+    return Math.abs(orden.indexOf(a) - orden.indexOf(b)) === 1;
+  };
+
+  const verificar = () => {
+    const [a, b] = seleccionados;
+    const ok = sonAdyacentes(a, b);
+    if (ok && !ganadoRef.current) { ganadoRef.current = true; onGanar(); }
+    setFeedback({ ok, msg: ok ? "¡Correcto! Rompiste el cable justo ahí e insertaste el amperímetro EN SERIE — así se mide la corriente." : "Incorrecto. Para medir corriente hay que ROMPER el cable e insertar el multímetro EN SERIE — elige dos nodos que estén uno junto al otro en el mismo cable." });
+  };
+
+  return (
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, background: T.graySoft }}>
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>🔴⚫ Coloca el amperímetro para medir la CORRIENTE del circuito</div>
+      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 12 }}>Haz clic en los 2 nodos donde "romperías" el cable para insertar el multímetro (recuerda: la corriente se mide en serie).</div>
+      <CircuitoSerieSVG nodosSeleccionados={seleccionados} onClickNodo={clickNodo} />
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+        <Btn small variant="accent" onClick={verificar} disabled={seleccionados.length !== 2}>Verificar</Btn>
+        <Btn small variant="ghost" onClick={() => { setSeleccionados([]); setFeedback(null); }}>Limpiar</Btn>
+        {feedback && <span style={{ fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+function EjercicioCodigoColores({ onGanar }) {
+  const [indice, setIndice] = useState(0);
+  const [seleccion, setSeleccion] = useState({ b1: null, b2: null, mult: null, tol: null });
+  const [feedback, setFeedback] = useState(null);
+  const ganadasRef = React.useRef(new Set());
+
+  const reto = RETOS_CODIGO_COLORES[indice];
+
+  const elegir = (banda, nombreColor) => {
+    setFeedback(null);
+    setSeleccion((prev) => ({ ...prev, [banda]: nombreColor }));
+  };
+
+  const verificar = () => {
+    const ok = seleccion.b1 === reto.b1 && seleccion.b2 === reto.b2 && seleccion.mult === reto.mult && seleccion.tol === reto.tol;
+    if (ok && !ganadasRef.current.has(indice)) { ganadasRef.current.add(indice); onGanar(); }
+    setFeedback({ ok, msg: ok ? "¡Correcto!" : `Incorrecto. La combinación correcta es: ${reto.b1} - ${reto.b2} - ${reto.mult} - ${reto.tol}.` });
+  };
+
+  const siguienteReto = () => {
+    setIndice((i) => (i + 1) % RETOS_CODIGO_COLORES.length);
+    setSeleccion({ b1: null, b2: null, mult: null, tol: null });
+    setFeedback(null);
+  };
+
+  const colorHex = (nombre) => COLORES_RESISTENCIA.find((c) => c.nombre === nombre)?.hex || COLORES_TOLERANCIA.find((c) => c.nombre === nombre)?.hex || "#ccc";
+
+  return (
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, background: T.graySoft }}>
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>🎨 Arma el código de colores — Reto {indice + 1} de {RETOS_CODIGO_COLORES.length}</div>
+      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 14 }}>Elige los colores para que la resistencia sea de <strong>{reto.texto}</strong>.</div>
+
+      {/* Vista previa de la resistencia */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
+        <div style={{ width: 220, height: 40, background: "#e9d8b4", borderRadius: 20, position: "relative", display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+          {["b1", "b2", "mult", "tol"].map((banda) => (
+            <div key={banda} style={{ width: 14, height: 40, background: seleccion[banda] ? colorHex(seleccion[banda]) : "#fff", border: "1px solid #999" }} />
+          ))}
+        </div>
+      </div>
+
+      {[
+        { banda: "b1", label: "Banda 1", opciones: COLORES_RESISTENCIA },
+        { banda: "b2", label: "Banda 2", opciones: COLORES_RESISTENCIA },
+        { banda: "mult", label: "Multiplicador", opciones: COLORES_RESISTENCIA },
+        { banda: "tol", label: "Tolerancia", opciones: COLORES_TOLERANCIA },
+      ].map(({ banda, label, opciones }) => (
+        <div key={banda} style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: T.inkSoft, marginBottom: 4 }}>{label}</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {opciones.map((c) => (
+              <button key={c.nombre} onClick={() => elegir(banda, c.nombre)} title={c.nombre} style={{
+                width: 30, height: 30, borderRadius: 6, background: c.hex, cursor: "pointer",
+                border: seleccion[banda] === c.nombre ? `3px solid ${T.accent}` : "1px solid #999",
+              }} />
+            ))}
+          </div>
+        </div>
+      ))}
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+        <Btn small variant="accent" onClick={verificar} disabled={!seleccion.b1 || !seleccion.b2 || !seleccion.mult || !seleccion.tol}>Verificar</Btn>
+        <Btn small variant="ghost" onClick={siguienteReto}>Siguiente reto →</Btn>
+        {feedback && <span style={{ fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+function EjercicioDiodo({ onGanar }) {
+  const [eleccion, setEleccion] = useState(null); // "A" | "B"
+  const [feedback, setFeedback] = useState(null);
+  const ganadoRef = React.useRef(false);
+
+  const elegir = (terminal) => {
+    setEleccion(terminal);
+    const ok = terminal === "A"; // A = ánodo (lado del triángulo)
+    if (ok && !ganadoRef.current) { ganadoRef.current = true; onGanar(); }
+    setFeedback({ ok, msg: ok ? "¡Correcto! El ánodo va con la punta ROJA — el diodo queda en polarización directa y marca entre 0.5V y 0.8V." : "Incorrecto. La punta roja debe ir en el ÁNODO (el lado ancho del triángulo) para tener polarización directa." });
+  };
+
+  return (
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, background: T.graySoft }}>
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>🔴 ¿Dónde va la punta ROJA?</div>
+      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 14 }}>Quieres obtener una lectura de <strong>0.5V a 0.8V</strong> (polarización directa, diodo en buen estado). Elige la terminal donde colocarías la punta roja.</div>
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
+        <svg viewBox="0 0 300 100" style={{ width: "100%", maxWidth: 320, height: "auto", background: "#fff", borderRadius: 10, border: `1px solid ${T.line}` }}>
+          <line x1="20" y1="50" x2="110" y2="50" stroke="#495057" strokeWidth="2" />
+          <polygon points="110,25 110,75 180,50" fill="#fff" stroke="#495057" strokeWidth="2" />
+          <line x1="180" y1="25" x2="180" y2="75" stroke="#495057" strokeWidth="4" />
+          <line x1="180" y1="50" x2="280" y2="50" stroke="#495057" strokeWidth="2" />
+          <text x="65" y="35" fontSize="12" fontWeight="700" textAnchor="middle" fill={eleccion === "A" ? T.accent : T.ink}>A</text>
+          <text x="230" y="35" fontSize="12" fontWeight="700" textAnchor="middle" fill={eleccion === "B" ? T.accent : T.ink}>B</text>
+        </svg>
+      </div>
+      <div style={{ display: "flex", justifyContent: "center", gap: 12, marginBottom: 10 }}>
+        <Btn small variant={eleccion === "A" ? "accent" : "ghost"} onClick={() => elegir("A")}>Terminal A</Btn>
+        <Btn small variant={eleccion === "B" ? "accent" : "ghost"} onClick={() => elegir("B")}>Terminal B</Btn>
+      </div>
+      {feedback && <div style={{ textAlign: "center", fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</div>}
+    </div>
+  );
+}
+
+
 function JuegoEquiposMedicion({ onGanarPuntos, esAdmin, onReiniciar }) {
   const [mostrarIntro, setMostrarIntro] = useState(true);
-  const [tabEquipos, setTabEquipos] = useState("multimetro"); // "multimetro" | "megometro"
+  const [tabEquipos, setTabEquipos] = useState("multimetro"); // "multimetro" | "megometro" | "practica"
 
   const [respuestasMM, setRespuestasMM] = useState({});
   const [intentosMM, setIntentosMM] = useState({});
@@ -9787,12 +10038,13 @@ function JuegoEquiposMedicion({ onGanarPuntos, esAdmin, onReiniciar }) {
 
   return (
     <Card
-      title={tabEquipos === "multimetro" ? "Examen — Multímetro" : "Examen — Megóhmetro"}
+      title={tabEquipos === "multimetro" ? "Examen — Multímetro" : tabEquipos === "megometro" ? "Examen — Megóhmetro" : "Práctica interactiva"}
       action={<Btn small variant="ghost" onClick={() => setMostrarIntro(true)}>Ver la guía otra vez</Btn>}
     >
       <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
         <Btn variant={tabEquipos === "multimetro" ? "accent" : "ghost"} small onClick={() => setTabEquipos("multimetro")}>🔌 Multímetro</Btn>
         <Btn variant={tabEquipos === "megometro" ? "accent" : "ghost"} small onClick={() => setTabEquipos("megometro")}>🧯 Megóhmetro</Btn>
+        <Btn variant={tabEquipos === "practica" ? "accent" : "ghost"} small onClick={() => setTabEquipos("practica")}>🎮 Práctica</Btn>
       </div>
 
       {tabEquipos === "multimetro" && (
@@ -9835,6 +10087,19 @@ function JuegoEquiposMedicion({ onGanarPuntos, esAdmin, onReiniciar }) {
             {esAdmin && <BotonReiniciarModulo onReiniciar={reiniciarTodoEquipos} />}
           </div>
         </>
+      )}
+
+      {tabEquipos === "practica" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          <div style={{ fontSize: 12.5, color: T.inkSoft }}>
+            Estos ejercicios son de práctica libre — puedes reintentarlos las veces que quieras. La primera vez que aciertes
+            cada uno, ganas puntos.
+          </div>
+          <EjercicioVoltaje onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: medir voltaje", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
+          <EjercicioCorriente onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: medir corriente", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
+          <EjercicioCodigoColores onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: código de colores", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
+          <EjercicioDiodo onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: prueba de diodo", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
+        </div>
       )}
     </Card>
   );

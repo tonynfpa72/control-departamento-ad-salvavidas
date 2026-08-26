@@ -6676,7 +6676,7 @@ function rangoDeEntrenamiento(pts) {
 // 10 puntos cada uno). Los segmentos en 0 todavía no tienen contenido y no
 // bloquean el rango Senior mientras sigan vacíos.
 const MAX_PUNTOS_SEGMENTO = {
-  compuertas: 160, tablas_verdad: 120, escalera: 50, simplex: 80, notifier: 450, nfpa72: 200, electronica: 190, nicet: 500, fas_nivel1: 1200, equipos_medicion: 360,
+  compuertas: 160, tablas_verdad: 120, escalera: 50, simplex: 80, notifier: 450, nfpa72: 200, electronica: 190, nicet: 500, fas_nivel1: 1200, equipos_medicion: 380,
 };
 
 // El rango Senior (el más alto) SOLO se otorga si el usuario tiene 100% en
@@ -9607,6 +9607,13 @@ const RETOS_CODIGO_COLORES = [
   { texto: "220 Ω ±5%", b1: "Rojo", b2: "Rojo", mult: "Marrón", tol: "Dorado" },
   { texto: "4,700 Ω ±5%", b1: "Amarillo", b2: "Violeta", mult: "Rojo", tol: "Dorado" },
   { texto: "1,000 Ω ±10%", b1: "Marrón", b2: "Negro", mult: "Rojo", tol: "Plateado" },
+  { texto: "10 Ω ±5%", b1: "Marrón", b2: "Negro", mult: "Negro", tol: "Dorado" },
+  { texto: "100 Ω ±5%", b1: "Marrón", b2: "Negro", mult: "Marrón", tol: "Dorado" },
+  { texto: "330 Ω ±5%", b1: "Naranja", b2: "Naranja", mult: "Marrón", tol: "Dorado" },
+  { texto: "560 Ω ±5%", b1: "Verde", b2: "Azul", mult: "Marrón", tol: "Dorado" },
+  { texto: "2,200 Ω ±5%", b1: "Rojo", b2: "Rojo", mult: "Rojo", tol: "Dorado" },
+  { texto: "10,000 Ω (10k) ±10%", b1: "Marrón", b2: "Negro", mult: "Naranja", tol: "Plateado" },
+  { texto: "47 Ω ±5%", b1: "Amarillo", b2: "Violeta", mult: "Negro", tol: "Dorado" },
 ];
 
 // Circuito simple en serie (batería + R1 + R2 + R3) reutilizado tanto
@@ -9653,6 +9660,64 @@ function CircuitoSerieSVG({ nodosSeleccionados, onClickNodo, resaltar }) {
   );
 }
 
+// Mismo circuito, pero pensado para "cortar" el cable físicamente en
+// uno de 3 puntos válidos y ver el amperímetro insertado en el hueco —
+// simula de verdad abrir el circuito, en vez de solo tocar 2 puntos.
+const PUNTOS_CORTE_CIRCUITO = [
+  { id: 1, x: 220 },
+  { id: 2, x: 390 },
+  { id: 3, x: 560 },
+];
+function CircuitoCorteSVG({ corteHecho, onCortar }) {
+  return (
+    <svg viewBox="0 0 680 200" style={{ width: "100%", maxWidth: 560, height: "auto", background: "#fff", borderRadius: 10, border: `1px solid ${T.line}` }}>
+      {/* Batería */}
+      <line x1="30" y1="40" x2="30" y2="160" stroke="#495057" strokeWidth="2" />
+      <line x1="15" y1="60" x2="45" y2="60" stroke="#495057" strokeWidth="4" />
+      <line x1="20" y1="140" x2="40" y2="140" stroke="#495057" strokeWidth="2" />
+      <text x="10" y="100" fontSize="12" fill="#495057">12V</text>
+      {/* Cable superior completo (de fondo) */}
+      <line x1="30" y1="40" x2="650" y2="40" stroke="#495057" strokeWidth="2" />
+      {[{ x: 150, label: "R1" }, { x: 320, label: "R2" }, { x: 490, label: "R3" }].map((r) => (
+        <g key={r.label}>
+          <rect x={r.x - 30} y="28" width="60" height="24" fill="#fff" stroke="#495057" strokeWidth="2" />
+          <text x={r.x} y="44" fontSize="13" fontWeight="700" textAnchor="middle" fill="#495057">{r.label}</text>
+        </g>
+      ))}
+      <line x1="650" y1="40" x2="650" y2="160" stroke="#495057" strokeWidth="2" />
+      <line x1="30" y1="160" x2="650" y2="160" stroke="#495057" strokeWidth="2" />
+
+      {/* Puntos de corte: si no se ha cortado nada, se ven como
+          tijeritas invitando a hacer clic; si YA se cortó (en cualquier
+          punto), los demás quedan intactos y ya no son clicables. */}
+      {PUNTOS_CORTE_CIRCUITO.map((p) => {
+        const esEsteElCorte = corteHecho === p.id;
+        return (
+          <g key={p.id}>
+            {esEsteElCorte && (
+              <>
+                {/* Tapa el cable original para simular el hueco */}
+                <rect x={p.x - 34} y="30" width="68" height="20" fill="#fff" />
+                <line x1={p.x - 34} y1="40" x2={p.x - 26} y2="40" stroke="#495057" strokeWidth="2" />
+                <line x1={p.x + 26} y1="40" x2={p.x + 34} y2="40" stroke="#495057" strokeWidth="2" />
+                {/* Amperímetro insertado en el hueco */}
+                <circle cx={p.x} cy="40" r="18" fill={T.greenSoft} stroke={T.green} strokeWidth="2.5" />
+                <text x={p.x} y="45" fontSize="13" fontWeight="800" textAnchor="middle" fill={T.green}>A</text>
+              </>
+            )}
+            {!corteHecho && (
+              <g onClick={() => onCortar(p.id)} style={{ cursor: "pointer" }}>
+                <rect x={p.x - 16} y="26" width="32" height="28" fill="transparent" />
+                <text x={p.x} y="22" fontSize="16" textAnchor="middle">✂️</text>
+              </g>
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 function EjercicioVoltaje({ onGanar }) {
   const [seleccionados, setSeleccionados] = useState([]);
   const [feedback, setFeedback] = useState(null);
@@ -9690,51 +9755,44 @@ function EjercicioVoltaje({ onGanar }) {
 }
 
 function EjercicioCorriente({ onGanar }) {
-  const [seleccionados, setSeleccionados] = useState([]);
-  const [feedback, setFeedback] = useState(null);
+  const [corteHecho, setCorteHecho] = useState(null);
   const ganadoRef = React.useRef(false);
 
-  const clickNodo = (id) => {
-    if (feedback?.ok) return;
-    setFeedback(null);
-    setSeleccionados((prev) => {
-      if (prev.includes(id)) return prev.filter((x) => x !== id);
-      if (prev.length >= 2) return [id];
-      return [...prev, id];
-    });
+  const cortar = (id) => {
+    setCorteHecho(id);
+    if (!ganadoRef.current) { ganadoRef.current = true; onGanar(); }
   };
 
-  const sonAdyacentes = (a, b) => {
-    const orden = ["A", "B", "C", "D"];
-    return Math.abs(orden.indexOf(a) - orden.indexOf(b)) === 1;
-  };
-
-  const verificar = () => {
-    const [a, b] = seleccionados;
-    const ok = sonAdyacentes(a, b);
-    if (ok && !ganadoRef.current) { ganadoRef.current = true; onGanar(); }
-    setFeedback({ ok, msg: ok ? "¡Correcto! Rompiste el cable justo ahí e insertaste el amperímetro EN SERIE — así se mide la corriente." : "Incorrecto. Para medir corriente hay que ROMPER el cable e insertar el multímetro EN SERIE — elige dos nodos que estén uno junto al otro en el mismo cable." });
-  };
+  const reiniciar = () => setCorteHecho(null);
 
   return (
     <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, background: T.graySoft }}>
-      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>🔴⚫ Coloca el amperímetro para medir la CORRIENTE del circuito</div>
-      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 12 }}>Haz clic en los 2 nodos donde "romperías" el cable para insertar el multímetro (recuerda: la corriente se mide en serie).</div>
-      <CircuitoSerieSVG nodosSeleccionados={seleccionados} onClickNodo={clickNodo} />
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>✂️ Abre el circuito para medir la CORRIENTE</div>
+      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 12 }}>
+        A diferencia del voltaje, para medir corriente hay que <strong>abrir (cortar) el cable</strong> e insertar el
+        amperímetro en el hueco. Haz clic en unas tijeras ✂️ para cortar el cable ahí.
+      </div>
+      <CircuitoCorteSVG corteHecho={corteHecho} onCortar={cortar} />
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
-        <Btn small variant="accent" onClick={verificar} disabled={seleccionados.length !== 2}>Verificar</Btn>
-        <Btn small variant="ghost" onClick={() => { setSeleccionados([]); setFeedback(null); }}>Limpiar</Btn>
-        {feedback && <span style={{ fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</span>}
+        <Btn small variant="ghost" onClick={reiniciar}>Reiniciar circuito</Btn>
+        {corteHecho && (
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: T.green }}>
+            ¡Correcto! Cortaste el cable e insertaste el amperímetro EN SERIE — ahora toda la corriente del circuito pasa a través de él.
+          </span>
+        )}
       </div>
     </div>
   );
 }
 
 function EjercicioCodigoColores({ onGanar }) {
+  const [modo, setModo] = useState("armar"); // "armar" | "leer"
   const [indice, setIndice] = useState(0);
   const [seleccion, setSeleccion] = useState({ b1: null, b2: null, mult: null, tol: null });
   const [feedback, setFeedback] = useState(null);
+  const [opcionElegida, setOpcionElegida] = useState(null);
   const ganadasRef = React.useRef(new Set());
+  const ganadasLeerRef = React.useRef(new Set());
 
   const reto = RETOS_CODIGO_COLORES[indice];
 
@@ -9753,48 +9811,94 @@ function EjercicioCodigoColores({ onGanar }) {
     setIndice((i) => (i + 1) % RETOS_CODIGO_COLORES.length);
     setSeleccion({ b1: null, b2: null, mult: null, tol: null });
     setFeedback(null);
+    setOpcionElegida(null);
   };
 
   const colorHex = (nombre) => COLORES_RESISTENCIA.find((c) => c.nombre === nombre)?.hex || COLORES_TOLERANCIA.find((c) => c.nombre === nombre)?.hex || "#ccc";
 
+  // Opciones de valor para el modo "Leer" — la correcta + 3 al azar de otros retos.
+  const opcionesLeer = React.useMemo(() => {
+    const otras = RETOS_CODIGO_COLORES.filter((_, i) => i !== indice).map((r) => r.texto);
+    const distractores = [...otras].sort(() => Math.random() - 0.5).slice(0, 3);
+    return [reto.texto, ...distractores].sort(() => Math.random() - 0.5);
+  }, [indice]);
+
+  const elegirOpcionLeer = (opcion) => {
+    setOpcionElegida(opcion);
+    const ok = opcion === reto.texto;
+    if (ok && !ganadasLeerRef.current.has(indice)) { ganadasLeerRef.current.add(indice); onGanar(); }
+    setFeedback({ ok, msg: ok ? "¡Correcto!" : `Incorrecto. El valor correcto es ${reto.texto}.` });
+  };
+
   return (
     <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, background: T.graySoft }}>
-      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>🎨 Arma el código de colores — Reto {indice + 1} de {RETOS_CODIGO_COLORES.length}</div>
-      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 14 }}>Elige los colores para que la resistencia sea de <strong>{reto.texto}</strong>.</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 4 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700 }}>🎨 Código de colores — Reto {indice + 1} de {RETOS_CODIGO_COLORES.length}</div>
+        <div style={{ display: "flex", background: "#fff", borderRadius: 8, padding: 3, border: `1px solid ${T.line}` }}>
+          <button onClick={() => { setModo("armar"); setFeedback(null); }} style={{ padding: "4px 10px", borderRadius: 6, border: "none", fontSize: 11, fontWeight: 700, cursor: "pointer", background: modo === "armar" ? T.accent : "transparent", color: modo === "armar" ? "#fff" : T.inkSoft }}>Armar</button>
+          <button onClick={() => { setModo("leer"); setFeedback(null); setOpcionElegida(null); }} style={{ padding: "4px 10px", borderRadius: 6, border: "none", fontSize: 11, fontWeight: 700, cursor: "pointer", background: modo === "leer" ? T.accent : "transparent", color: modo === "leer" ? "#fff" : T.inkSoft }}>Leer</button>
+        </div>
+      </div>
+
+      {modo === "armar" ? (
+        <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 14 }}>Elige los colores para que la resistencia sea de <strong>{reto.texto}</strong>.</div>
+      ) : (
+        <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 14 }}>Observa los colores de la resistencia y elige su valor correcto.</div>
+      )}
 
       {/* Vista previa de la resistencia */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16 }}>
         <div style={{ width: 220, height: 40, background: "#e9d8b4", borderRadius: 20, position: "relative", display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
-          {["b1", "b2", "mult", "tol"].map((banda) => (
-            <div key={banda} style={{ width: 14, height: 40, background: seleccion[banda] ? colorHex(seleccion[banda]) : "#fff", border: "1px solid #999" }} />
-          ))}
+          {["b1", "b2", "mult", "tol"].map((banda) => {
+            const color = modo === "armar" ? seleccion[banda] : reto[banda];
+            return <div key={banda} style={{ width: 14, height: 40, background: color ? colorHex(color) : "#fff", border: "1px solid #999" }} />;
+          })}
         </div>
       </div>
 
-      {[
-        { banda: "b1", label: "Banda 1", opciones: COLORES_RESISTENCIA },
-        { banda: "b2", label: "Banda 2", opciones: COLORES_RESISTENCIA },
-        { banda: "mult", label: "Multiplicador", opciones: COLORES_RESISTENCIA },
-        { banda: "tol", label: "Tolerancia", opciones: COLORES_TOLERANCIA },
-      ].map(({ banda, label, opciones }) => (
-        <div key={banda} style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: T.inkSoft, marginBottom: 4 }}>{label}</div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {opciones.map((c) => (
-              <button key={c.nombre} onClick={() => elegir(banda, c.nombre)} title={c.nombre} style={{
-                width: 30, height: 30, borderRadius: 6, background: c.hex, cursor: "pointer",
-                border: seleccion[banda] === c.nombre ? `3px solid ${T.accent}` : "1px solid #999",
-              }} />
+      {modo === "armar" ? (
+        <>
+          {[
+            { banda: "b1", label: "Banda 1", opciones: COLORES_RESISTENCIA },
+            { banda: "b2", label: "Banda 2", opciones: COLORES_RESISTENCIA },
+            { banda: "mult", label: "Multiplicador", opciones: COLORES_RESISTENCIA },
+            { banda: "tol", label: "Tolerancia", opciones: COLORES_TOLERANCIA },
+          ].map(({ banda, label, opciones }) => (
+            <div key={banda} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.inkSoft, marginBottom: 4 }}>{label}</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {opciones.map((c) => (
+                  <button key={c.nombre} onClick={() => elegir(banda, c.nombre)} title={c.nombre} style={{
+                    width: 30, height: 30, borderRadius: 6, background: c.hex, cursor: "pointer",
+                    border: seleccion[banda] === c.nombre ? `3px solid ${T.accent}` : "1px solid #999",
+                  }} />
+                ))}
+              </div>
+            </div>
+          ))}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+            <Btn small variant="accent" onClick={verificar} disabled={!seleccion.b1 || !seleccion.b2 || !seleccion.mult || !seleccion.tol}>Verificar</Btn>
+            <Btn small variant="ghost" onClick={siguienteReto}>Siguiente reto →</Btn>
+            {feedback && <span style={{ fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</span>}
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+            {opcionesLeer.map((op) => (
+              <button key={op} onClick={() => elegirOpcionLeer(op)} disabled={!!opcionElegida} style={{
+                padding: "8px 14px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: opcionElegida ? "default" : "pointer",
+                border: `2px solid ${opcionElegida === op ? (op === reto.texto ? T.green : T.red) : T.line}`,
+                background: opcionElegida === op ? (op === reto.texto ? T.greenSoft : T.redSoft) : (opcionElegida && op === reto.texto ? T.greenSoft : "#fff"),
+              }}>{op}</button>
             ))}
           </div>
-        </div>
-      ))}
-
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
-        <Btn small variant="accent" onClick={verificar} disabled={!seleccion.b1 || !seleccion.b2 || !seleccion.mult || !seleccion.tol}>Verificar</Btn>
-        <Btn small variant="ghost" onClick={siguienteReto}>Siguiente reto →</Btn>
-        {feedback && <span style={{ fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</span>}
-      </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <Btn small variant="ghost" onClick={siguienteReto}>Siguiente reto →</Btn>
+            {feedback && <span style={{ fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</span>}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -9828,6 +9932,93 @@ function EjercicioDiodo({ onGanar }) {
       <div style={{ display: "flex", justifyContent: "center", gap: 12, marginBottom: 10 }}>
         <Btn small variant={eleccion === "A" ? "accent" : "ghost"} onClick={() => elegir("A")}>Terminal A</Btn>
         <Btn small variant={eleccion === "B" ? "accent" : "ghost"} onClick={() => elegir("B")}>Terminal B</Btn>
+      </div>
+      {feedback && <div style={{ textAlign: "center", fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</div>}
+    </div>
+  );
+}
+
+// Dial de rango giratorio — no se sabe el voltaje de antemano, hay que
+// elegir con qué escala empezar (siempre la más alta).
+const ESCALAS_DIAL = [
+  { id: "200m", label: "200mV", angulo: -120 },
+  { id: "2", label: "2V", angulo: -60 },
+  { id: "20", label: "20V", angulo: 0 },
+  { id: "200", label: "200V", angulo: 60 },
+  { id: "600", label: "600V", angulo: 120 },
+];
+function EjercicioSelectorRango({ onGanar }) {
+  const [seleccion, setSeleccion] = useState(null);
+  const [feedback, setFeedback] = useState(null);
+  const ganadoRef = React.useRef(false);
+  const anguloActual = ESCALAS_DIAL.find((e) => e.id === seleccion)?.angulo ?? 120;
+
+  const elegir = (id) => {
+    setSeleccion(id);
+    const ok = id === "600";
+    if (ok && !ganadoRef.current) { ganadoRef.current = true; onGanar(); }
+    setFeedback({ ok, msg: ok ? "¡Correcto! Al no conocer el voltaje, siempre se empieza por la escala MÁS ALTA para no dañar el multímetro, y luego se baja hasta obtener una lectura clara." : "Incorrecto. Si no sabes el voltaje, nunca empieces por una escala baja — podrías dañar el multímetro. Empieza por la más alta." });
+  };
+
+  return (
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, background: T.graySoft }}>
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>🎚️ Gira el dial a la escala correcta</div>
+      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 14 }}>Vas a medir el voltaje de un circuito, pero no sabes cuánto es. Haz clic en la escala con la que deberías <strong>empezar</strong>.</div>
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
+        <svg viewBox="0 0 280 200" style={{ width: "100%", maxWidth: 280, height: "auto" }}>
+          <circle cx="140" cy="140" r="90" fill="#fff" stroke={T.line} strokeWidth="2" />
+          <circle cx="140" cy="140" r="10" fill="#495057" />
+          <line x1="140" y1="140" x2={140 + 70 * Math.sin((anguloActual * Math.PI) / 180)} y2={140 - 70 * Math.cos((anguloActual * Math.PI) / 180)} stroke={T.accent} strokeWidth="4" style={{ transition: "all 0.3s ease" }} />
+          {ESCALAS_DIAL.map((e) => {
+            const x = 140 + 100 * Math.sin((e.angulo * Math.PI) / 180);
+            const y = 140 - 100 * Math.cos((e.angulo * Math.PI) / 180);
+            return (
+              <g key={e.id} onClick={() => elegir(e.id)} style={{ cursor: "pointer" }}>
+                <circle cx={x} cy={y} r="20" fill={seleccion === e.id ? T.accent : "#fff"} stroke={T.accent} strokeWidth="2" />
+                <text x={x} y={y + 4} fontSize="10" fontWeight="800" textAnchor="middle" fill={seleccion === e.id ? "#fff" : T.accent}>{e.label}</text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      {feedback && <div style={{ textAlign: "center", fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</div>}
+    </div>
+  );
+}
+
+// Amperímetro de gancho — pinzar SOLO un conductor, nunca los dos.
+function EjercicioGancho({ onGanar }) {
+  const [eleccion, setEleccion] = useState(null); // "uno" | "ambos"
+  const [feedback, setFeedback] = useState(null);
+  const ganadoRef = React.useRef(false);
+
+  const elegir = (op) => {
+    setEleccion(op);
+    const ok = op === "uno";
+    if (ok && !ganadoRef.current) { ganadoRef.current = true; onGanar(); }
+    setFeedback({ ok, msg: ok ? "¡Correcto! Al pinzar un solo conductor, el gancho detecta su campo magnético y mide la corriente real." : "Incorrecto. Si pinzas AMBOS conductores (ida y vuelta), los campos magnéticos se cancelan y la lectura da cerca de cero, aunque sí haya corriente circulando." });
+  };
+
+  return (
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, background: T.graySoft }}>
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>🪝 Amperímetro de gancho — ¿cómo pinzas el cable?</div>
+      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 14 }}>Este cable de alimentación trae dos conductores (ida y vuelta). Elige cómo pinzarías el gancho para medir la corriente correctamente.</div>
+      <div style={{ display: "flex", justifyContent: "center", gap: 24, marginBottom: 14 }}>
+        <svg viewBox="0 0 120 140" style={{ width: 120, height: "auto", background: "#fff", borderRadius: 10, border: `1px solid ${T.line}` }}>
+          <line x1="45" y1="10" x2="45" y2="130" stroke="#e03131" strokeWidth="6" />
+          <line x1="75" y1="10" x2="75" y2="130" stroke="#1971c2" strokeWidth="6" />
+          {eleccion === "uno" && <circle cx="45" cy="70" r="26" fill="none" stroke={T.green} strokeWidth="4" />}
+          <text x="60" y="20" fontSize="9" textAnchor="middle" fill={T.inkSoft}>ida / vuelta</text>
+        </svg>
+        <svg viewBox="0 0 120 140" style={{ width: 120, height: "auto", background: "#fff", borderRadius: 10, border: `1px solid ${T.line}` }}>
+          <line x1="45" y1="10" x2="45" y2="130" stroke="#e03131" strokeWidth="6" />
+          <line x1="75" y1="10" x2="75" y2="130" stroke="#1971c2" strokeWidth="6" />
+          {eleccion === "ambos" && <circle cx="60" cy="70" r="40" fill="none" stroke={T.red} strokeWidth="4" />}
+        </svg>
+      </div>
+      <div style={{ display: "flex", justifyContent: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+        <Btn small variant={eleccion === "uno" ? "accent" : "ghost"} onClick={() => elegir("uno")}>Pinzar UN solo conductor</Btn>
+        <Btn small variant={eleccion === "ambos" ? "accent" : "ghost"} onClick={() => elegir("ambos")}>Pinzar AMBOS conductores</Btn>
       </div>
       {feedback && <div style={{ textAlign: "center", fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</div>}
     </div>
@@ -10091,14 +10282,16 @@ function JuegoEquiposMedicion({ onGanarPuntos, esAdmin, onReiniciar }) {
 
       {tabEquipos === "practica" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-          <div style={{ fontSize: 12.5, color: T.inkSoft }}>
-            Estos ejercicios son de práctica libre — puedes reintentarlos las veces que quieras. La primera vez que aciertes
-            cada uno, ganas puntos.
+          <div style={{ background: "linear-gradient(120deg, #20c997, #0b7285)", borderRadius: 12, padding: "14px 16px", color: "#fff" }}>
+            <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 3 }}>🎮 6 ejercicios interactivos</div>
+            <div style={{ fontSize: 12, opacity: 0.9 }}>Práctica libre — reinténtalos las veces que quieras. La primera vez que aciertes cada uno, ganas puntos.</div>
           </div>
           <EjercicioVoltaje onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: medir voltaje", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
           <EjercicioCorriente onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: medir corriente", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
+          <EjercicioSelectorRango onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: selector de rango", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
           <EjercicioCodigoColores onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: código de colores", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
           <EjercicioDiodo onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: prueba de diodo", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
+          <EjercicioGancho onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: amperímetro de gancho", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
         </div>
       )}
     </Card>

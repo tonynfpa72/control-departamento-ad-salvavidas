@@ -4233,7 +4233,14 @@ function generarPreguntasAlAzar(n) {
   const todasElectronica = Object.values(NIVELES_ELECTRONICA).flat().filter((p) => !p.multiple).map((p) => ({ modulo: "Electrónica Básica", texto: p.texto, opciones: p.opciones, correcta: p.correcta, imagen: p.imagen || null }));
   const todasNicet = PREGUNTAS_NICET.filter((p) => !p.multiple).map((p) => ({ modulo: "NICET", texto: p.es.texto, opciones: p.es.opciones, correcta: p.correcta, imagen: p.imagen || null }));
   const todasFas1 = FAS_NIVEL1_QUIZZES.flatMap((q) => q.preguntas).filter((p) => !p.multiple).map((p) => ({ modulo: "FAS Nivel I", texto: p.es.texto, opciones: p.es.opciones, correcta: p.correcta, imagen: p.imagen || null }));
-  const pool = [...todasNfpa, ...todasElectronica, ...todasNicet, ...todasFas1];
+  const todasNotifier = PREGUNTAS_NOTIFIER.map((p) => ({ modulo: "Notifier", texto: p.texto, opciones: p.opciones, correcta: p.correcta, imagen: null }));
+  const todasMantenimiento = PREGUNTAS_MANTENIMIENTO_NOTIFIER.map((p) => ({ modulo: "Notifier — Mantenimiento", texto: p.texto, opciones: p.opciones, correcta: p.correcta, imagen: null }));
+  const todasMultimetro = PREGUNTAS_MULTIMETRO.map((p) => ({ modulo: "Multímetro", texto: p.texto, opciones: p.opciones, correcta: p.correcta, imagen: null }));
+  const todasMegometro = PREGUNTAS_MEGOMETRO.map((p) => ({ modulo: "Megóhmetro", texto: p.texto, opciones: p.opciones, correcta: p.correcta, imagen: null }));
+  const pool = [
+    ...todasNfpa, ...todasElectronica, ...todasNicet, ...todasFas1,
+    ...todasNotifier, ...todasMantenimiento, ...todasMultimetro, ...todasMegometro,
+  ];
   return muestraAlAzar(pool, n);
 }
 
@@ -6676,7 +6683,7 @@ function rangoDeEntrenamiento(pts) {
 // 10 puntos cada uno). Los segmentos en 0 todavía no tienen contenido y no
 // bloquean el rango Senior mientras sigan vacíos.
 const MAX_PUNTOS_SEGMENTO = {
-  compuertas: 160, tablas_verdad: 120, escalera: 50, simplex: 80, notifier: 450, nfpa72: 200, electronica: 190, nicet: 500, fas_nivel1: 1200, equipos_medicion: 380,
+  compuertas: 160, tablas_verdad: 120, escalera: 50, simplex: 80, notifier: 450, nfpa72: 200, electronica: 190, nicet: 500, fas_nivel1: 1200, equipos_medicion: 700,
 };
 
 // El rango Senior (el más alto) SOLO se otorga si el usuario tiene 100% en
@@ -10026,6 +10033,328 @@ function EjercicioGancho({ onGanar }) {
 }
 
 
+// 1) Neutro vs Activo en un tomacorriente
+function EjercicioNeutroActivo({ onGanar }) {
+  const [eleccion, setEleccion] = useState(null);
+  const [feedback, setFeedback] = useState(null);
+  const ganadoRef = React.useRef(false);
+
+  const elegir = (lado) => {
+    setEleccion(lado);
+    const ok = lado === "izquierda"; // ranura larga (neutro) a la izquierda
+    if (ok && !ganadoRef.current) { ganadoRef.current = true; onGanar(); }
+    setFeedback({ ok, msg: ok ? "¡Correcto! La ranura MÁS LARGA es el Neutro. Con el multímetro en AC, Neutro-Tierra debe marcar cerca de 0V." : "Incorrecto. El Neutro es la ranura MÁS LARGA (la de la izquierda en un tomacorriente estándar)." });
+  };
+
+  return (
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, background: T.graySoft }}>
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>🔌 ¿Cuál ranura es el NEUTRO?</div>
+      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 14 }}>En un tomacorriente estándar, una ranura es más larga que la otra. Haz clic en la que crees que es el <strong>Neutro</strong>.</div>
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
+        <svg viewBox="0 0 160 120" style={{ width: 160, height: "auto", background: "#fff", borderRadius: 10, border: `1px solid ${T.line}` }}>
+          <rect x="10" y="10" width="140" height="100" rx="10" fill="#f1f3f5" stroke="#495057" strokeWidth="2" />
+          <g onClick={() => elegir("izquierda")} style={{ cursor: "pointer" }}>
+            <rect x="45" y="30" width="10" height="30" rx="3" fill={eleccion === "izquierda" ? (eleccion === "izquierda" && feedback ? (feedback.ok ? T.green : T.red) : T.accent) : "#495057"} />
+          </g>
+          <g onClick={() => elegir("derecha")} style={{ cursor: "pointer" }}>
+            <rect x="100" y="35" width="10" height="22" rx="3" fill={eleccion === "derecha" ? (feedback ? (feedback.ok ? T.green : T.red) : T.accent) : "#495057"} />
+          </g>
+          <circle cx="80" cy="85" r="6" fill="#495057" />
+          <text x="80" y="20" fontSize="9" textAnchor="middle" fill={T.inkSoft}>tierra abajo</text>
+        </svg>
+      </div>
+      {feedback && <div style={{ textAlign: "center", fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</div>}
+    </div>
+  );
+}
+
+// 2) Elegir el puerto correcto según la tarea
+const TAREAS_PUERTO = [
+  { texto: "Medir una corriente de 5A", correcto: "10A" },
+  { texto: "Medir una corriente de 50mA", correcto: "mA" },
+  { texto: "Medir el voltaje de un tomacorriente (120V)", correcto: "VΩ" },
+  { texto: "Medir la resistencia de un resistor", correcto: "VΩ" },
+];
+function EjercicioPuertoCorrecto({ onGanar }) {
+  const [indice, setIndice] = useState(0);
+  const [eleccion, setEleccion] = useState(null);
+  const [feedback, setFeedback] = useState(null);
+  const ganadasRef = React.useRef(new Set());
+  const tarea = TAREAS_PUERTO[indice];
+  const puertos = [
+    { id: "COM", desc: "Común (negativo)" },
+    { id: "mA", desc: "Corrientes pequeñas (fusible ~200mA)" },
+    { id: "10A", desc: "Corrientes grandes (hasta 10A)" },
+    { id: "VΩ", desc: "Voltaje y resistencia" },
+  ];
+
+  const elegir = (id) => {
+    setEleccion(id);
+    const ok = id === tarea.correcto;
+    if (ok && !ganadasRef.current.has(indice)) { ganadasRef.current.add(indice); onGanar(); }
+    setFeedback({ ok, msg: ok ? "¡Correcto!" : `Incorrecto — usar el puerto equivocado aquí podría quemar el fusible o dañar el multímetro. El correcto es "${tarea.correcto}".` });
+  };
+
+  const siguiente = () => {
+    setIndice((i) => (i + 1) % TAREAS_PUERTO.length);
+    setEleccion(null); setFeedback(null);
+  };
+
+  return (
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, background: T.graySoft }}>
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>🔎 Elige el puerto correcto</div>
+      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 14 }}>Tarea: <strong>{tarea.texto}</strong>. ¿En qué puerto conectarías la punta?</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+        {puertos.map((p) => (
+          <button key={p.id} onClick={() => elegir(p.id)} title={p.desc} style={{
+            padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 800, cursor: "pointer",
+            border: `2px solid ${eleccion === p.id ? (feedback?.ok ? T.green : T.red) : T.line}`,
+            background: eleccion === p.id ? (feedback?.ok ? T.greenSoft : T.redSoft) : "#fff",
+          }}>{p.id}</button>
+        ))}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <Btn small variant="ghost" onClick={siguiente}>Siguiente tarea →</Btn>
+        {feedback && <span style={{ fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+// 3) Categorías CAT II / III / IV
+const ESCENARIOS_CAT = [
+  { texto: "Medir un tomacorriente normal dentro de una oficina", correcto: "CAT II" },
+  { texto: "Medir en el tablero de distribución (panel) de un edificio", correcto: "CAT III" },
+  { texto: "Medir en la acometida principal, cerca del transformador o medidor de la calle", correcto: "CAT IV" },
+];
+function EjercicioCategoriasCAT({ onGanar }) {
+  const [indice, setIndice] = useState(0);
+  const [eleccion, setEleccion] = useState(null);
+  const [feedback, setFeedback] = useState(null);
+  const ganadasRef = React.useRef(new Set());
+  const escenario = ESCENARIOS_CAT[indice];
+
+  const elegir = (cat) => {
+    setEleccion(cat);
+    const ok = cat === escenario.correcto;
+    if (ok && !ganadasRef.current.has(indice)) { ganadasRef.current.add(indice); onGanar(); }
+    setFeedback({ ok, msg: ok ? "¡Correcto!" : `Incorrecto. Para este caso se necesita como mínimo ${escenario.correcto}.` });
+  };
+
+  const siguiente = () => {
+    setIndice((i) => (i + 1) % ESCENARIOS_CAT.length);
+    setEleccion(null); setFeedback(null);
+  };
+
+  return (
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, background: T.graySoft }}>
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>🛡️ Categorías de seguridad CAT</div>
+      <div style={{ fontSize: 11.5, color: T.inkSoft, marginBottom: 10, lineHeight: 1.6 }}>
+        <strong>CAT II:</strong> tomacorrientes y equipos conectados a ellos. <strong>CAT III:</strong> tableros de distribución,
+        circuitos fijos del edificio. <strong>CAT IV:</strong> la acometida — el punto donde entra la electricidad al edificio.
+        Entre más cerca de la fuente de la calle, mayor categoría se necesita.
+      </div>
+      <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 10 }}>Escenario: {escenario.texto}. ¿Qué categoría mínima necesitas?</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        {["CAT II", "CAT III", "CAT IV"].map((cat) => (
+          <button key={cat} onClick={() => elegir(cat)} style={{
+            padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 800, cursor: "pointer",
+            border: `2px solid ${eleccion === cat ? (feedback?.ok ? T.green : T.red) : T.line}`,
+            background: eleccion === cat ? (feedback?.ok ? T.greenSoft : T.redSoft) : "#fff",
+          }}>{cat}</button>
+        ))}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <Btn small variant="ghost" onClick={siguiente}>Siguiente escenario →</Btn>
+        {feedback && <span style={{ fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+// 4) Prueba de transistor NPN/PNP con el modo de diodo
+function EjercicioTransistor({ onGanar }) {
+  const [eleccion, setEleccion] = useState(null);
+  const [feedback, setFeedback] = useState(null);
+  const ganadoRef = React.useRef(false);
+
+  const elegir = (op) => {
+    setEleccion(op);
+    const ok = op === "npn";
+    if (ok && !ganadoRef.current) { ganadoRef.current = true; onGanar(); }
+    setFeedback({ ok, msg: ok ? "¡Correcto! Cuando la punta ROJA (positiva) en la Base conduce hacia los otros dos pines, es un transistor NPN — y ese pin del medio es la Base." : "Incorrecto. Si la punta ROJA en un pin conduce hacia los otros dos, ese transistor es NPN (no PNP)." });
+  };
+
+  return (
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, background: T.graySoft }}>
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>🔺 Identifica el transistor con el modo de diodo</div>
+      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 14 }}>
+        Pones la punta <strong>ROJA</strong> en el pin del medio, y la <strong>NEGRA</strong> en los otros dos pines, por
+        turnos. En ambos casos el multímetro muestra una lectura de voltaje (conduce). ¿Qué tipo de transistor es?
+      </div>
+      <div style={{ display: "flex", justifyContent: "center", gap: 10, marginBottom: 14 }}>
+        <Btn small variant={eleccion === "npn" ? "accent" : "ghost"} onClick={() => elegir("npn")}>NPN</Btn>
+        <Btn small variant={eleccion === "pnp" ? "accent" : "ghost"} onClick={() => elegir("pnp")}>PNP</Btn>
+      </div>
+      {feedback && <div style={{ textAlign: "center", fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</div>}
+    </div>
+  );
+}
+
+// 5) Prueba de capacitor (simulación de carga en modo continuidad)
+function EjercicioCapacitor({ onGanar }) {
+  const [paso, setPaso] = useState(0); // 0: sin probar, 1: probando, 2: listo
+  const [lectura, setLectura] = useState("0");
+  const [respuesta, setRespuesta] = useState(null);
+  const [feedback, setFeedback] = useState(null);
+  const ganadoRef = React.useRef(false);
+
+  const probar = () => {
+    setPaso(1);
+    setRespuesta(null);
+    setFeedback(null);
+    let n = 0;
+    const secuencia = ["12", "145", "890", "OL"];
+    const t = setInterval(() => {
+      setLectura(secuencia[n]);
+      n++;
+      if (n >= secuencia.length) { clearInterval(t); setPaso(2); }
+    }, 450);
+  };
+
+  const responder = (op) => {
+    setRespuesta(op);
+    const ok = op === "bueno";
+    if (ok && !ganadoRef.current) { ganadoRef.current = true; onGanar(); }
+    setFeedback({ ok, msg: ok ? "¡Correcto! La lectura subió gradualmente hasta OL — así se comporta un capacitor bueno al cargarse." : "Incorrecto. Cuando la lectura sube gradualmente hasta OL, el capacitor está BUENO (se cargó con normalidad)." });
+  };
+
+  return (
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, background: T.graySoft }}>
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>🔋 Prueba de capacitor (modo continuidad)</div>
+      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 14 }}>Presiona "Probar" y observa cómo cambia la lectura mientras el capacitor se carga.</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 12 }}>
+        <div style={{ background: "#000", color: "#8effc2", fontFamily: "monospace", fontSize: 22, padding: "8px 18px", borderRadius: 6, minWidth: 90, textAlign: "center" }}>{lectura}</div>
+        <Btn small variant="accent" onClick={probar} disabled={paso === 1}>{paso === 0 ? "Probar" : paso === 1 ? "Cargando…" : "Probar de nuevo"}</Btn>
+      </div>
+      {paso === 2 && (
+        <>
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>Según lo que viste, ¿el capacitor está bueno o malo?</div>
+          <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+            <Btn small variant={respuesta === "bueno" ? "accent" : "ghost"} onClick={() => responder("bueno")}>Bueno</Btn>
+            <Btn small variant={respuesta === "malo" ? "accent" : "ghost"} onClick={() => responder("malo")}>Malo</Btn>
+          </div>
+          {feedback && <div style={{ fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
+// 6) Diagnóstico de falla — un foco que no enciende
+function EjercicioDiagnosticoFalla({ onGanar }) {
+  const [medido, setMedido] = useState({});
+  const [diagnostico, setDiagnostico] = useState(null);
+  const [feedback, setFeedback] = useState(null);
+  const ganadoRef = React.useRef(false);
+
+  const puntos = [
+    { id: "A", label: "Puntas en la batería", lectura: "12.0V — normal" },
+    { id: "B", label: "Puntas después del interruptor", lectura: "12.0V — normal (el interruptor sí pasa corriente)" },
+    { id: "C", label: "Continuidad en el foco", lectura: "OL — sin continuidad (filamento roto)" },
+  ];
+
+  const medir = (id) => setMedido((prev) => ({ ...prev, [id]: true }));
+
+  const diagnosticar = (op) => {
+    setDiagnostico(op);
+    const ok = op === "foco";
+    if (ok && !ganadoRef.current) { ganadoRef.current = true; onGanar(); }
+    setFeedback({ ok, msg: ok ? "¡Correcto! La batería y el interruptor funcionan bien, pero el foco no tiene continuidad — su filamento está roto." : "Incorrecto. Revisa las 3 mediciones: la batería y el interruptor están bien, el problema está en el foco (marca OL = sin continuidad)." });
+  };
+
+  return (
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, background: T.graySoft }}>
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>🔦 Diagnóstico: el foco no enciende</div>
+      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 14 }}>Un circuito de batería, interruptor y foco no enciende con el interruptor cerrado. Usa el multímetro en cada punto para investigar.</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+        {puntos.map((p) => (
+          <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <Btn small variant="ghost" onClick={() => medir(p.id)}>Medir: {p.label}</Btn>
+            {medido[p.id] && <span style={{ fontSize: 12, fontFamily: "monospace", background: "#000", color: "#8effc2", padding: "3px 8px", borderRadius: 4 }}>{p.lectura}</span>}
+          </div>
+        ))}
+      </div>
+      {Object.keys(medido).length === puntos.length && (
+        <>
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>¿Dónde está la falla?</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+            {[{ id: "bateria", label: "Batería agotada" }, { id: "interruptor", label: "Interruptor dañado" }, { id: "foco", label: "Foco quemado" }].map((o) => (
+              <Btn key={o.id} small variant={diagnostico === o.id ? "accent" : "ghost"} onClick={() => diagnosticar(o.id)}>{o.label}</Btn>
+            ))}
+          </div>
+          {feedback && <div style={{ fontSize: 12.5, fontWeight: 700, color: feedback.ok ? T.green : T.red }}>{feedback.msg}</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
+// 7) Calculador de resistencias en serie y en paralelo
+function EjercicioResistenciasSeriesParalelo({ onGanar }) {
+  const [respSerie, setRespSerie] = useState(null);
+  const [respParalelo, setRespParalelo] = useState(null);
+  const [feedback, setFeedback] = useState({});
+  const ganadasRef = React.useRef(new Set());
+  // R1=100Ω, R2=200Ω → serie=300Ω, paralelo=66.7Ω
+
+  const elegirSerie = (val) => {
+    setRespSerie(val);
+    const ok = val === 300;
+    if (ok && !ganadasRef.current.has("serie")) { ganadasRef.current.add("serie"); onGanar(); }
+    setFeedback((f) => ({ ...f, serie: ok }));
+  };
+  const elegirParalelo = (val) => {
+    setRespParalelo(val);
+    const ok = val === 67;
+    if (ok && !ganadasRef.current.has("paralelo")) { ganadasRef.current.add("paralelo"); onGanar(); }
+    setFeedback((f) => ({ ...f, paralelo: ok }));
+  };
+
+  return (
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, background: T.graySoft }}>
+      <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 4 }}>➕ Resistencia total: R1 = 100Ω, R2 = 200Ω</div>
+      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 14 }}>Calcula la resistencia total en cada configuración y elige la respuesta correcta.</div>
+
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>Si R1 y R2 están en SERIE:</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {[150, 300, 67, 20000].map((v) => (
+            <button key={v} onClick={() => elegirSerie(v)} style={{
+              padding: "8px 14px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+              border: `2px solid ${respSerie === v ? (feedback.serie ? T.green : T.red) : T.line}`,
+              background: respSerie === v ? (feedback.serie ? T.greenSoft : T.redSoft) : "#fff",
+            }}>{v}Ω</button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>Si R1 y R2 están en PARALELO:</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {[300, 150, 67, 100].map((v) => (
+            <button key={v} onClick={() => elegirParalelo(v)} style={{
+              padding: "8px 14px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+              border: `2px solid ${respParalelo === v ? (feedback.paralelo ? T.green : T.red) : T.line}`,
+              background: respParalelo === v ? (feedback.paralelo ? T.greenSoft : T.redSoft) : "#fff",
+            }}>{v}Ω</button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function JuegoEquiposMedicion({ onGanarPuntos, esAdmin, onReiniciar }) {
   const [mostrarIntro, setMostrarIntro] = useState(true);
   const [tabEquipos, setTabEquipos] = useState("multimetro"); // "multimetro" | "megometro" | "practica"
@@ -10283,7 +10612,7 @@ function JuegoEquiposMedicion({ onGanarPuntos, esAdmin, onReiniciar }) {
       {tabEquipos === "practica" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <div style={{ background: "linear-gradient(120deg, #20c997, #0b7285)", borderRadius: 12, padding: "14px 16px", color: "#fff" }}>
-            <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 3 }}>🎮 6 ejercicios interactivos</div>
+            <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 3 }}>🎮 13 ejercicios interactivos</div>
             <div style={{ fontSize: 12, opacity: 0.9 }}>Práctica libre — reinténtalos las veces que quieras. La primera vez que aciertes cada uno, ganas puntos.</div>
           </div>
           <EjercicioVoltaje onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: medir voltaje", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
@@ -10292,6 +10621,13 @@ function JuegoEquiposMedicion({ onGanarPuntos, esAdmin, onReiniciar }) {
           <EjercicioCodigoColores onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: código de colores", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
           <EjercicioDiodo onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: prueba de diodo", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
           <EjercicioGancho onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: amperímetro de gancho", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
+          <EjercicioNeutroActivo onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: neutro vs activo", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
+          <EjercicioPuertoCorrecto onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: puerto correcto", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
+          <EjercicioCategoriasCAT onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: categorías CAT", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
+          <EjercicioTransistor onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: prueba de transistor", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
+          <EjercicioCapacitor onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: prueba de capacitor", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
+          <EjercicioDiagnosticoFalla onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: diagnóstico de falla", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
+          <EjercicioResistenciasSeriesParalelo onGanar={() => onGanarPuntos && onGanarPuntos("Práctica: resistencias serie/paralelo", PUNTOS_POR_PREGUNTA_EQUIPOS)} />
         </div>
       )}
     </Card>

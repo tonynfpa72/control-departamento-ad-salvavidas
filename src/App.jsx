@@ -10533,7 +10533,7 @@ function JuegoEquiposMedicion({ onGanarPuntos, esAdmin, onReiniciar }) {
     return (
       <div key={i} style={{
         border: `1px solid ${T.line}`, borderRadius: 10, padding: 14,
-        background: estado[i] === "correcta" ? T.greenSoft : estado[i] === "bloqueada" ? T.redSoft : T.graySoft,
+        background: estado[i] === "correcta" ? T.greenSoft : estado[i] === "bloqueada" ? T.redSoft : (intentosUsados > 0 && respuestas[i] !== undefined ? T.redSoft : T.graySoft),
       }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 10 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>{i + 1}. {p.texto}</div>
@@ -10550,7 +10550,10 @@ function JuegoEquiposMedicion({ onGanarPuntos, esAdmin, onReiniciar }) {
           ))}
         </div>
         {estado[i] === "bloqueada" && (
-          <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>Respuesta correcta: {p.opciones[p.correcta]} — quedó fija, sin más intentos disponibles.</div>
+          <div style={{ fontSize: 11.5, color: T.red, marginTop: 8, fontWeight: 700 }}>❌ Esta pregunta quedó mal — sin más intentos disponibles.</div>
+        )}
+        {!fija && intentosUsados > 0 && respuestas[i] !== undefined && (
+          <div style={{ fontSize: 11.5, color: T.red, marginTop: 8, fontWeight: 700 }}>❌ Está mal, inténtalo de nuevo.</div>
         )}
       </div>
     );

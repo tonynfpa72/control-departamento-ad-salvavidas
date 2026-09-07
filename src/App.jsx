@@ -7,7 +7,7 @@ import * as XLSX from "xlsx";
 import {
   LogOut, Plus, Download, Check, X, Clock, ClipboardList,
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
-  ChevronLeft, ChevronRight, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck, Package, GraduationCap, Award,
+  ChevronLeft, ChevronRight, ChevronUp, ChevronDown, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck, Package, GraduationCap, Award,
   Star, Trophy, Zap, Target, Medal, Rocket, Crown, Sparkles, ShieldCheck, Gem, Repeat, Lock
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
@@ -1117,6 +1117,21 @@ function Login({ onLogin }) {
 /* ---------------------------------------------------------
    MODULO: HORAS EXTRAS
    --------------------------------------------------------- */
+// Ordena filas usando su "orden" manual si ya tiene uno asignado; las
+// que todavía no tienen orden se muestran después, más recientes primero
+// (el comportamiento de siempre), para no romper listas que nadie ha
+// reacomodado todavía.
+function ordenarPorOrdenManual(filas) {
+  return [...filas].sort((a, b) => {
+    const tieneA = a.orden !== null && a.orden !== undefined;
+    const tieneB = b.orden !== null && b.orden !== undefined;
+    if (tieneA && tieneB) return a.orden - b.orden;
+    if (tieneA) return -1;
+    if (tieneB) return 1;
+    return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+  });
+}
+
 function HorasExtras({ area, color }) {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
@@ -1259,15 +1274,37 @@ function HorasExtras({ area, color }) {
   const [filtroOdHoras, setFiltroOdHoras] = useState("");
   const [filtroFechaEjecHoras, setFiltroFechaEjecHoras] = useState("");
 
-  const rowsSolicitud = rows.filter((r) => r.estado === "Pendiente" || r.estado === "Aprobada");
-  const rowsDenegadas = rows.filter((r) => r.estado === "Rechazada");
-  const rowsCerradas = rows.filter((r) => r.estado === "Cerrada");
+  const rowsSolicitud = ordenarPorOrdenManual(rows.filter((r) => r.estado === "Pendiente" || r.estado === "Aprobada"));
+  const rowsDenegadas = ordenarPorOrdenManual(rows.filter((r) => r.estado === "Rechazada"));
+  const rowsCerradas = ordenarPorOrdenManual(rows.filter((r) => r.estado === "Cerrada"));
   const rowsMostradas = (subTab === "solicitud" ? rowsSolicitud : subTab === "denegadas" ? rowsDenegadas : rowsCerradas).filter((r) => {
     const matchPersonal = !filtroPersonalHoras.trim() || (r.personal || "").toLowerCase().includes(filtroPersonalHoras.trim().toLowerCase());
     const matchOd = !filtroOdHoras.trim() || (r.od || "").toLowerCase().includes(filtroOdHoras.trim().toLowerCase());
     const matchFecha = !filtroFechaEjecHoras || r.fecha_ejecucion === filtroFechaEjecHoras;
     return matchPersonal && matchOd && matchFecha;
   });
+
+  // Sube o baja una fila dentro de la lista que se está viendo ahora
+  // mismo (respeta los filtros activos), intercambiando su "orden" con
+  // la fila vecina y guardándolo en Supabase.
+  const bucketActual = subTab === "solicitud" ? rowsSolicitud : subTab === "denegadas" ? rowsDenegadas : rowsCerradas;
+
+  // Sube o baja una fila dentro de su pestaña (Solicitudes/Denegadas/
+  // Cerradas) — no dentro de lo filtrado, para que el orden guardado
+  // sea siempre consistente aunque haya un filtro activo.
+  const moverFila = (id, direccion) => {
+    const idx = bucketActual.findIndex((r) => r.id === id);
+    const idxVecino = idx + direccion;
+    if (idx === -1 || idxVecino < 0 || idxVecino >= bucketActual.length) return;
+    const idsEnOrden = bucketActual.map((r) => r.id);
+    [idsEnOrden[idx], idsEnOrden[idxVecino]] = [idsEnOrden[idxVecino], idsEnOrden[idx]];
+    const nuevoOrdenPorId = {};
+    idsEnOrden.forEach((rid, i) => { nuevoOrdenPorId[rid] = i; });
+    setRows((prev) => prev.map((r) => (r.id in nuevoOrdenPorId ? { ...r, orden: nuevoOrdenPorId[r.id] } : r)));
+    Object.entries(nuevoOrdenPorId).forEach(([rid, orden]) => {
+      supabase.from("horas_extras").update({ orden }).eq("id", rid).then();
+    });
+  };
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16 }}>
@@ -1354,12 +1391,22 @@ function HorasExtras({ area, color }) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
-              <th style={{ padding: "6px 8px" }}>Fecha</th><th>Fecha ejecución</th><th style={{ minWidth: 220 }}>OD</th><th>Personal</th><th>Rango</th><th>Horas</th><th>Estado</th><th></th>
+              <th style={{ width: 34 }}></th><th style={{ padding: "6px 8px" }}>Fecha</th><th>Fecha ejecución</th><th style={{ minWidth: 220 }}>OD</th><th>Personal</th><th>Rango</th><th>Horas</th><th>Estado</th><th></th>
             </tr>
           </thead>
           <tbody>
-            {rowsMostradas.map((r) => (
+            {rowsMostradas.map((r, iMostrada) => (
               <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
+                <td style={{ padding: "4px 4px 4px 8px" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                    <button onClick={() => moverFila(r.id, -1)} disabled={iMostrada === 0} title="Subir" style={{ background: "transparent", border: "none", cursor: iMostrada === 0 ? "default" : "pointer", opacity: iMostrada === 0 ? 0.3 : 1, padding: 0, lineHeight: 1 }}>
+                      <ChevronUp size={14} color={T.inkSoft} />
+                    </button>
+                    <button onClick={() => moverFila(r.id, 1)} disabled={iMostrada === rowsMostradas.length - 1} title="Bajar" style={{ background: "transparent", border: "none", cursor: iMostrada === rowsMostradas.length - 1 ? "default" : "pointer", opacity: iMostrada === rowsMostradas.length - 1 ? 0.3 : 1, padding: 0, lineHeight: 1 }}>
+                      <ChevronDown size={14} color={T.inkSoft} />
+                    </button>
+                  </div>
+                </td>
                 <td style={{ padding: "9px 8px" }}>{r.fecha}</td>
                 <td>
                   {puedeAdminAqui ? (

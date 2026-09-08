@@ -603,6 +603,87 @@ function Btn({ children, onClick, variant = "primary", small, style, disabled })
   );
 }
 
+// Selector de OD con búsqueda: escribe parte del número de OD o del
+// nombre del cliente y va filtrando la lista en vivo, en vez de tener
+// que desplazarte por un <select> largo.
+function BuscadorOD({ value, onChange, opciones, grupoExtra, etiquetaGrupoExtra, placeholder }) {
+  const [texto, setTexto] = useState(value || "");
+  const [abierto, setAbierto] = useState(false);
+  const contenedorRef = React.useRef(null);
+
+  useEffect(() => { setTexto(value || ""); }, [value]);
+
+  useEffect(() => {
+    const cerrarSiFuera = (e) => {
+      if (contenedorRef.current && !contenedorRef.current.contains(e.target)) setAbierto(false);
+    };
+    document.addEventListener("mousedown", cerrarSiFuera);
+    return () => document.removeEventListener("mousedown", cerrarSiFuera);
+  }, []);
+
+  const filtrar = (lista) => {
+    const q = texto.trim().toLowerCase();
+    if (!q) return lista;
+    return lista.filter((o) => o.od.toLowerCase().includes(q) || (o.cliente || "").toLowerCase().includes(q));
+  };
+  const principales = filtrar(opciones);
+  const extra = filtrar(grupoExtra || []);
+  const sinResultados = principales.length === 0 && extra.length === 0;
+
+  const elegir = (o) => {
+    onChange(o.od);
+    setTexto(o.od);
+    setAbierto(false);
+  };
+
+  return (
+    <div ref={contenedorRef} style={{ position: "relative" }}>
+      <input
+        style={inputStyle}
+        value={texto}
+        onFocus={() => setAbierto(true)}
+        onChange={(e) => { setTexto(e.target.value); onChange(e.target.value); setAbierto(true); }}
+        placeholder={placeholder || "Escribe el OD o el nombre del cliente…"}
+      />
+      {abierto && (
+        <div style={{
+          position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, marginTop: 4,
+          background: "#fff", border: `1px solid ${T.line}`, borderRadius: 8, boxShadow: "0 6px 16px rgba(0,0,0,0.12)",
+          maxHeight: 260, overflowY: "auto",
+        }}>
+          {sinResultados ? (
+            <div style={{ padding: "10px 12px", fontSize: 12.5, color: T.gray }}>Sin resultados — puedes escribir el OD manualmente.</div>
+          ) : (
+            <>
+              {principales.map((o) => (
+                <div key={o.id} onClick={() => elegir(o)} style={{ padding: "8px 12px", fontSize: 12.5, cursor: "pointer", borderBottom: `1px solid ${T.line}` }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = T.graySoft; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                >
+                  <strong>{o.od}</strong> — {o.cliente}
+                </div>
+              ))}
+              {extra.length > 0 && (
+                <>
+                  <div style={{ padding: "6px 12px", fontSize: 10.5, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", background: T.graySoft }}>{etiquetaGrupoExtra}</div>
+                  {extra.map((o) => (
+                    <div key={o.id} onClick={() => elegir(o)} style={{ padding: "8px 12px", fontSize: 12.5, cursor: "pointer", borderBottom: `1px solid ${T.line}` }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = T.graySoft; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                    >
+                      <strong>{o.od}</strong> — {o.cliente}
+                    </div>
+                  ))}
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Field({ label, children }) {
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12.5, color: T.inkSoft, fontWeight: 600 }}>
@@ -1340,15 +1421,13 @@ function HorasExtras({ area, color }) {
               {odsParaSolicitud.length === 0 ? (
                 <input style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })} placeholder="OD-1004" />
               ) : (
-                <select style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })}>
-                  <option value="">Selecciona un OD…</option>
-                  {odsDelArea.map((o) => <option key={o.id} value={o.od}>{o.od} — {o.cliente}</option>)}
-                  {odsCorrectivosOtraArea.length > 0 && (
-                    <optgroup label={`OD Correctivos — ${area === "inspecciones" ? "Proyectos" : "Inspecciones"}`}>
-                      {odsCorrectivosOtraArea.map((o) => <option key={o.id} value={o.od}>{o.od} — {o.cliente}</option>)}
-                    </optgroup>
-                  )}
-                </select>
+                <BuscadorOD
+                  value={form.od}
+                  onChange={(od) => setForm({ ...form, od })}
+                  opciones={odsDelArea}
+                  grupoExtra={odsCorrectivosOtraArea}
+                  etiquetaGrupoExtra={`OD Correctivos — ${area === "inspecciones" ? "Proyectos" : "Inspecciones"}`}
+                />
               )}
             </Field>
             <Field label="Persona que solicita">

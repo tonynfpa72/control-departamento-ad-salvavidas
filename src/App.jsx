@@ -1141,6 +1141,17 @@ function HorasExtras({ area, color }) {
   const confirmar = useContext(ConfirmContext);
   const { fechasCorte } = useContext(FechasCorteContext);
   const [odsDelArea] = useClientesArea(area);
+  // Los OD Correctivos se comparten entre Inspecciones y Proyectos —
+  // alguien puede hacer horas extra en un Correctivo que pertenece al
+  // área hermana, así que se incluyen también en el selector.
+  const [odsInspecciones] = useClientesArea("inspecciones");
+  const [odsProyectos] = useClientesArea("proyectos");
+  const odsCorrectivosOtraArea = area === "inspecciones"
+    ? odsProyectos.filter((r) => (r.tipoOD || "Normal") === "Correctivo")
+    : area === "proyectos"
+    ? odsInspecciones.filter((r) => (r.tipoOD || "Normal") === "Correctivo")
+    : [];
+  const odsParaSolicitud = [...odsDelArea, ...odsCorrectivosOtraArea];
   const [disponible, setDisponibleState] = useState(150);
   const [rows, setRows] = useState([]);
   const [empleados, setEmpleados] = useState([]);
@@ -1326,12 +1337,17 @@ function HorasExtras({ area, color }) {
         <Card title="Nueva solicitud">
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <Field label="OD del proyecto">
-              {odsDelArea.length === 0 ? (
+              {odsParaSolicitud.length === 0 ? (
                 <input style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })} placeholder="OD-1004" />
               ) : (
                 <select style={inputStyle} value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })}>
                   <option value="">Selecciona un OD…</option>
                   {odsDelArea.map((o) => <option key={o.id} value={o.od}>{o.od} — {o.cliente}</option>)}
+                  {odsCorrectivosOtraArea.length > 0 && (
+                    <optgroup label={`OD Correctivos — ${area === "inspecciones" ? "Proyectos" : "Inspecciones"}`}>
+                      {odsCorrectivosOtraArea.map((o) => <option key={o.id} value={o.od}>{o.od} — {o.cliente}</option>)}
+                    </optgroup>
+                  )}
                 </select>
               )}
             </Field>
@@ -1418,7 +1434,7 @@ function HorasExtras({ area, color }) {
                     <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 200 }} value={r.od} onChange={(e) => setOd(r.id, e.target.value)} />
                   ) : (r.od)}
                   {(() => {
-                    const clienteOD = odsDelArea.find((o) => o.od === r.od)?.cliente;
+                    const clienteOD = odsParaSolicitud.find((o) => o.od === r.od)?.cliente;
                     return clienteOD ? <div style={{ fontSize: 11, color: T.gray, marginTop: 2 }}>{clienteOD}</div> : null;
                   })()}
                 </td>

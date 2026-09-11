@@ -12968,6 +12968,16 @@ export default function App() {
 
   return (
     <LogoContext.Provider value={{ logo, setLogo }}>
+      <style>{`
+        input[type="number"]::-webkit-outer-spin-button,
+        input[type="number"]::-webkit-inner-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+        input[type="number"] {
+          -moz-appearance: textfield;
+        }
+      `}</style>
       <UsersContext.Provider value={{ users, refetchUsers }}>
         <ClientesContext.Provider value={{ clientes, setClientes }}>
           <FechasCorteContext.Provider value={{ fechasCorte, refetchFechasCorte }}>

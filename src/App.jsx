@@ -2677,6 +2677,7 @@ function Cotizaciones() {
   const [filtroDias, setFiltroDias] = useState("");
   const [filtroNumCot, setFiltroNumCot] = useState("");
   const [filtroTipoCot, setFiltroTipoCot] = useState("Todos");
+  const [ordenMonto, setOrdenMonto] = useState("ninguno"); // "ninguno" | "mayor" | "menor"
   const [form, setForm] = useState({
     solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "",
     dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Solicitud",
@@ -2762,6 +2763,15 @@ function Cotizaciones() {
     const matchNumCot = !filtroNumCot.trim() || (r.numCot || "").toLowerCase().includes(filtroNumCot.trim().toLowerCase());
     const matchTipo = filtroTipoCot === "Todos" || r.tipo === filtroTipoCot;
     return matchTab && matchSolicitante && matchCliente && matchProvincia && matchDias && matchNumCot && matchTipo;
+  }).sort((a, b) => {
+    if (ordenMonto === "ninguno") return 0;
+    const montoNum = (v) => {
+      if (typeof v === "number") return v;
+      const limpio = String(v || "0").replace(/[^0-9.-]/g, "");
+      return parseFloat(limpio) || 0;
+    };
+    const ma = montoNum(a.monto), mb = montoNum(b.monto);
+    return ordenMonto === "mayor" ? mb - ma : ma - mb;
   });
 
   return (
@@ -2830,8 +2840,13 @@ function Cotizaciones() {
             <option value="Todos">Todos los tipos</option>
             {TIPO_OFERTA_OPCIONES.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
-          {(filtroSolicitante || filtroCliente || filtroProvincia || filtroDias || filtroNumCot || filtroTipoCot !== "Todos") && (
-            <Btn small variant="ghost" onClick={() => { setFiltroSolicitante(""); setFiltroCliente(""); setFiltroProvincia(""); setFiltroDias(""); setFiltroNumCot(""); setFiltroTipoCot("Todos"); }}>Limpiar filtros</Btn>
+          <select style={{ ...inputStyle, width: 190 }} value={ordenMonto} onChange={(e) => setOrdenMonto(e.target.value)}>
+            <option value="ninguno">Orden: sin ordenar</option>
+            <option value="mayor">Monto: mayor a menor</option>
+            <option value="menor">Monto: menor a mayor</option>
+          </select>
+          {(filtroSolicitante || filtroCliente || filtroProvincia || filtroDias || filtroNumCot || filtroTipoCot !== "Todos" || ordenMonto !== "ninguno") && (
+            <Btn small variant="ghost" onClick={() => { setFiltroSolicitante(""); setFiltroCliente(""); setFiltroProvincia(""); setFiltroDias(""); setFiltroNumCot(""); setFiltroTipoCot("Todos"); setOrdenMonto("ninguno"); }}>Limpiar filtros</Btn>
           )}
         </div>
 

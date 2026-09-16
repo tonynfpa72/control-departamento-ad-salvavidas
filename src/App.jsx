@@ -4385,7 +4385,13 @@ function descargarExamen40() {
 // tomadas de todos los módulos con preguntas de opción múltiple.
 // Conserva la imagen de la pregunta cuando la tiene (algunas de FAS
 // Nivel I y NICET dependen de una figura para poder responderse).
-function generarPreguntasAlAzar(n) {
+// Genera preguntas al azar para un Reto nuevo, EXCLUYENDO las que ya
+// se usaron en retos anteriores (comparando el texto exacto de la
+// pregunta) — así cada reto es distinto al anterior y no sirve de nada
+// copiar respuestas de un reto viejo. Si ya no quedan suficientes
+// preguntas sin usar, se completa repitiendo de las más antiguas para
+// no bloquear la creación del reto.
+async function generarPreguntasAlAzar(n) {
   const todasNfpa = PREGUNTAS_NFPA72.filter((p) => !p.multiple).map((p) => ({ modulo: "NFPA 72", texto: p.texto, opciones: p.opciones, correcta: p.correcta, imagen: p.imagen || null }));
   const todasElectronica = Object.values(NIVELES_ELECTRONICA).flat().filter((p) => !p.multiple).map((p) => ({ modulo: "Electrónica Básica", texto: p.texto, opciones: p.opciones, correcta: p.correcta, imagen: p.imagen || null }));
   const todasNicet = PREGUNTAS_NICET.filter((p) => !p.multiple).map((p) => ({ modulo: "NICET", texto: p.es.texto, opciones: p.es.opciones, correcta: p.correcta, imagen: p.imagen || null }));
@@ -4398,7 +4404,18 @@ function generarPreguntasAlAzar(n) {
     ...todasNfpa, ...todasElectronica, ...todasNicet, ...todasFas1,
     ...todasNotifier, ...todasMantenimiento, ...todasMultimetro, ...todasMegometro,
   ];
-  return muestraAlAzar(pool, n);
+
+  const { data: retosAnteriores } = await supabase.from("entrenamiento_retos").select("preguntas").order("creado_en", { ascending: false }).limit(20);
+  const textosUsados = new Set();
+  (retosAnteriores || []).forEach((r) => (r.preguntas || []).forEach((p) => textosUsados.add(p.texto)));
+
+  const poolSinUsar = pool.filter((p) => !textosUsados.has(p.texto));
+  if (poolSinUsar.length >= n) return muestraAlAzar(poolSinUsar, n);
+  // No alcanzan preguntas sin usar — se completa con el resto del pool
+  // (empezando por las que llevan más tiempo sin aparecer).
+  const faltan = n - poolSinUsar.length;
+  const relleno = muestraAlAzar(pool.filter((p) => textosUsados.has(p.texto)), faltan);
+  return muestraAlAzar([...poolSinUsar, ...relleno], n);
 }
 
 // Panel de control del Reto — solo para Admin. Prepara (borrador),
@@ -4435,7 +4452,7 @@ function PanelAdminReto({ reto, onCambio }) {
     setPreparando(true);
     const { count } = await supabase.from("entrenamiento_retos").select("*", { count: "exact", head: true });
     const numero = (count || 0) + 1;
-    const preguntas = generarPreguntasAlAzar(30);
+    const preguntas = await generarPreguntasAlAzar(30);
     await supabase.from("entrenamiento_retos").update({ estado: "finalizado" }).neq("estado", "finalizado");
     await supabase.from("entrenamiento_retos").insert({
       numero, preguntas, activo: false, estado: "borrador",
@@ -4700,12 +4717,14 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
       p_personal_codigo: jugador.codigo, p_personal_nombre: jugador.nombre,
     });
     if (error || !data || data.error) {
-      setFeedback({ error: true, msg: opcionIdx === -1 ? "⏱️ Se acabó el tiempo de esta pregunta." : "No se pudo registrar la respuesta.", correcta_idx: data?.correcta_idx });
+      setFeedback({ error: true, msg: opcionIdx === -1 ? "⏱️ Se acabó el tiempo de esta pregunta." : "No se pudo registrar la respuesta." });
       return;
     }
-    setFeedback({ correcta: data.correcta, puntos: data.puntos, correcta_idx: data.correcta_idx });
-    setPuntajeAcumulado((p) => p + data.puntos);
-    if (data.correcta) setCorrectasCount((c) => c + 1);
+    // A propósito NO se guarda si fue correcta ni cuál era la respuesta
+    // — así nadie puede ver el resultado de cada pregunta y pasárselo a
+    // otra persona. El puntaje se calcula en el backend y solo se
+    // revela hasta el ranking final.
+    setFeedback({ registrada: true });
   };
 
   const avanzar = async () => {
@@ -4822,7 +4841,6 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
       <Card>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
           <Badge color={T.blue} soft={T.blueSoft}>Pregunta {indice + 1} de {reto.preguntas.length}</Badge>
-          <div style={{ fontSize: 13, fontWeight: 700, color: T.inkSoft }}>{puntajeAcumulado.toLocaleString()} pts</div>
         </div>
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
           <div style={{
@@ -4847,14 +4865,14 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
         )}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
           {p.opciones.map((op, j) => {
-            let bg = "#fff", borde = T.line, color = T.ink;
-            if (bloqueada) {
-              if (feedback && j === feedback.correcta_idx) { bg = T.greenSoft; borde = T.green; color = T.green; }
-              else if (j === respuestaElegida) { bg = T.redSoft; borde = T.red; color = T.red; }
-            }
+            // A propósito, ninguna opción se pinta de verde/rojo — nadie
+            // debe poder ver cuál era la correcta durante el reto.
+            const seleccionada = j === respuestaElegida;
+            const bg = seleccionada ? T.accentSoft || "#eef2ff" : "#fff";
+            const borde = seleccionada ? T.accent : T.line;
             return (
               <button key={j} onClick={() => responder(j)} disabled={bloqueada} style={{
-                textAlign: "left", padding: "16px 18px", borderRadius: 12, border: `2px solid ${borde}`, background: bg, color,
+                textAlign: "left", padding: "16px 18px", borderRadius: 12, border: `2px solid ${borde}`, background: bg, color: T.ink,
                 fontSize: 14, fontWeight: 700, cursor: bloqueada ? "default" : "pointer", transition: "transform 0.1s",
               }}
                 onMouseDown={(e) => { if (!bloqueada) e.currentTarget.style.transform = "scale(0.97)"; }}
@@ -4868,9 +4886,7 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
             {feedback.error ? (
               <span style={{ fontSize: 14, fontWeight: 700, color: T.red }}>{feedback.msg}</span>
             ) : (
-              <span style={{ fontSize: 15, fontWeight: 800, color: feedback.correcta ? T.green : T.red }}>
-                {feedback.correcta ? `✓ ¡Correcto! +${feedback.puntos.toLocaleString()} puntos` : (respuestaElegida === -1 ? "⏱️ Se acabó el tiempo de esta pregunta" : "✗ Respuesta incorrecta")}
-              </span>
+              <span style={{ fontSize: 14, fontWeight: 700, color: T.inkSoft }}>✔ Respuesta registrada</span>
             )}
             <Btn variant="accent" onClick={avanzar}>{indice + 1 >= reto.preguntas.length ? "Ver resultado final" : "Siguiente pregunta →"}</Btn>
           </div>

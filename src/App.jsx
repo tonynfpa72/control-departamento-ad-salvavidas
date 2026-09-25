@@ -8,7 +8,7 @@ import {
   LogOut, Plus, Download, Check, X, Clock, ClipboardList,
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
   ChevronLeft, ChevronRight, ChevronUp, ChevronDown, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck, Package, GraduationCap, Award,
-  Star, Trophy, Zap, Target, Medal, Rocket, Crown, Sparkles, ShieldCheck, Gem, Repeat, Lock
+  Star, Trophy, Zap, Target, Medal, Rocket, Crown, Sparkles, ShieldCheck, Gem, Repeat, Lock, Search
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -2720,15 +2720,20 @@ function FacturacionIpmCard() {
   const currentUser = useContext(CurrentUserContext);
   const confirmar = useContext(ConfirmContext);
   const puedeMarcar = currentUser?.categoria === "admin" || currentUser?.categoria === "asistente";
+  const [busqueda, setBusqueda] = useState("");
   const hoy = todayISO();
   const finDeMes = new Date();
   finDeMes.setMonth(finDeMes.getMonth() + 1, 0); // último día del mes actual
   const limite = finDeMes.toISOString().slice(0, 10);
-  const pendientes = rows
+  const pendientesDelMes = rows
     .filter((r) => (r.tipoOD || "Normal") === "Normal" && r.estado === "Activo" && r.frecuencia)
     .filter((r) => !r.proximaFacturaIpm || r.proximaFacturaIpm <= limite)
     .sort((a, b) => (a.proximaFacturaIpm || "").localeCompare(b.proximaFacturaIpm || ""));
-  const atrasadas = pendientes.filter((r) => r.proximaFacturaIpm && r.proximaFacturaIpm < hoy);
+  const atrasadas = pendientesDelMes.filter((r) => r.proximaFacturaIpm && r.proximaFacturaIpm < hoy);
+  const q = busqueda.trim().toLowerCase();
+  const pendientes = q
+    ? pendientesDelMes.filter((r) => (r.od || "").toLowerCase().includes(q) || (r.cliente || "").toLowerCase().includes(q) || (r.tecnico || "").toLowerCase().includes(q))
+    : pendientesDelMes;
 
   const marcarFacturado = async (r) => {
     if (!(await confirmar(`¿Confirmas que ya facturaste la OD ${r.od}? Se registra hoy y se calcula sola la siguiente fecha según su frecuencia (${r.frecuencia || "sin frecuencia"}).`, { confirmLabel: "Sí, ya facturé", variant: "accent" }))) return;
@@ -2739,9 +2744,22 @@ function FacturacionIpmCard() {
   };
 
   return (
-    <Card title="IPM a facturar este mes" action={pendientes.length > 0 ? <Badge color={atrasadas.length ? T.red : T.amber} soft={atrasadas.length ? T.redSoft : T.amberSoft}>{pendientes.length}</Badge> : null}>
-      {pendientes.length === 0 ? (
+    <Card title="IPM a facturar este mes" action={pendientesDelMes.length > 0 ? <Badge color={atrasadas.length ? T.red : T.amber} soft={atrasadas.length ? T.redSoft : T.amberSoft}>{pendientesDelMes.length}</Badge> : null}>
+      {pendientesDelMes.length > 0 && (
+        <div style={{ position: "relative", marginBottom: 10 }}>
+          <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T.gray }} />
+          <input
+            style={{ ...inputStyle, paddingLeft: 30, fontSize: 12.5 }}
+            placeholder="Buscar por OD, cliente o técnico..."
+            value={busqueda}
+            onChange={(e) => setBusqueda(e.target.value)}
+          />
+        </div>
+      )}
+      {pendientesDelMes.length === 0 ? (
         <div style={{ color: T.gray, fontSize: 13 }}>No hay IPM pendientes de facturar este mes.</div>
+      ) : pendientes.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 13 }}>Ningún resultado para "{busqueda}".</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {pendientes.map((r) => {

@@ -3775,6 +3775,282 @@ function EquipoSeguridad() {
   );
 }
 
+/* ---------------------------------------------------------
+   MODULO: PRETAREAS (EHS) — cargar y volver a descargar en PDF
+   --------------------------------------------------------- */
+function pretareaRowFromDb(r) {
+  return {
+    id: r.id,
+    trabajo: r.trabajo || "",
+    planta: r.planta || "",
+    ubicacion: r.ubicacion || "",
+    responsable: r.responsable || "",
+    sponsor: r.sponsor || "",
+    realizadoPor: r.realizado_por || "",
+    areasAfectadas: r.areas_afectadas || "",
+    fecha: r.fecha || "",
+    trabajadores: r.trabajadores || "",
+    pasos: Array.isArray(r.pasos) ? r.pasos : [],
+    herramientas: r.herramientas || "",
+    materiales: r.materiales || "",
+    requiereQuimicos: r.requiere_quimicos || "No",
+    nombreQuimico: r.nombre_quimico || "",
+    created_at: r.created_at,
+  };
+}
+const PRETAREA_FORM_VACIO = {
+  trabajo: "", planta: "", ubicacion: "", responsable: "", sponsor: "", realizadoPor: "",
+  areasAfectadas: "", fecha: "", trabajadores: "",
+  pasos: [{ que: "", como: "" }, { que: "", como: "" }, { que: "", como: "" }],
+  herramientas: "", materiales: "", requiereQuimicos: "No", nombreQuimico: "",
+};
+
+// Vista imprimible de una pretarea, con el mismo formato del machote en
+// Word (información general, pasos, herramientas/materiales y químicos) —
+// se descarga en PDF con Imprimir/Guardar PDF del navegador, igual que
+// Cotizaciones y el Resumen Ejecutivo.
+function PretareaPrintView({ r, onClose }) {
+  const { logo } = useContext(LogoContext);
+  if (!r) return null;
+  const infoRow = (label, value) => (
+    <tr>
+      <td style={{ padding: "8px 12px", fontWeight: 600, color: T.inkSoft, width: "32%", background: T.graySoft, border: `1px solid ${T.line}` }}>{label}</td>
+      <td style={{ padding: "8px 12px", color: T.ink, border: `1px solid ${T.line}` }}>{value || "—"}</td>
+    </tr>
+  );
+  return (
+    <div id="pretarea-print-overlay" style={{
+      position: "fixed", inset: 0, background: "rgba(16,24,38,0.55)", zIndex: 1000,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+    }}>
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #pretarea-print-content, #pretarea-print-content * { visibility: visible; }
+          #pretarea-print-content { position: absolute; top: 0; left: 0; width: 100%; }
+          #pretarea-print-toolbar { display: none !important; }
+        }
+      `}</style>
+      <div style={{ background: "#fff", borderRadius: 14, width: 720, maxHeight: "88vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,.35)" }}>
+        <div id="pretarea-print-toolbar" style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "14px 20px 0" }}>
+          <Btn small variant="ghost" onClick={onClose}><X size={13} /> Cerrar</Btn>
+          <Btn small variant="accent" onClick={() => window.print()}><Download size={13} /> Imprimir / Guardar PDF</Btn>
+        </div>
+        <div id="pretarea-print-content" style={{ padding: 32 }}>
+          {logo && <img src={logo} alt="Logo" style={{ height: 40, marginBottom: 12, objectFit: "contain" }} />}
+          <h1 style={{ fontSize: 18, margin: "0 0 2px", textAlign: "center", color: T.steel }}>PRETAREA</h1>
+          <div style={{ textAlign: "center", fontStyle: "italic", color: T.inkSoft, fontSize: 12.5, marginBottom: 22 }}>Análisis previo al trabajo</div>
+
+          <h2 style={{ fontSize: 12.5, textTransform: "uppercase", letterSpacing: 0.4, color: "#fff", background: T.steel, margin: "18px 0 0", padding: "6px 10px" }}>1. Información general</h2>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 4 }}>
+            <tbody>
+              {infoRow("Trabajo a realizar", r.trabajo)}
+              {infoRow("Planta", r.planta)}
+              {infoRow("Ubicación específica", r.ubicacion)}
+              {infoRow("Responsable del trabajo", r.responsable)}
+              {infoRow("Sponsor", r.sponsor)}
+              {infoRow("Realizado por", r.realizadoPor)}
+              {infoRow("Áreas afectadas", r.areasAfectadas)}
+              {infoRow("Fecha", r.fecha)}
+              {infoRow("Nombre de trabajadores", r.trabajadores)}
+            </tbody>
+          </table>
+
+          <h2 style={{ fontSize: 12.5, textTransform: "uppercase", letterSpacing: 0.4, color: "#fff", background: T.steel, margin: "18px 0 0", padding: "6px 10px" }}>2. Descripción de las actividades</h2>
+          <div style={{ fontSize: 12.5, fontWeight: 700, margin: "10px 0 6px" }}>Actividad a realizar por pasos:</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, marginBottom: 14 }}>
+            <thead>
+              <tr>
+                <th style={{ padding: "6px 8px", border: `1px solid ${T.line}`, background: T.steel, color: "#fff", width: 40 }}>Paso</th>
+                <th style={{ padding: "6px 8px", border: `1px solid ${T.line}`, background: T.steel, color: "#fff" }}>¿Qué van a hacer?</th>
+                <th style={{ padding: "6px 8px", border: `1px solid ${T.line}`, background: T.steel, color: "#fff" }}>¿Cómo lo van a hacer?</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(r.pasos || []).map((p, i) => (
+                <tr key={i}>
+                  <td style={{ padding: "6px 8px", border: `1px solid ${T.line}`, textAlign: "center", fontWeight: 700 }}>{i + 1}</td>
+                  <td style={{ padding: "6px 8px", border: `1px solid ${T.line}` }}>{p.que || "—"}</td>
+                  <td style={{ padding: "6px 8px", border: `1px solid ${T.line}` }}>{p.como || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div style={{ fontSize: 12.5, fontWeight: 700, margin: "10px 0 6px" }}>Herramientas, materiales y químicos:</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, marginBottom: 4 }}>
+            <thead>
+              <tr>
+                <th style={{ padding: "6px 8px", border: `1px solid ${T.line}`, background: T.graySoft, textAlign: "left" }}>Herramientas a utilizar</th>
+                <th style={{ padding: "6px 8px", border: `1px solid ${T.line}`, background: T.graySoft, textAlign: "left" }}>Materiales a utilizar</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ padding: "8px", border: `1px solid ${T.line}`, verticalAlign: "top", whiteSpace: "pre-wrap" }}>{r.herramientas || "—"}</td>
+                <td style={{ padding: "8px", border: `1px solid ${T.line}`, verticalAlign: "top", whiteSpace: "pre-wrap" }}>{r.materiales || "—"}</td>
+              </tr>
+            </tbody>
+          </table>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 14 }}>
+            <tbody>
+              {infoRow("¿Requieren el uso de químicos? (Sí / No)", r.requiereQuimicos)}
+              {infoRow("Nombre del químico (si aplica)", r.nombreQuimico)}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Pretareas() {
+  const currentUser = useContext(CurrentUserContext);
+  const isAdmin = currentUser?.categoria === "admin";
+  const isEHS = currentUser?.categoria === "ehs";
+  const canEditar = isAdmin || isEHS || currentUser?.categoria === "tecnico";
+  const confirmar = useContext(ConfirmContext);
+  const [rows, setRows] = useState([]);
+  const [mostrarForm, setMostrarForm] = useState(false);
+  const [form, setForm] = useState(PRETAREA_FORM_VACIO);
+  const [printRow, setPrintRow] = useState(null);
+  const [filtroTexto, setFiltroTexto] = useState("");
+
+  useEffect(() => {
+    const cargar = async () => {
+      const { data } = await supabase.from("pretareas_ehs").select("*").order("created_at", { ascending: false });
+      if (data) setRows(data.map(pretareaRowFromDb));
+    };
+    cargar();
+    const intervalo = setInterval(cargar, 20000);
+    return () => clearInterval(intervalo);
+  }, []);
+
+  const setPaso = (idx, campo, valor) => {
+    setForm((prev) => ({ ...prev, pasos: prev.pasos.map((p, i) => i === idx ? { ...p, [campo]: valor } : p) }));
+  };
+  const agregarPaso = () => setForm((prev) => ({ ...prev, pasos: [...prev.pasos, { que: "", como: "" }] }));
+  const quitarPaso = (idx) => setForm((prev) => ({ ...prev, pasos: prev.pasos.filter((_, i) => i !== idx) }));
+
+  const guardar = async () => {
+    if (!form.trabajo.trim()) return;
+    const payload = {
+      trabajo: form.trabajo, planta: form.planta, ubicacion: form.ubicacion, responsable: form.responsable,
+      sponsor: form.sponsor, realizado_por: form.realizadoPor, areas_afectadas: form.areasAfectadas,
+      fecha: form.fecha || null, trabajadores: form.trabajadores,
+      pasos: form.pasos.filter((p) => p.que.trim() || p.como.trim()),
+      herramientas: form.herramientas, materiales: form.materiales,
+      requiere_quimicos: form.requiereQuimicos, nombre_quimico: form.nombreQuimico,
+    };
+    const { data, error } = await supabase.from("pretareas_ehs").insert(payload).select().single();
+    if (!error && data) {
+      setRows((prev) => [pretareaRowFromDb(data), ...prev]);
+      setForm(PRETAREA_FORM_VACIO);
+      setMostrarForm(false);
+    }
+  };
+
+  const eliminar = async (id) => {
+    if (!(await confirmar("¿Está seguro que desea eliminar esta pretarea? Esta acción no se puede deshacer."))) return;
+    setRows((prev) => prev.filter((r) => r.id !== id));
+    supabase.from("pretareas_ehs").delete().eq("id", id).then();
+  };
+
+  const q = filtroTexto.trim().toLowerCase();
+  const rowsFiltradas = q
+    ? rows.filter((r) => (r.trabajo || "").toLowerCase().includes(q) || (r.planta || "").toLowerCase().includes(q) || (r.responsable || "").toLowerCase().includes(q))
+    : rows;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <PretareaPrintView r={printRow} onClose={() => setPrintRow(null)} />
+      <Card
+        title="Pretareas cargadas"
+        action={
+          <div style={{ display: "flex", gap: 8 }}>
+            <input style={{ ...inputStyle, width: 200 }} placeholder="Buscar por trabajo, planta..." value={filtroTexto} onChange={(e) => setFiltroTexto(e.target.value)} />
+            {canEditar && <Btn small variant="accent" onClick={() => setMostrarForm((v) => !v)}><Plus size={13} /> {mostrarForm ? "Cerrar formulario" : "Nueva pretarea"}</Btn>}
+          </div>
+        }
+      >
+        {rowsFiltradas.length === 0 ? (
+          <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay pretareas cargadas.</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                <th style={{ padding: "6px 8px" }}>Trabajo</th><th>Planta</th><th>Responsable</th><th>Fecha</th><th></th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rowsFiltradas.map((r) => (
+                <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
+                  <td style={{ padding: "9px 8px", fontWeight: 600 }}>{r.trabajo || "—"}</td>
+                  <td>{r.planta || "—"}</td>
+                  <td>{r.responsable || "—"}</td>
+                  <td>{r.fecha || "—"}</td>
+                  <td><Btn small variant="ghost" onClick={() => setPrintRow(r)}><Download size={12} /> PDF</Btn></td>
+                  <td>{(isAdmin || isEHS) && <Btn small variant="danger" onClick={() => eliminar(r.id)}><X size={12} /></Btn>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      {mostrarForm && canEditar && (
+        <Card title="Nueva pretarea">
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, textTransform: "uppercase" }}>1. Información general</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <Field label="Trabajo a realizar"><input style={inputStyle} value={form.trabajo} onChange={(e) => setForm({ ...form, trabajo: e.target.value })} /></Field>
+              <Field label="Planta"><input style={inputStyle} value={form.planta} onChange={(e) => setForm({ ...form, planta: e.target.value })} /></Field>
+              <Field label="Ubicación específica"><input style={inputStyle} value={form.ubicacion} onChange={(e) => setForm({ ...form, ubicacion: e.target.value })} /></Field>
+              <Field label="Responsable del trabajo"><input style={inputStyle} value={form.responsable} onChange={(e) => setForm({ ...form, responsable: e.target.value })} /></Field>
+              <Field label="Sponsor"><input style={inputStyle} value={form.sponsor} onChange={(e) => setForm({ ...form, sponsor: e.target.value })} /></Field>
+              <Field label="Realizado por"><input style={inputStyle} value={form.realizadoPor} onChange={(e) => setForm({ ...form, realizadoPor: e.target.value })} /></Field>
+              <Field label="Áreas afectadas"><input style={inputStyle} value={form.areasAfectadas} onChange={(e) => setForm({ ...form, areasAfectadas: e.target.value })} /></Field>
+              <Field label="Fecha"><input type="date" style={inputStyle} value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} /></Field>
+            </div>
+            <Field label="Nombre de trabajadores"><input style={inputStyle} value={form.trabajadores} onChange={(e) => setForm({ ...form, trabajadores: e.target.value })} placeholder="Separados por coma" /></Field>
+
+            <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, textTransform: "uppercase", marginTop: 8 }}>2. Descripción de las actividades</div>
+            {form.pasos.map((p, i) => (
+              <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                <div style={{ fontWeight: 800, color: T.inkSoft, width: 22, paddingBottom: 10 }}>{i + 1}</div>
+                <div style={{ flex: 1 }}><Field label="¿Qué van a hacer?"><input style={inputStyle} value={p.que} onChange={(e) => setPaso(i, "que", e.target.value)} /></Field></div>
+                <div style={{ flex: 1 }}><Field label="¿Cómo lo van a hacer?"><input style={inputStyle} value={p.como} onChange={(e) => setPaso(i, "como", e.target.value)} /></Field></div>
+                <Btn small variant="danger" onClick={() => quitarPaso(i)}><X size={12} /></Btn>
+              </div>
+            ))}
+            <Btn small variant="ghost" onClick={agregarPaso}><Plus size={13} /> Agregar paso</Btn>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 8 }}>
+              <Field label="Herramientas a utilizar"><textarea style={{ ...inputStyle, minHeight: 80 }} value={form.herramientas} onChange={(e) => setForm({ ...form, herramientas: e.target.value })} placeholder="Una por línea" /></Field>
+              <Field label="Materiales a utilizar"><textarea style={{ ...inputStyle, minHeight: 80 }} value={form.materiales} onChange={(e) => setForm({ ...form, materiales: e.target.value })} placeholder="Uno por línea" /></Field>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <Field label="¿Requieren el uso de químicos?">
+                <select style={inputStyle} value={form.requiereQuimicos} onChange={(e) => setForm({ ...form, requiereQuimicos: e.target.value })}>
+                  <option>No</option>
+                  <option>Sí</option>
+                </select>
+              </Field>
+              {form.requiereQuimicos === "Sí" && (
+                <Field label="Nombre del químico"><input style={inputStyle} value={form.nombreQuimico} onChange={(e) => setForm({ ...form, nombreQuimico: e.target.value })} /></Field>
+              )}
+            </div>
+
+            <Btn variant="accent" onClick={guardar} disabled={!form.trabajo.trim()} style={{ justifyContent: "center", marginTop: 4 }}>
+              <Plus size={14} /> Guardar pretarea
+            </Btn>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function SaludOcupacional() {
   const [tab, setTab] = useState("cursos");
   return (
@@ -3782,11 +4058,13 @@ function SaludOcupacional() {
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <Btn variant={tab === "cursos" ? "accent" : "ghost"} small onClick={() => setTab("cursos")}>Cursos EHS</Btn>
         <Btn variant={tab === "epp" ? "accent" : "ghost"} small onClick={() => setTab("epp")}>Equipo de Seguridad (EPP)</Btn>
+        <Btn variant={tab === "pretareas" ? "accent" : "ghost"} small onClick={() => setTab("pretareas")}>Pretareas</Btn>
         <Btn variant={tab === "horas" ? "accent" : "ghost"} small onClick={() => setTab("horas")}>Horas extras</Btn>
         <Btn variant={tab === "calendario" ? "accent" : "ghost"} small onClick={() => setTab("calendario")}>Agenda de visitas a Proyectos/Inspecciones</Btn>
       </div>
       {tab === "cursos" && <CursosEHS />}
       {tab === "epp" && <EquipoSeguridad />}
+      {tab === "pretareas" && <Pretareas />}
       {tab === "horas" && <HorasExtras area="salud" color={T.red} />}
       {tab === "calendario" && <Calendario area="salud" color={T.red} tipoLabel={["Inspección", "Proyecto"]} />}
     </div>

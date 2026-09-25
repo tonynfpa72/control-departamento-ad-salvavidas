@@ -246,6 +246,53 @@ function sumarDiasISO(fechaISO, dias) {
   return base.toISOString().slice(0, 10);
 }
 
+const MESES_ABREV = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"];
+
+// Devuelve el próximo mes de la agenda de visitas después de hoy (o el
+// primero del listado si ya se pasaron todos este año) — solo para mostrar,
+// no dispara nada por sí solo.
+function proximoMesEnAgenda(mesesVisita, hoy) {
+  if (!mesesVisita || mesesVisita.length === 0) return "";
+  const idxActual = new Date(hoy + "T00:00:00").getMonth();
+  const indices = mesesVisita.map((m) => MESES_ABREV.indexOf(m)).filter((i) => i >= 0).sort((a, b) => a - b);
+  if (indices.length === 0) return "";
+  const siguiente = indices.find((i) => i > idxActual);
+  return MESES_ABREV[siguiente !== undefined ? siguiente : indices[0]];
+}
+
+// Estado de facturación de una OD de IPM. Si la OD tiene una agenda de
+// meses de visita marcada (Ene, Abr, Jul...), esa agenda manda: se
+// considera pendiente si el mes calendario actual está en la lista y
+// todavía no se marcó facturado este mes. Si no tiene agenda, se usa el
+// mecanismo anterior de frecuencia + próxima fecha calculada sola.
+function estadoFacturacionIpm(r, hoy) {
+  const usaAgenda = Array.isArray(r.mesesVisita) && r.mesesVisita.length > 0;
+  if (usaAgenda) {
+    const mesActual = MESES_ABREV[new Date(hoy + "T00:00:00").getMonth()];
+    const tocaEsteMes = r.mesesVisita.includes(mesActual);
+    const yaFacturadoEsteMes = !!r.ultimaFacturaIpm && r.ultimaFacturaIpm.slice(0, 7) === hoy.slice(0, 7);
+    const pendiente = tocaEsteMes && !yaFacturadoEsteMes;
+    const proximo = proximoMesEnAgenda(r.mesesVisita, hoy);
+    return {
+      pendiente,
+      atrasada: false,
+      etiqueta: pendiente ? `Toca este mes (${mesActual})` : yaFacturadoEsteMes ? "Facturado este mes" : `Próxima visita: ${proximo || "—"}`,
+      colorTxt: pendiente ? T.amber : yaFacturadoEsteMes ? T.green : T.gray,
+      colorFondo: pendiente ? T.amberSoft : yaFacturadoEsteMes ? T.greenSoft : T.graySoft,
+    };
+  }
+  const tieneProxima = !!r.proximaFacturaIpm;
+  const atrasada = tieneProxima && r.proximaFacturaIpm < hoy;
+  const proximaSemana = tieneProxima && !atrasada && r.proximaFacturaIpm <= sumarDiasISO(hoy, 7);
+  return {
+    pendiente: !tieneProxima || r.proximaFacturaIpm <= hoy,
+    atrasada,
+    etiqueta: tieneProxima ? (atrasada ? `Atrasada desde ${r.proximaFacturaIpm}` : `Próxima: ${r.proximaFacturaIpm}`) : "Sin programar",
+    colorTxt: atrasada ? T.red : proximaSemana ? T.amber : tieneProxima ? T.green : T.gray,
+    colorFondo: atrasada ? T.redSoft : proximaSemana ? T.amberSoft : tieneProxima ? T.greenSoft : T.graySoft,
+  };
+}
+
 // Normaliza un valor de frecuencia importado desde Excel (espacios de más,
 // mayúsculas distintas, etc.) para que coincida exactamente con una de las
 // opciones válidas — si no, el desplegable de edición del admin se vería
@@ -1119,6 +1166,7 @@ function odRowFromDb(r) {
     facturado: r.facturado || "Sin facturar",
     proximaFacturaIpm: r.proxima_factura_ipm || "",
     ultimaFacturaIpm: r.ultima_factura_ipm || "",
+    mesesVisita: r.meses_visita || [],
     area: r.area,
     created_at: r.created_at,
   };
@@ -1127,7 +1175,7 @@ const ODFIELD_TO_DB = {
   fechaInicio: "fecha_inicio", fechaEntrega: "fecha_entrega", fechaAprobacion: "fecha_aprobacion",
   equiposCorrectivo: "equipos_correctivo", tipoOD: "tipo_od",
   poNumero: "po_numero", fechaPo: "fecha_po", sapNumero: "sap_numero", estatusEquipo: "estatus_equipo",
-  proximaFacturaIpm: "proxima_factura_ipm", ultimaFacturaIpm: "ultima_factura_ipm",
+  proximaFacturaIpm: "proxima_factura_ipm", ultimaFacturaIpm: "ultima_factura_ipm", mesesVisita: "meses_visita",
 };
 function odPatchToDb(patch) {
   const out = {};
@@ -1717,14 +1765,17 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     supabase.from("ordenes_trabajo").update(odPatchToDb({ frecuencia })).eq("id", id).then();
   };
   // Facturación de IPM: se factura por periodicidad, no por cierre. Al
-  // marcar "Facturado" para el periodo actual, se registra la fecha y se
-  // calcula sola la siguiente fecha de factura según la frecuencia de la OD.
+  // marcar "Facturado" para el periodo actual, se registra la fecha. Si la
+  // OD tiene agenda de meses de visita, esa agenda manda (no hace falta
+  // calcular nada); si no, se calcula sola la siguiente fecha según su
+  // frecuencia.
   const marcarFacturadoIpm = async (id) => {
     const actual = rows.find((r) => r.id === id);
     if (!actual) return;
-    if (!(await confirmar(`¿Confirmas que ya facturaste la OD ${actual.od}? Se registra hoy y se calcula sola la siguiente fecha según su frecuencia (${actual.frecuencia || "sin frecuencia"}).`, { confirmLabel: "Sí, ya facturé", variant: "accent" }))) return;
+    if (!(await confirmar(`¿Confirmas que ya facturaste la OD ${actual.od}?`, { confirmLabel: "Sí, ya facturé", variant: "accent" }))) return;
     const hoy = todayISO();
-    const proxima = sumarIntervaloFrecuencia(hoy, actual.frecuencia);
+    const usaAgenda = Array.isArray(actual.mesesVisita) && actual.mesesVisita.length > 0;
+    const proxima = usaAgenda ? actual.proximaFacturaIpm : sumarIntervaloFrecuencia(hoy, actual.frecuencia);
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, ultimaFacturaIpm: hoy, proximaFacturaIpm: proxima } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ ultimaFacturaIpm: hoy, proximaFacturaIpm: proxima })).eq("id", id).then();
     supabase.from("facturas_ipm").insert({ od_id: id, fecha_facturada: hoy }).then();
@@ -1740,12 +1791,24 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     const actual = rows.find((r) => r.id === id);
     if (!actual || !actual.ultimaFacturaIpm) return;
     if (!(await confirmar(`¿Deshacer la última factura marcada de la OD ${actual.od} (${actual.ultimaFacturaIpm})? Se quita del historial.`, { confirmLabel: "Sí, deshacer", variant: "danger" }))) return;
+    const usaAgenda = Array.isArray(actual.mesesVisita) && actual.mesesVisita.length > 0;
     const { data: historial } = await supabase.from("facturas_ipm").select("id, fecha_facturada").eq("od_id", id).order("fecha_facturada", { ascending: false }).order("created_at", { ascending: false });
     if (historial && historial[0]) await supabase.from("facturas_ipm").delete().eq("id", historial[0].id);
     const anterior = historial && historial[1] ? historial[1].fecha_facturada : "";
-    const proximaRestaurada = anterior ? sumarIntervaloFrecuencia(anterior, actual.frecuencia) : "";
+    const proximaRestaurada = usaAgenda ? actual.proximaFacturaIpm : (anterior ? sumarIntervaloFrecuencia(anterior, actual.frecuencia) : "");
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, ultimaFacturaIpm: anterior, proximaFacturaIpm: proximaRestaurada } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ ultimaFacturaIpm: anterior, proximaFacturaIpm: proximaRestaurada })).eq("id", id).then();
+  };
+  // Alterna un mes en la agenda de visitas de la OD (columna "Acción" de
+  // IPM). Esta agenda reemplaza a la frecuencia para decidir cuándo toca
+  // facturar: la OD aparece en Facturación cada mes que esté marcado aquí.
+  const toggleMesVisita = (id, mes) => {
+    const actual = rows.find((r) => r.id === id);
+    if (!actual) return;
+    const actuales = Array.isArray(actual.mesesVisita) ? actual.mesesVisita : [];
+    const mesesVisita = actuales.includes(mes) ? actuales.filter((m) => m !== mes) : [...actuales, mes];
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, mesesVisita } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ mesesVisita })).eq("id", id).then();
   };
   const setFechaInicio = (id, fechaInicio) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, fechaInicio } : r));
@@ -1979,16 +2042,14 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                   )}
                   {!esCorrectivo && isInspecciones && (() => {
                     const hoy = todayISO();
-                    const tieneProxima = !!r.proximaFacturaIpm;
-                    const atrasada = tieneProxima && r.proximaFacturaIpm < hoy;
-                    const proximaSemana = tieneProxima && !atrasada && r.proximaFacturaIpm <= sumarDiasISO(hoy, 7);
-                    const [colorTxt, colorFondo] = atrasada ? [T.red, T.redSoft] : proximaSemana ? [T.amber, T.amberSoft] : tieneProxima ? [T.green, T.greenSoft] : [T.gray, T.graySoft];
+                    const usaAgenda = Array.isArray(r.mesesVisita) && r.mesesVisita.length > 0;
+                    const estado = estadoFacturacionIpm(r, hoy);
                     return (
                       <td>
                         <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
-                          <Badge color={colorTxt} soft={colorFondo}>
-                            <Dot color={colorTxt} />
-                            {tieneProxima ? (atrasada ? `Atrasada desde ${r.proximaFacturaIpm}` : `Próxima: ${r.proximaFacturaIpm}`) : "Sin programar"}
+                          <Badge color={estado.colorTxt} soft={estado.colorFondo}>
+                            <Dot color={estado.colorTxt} />
+                            {estado.etiqueta}
                           </Badge>
                           {canEditEstado && (
                             <>
@@ -1996,7 +2057,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                               {r.ultimaFacturaIpm && (
                                 <Btn small variant="ghost" onClick={() => deshacerFacturaIpm(r.id)} title={`Última marca: ${r.ultimaFacturaIpm}`}><X size={13} /> Deshacer última</Btn>
                               )}
-                              {isAdmin && (
+                              {isAdmin && !usaAgenda && (
                                 <input type="date" style={{ ...inputStyle, fontSize: 11, padding: "3px 6px", width: 130 }} value={r.proximaFacturaIpm || ""} onChange={(e) => setProximaFacturaIpm(r.id, e.target.value)} title="Ajustar próxima fecha de factura manualmente" />
                               )}
                             </>
@@ -2020,7 +2081,31 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                     </td>
                   )}
                   <td>
-                    {isAdmin ? (
+                    {!esCorrectivo && isInspecciones ? (
+                      // Para IPM, "Acción" es la agenda de meses de visita: se
+                      // marca en qué meses del año toca visitar/facturar esa OD.
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 3, maxWidth: 150 }}>
+                        {MESES_ABREV.map((mes) => {
+                          const activo = (r.mesesVisita || []).includes(mes);
+                          return isAdmin ? (
+                            <button
+                              key={mes}
+                              onClick={() => toggleMesVisita(r.id, mes)}
+                              style={{
+                                border: "none", borderRadius: 5, cursor: "pointer", fontSize: 10.5, fontWeight: 700,
+                                padding: "3px 5px", background: activo ? T.accent : T.graySoft, color: activo ? "#fff" : T.gray,
+                              }}
+                              title={activo ? `Quitar ${mes} de la agenda` : `Agregar ${mes} a la agenda`}
+                            >
+                              {mes}
+                            </button>
+                          ) : activo ? (
+                            <Badge key={mes} color={T.accent} soft={T.blueSoft}>{mes}</Badge>
+                          ) : null;
+                        })}
+                        {!isAdmin && (r.mesesVisita || []).length === 0 && <span style={{ color: T.gray, fontSize: 12 }}>—</span>}
+                      </div>
+                    ) : isAdmin ? (
                       <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }} placeholder="Acción tomada..." value={r.accion} onChange={(e) => setAccion(r.id, e.target.value)} />
                     ) : <span style={{ color: T.gray, fontSize: 12 }}>{r.accion || "—"}</span>}
                   </td>
@@ -2725,9 +2810,18 @@ function FacturacionIpmCard() {
   const finDeMes = new Date();
   finDeMes.setMonth(finDeMes.getMonth() + 1, 0); // último día del mes actual
   const limite = finDeMes.toISOString().slice(0, 10);
+  // Una OD entra a la lista de este mes de dos formas: si tiene agenda de
+  // meses de visita marcada en "Acción" y este mes calendario está en esa
+  // lista, o (si no tiene agenda) si su próxima fecha calculada por
+  // frecuencia cae dentro de este mes o ya está atrasada.
   const pendientesDelMes = rows
-    .filter((r) => (r.tipoOD || "Normal") === "Normal" && r.estado === "Activo" && r.frecuencia)
-    .filter((r) => !r.proximaFacturaIpm || r.proximaFacturaIpm <= limite)
+    .filter((r) => (r.tipoOD || "Normal") === "Normal" && r.estado === "Activo")
+    .filter((r) => {
+      const usaAgenda = Array.isArray(r.mesesVisita) && r.mesesVisita.length > 0;
+      if (usaAgenda) return estadoFacturacionIpm(r, hoy).pendiente;
+      if (!r.frecuencia) return false;
+      return !r.proximaFacturaIpm || r.proximaFacturaIpm <= limite;
+    })
     .sort((a, b) => (a.proximaFacturaIpm || "").localeCompare(b.proximaFacturaIpm || ""));
   const atrasadas = pendientesDelMes.filter((r) => r.proximaFacturaIpm && r.proximaFacturaIpm < hoy);
   const q = busqueda.trim().toLowerCase();
@@ -2736,8 +2830,9 @@ function FacturacionIpmCard() {
     : pendientesDelMes;
 
   const marcarFacturado = async (r) => {
-    if (!(await confirmar(`¿Confirmas que ya facturaste la OD ${r.od}? Se registra hoy y se calcula sola la siguiente fecha según su frecuencia (${r.frecuencia || "sin frecuencia"}).`, { confirmLabel: "Sí, ya facturé", variant: "accent" }))) return;
-    const proxima = sumarIntervaloFrecuencia(hoy, r.frecuencia);
+    if (!(await confirmar(`¿Confirmas que ya facturaste la OD ${r.od}?`, { confirmLabel: "Sí, ya facturé", variant: "accent" }))) return;
+    const usaAgenda = Array.isArray(r.mesesVisita) && r.mesesVisita.length > 0;
+    const proxima = usaAgenda ? r.proximaFacturaIpm : sumarIntervaloFrecuencia(hoy, r.frecuencia);
     setRows((prev) => prev.map((x) => x.id === r.id ? { ...x, ultimaFacturaIpm: hoy, proximaFacturaIpm: proxima } : x));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ ultimaFacturaIpm: hoy, proximaFacturaIpm: proxima })).eq("id", r.id).then();
     supabase.from("facturas_ipm").insert({ od_id: r.id, fecha_facturada: hoy }).then();
@@ -2763,19 +2858,20 @@ function FacturacionIpmCard() {
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {pendientes.map((r) => {
-            const atrasada = r.proximaFacturaIpm && r.proximaFacturaIpm < hoy;
-            const sinProgramar = !r.proximaFacturaIpm;
-            const [colorTxt, colorFondo] = atrasada ? [T.red, T.redSoft] : sinProgramar ? [T.gray, T.graySoft] : [T.amber, T.amberSoft];
+            const usaAgenda = Array.isArray(r.mesesVisita) && r.mesesVisita.length > 0;
+            const estado = estadoFacturacionIpm(r, hoy);
             return (
               <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: T.bg, borderRadius: 8, gap: 8 }}>
                 <div>
                   <div style={{ fontWeight: 700, fontSize: 13 }}>{r.od} — {r.cliente}</div>
-                  <div style={{ fontSize: 12, color: T.inkSoft }}>Frecuencia: {r.frecuencia || "—"}{r.tecnico ? ` · ${r.tecnico}` : ""}</div>
+                  <div style={{ fontSize: 12, color: T.inkSoft }}>
+                    {usaAgenda ? `Agenda: ${r.mesesVisita.join(", ")}` : `Frecuencia: ${r.frecuencia || "—"}`}{r.tecnico ? ` · ${r.tecnico}` : ""}
+                  </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <Badge color={colorTxt} soft={colorFondo}>
-                    <Dot color={colorTxt} />
-                    {sinProgramar ? "Sin programar" : atrasada ? `Atrasada desde ${r.proximaFacturaIpm}` : `Este mes: ${r.proximaFacturaIpm}`}
+                  <Badge color={estado.colorTxt} soft={estado.colorFondo}>
+                    <Dot color={estado.colorTxt} />
+                    {estado.etiqueta}
                   </Badge>
                   {puedeMarcar && (
                     <Btn small variant="ghost" onClick={() => marcarFacturado(r)}><Check size={13} /> Marcar facturado</Btn>

@@ -4150,7 +4150,6 @@ function ResumenEjecutivo() {
         <ResumenEHSCard />
       </div>
 
-      <FacturacionIpmCard />
 
       <Card
         title="Facturación mensual vs. punto de equilibrio ($120,000)"
@@ -5688,32 +5687,35 @@ function FacturacionPublica() {
   const inicioVentana = Math.max(0, finVentana - VENTANA_MESES);
   const facturasVentana = facturasAnioActual.slice(inicioVentana, finVentana);
   return (
-    <Card
-      title="Facturación mensual vs. punto de equilibrio ($120,000)"
-      action={facturasAnioActual.length > 0 && (
-        <div style={{ display: "flex", gap: 6 }}>
-          <Btn small variant="ghost" onClick={() => setVentana((v) => Math.min(v + 1, totalVentanas - 1))} disabled={ventanaActual >= totalVentanas - 1}><ChevronLeft size={14} /></Btn>
-          <Btn small variant="ghost" onClick={() => setVentana((v) => Math.max(v - 1, 0))} disabled={ventanaActual <= 0}><ChevronRight size={14} /></Btn>
-        </div>
-      )}
-    >
-      {facturasAnioActual.length === 0 ? (
-        <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay datos de facturación cargados.</div>
-      ) : (
-        <ResponsiveContainer width="100%" height={320}>
-          <LineChart data={facturasVentana} margin={{ top: 26, right: 20, left: 0, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
-            <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
-            <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${v / 1000}k`} />
-            <Tooltip formatter={(v) => fmtMoney(v)} />
-            <ReferenceLine y={PUNTO_EQUILIBRIO} stroke={T.accent} strokeDasharray="6 4" label={{ value: "Punto de equilibrio", fill: T.accent, fontSize: 11, position: "insideTopRight" }} />
-            <Line type="monotone" dataKey="monto" stroke={T.steel} strokeWidth={3} dot={{ r: 4 }}>
-              <LabelList dataKey="monto" position="top" offset={12} formatter={(v) => fmtMoney(v)} style={{ fontSize: 11.5, fontWeight: 700, fill: T.ink }} />
-            </Line>
-          </LineChart>
-        </ResponsiveContainer>
-      )}
-    </Card>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <FacturacionIpmCard />
+      <Card
+        title="Facturación mensual vs. punto de equilibrio ($120,000)"
+        action={facturasAnioActual.length > 0 && (
+          <div style={{ display: "flex", gap: 6 }}>
+            <Btn small variant="ghost" onClick={() => setVentana((v) => Math.min(v + 1, totalVentanas - 1))} disabled={ventanaActual >= totalVentanas - 1}><ChevronLeft size={14} /></Btn>
+            <Btn small variant="ghost" onClick={() => setVentana((v) => Math.max(v - 1, 0))} disabled={ventanaActual <= 0}><ChevronRight size={14} /></Btn>
+          </div>
+        )}
+      >
+        {facturasAnioActual.length === 0 ? (
+          <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay datos de facturación cargados.</div>
+        ) : (
+          <ResponsiveContainer width="100%" height={320}>
+            <LineChart data={facturasVentana} margin={{ top: 26, right: 20, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
+              <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
+              <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${v / 1000}k`} />
+              <Tooltip formatter={(v) => fmtMoney(v)} />
+              <ReferenceLine y={PUNTO_EQUILIBRIO} stroke={T.accent} strokeDasharray="6 4" label={{ value: "Punto de equilibrio", fill: T.accent, fontSize: 11, position: "insideTopRight" }} />
+              <Line type="monotone" dataKey="monto" stroke={T.steel} strokeWidth={3} dot={{ r: 4 }}>
+                <LabelList dataKey="monto" position="top" offset={12} formatter={(v) => fmtMoney(v)} style={{ fontSize: 11.5, fontWeight: 700, fill: T.ink }} />
+              </Line>
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </Card>
+    </div>
   );
 }
 

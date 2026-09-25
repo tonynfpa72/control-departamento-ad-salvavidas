@@ -1965,9 +1965,21 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     const matchProgreso = !esCorrectivo || (subTabCorrectivo === "Pendientes" ? (r.progreso || "Pendiente") !== "Completado" : (r.progreso || "Pendiente") === "Completado");
     return matchTexto && matchEstado && matchProgreso;
   }).sort((a, b) => {
-    if (!esCorrectivo) return 0;
-    // OD Correctivos: del más antiguo al más nuevo.
-    return (a.created_at || "").localeCompare(b.created_at || "");
+    if (esCorrectivo) {
+      // OD Correctivos: del más antiguo al más nuevo.
+      return (a.created_at || "").localeCompare(b.created_at || "");
+    }
+    if (isInspecciones) {
+      // IPM: primero arriba las que les toca facturar/visitar este mes
+      // (por agenda o por frecuencia) — se recalcula en cada render, así
+      // que se reordena sola en cuanto cambia el mes.
+      const hoy = todayISO();
+      const pendienteA = estadoFacturacionIpm(a, hoy).pendiente ? 0 : 1;
+      const pendienteB = estadoFacturacionIpm(b, hoy).pendiente ? 0 : 1;
+      if (pendienteA !== pendienteB) return pendienteA - pendienteB;
+      return (a.od || "").localeCompare(b.od || "");
+    }
+    return 0;
   });
   const estadoOpciones = isProyectos ? ["Todos", "Activo", "No Activo", "Entregado", "Vencido"] : ["Todos", "Activo", "No Activo", "Vencido"];
   const pendientesCorrectivoCount = rows.filter((r) => (r.progreso || "Pendiente") !== "Completado").length;
@@ -2879,7 +2891,15 @@ function FacturacionIpmCard() {
       if (!r.frecuencia) return false;
       return !r.proximaFacturaIpm || r.proximaFacturaIpm <= limite;
     })
-    .sort((a, b) => (a.proximaFacturaIpm || "").localeCompare(b.proximaFacturaIpm || ""));
+    .sort((a, b) => {
+      // Las atrasadas (de meses anteriores) siempre arriba, y dentro de
+      // cada grupo, alfabético por OD. Se recalcula en cada render, así se
+      // reacomoda sola en cuanto cambia el mes o se marca algo facturado.
+      const ea = estadoFacturacionIpm(a, hoy);
+      const eb = estadoFacturacionIpm(b, hoy);
+      if (ea.atrasada !== eb.atrasada) return ea.atrasada ? -1 : 1;
+      return (a.od || "").localeCompare(b.od || "");
+    });
   const atrasadas = pendientesDelMes.filter((r) => r.proximaFacturaIpm && r.proximaFacturaIpm < hoy);
   const q = busqueda.trim().toLowerCase();
   const pendientes = q

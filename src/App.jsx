@@ -2708,22 +2708,40 @@ function CotizacionPrintView({ r, onClose }) {
   );
 }
 
-// Lista, ordenada por atraso, las OD de IPM cuya próxima factura ya venció
-// o vence en los próximos 7 días — así no se olvida facturar trabajo
-// recurrente que no depende de cerrar la OD, a diferencia de Correctivos.
-function FacturacionIpmCard({ inspRows }) {
+// Lista, ordenada por atraso, las OD de IPM que corresponde facturar este
+// mes (atrasadas de meses anteriores + las que vencen dentro del mes
+// calendario actual) — así no se olvida facturar trabajo recurrente que no
+// depende de cerrar la OD, a diferencia de Correctivos. Se recalcula sola
+// cada mes (se basa en la fecha de hoy, no en una lista fija), y en cuanto
+// se marca "Facturado" la fila desaparece de aquí porque su próxima fecha
+// pasa a caer en un mes futuro.
+function FacturacionIpmCard() {
+  const [rows, setRows] = useClientesArea("inspecciones");
+  const currentUser = useContext(CurrentUserContext);
+  const confirmar = useContext(ConfirmContext);
+  const puedeMarcar = currentUser?.categoria === "admin" || currentUser?.categoria === "asistente";
   const hoy = todayISO();
-  const limite = sumarDiasISO(hoy, 7);
-  const pendientes = (inspRows || [])
+  const finDeMes = new Date();
+  finDeMes.setMonth(finDeMes.getMonth() + 1, 0); // último día del mes actual
+  const limite = finDeMes.toISOString().slice(0, 10);
+  const pendientes = rows
     .filter((r) => (r.tipoOD || "Normal") === "Normal" && r.estado === "Activo" && r.frecuencia)
     .filter((r) => !r.proximaFacturaIpm || r.proximaFacturaIpm <= limite)
     .sort((a, b) => (a.proximaFacturaIpm || "").localeCompare(b.proximaFacturaIpm || ""));
   const atrasadas = pendientes.filter((r) => r.proximaFacturaIpm && r.proximaFacturaIpm < hoy);
 
+  const marcarFacturado = async (r) => {
+    if (!(await confirmar(`¿Confirmas que ya facturaste la OD ${r.od}? Se registra hoy y se calcula sola la siguiente fecha según su frecuencia (${r.frecuencia || "sin frecuencia"}).`, { confirmLabel: "Sí, ya facturé", variant: "accent" }))) return;
+    const proxima = sumarIntervaloFrecuencia(hoy, r.frecuencia);
+    setRows((prev) => prev.map((x) => x.id === r.id ? { ...x, ultimaFacturaIpm: hoy, proximaFacturaIpm: proxima } : x));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ ultimaFacturaIpm: hoy, proximaFacturaIpm: proxima })).eq("id", r.id).then();
+    supabase.from("facturas_ipm").insert({ od_id: r.id, fecha_facturada: hoy }).then();
+  };
+
   return (
-    <Card title="IPM pendientes de facturar" action={pendientes.length > 0 ? <Badge color={atrasadas.length ? T.red : T.amber} soft={atrasadas.length ? T.redSoft : T.amberSoft}>{pendientes.length}</Badge> : null}>
+    <Card title="IPM a facturar este mes" action={pendientes.length > 0 ? <Badge color={atrasadas.length ? T.red : T.amber} soft={atrasadas.length ? T.redSoft : T.amberSoft}>{pendientes.length}</Badge> : null}>
       {pendientes.length === 0 ? (
-        <div style={{ color: T.gray, fontSize: 13 }}>No hay IPM pendientes de facturar por ahora.</div>
+        <div style={{ color: T.gray, fontSize: 13 }}>No hay IPM pendientes de facturar este mes.</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {pendientes.map((r) => {
@@ -2731,15 +2749,20 @@ function FacturacionIpmCard({ inspRows }) {
             const sinProgramar = !r.proximaFacturaIpm;
             const [colorTxt, colorFondo] = atrasada ? [T.red, T.redSoft] : sinProgramar ? [T.gray, T.graySoft] : [T.amber, T.amberSoft];
             return (
-              <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: T.bg, borderRadius: 8 }}>
+              <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: T.bg, borderRadius: 8, gap: 8 }}>
                 <div>
                   <div style={{ fontWeight: 700, fontSize: 13 }}>{r.od} — {r.cliente}</div>
                   <div style={{ fontSize: 12, color: T.inkSoft }}>Frecuencia: {r.frecuencia || "—"}{r.tecnico ? ` · ${r.tecnico}` : ""}</div>
                 </div>
-                <Badge color={colorTxt} soft={colorFondo}>
-                  <Dot color={colorTxt} />
-                  {sinProgramar ? "Sin programar" : atrasada ? `Atrasada desde ${r.proximaFacturaIpm}` : `Próxima: ${r.proximaFacturaIpm}`}
-                </Badge>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Badge color={colorTxt} soft={colorFondo}>
+                    <Dot color={colorTxt} />
+                    {sinProgramar ? "Sin programar" : atrasada ? `Atrasada desde ${r.proximaFacturaIpm}` : `Este mes: ${r.proximaFacturaIpm}`}
+                  </Badge>
+                  {puedeMarcar && (
+                    <Btn small variant="ghost" onClick={() => marcarFacturado(r)}><Check size={13} /> Marcar facturado</Btn>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -4127,7 +4150,7 @@ function ResumenEjecutivo() {
         <ResumenEHSCard />
       </div>
 
-      <FacturacionIpmCard inspRows={inspRows} />
+      <FacturacionIpmCard />
 
       <Card
         title="Facturación mensual vs. punto de equilibrio ($120,000)"

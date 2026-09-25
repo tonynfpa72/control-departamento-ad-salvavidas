@@ -225,6 +225,27 @@ function estadoEfectivoOD(r, campoFecha) {
    --------------------------------------------------------- */
 const FRECUENCIA_OPCIONES = ["Semanal", "Mensual", "Bimensual", "Trimestral", "Cuatrimestral", "Semestral", "Anual"];
 
+// Facturación de IPM: a diferencia de OD Correctivos (que se factura al
+// cerrar el trabajo), un IPM se factura una y otra vez según su
+// periodicidad. Esto traduce cada frecuencia a meses (Semanal se trata
+// como ~1 semana) para calcular la siguiente fecha de factura.
+const FRECUENCIA_A_MESES = { "Semanal": 0, "Mensual": 1, "Bimensual": 2, "Trimestral": 3, "Cuatrimestral": 4, "Semestral": 6, "Anual": 12 };
+function sumarIntervaloFrecuencia(fechaISO, frecuencia) {
+  const base = fechaISO ? new Date(fechaISO + "T00:00:00") : new Date();
+  if (frecuencia === "Semanal") {
+    base.setDate(base.getDate() + 7);
+  } else {
+    const meses = FRECUENCIA_A_MESES[frecuencia] ?? 1;
+    base.setMonth(base.getMonth() + meses);
+  }
+  return base.toISOString().slice(0, 10);
+}
+function sumarDiasISO(fechaISO, dias) {
+  const base = fechaISO ? new Date(fechaISO + "T00:00:00") : new Date();
+  base.setDate(base.getDate() + dias);
+  return base.toISOString().slice(0, 10);
+}
+
 // Normaliza un valor de frecuencia importado desde Excel (espacios de más,
 // mayúsculas distintas, etc.) para que coincida exactamente con una de las
 // opciones válidas — si no, el desplegable de edición del admin se vería
@@ -1096,6 +1117,8 @@ function odRowFromDb(r) {
     tipoOD: r.tipo_od || "Normal",
     progreso: r.progreso || "Pendiente",
     facturado: r.facturado || "Sin facturar",
+    proximaFacturaIpm: r.proxima_factura_ipm || "",
+    ultimaFacturaIpm: r.ultima_factura_ipm || "",
     area: r.area,
     created_at: r.created_at,
   };
@@ -1104,6 +1127,7 @@ const ODFIELD_TO_DB = {
   fechaInicio: "fecha_inicio", fechaEntrega: "fecha_entrega", fechaAprobacion: "fecha_aprobacion",
   equiposCorrectivo: "equipos_correctivo", tipoOD: "tipo_od",
   poNumero: "po_numero", fechaPo: "fecha_po", sapNumero: "sap_numero", estatusEquipo: "estatus_equipo",
+  proximaFacturaIpm: "proxima_factura_ipm", ultimaFacturaIpm: "ultima_factura_ipm",
 };
 function odPatchToDb(patch) {
   const out = {};
@@ -1692,6 +1716,22 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, frecuencia } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ frecuencia })).eq("id", id).then();
   };
+  // Facturación de IPM: se factura por periodicidad, no por cierre. Al
+  // marcar "Facturado" para el periodo actual, se registra la fecha y se
+  // calcula sola la siguiente fecha de factura según la frecuencia de la OD.
+  const marcarFacturadoIpm = async (id) => {
+    const actual = rows.find((r) => r.id === id);
+    if (!actual) return;
+    const hoy = todayISO();
+    const proxima = sumarIntervaloFrecuencia(hoy, actual.frecuencia);
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, ultimaFacturaIpm: hoy, proximaFacturaIpm: proxima } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ ultimaFacturaIpm: hoy, proximaFacturaIpm: proxima })).eq("id", id).then();
+    supabase.from("facturas_ipm").insert({ od_id: id, fecha_facturada: hoy }).then();
+  };
+  const setProximaFacturaIpm = (id, proximaFacturaIpm) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, proximaFacturaIpm } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ proximaFacturaIpm })).eq("id", id).then();
+  };
   const setFechaInicio = (id, fechaInicio) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, fechaInicio } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ fechaInicio })).eq("id", id).then();
@@ -1820,6 +1860,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                 {esCorrectivo && <th style={{ minWidth: 160 }}>Equipos</th>}
                 {!esCorrectivo && isInspecciones && <th>Fecha de Vencimiento</th>}
                 {!esCorrectivo && isInspecciones && <th>Frecuencia</th>}
+                {!esCorrectivo && isInspecciones && <th style={{ minWidth: 150 }}>Facturación IPM</th>}
                 {!esCorrectivo && isProyectos && <th>Fecha de Inicio</th>}
                 {!esCorrectivo && isProyectos && <th>Fecha de Entrega</th>}
                 <th>Acción</th>
@@ -1921,6 +1962,31 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                       ) : (r.frecuencia || "—")}
                     </td>
                   )}
+                  {!esCorrectivo && isInspecciones && (() => {
+                    const hoy = todayISO();
+                    const tieneProxima = !!r.proximaFacturaIpm;
+                    const atrasada = tieneProxima && r.proximaFacturaIpm < hoy;
+                    const proximaSemana = tieneProxima && !atrasada && r.proximaFacturaIpm <= sumarDiasISO(hoy, 7);
+                    const [colorTxt, colorFondo] = atrasada ? [T.red, T.redSoft] : proximaSemana ? [T.amber, T.amberSoft] : tieneProxima ? [T.green, T.greenSoft] : [T.gray, T.graySoft];
+                    return (
+                      <td>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+                          <Badge color={colorTxt} soft={colorFondo}>
+                            <Dot color={colorTxt} />
+                            {tieneProxima ? (atrasada ? `Atrasada desde ${r.proximaFacturaIpm}` : `Próxima: ${r.proximaFacturaIpm}`) : "Sin programar"}
+                          </Badge>
+                          {canEditEstado && (
+                            <>
+                              <Btn small variant="ghost" onClick={() => marcarFacturadoIpm(r.id)}><Check size={13} /> Marcar facturado</Btn>
+                              {isAdmin && (
+                                <input type="date" style={{ ...inputStyle, fontSize: 11, padding: "3px 6px", width: 130 }} value={r.proximaFacturaIpm || ""} onChange={(e) => setProximaFacturaIpm(r.id, e.target.value)} title="Ajustar próxima fecha de factura manualmente" />
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    );
+                  })()}
                   {!esCorrectivo && isProyectos && (
                     <td>
                       {canEditFechas ? (
@@ -2621,6 +2687,47 @@ function CotizacionPrintView({ r, onClose }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// Lista, ordenada por atraso, las OD de IPM cuya próxima factura ya venció
+// o vence en los próximos 7 días — así no se olvida facturar trabajo
+// recurrente que no depende de cerrar la OD, a diferencia de Correctivos.
+function FacturacionIpmCard({ inspRows }) {
+  const hoy = todayISO();
+  const limite = sumarDiasISO(hoy, 7);
+  const pendientes = (inspRows || [])
+    .filter((r) => (r.tipoOD || "Normal") === "Normal" && r.estado === "Activo" && r.frecuencia)
+    .filter((r) => !r.proximaFacturaIpm || r.proximaFacturaIpm <= limite)
+    .sort((a, b) => (a.proximaFacturaIpm || "").localeCompare(b.proximaFacturaIpm || ""));
+  const atrasadas = pendientes.filter((r) => r.proximaFacturaIpm && r.proximaFacturaIpm < hoy);
+
+  return (
+    <Card title="IPM pendientes de facturar" action={pendientes.length > 0 ? <Badge color={atrasadas.length ? T.red : T.amber} soft={atrasadas.length ? T.redSoft : T.amberSoft}>{pendientes.length}</Badge> : null}>
+      {pendientes.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 13 }}>No hay IPM pendientes de facturar por ahora.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {pendientes.map((r) => {
+            const atrasada = r.proximaFacturaIpm && r.proximaFacturaIpm < hoy;
+            const sinProgramar = !r.proximaFacturaIpm;
+            const [colorTxt, colorFondo] = atrasada ? [T.red, T.redSoft] : sinProgramar ? [T.gray, T.graySoft] : [T.amber, T.amberSoft];
+            return (
+              <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: T.bg, borderRadius: 8 }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 13 }}>{r.od} — {r.cliente}</div>
+                  <div style={{ fontSize: 12, color: T.inkSoft }}>Frecuencia: {r.frecuencia || "—"}{r.tecnico ? ` · ${r.tecnico}` : ""}</div>
+                </div>
+                <Badge color={colorTxt} soft={colorFondo}>
+                  <Dot color={colorTxt} />
+                  {sinProgramar ? "Sin programar" : atrasada ? `Atrasada desde ${r.proximaFacturaIpm}` : `Próxima: ${r.proximaFacturaIpm}`}
+                </Badge>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -4002,6 +4109,8 @@ function ResumenEjecutivo() {
         <ResumenEHSCard />
       </div>
 
+      <FacturacionIpmCard inspRows={inspRows} />
+
       <Card
         title="Facturación mensual vs. punto de equilibrio ($120,000)"
         action={
@@ -4458,8 +4567,25 @@ function PanelAdminReto({ reto, onCambio }) {
       numero, preguntas, activo: false, estado: "borrador",
       segundos_por_pregunta: confSegundos, puntos_max_por_pregunta: confPuntosMax, mostrar_ranking_intermedio: confMostrarRanking,
     });
+    await limpiarRetosViejos();
     setPreparando(false);
     onCambio();
+  };
+
+  // Cada reto nuevo se aprovecha para borrar los retos finalizados más
+  // viejos que ya no hacen falta: se conservan solo los últimos 20 (el
+  // mismo límite que usa generarPreguntasAlAzar para no repetir preguntas),
+  // junto con sus respuestas y participaciones, para no acumular en la
+  // base información de retos que nadie va a volver a ver.
+  const limpiarRetosViejos = async () => {
+    const { data: todos } = await supabase.from("entrenamiento_retos").select("id").order("creado_en", { ascending: false });
+    if (!todos || todos.length <= 20) return;
+    const idsAEliminar = todos.slice(20).map((r) => r.id);
+    for (const id of idsAEliminar) {
+      await supabase.from("entrenamiento_reto_respuestas").delete().eq("reto_id", id);
+      await supabase.from("entrenamiento_reto_completados").delete().eq("reto_id", id);
+      await supabase.from("entrenamiento_retos").delete().eq("id", id);
+    }
   };
 
   const activarReto = async () => {

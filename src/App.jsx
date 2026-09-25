@@ -248,35 +248,49 @@ function sumarDiasISO(fechaISO, dias) {
 
 const MESES_ABREV = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"];
 
-// Devuelve el próximo mes de la agenda de visitas después de hoy (o el
-// primero del listado si ya se pasaron todos este año) — solo para mostrar,
-// no dispara nada por sí solo.
+// Cada entrada de la agenda es una clave "AAAA-MM" (ej. "2026-11") — así
+// una OD puede tener meses marcados de este año y del que viene sin que se
+// mezclen ni se repitan solos año tras año.
+function claveMesAno(anio, mesIdx) { return `${anio}-${String(mesIdx + 1).padStart(2, "0")}`; }
+function esClaveMesAnoValida(m) { return /^\d{4}-\d{2}$/.test(m); }
+function formatMesAno(clave) {
+  const [anio, mes] = clave.split("-");
+  const idx = parseInt(mes, 10) - 1;
+  return `${MESES_ABREV[idx] || "?"} ${anio.slice(2)}`;
+}
+function mesesValidosOrdenados(mesesVisita) {
+  return (Array.isArray(mesesVisita) ? mesesVisita : []).filter(esClaveMesAnoValida).sort();
+}
+
+// Devuelve el próximo mes de la agenda de visitas después de hoy (cada
+// entrada ya trae su año, así que no hay que "dar la vuelta" al terminar el
+// año) — solo para mostrar, no dispara nada por sí solo.
 function proximoMesEnAgenda(mesesVisita, hoy) {
-  if (!mesesVisita || mesesVisita.length === 0) return "";
-  const idxActual = new Date(hoy + "T00:00:00").getMonth();
-  const indices = mesesVisita.map((m) => MESES_ABREV.indexOf(m)).filter((i) => i >= 0).sort((a, b) => a - b);
-  if (indices.length === 0) return "";
-  const siguiente = indices.find((i) => i > idxActual);
-  return MESES_ABREV[siguiente !== undefined ? siguiente : indices[0]];
+  const ordenados = mesesValidosOrdenados(mesesVisita);
+  if (ordenados.length === 0) return "";
+  const mesActual = hoy.slice(0, 7);
+  const siguiente = ordenados.find((m) => m > mesActual);
+  return siguiente ? formatMesAno(siguiente) : "";
 }
 
 // Estado de facturación de una OD de IPM. Si la OD tiene una agenda de
-// meses de visita marcada (Ene, Abr, Jul...), esa agenda manda: se
+// meses de visita marcada (Nov 26, Feb 27...), esa agenda manda: se
 // considera pendiente si el mes calendario actual está en la lista y
 // todavía no se marcó facturado este mes. Si no tiene agenda, se usa el
 // mecanismo anterior de frecuencia + próxima fecha calculada sola.
 function estadoFacturacionIpm(r, hoy) {
-  const usaAgenda = Array.isArray(r.mesesVisita) && r.mesesVisita.length > 0;
+  const meses = mesesValidosOrdenados(r.mesesVisita);
+  const usaAgenda = meses.length > 0;
   if (usaAgenda) {
-    const mesActual = MESES_ABREV[new Date(hoy + "T00:00:00").getMonth()];
-    const tocaEsteMes = r.mesesVisita.includes(mesActual);
-    const yaFacturadoEsteMes = !!r.ultimaFacturaIpm && r.ultimaFacturaIpm.slice(0, 7) === hoy.slice(0, 7);
+    const mesActual = hoy.slice(0, 7);
+    const tocaEsteMes = meses.includes(mesActual);
+    const yaFacturadoEsteMes = !!r.ultimaFacturaIpm && r.ultimaFacturaIpm.slice(0, 7) === mesActual;
     const pendiente = tocaEsteMes && !yaFacturadoEsteMes;
-    const proximo = proximoMesEnAgenda(r.mesesVisita, hoy);
+    const proximo = proximoMesEnAgenda(meses, hoy);
     return {
       pendiente,
       atrasada: false,
-      etiqueta: pendiente ? `Toca este mes (${mesActual})` : yaFacturadoEsteMes ? "Facturado este mes" : `Próxima visita: ${proximo || "—"}`,
+      etiqueta: pendiente ? `Toca este mes (${formatMesAno(mesActual)})` : yaFacturadoEsteMes ? "Facturado este mes" : (proximo ? `Próxima visita: ${proximo}` : "Sin más fechas en la agenda"),
       colorTxt: pendiente ? T.amber : yaFacturadoEsteMes ? T.green : T.gray,
       colorFondo: pendiente ? T.amberSoft : yaFacturadoEsteMes ? T.greenSoft : T.graySoft,
     };
@@ -291,6 +305,68 @@ function estadoFacturacionIpm(r, hoy) {
     colorTxt: atrasada ? T.red : proximaSemana ? T.amber : tieneProxima ? T.green : T.gray,
     colorFondo: atrasada ? T.redSoft : proximaSemana ? T.amberSoft : tieneProxima ? T.greenSoft : T.graySoft,
   };
+}
+
+// Selector de la agenda de meses de visita de una OD de IPM. Tiene su
+// propio año "en pantalla" (por defecto el actual) para poder marcar meses
+// de este año o del siguiente sin que se mezclen — lo marcado se guarda
+// siempre con su año (claveMesAno), así que cambiar de año aquí solo
+// cambia qué grilla de meses se ve, nunca borra lo ya marcado.
+function AgendaMesesIpm({ row, isAdmin, onToggle }) {
+  const [anioVista, setAnioVista] = useState(new Date().getFullYear());
+  const seleccionados = mesesValidosOrdenados(row.mesesVisita);
+  if (!isAdmin) {
+    return seleccionados.length === 0 ? (
+      <span style={{ color: T.gray, fontSize: 12 }}>—</span>
+    ) : (
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 3, maxWidth: 150 }}>
+        {seleccionados.map((m) => <Badge key={m} color={T.accent} soft={T.blueSoft}>{formatMesAno(m)}</Badge>)}
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 175 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <button type="button" onClick={() => setAnioVista((a) => a - 1)} style={{ border: "none", background: T.graySoft, borderRadius: 5, cursor: "pointer", fontSize: 11, padding: "2px 6px", color: T.gray }}>‹</button>
+        <span style={{ fontSize: 11.5, fontWeight: 700, color: T.inkSoft }}>{anioVista}</span>
+        <button type="button" onClick={() => setAnioVista((a) => a + 1)} style={{ border: "none", background: T.graySoft, borderRadius: 5, cursor: "pointer", fontSize: 11, padding: "2px 6px", color: T.gray }}>›</button>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+        {MESES_ABREV.map((mes, i) => {
+          const clave = claveMesAno(anioVista, i);
+          const activo = seleccionados.includes(clave);
+          return (
+            <button
+              key={clave}
+              type="button"
+              onClick={() => onToggle(row.id, clave)}
+              style={{
+                border: "none", borderRadius: 5, cursor: "pointer", fontSize: 10.5, fontWeight: 700,
+                padding: "3px 5px", background: activo ? T.accent : T.graySoft, color: activo ? "#fff" : T.gray,
+              }}
+              title={activo ? `Quitar ${mes} ${anioVista} de la agenda` : `Agregar ${mes} ${anioVista} a la agenda`}
+            >
+              {mes}
+            </button>
+          );
+        })}
+      </div>
+      {seleccionados.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+          {seleccionados.map((m) => (
+            <span
+              key={m}
+              onClick={() => onToggle(row.id, m)}
+              title="Quitar de la agenda"
+              style={{ cursor: "pointer", fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 999, background: T.blueSoft, color: T.blue }}
+            >
+              {formatMesAno(m)} ✕
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Normaliza un valor de frecuencia importado desde Excel (espacios de más,
@@ -2083,28 +2159,9 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                   <td>
                     {!esCorrectivo && isInspecciones ? (
                       // Para IPM, "Acción" es la agenda de meses de visita: se
-                      // marca en qué meses del año toca visitar/facturar esa OD.
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 3, maxWidth: 150 }}>
-                        {MESES_ABREV.map((mes) => {
-                          const activo = (r.mesesVisita || []).includes(mes);
-                          return isAdmin ? (
-                            <button
-                              key={mes}
-                              onClick={() => toggleMesVisita(r.id, mes)}
-                              style={{
-                                border: "none", borderRadius: 5, cursor: "pointer", fontSize: 10.5, fontWeight: 700,
-                                padding: "3px 5px", background: activo ? T.accent : T.graySoft, color: activo ? "#fff" : T.gray,
-                              }}
-                              title={activo ? `Quitar ${mes} de la agenda` : `Agregar ${mes} a la agenda`}
-                            >
-                              {mes}
-                            </button>
-                          ) : activo ? (
-                            <Badge key={mes} color={T.accent} soft={T.blueSoft}>{mes}</Badge>
-                          ) : null;
-                        })}
-                        {!isAdmin && (r.mesesVisita || []).length === 0 && <span style={{ color: T.gray, fontSize: 12 }}>—</span>}
-                      </div>
+                      // marca en qué meses (de este año o del siguiente) toca
+                      // visitar/facturar esa OD.
+                      <AgendaMesesIpm row={r} isAdmin={isAdmin} onToggle={toggleMesVisita} />
                     ) : isAdmin ? (
                       <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }} placeholder="Acción tomada..." value={r.accion} onChange={(e) => setAccion(r.id, e.target.value)} />
                     ) : <span style={{ color: T.gray, fontSize: 12 }}>{r.accion || "—"}</span>}
@@ -2865,7 +2922,7 @@ function FacturacionIpmCard() {
                 <div>
                   <div style={{ fontWeight: 700, fontSize: 13 }}>{r.od} — {r.cliente}</div>
                   <div style={{ fontSize: 12, color: T.inkSoft }}>
-                    {usaAgenda ? `Agenda: ${r.mesesVisita.join(", ")}` : `Frecuencia: ${r.frecuencia || "—"}`}{r.tecnico ? ` · ${r.tecnico}` : ""}
+                    {usaAgenda ? `Agenda: ${mesesValidosOrdenados(r.mesesVisita).map(formatMesAno).join(", ")}` : `Frecuencia: ${r.frecuencia || "—"}`}{r.tecnico ? ` · ${r.tecnico}` : ""}
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

@@ -307,6 +307,23 @@ function estadoFacturacionIpm(r, hoy) {
   };
 }
 
+// Clave (comparable como texto) para ordenar OD de IPM de la más próxima a
+// facturar/visitar a la más lejana: la del mes que se está cursando queda
+// arriba de todo, y las de meses futuros van más abajo mientras más lejos
+// estén. Las atrasadas (fecha ya pasada) ordenan antes que el mes actual,
+// y las que no tienen nada programado quedan al final.
+function claveOrdenamientoIpm(r, hoy) {
+  const meses = mesesValidosOrdenados(r.mesesVisita);
+  if (meses.length > 0) {
+    const mesActual = hoy.slice(0, 7);
+    const yaFacturadoEsteMes = !!r.ultimaFacturaIpm && r.ultimaFacturaIpm.slice(0, 7) === mesActual;
+    if (meses.includes(mesActual) && !yaFacturadoEsteMes) return mesActual + "-01";
+    const siguiente = meses.find((m) => m > mesActual);
+    return siguiente ? siguiente + "-01" : "9999-12-31";
+  }
+  return r.proximaFacturaIpm || "9999-12-31";
+}
+
 // Selector de la agenda de meses de visita de una OD de IPM. Tiene su
 // propio año "en pantalla" (por defecto el actual) para poder marcar meses
 // de este año o del siguiente sin que se mezclen — lo marcado se guarda
@@ -1974,13 +1991,13 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
       return (a.created_at || "").localeCompare(b.created_at || "");
     }
     if (isInspecciones) {
-      // IPM: primero arriba las que les toca facturar/visitar este mes
-      // (por agenda o por frecuencia) — se recalcula en cada render, así
-      // que se reordena sola en cuanto cambia el mes.
+      // IPM: de la más próxima a facturar/visitar (el mes que se está
+      // cursando, arriba de todo) a la más lejana, abajo — se recalcula en
+      // cada render, así que se reordena sola en cuanto cambia el mes.
       const hoy = todayISO();
-      const pendienteA = estadoFacturacionIpm(a, hoy).pendiente ? 0 : 1;
-      const pendienteB = estadoFacturacionIpm(b, hoy).pendiente ? 0 : 1;
-      if (pendienteA !== pendienteB) return pendienteA - pendienteB;
+      const claveA = claveOrdenamientoIpm(a, hoy);
+      const claveB = claveOrdenamientoIpm(b, hoy);
+      if (claveA !== claveB) return claveA.localeCompare(claveB);
       return (a.od || "").localeCompare(b.od || "");
     }
     return 0;
@@ -2906,12 +2923,12 @@ function FacturacionIpmCard() {
       return !r.proximaFacturaIpm || r.proximaFacturaIpm <= limite;
     })
     .sort((a, b) => {
-      // Las atrasadas (de meses anteriores) siempre arriba, y dentro de
-      // cada grupo, alfabético por OD. Se recalcula en cada render, así se
-      // reacomoda sola en cuanto cambia el mes o se marca algo facturado.
-      const ea = estadoFacturacionIpm(a, hoy);
-      const eb = estadoFacturacionIpm(b, hoy);
-      if (ea.atrasada !== eb.atrasada) return ea.atrasada ? -1 : 1;
+      // De la más próxima (atrasadas y el mes actual, arriba) a la más
+      // lejana. Se recalcula en cada render, así se reacomoda sola en
+      // cuanto cambia el mes o se marca algo facturado.
+      const claveA = claveOrdenamientoIpm(a, hoy);
+      const claveB = claveOrdenamientoIpm(b, hoy);
+      if (claveA !== claveB) return claveA.localeCompare(claveB);
       return (a.od || "").localeCompare(b.od || "");
     });
   const atrasadas = pendientesDelMes.filter((r) => r.proximaFacturaIpm && r.proximaFacturaIpm < hoy);

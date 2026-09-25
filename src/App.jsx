@@ -1767,6 +1767,9 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const [filtroTexto, setFiltroTexto] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("Todos");
   const [subTabCorrectivo, setSubTabCorrectivo] = useState("Pendientes");
+  // Para IPM: los inactivos ya no se mezclan en la lista principal, quedan
+  // en su propia pestaña aparte.
+  const [subTabIpmEstado, setSubTabIpmEstado] = useState("Activos");
   const [editandoId, setEditandoId] = useState(null);
   const fileInputRef = React.useRef(null);
 
@@ -1963,7 +1966,8 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     const efectivoFiltro = estadoEfectivoOD(r, campoFechaControl);
     const matchEstado = filtroEstado === "Todos" || r.estado === filtroEstado || efectivoFiltro === filtroEstado;
     const matchProgreso = !esCorrectivo || (subTabCorrectivo === "Pendientes" ? (r.progreso || "Pendiente") !== "Completado" : (r.progreso || "Pendiente") === "Completado");
-    return matchTexto && matchEstado && matchProgreso;
+    const matchIpmEstado = esCorrectivo || !isInspecciones || (subTabIpmEstado === "Activos" ? r.estado !== "No Activo" : r.estado === "No Activo");
+    return matchTexto && matchEstado && matchProgreso && matchIpmEstado;
   }).sort((a, b) => {
     if (esCorrectivo) {
       // OD Correctivos: del más antiguo al más nuevo.
@@ -1982,6 +1986,8 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     return 0;
   });
   const estadoOpciones = isProyectos ? ["Todos", "Activo", "No Activo", "Entregado", "Vencido"] : ["Todos", "Activo", "No Activo", "Vencido"];
+  const activosIpmCount = rows.filter((r) => r.estado !== "No Activo").length;
+  const inactivosIpmCount = rows.filter((r) => r.estado === "No Activo").length;
   const pendientesCorrectivoCount = rows.filter((r) => (r.progreso || "Pendiente") !== "Completado").length;
   const completadosCorrectivoCount = rows.filter((r) => (r.progreso || "Pendiente") === "Completado").length;
 
@@ -2007,6 +2013,12 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
               <Btn small variant={subTabCorrectivo === "Completados" ? "accent" : "ghost"} onClick={() => setSubTabCorrectivo("Completados")}>Completados ({completadosCorrectivoCount})</Btn>
             </div>
           )}
+          {!esCorrectivo && isInspecciones && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+              <Btn small variant={subTabIpmEstado === "Activos" ? "accent" : "ghost"} onClick={() => setSubTabIpmEstado("Activos")}>Activos ({activosIpmCount})</Btn>
+              <Btn small variant={subTabIpmEstado === "Inactivos" ? "accent" : "ghost"} onClick={() => setSubTabIpmEstado("Inactivos")}>Inactivos ({inactivosIpmCount})</Btn>
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
             <input
               style={{ ...inputStyle, flex: 1 }}
@@ -2014,9 +2026,11 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
               value={filtroTexto}
               onChange={(e) => setFiltroTexto(e.target.value)}
             />
-            <select style={{ ...inputStyle, width: 150 }} value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value)}>
-              {estadoOpciones.map((op) => <option key={op} value={op}>{op}</option>)}
-            </select>
+            {(esCorrectivo || !isInspecciones) && (
+              <select style={{ ...inputStyle, width: 150 }} value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value)}>
+                {estadoOpciones.map((op) => <option key={op} value={op}>{op}</option>)}
+              </select>
+            )}
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>

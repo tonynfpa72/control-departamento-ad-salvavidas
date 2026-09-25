@@ -1722,6 +1722,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const marcarFacturadoIpm = async (id) => {
     const actual = rows.find((r) => r.id === id);
     if (!actual) return;
+    if (!(await confirmar(`¿Confirmas que ya facturaste la OD ${actual.od}? Se registra hoy y se calcula sola la siguiente fecha según su frecuencia (${actual.frecuencia || "sin frecuencia"}).`, { confirmLabel: "Sí, ya facturé", variant: "accent" }))) return;
     const hoy = todayISO();
     const proxima = sumarIntervaloFrecuencia(hoy, actual.frecuencia);
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, ultimaFacturaIpm: hoy, proximaFacturaIpm: proxima } : r));
@@ -1731,6 +1732,20 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const setProximaFacturaIpm = (id, proximaFacturaIpm) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, proximaFacturaIpm } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ proximaFacturaIpm })).eq("id", id).then();
+  };
+  // Deshace el último "Marcar facturado" de una OD (por si fue un clic por
+  // error): borra ese registro del historial y regresa la fecha de próxima
+  // factura al estado en que estaba antes de esa marca.
+  const deshacerFacturaIpm = async (id) => {
+    const actual = rows.find((r) => r.id === id);
+    if (!actual || !actual.ultimaFacturaIpm) return;
+    if (!(await confirmar(`¿Deshacer la última factura marcada de la OD ${actual.od} (${actual.ultimaFacturaIpm})? Se quita del historial.`, { confirmLabel: "Sí, deshacer", variant: "danger" }))) return;
+    const { data: historial } = await supabase.from("facturas_ipm").select("id, fecha_facturada").eq("od_id", id).order("fecha_facturada", { ascending: false }).order("created_at", { ascending: false });
+    if (historial && historial[0]) await supabase.from("facturas_ipm").delete().eq("id", historial[0].id);
+    const anterior = historial && historial[1] ? historial[1].fecha_facturada : "";
+    const proximaRestaurada = anterior ? sumarIntervaloFrecuencia(anterior, actual.frecuencia) : "";
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, ultimaFacturaIpm: anterior, proximaFacturaIpm: proximaRestaurada } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ ultimaFacturaIpm: anterior, proximaFacturaIpm: proximaRestaurada })).eq("id", id).then();
   };
   const setFechaInicio = (id, fechaInicio) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, fechaInicio } : r));
@@ -1978,6 +1993,9 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                           {canEditEstado && (
                             <>
                               <Btn small variant="ghost" onClick={() => marcarFacturadoIpm(r.id)}><Check size={13} /> Marcar facturado</Btn>
+                              {r.ultimaFacturaIpm && (
+                                <Btn small variant="ghost" onClick={() => deshacerFacturaIpm(r.id)} title={`Última marca: ${r.ultimaFacturaIpm}`}><X size={13} /> Deshacer última</Btn>
+                              )}
                               {isAdmin && (
                                 <input type="date" style={{ ...inputStyle, fontSize: 11, padding: "3px 6px", width: 130 }} value={r.proximaFacturaIpm || ""} onChange={(e) => setProximaFacturaIpm(r.id, e.target.value)} title="Ajustar próxima fecha de factura manualmente" />
                               )}

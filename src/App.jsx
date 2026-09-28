@@ -2090,7 +2090,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                 {!esCorrectivo && isProyectos && <th>Fecha de Inicio</th>}
                 {!esCorrectivo && isProyectos && <th>Fecha de Entrega</th>}
                 <th>Acción</th>
-                {!esCorrectivo && isInspecciones && <th style={{ minWidth: 170 }}>Notas</th>}
+                {!esCorrectivo && isInspecciones && <th style={{ minWidth: 260 }}>Notas</th>}
                 {esCorrectivo && <th>Progreso</th>}
                 {esCorrectivo && <th>Facturado</th>}
                 <th></th>
@@ -2243,14 +2243,14 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                     <td>
                       {canEditEstado ? (
                         <textarea
-                          rows={3}
-                          style={{ ...inputStyle, fontSize: 12, padding: "6px 8px", width: 170, resize: "vertical", fontFamily: "inherit" }}
+                          rows={5}
+                          style={{ ...inputStyle, fontSize: 12, padding: "8px 10px", width: 260, minHeight: 100, resize: "vertical", fontFamily: "inherit" }}
                           placeholder="Notas..."
                           value={r.notas || ""}
                           onChange={(e) => setNotasOD(r.id, e.target.value)}
                         />
                       ) : (
-                        <div style={{ fontSize: 12, color: T.inkSoft, whiteSpace: "pre-wrap", maxWidth: 170 }}>{r.notas || "—"}</div>
+                        <div style={{ fontSize: 12, color: T.inkSoft, whiteSpace: "pre-wrap", maxWidth: 260 }}>{r.notas || "—"}</div>
                       )}
                     </td>
                   )}

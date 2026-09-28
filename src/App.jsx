@@ -2042,11 +2042,12 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
           <div style={{ display: "flex", gap: 8 }}>
             <input ref={fileInputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={handleImport} />
             <Btn small variant="ghost" onClick={() => fileInputRef.current?.click()}><Upload size={13} /> Importar Excel</Btn>
-            <Btn small variant="ghost" onClick={() => exportExcel(rows.map(({ od, cliente, estado, tecnico, vencimiento, frecuencia, fechaInicio, fechaEntrega, accion }) => ({
+            <Btn small variant="ghost" onClick={() => exportExcel(rows.map(({ od, cliente, estado, tecnico, vencimiento, frecuencia, fechaInicio, fechaEntrega, accion, notas }) => ({
               OD: od, Cliente: cliente, "Activo/No Activo": estado, [`${tecnicoLabel} asignado`]: tecnico,
               ...(isInspecciones ? { "Fecha de Vencimiento": vencimiento, Frecuencia: frecuencia } : {}),
               ...(isProyectos ? { "Fecha de Inicio": fechaInicio, "Fecha de Entrega": fechaEntrega } : {}),
               Acción: accion,
+              ...(!esCorrectivo && isInspecciones ? { Notas: notas } : {}),
             })), `${esCorrectivo ? "od_correctivos" : "od"}_${area}.xlsx`)}><Download size={13} /> Excel</Btn>
             {isAdmin && <Btn small variant="danger" onClick={eliminarTodos}><X size={13} /> Eliminar todo</Btn>}
           </div>
@@ -2076,6 +2077,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
               </select>
             )}
           </div>
+          <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
@@ -2237,6 +2239,21 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                       <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }} placeholder="Acción tomada..." value={r.accion} onChange={(e) => setAccion(r.id, e.target.value)} />
                     ) : <span style={{ color: T.gray, fontSize: 12 }}>{r.accion || "—"}</span>}
                   </td>
+                  {!esCorrectivo && isInspecciones && (
+                    <td>
+                      {canEditEstado ? (
+                        <textarea
+                          rows={3}
+                          style={{ ...inputStyle, fontSize: 12, padding: "6px 8px", width: 170, resize: "vertical", fontFamily: "inherit" }}
+                          placeholder="Notas..."
+                          value={r.notas || ""}
+                          onChange={(e) => setNotasOD(r.id, e.target.value)}
+                        />
+                      ) : (
+                        <div style={{ fontSize: 12, color: T.inkSoft, whiteSpace: "pre-wrap", maxWidth: 170 }}>{r.notas || "—"}</div>
+                      )}
+                    </td>
+                  )}
                   {esCorrectivo && (
                     <td>
                       <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
@@ -2278,6 +2295,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
               );})}
             </tbody>
           </table>
+          </div>
         </Card>
         <Card title="Agregar cliente / OD">
           <div style={{ display: "flex", gap: 10 }}>

@@ -2969,20 +2969,17 @@ function FacturacionIpmCard() {
   const puedeMarcar = currentUser?.categoria === "admin" || currentUser?.categoria === "asistente";
   const [busqueda, setBusqueda] = useState("");
   const hoy = todayISO();
-  const finDeMes = new Date();
-  finDeMes.setMonth(finDeMes.getMonth() + 1, 0); // último día del mes actual
-  const limite = finDeMes.toISOString().slice(0, 10);
-  // Una OD entra a la lista de este mes de dos formas: si tiene agenda de
-  // meses de visita marcada en "Acción" y este mes calendario está en esa
-  // lista, o (si no tiene agenda) si su próxima fecha calculada por
-  // frecuencia cae dentro de este mes o ya está atrasada.
   const pendientesDelMes = rows
     .filter((r) => (r.tipoOD || "Normal") === "Normal" && r.estado === "Activo")
     .filter((r) => {
+      // Solo entran a "este mes" las OD que tienen agenda de meses de visita
+      // (marcada en "Acción") y ese mes en curso está en su agenda y aún no
+      // se marcó facturado. Las que no tienen agenda quedan fuera de esta
+      // lista hasta que se les configure, en vez de aparecer todos los
+      // meses como "Sin programar".
       const usaAgenda = Array.isArray(r.mesesVisita) && r.mesesVisita.length > 0;
-      if (usaAgenda) return estadoFacturacionIpm(r, hoy).pendiente;
-      if (!r.frecuencia) return false;
-      return !r.proximaFacturaIpm || r.proximaFacturaIpm <= limite;
+      if (!usaAgenda) return false;
+      return estadoFacturacionIpm(r, hoy).pendiente;
     })
     .sort((a, b) => {
       // De la más próxima (atrasadas y el mes actual, arriba) a la más

@@ -3035,7 +3035,7 @@ function FacturacionIpmCard() {
                 <div>
                   <div style={{ fontWeight: 700, fontSize: 13 }}>{r.od} — {r.cliente}</div>
                   <div style={{ fontSize: 12, color: T.inkSoft }}>
-                    {usaAgenda ? `Agenda: ${mesesValidosOrdenados(r.mesesVisita).map(formatMesAno).join(", ")}` : `Frecuencia: ${r.frecuencia || "—"}`}{r.tecnico ? ` · ${r.tecnico}` : ""}
+                    {usaAgenda ? `Mes a facturar: ${formatMesAno(hoy.slice(0, 7))}` : `Frecuencia: ${r.frecuencia || "—"}`}{r.tecnico ? ` · ${r.tecnico}` : ""}
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

@@ -1254,6 +1254,7 @@ function odRowFromDb(r) {
     sapNumero: r.sap_numero || "",
     estatusEquipo: r.estatus_equipo || "Abierto",
     accion: r.accion || "",
+    notas: r.notas || "",
     tipoOD: r.tipo_od || "Normal",
     progreso: r.progreso || "Pendiente",
     facturado: r.facturado || "Sin facturar",
@@ -1822,6 +1823,10 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, accion } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ accion })).eq("id", id).then();
   };
+  const setNotasOD = (id, notas) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, notas } : r));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ notas })).eq("id", id).then();
+  };
   const moverTipoOD = async (id, od, nuevoTipo) => {
     if (!(await confirmar(`¿Mover la OD ${od} a "${nuevoTipo === "Correctivo" ? "OD Correctivos" : "OD " + (isProyectos ? "Proyectos" : "IPM")}"?`, { confirmLabel: "Sí, mover", variant: "accent" }))) return;
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, tipoOD: nuevoTipo } : r));
@@ -2008,6 +2013,28 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const pendientesCorrectivoCount = rows.filter((r) => (r.progreso || "Pendiente") !== "Completado").length;
   const completadosCorrectivoCount = rows.filter((r) => (r.progreso || "Pendiente") === "Completado").length;
 
+  // Tarjetas de "Resumen" cliqueables: filtran la tabla de arriba por ese
+  // estado. En IPM la tabla se filtra con las pestañas Activos/Inactivos en
+  // vez del select de Estado (que ahí está oculto), así que un clic mueve
+  // esa pestaña; en Proyectos/Correctivos, mueve el select de Estado.
+  const resumenSeleccionado = !esCorrectivo && isInspecciones
+    ? (subTabIpmEstado === "Inactivos" ? "No Activo" : (filtroEstado !== "Todos" ? filtroEstado : null))
+    : (filtroEstado !== "Todos" ? filtroEstado : null);
+  const seleccionarResumen = (estado) => {
+    const yaActivo = resumenSeleccionado === estado;
+    if (!esCorrectivo && isInspecciones) {
+      if (estado === "No Activo") {
+        setSubTabIpmEstado(yaActivo ? "Activos" : "Inactivos");
+        setFiltroEstado("Todos");
+      } else {
+        setSubTabIpmEstado("Activos");
+        setFiltroEstado(yaActivo ? "Todos" : estado);
+      }
+    } else {
+      setFiltroEstado(yaActivo ? "Todos" : estado);
+    }
+  };
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "2.4fr 0.7fr", gap: 16 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -2061,6 +2088,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                 {!esCorrectivo && isProyectos && <th>Fecha de Inicio</th>}
                 {!esCorrectivo && isProyectos && <th>Fecha de Entrega</th>}
                 <th>Acción</th>
+                {!esCorrectivo && isInspecciones && <th style={{ minWidth: 170 }}>Notas</th>}
                 {esCorrectivo && <th>Progreso</th>}
                 {esCorrectivo && <th>Facturado</th>}
                 <th></th>
@@ -2264,20 +2292,36 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <Card title="Resumen">
           <div style={{ display: "flex", gap: 12 }}>
-            <div style={{ flex: 1, background: T.greenSoft, borderRadius: 10, padding: 14 }}>
+            <div
+              onClick={() => seleccionarResumen("Activo")}
+              title="Filtrar por Activos"
+              style={{ flex: 1, background: T.greenSoft, borderRadius: 10, padding: 14, cursor: "pointer", boxShadow: resumenSeleccionado === "Activo" ? `0 0 0 2px ${T.green}` : "none" }}
+            >
               <div style={{ fontSize: 22, fontWeight: 800, color: T.green }}>{activos}</div>
               <div style={{ fontSize: 12, color: T.inkSoft }}>Activos</div>
             </div>
-            <div style={{ flex: 1, background: T.redSoft, borderRadius: 10, padding: 14 }}>
+            <div
+              onClick={() => seleccionarResumen("No Activo")}
+              title="Filtrar por No Activos"
+              style={{ flex: 1, background: T.redSoft, borderRadius: 10, padding: 14, cursor: "pointer", boxShadow: resumenSeleccionado === "No Activo" ? `0 0 0 2px ${T.red}` : "none" }}
+            >
               <div style={{ fontSize: 22, fontWeight: 800, color: T.red }}>{noActivos}</div>
               <div style={{ fontSize: 12, color: T.inkSoft }}>No Activos</div>
             </div>
-            <div style={{ flex: 1, background: T.amberSoft, borderRadius: 10, padding: 14 }}>
+            <div
+              onClick={() => seleccionarResumen("Vencido")}
+              title="Filtrar por Vencidos"
+              style={{ flex: 1, background: T.amberSoft, borderRadius: 10, padding: 14, cursor: "pointer", boxShadow: resumenSeleccionado === "Vencido" ? `0 0 0 2px ${T.amber}` : "none" }}
+            >
               <div style={{ fontSize: 22, fontWeight: 800, color: T.amber }}>{vencidos}</div>
               <div style={{ fontSize: 12, color: T.inkSoft }}>Vencidos</div>
             </div>
             {isProyectos && (
-              <div style={{ flex: 1, background: T.blueSoft, borderRadius: 10, padding: 14 }}>
+              <div
+                onClick={() => seleccionarResumen("Entregado")}
+                title="Filtrar por Entregados"
+                style={{ flex: 1, background: T.blueSoft, borderRadius: 10, padding: 14, cursor: "pointer", boxShadow: resumenSeleccionado === "Entregado" ? `0 0 0 2px ${T.blue}` : "none" }}
+              >
                 <div style={{ fontSize: 22, fontWeight: 800, color: T.blue }}>{entregados}</div>
                 <div style={{ fontSize: 12, color: T.inkSoft }}>Entregados</div>
               </div>

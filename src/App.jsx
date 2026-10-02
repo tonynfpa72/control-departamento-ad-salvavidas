@@ -157,7 +157,7 @@ const AREAS = [
   { id: "apertura", label: "Apertura de OD", icon: Building2, color: T.blue },
   { id: "equipos", label: "Equipos", icon: Package, color: T.amber },
   { id: "facturacion_publica", label: "Facturación", icon: LayoutDashboard, color: T.green },
-  { id: "monitoreo_notifier", label: "Monitoreo Notifier", icon: Flame, color: T.red },
+  { id: "monitoreo_notifier", label: "Monitoreo", icon: Flame, color: T.red },
   { id: "gastos_tarjeta", label: "Gastos de Tarjeta", icon: CreditCard, color: T.red },
   { id: "vehiculos", label: "Vehículos", icon: Truck, color: T.blue },
   { id: "planilla", label: "Planilla", icon: Wallet, color: T.amber },
@@ -6716,7 +6716,9 @@ function generarHtmlTendenciasPanel(texto) {
 function MonitoreoNotifier() {
   const currentUser = useContext(CurrentUserContext);
   const confirmar = useContext(ConfirmContext);
-  const canGestionar = currentUser?.categoria === "admin" || currentUser?.categoria === "asistente";
+  // En este módulo, a diferencia del resto de la app, Técnico tiene el mismo
+  // acceso que Admin/Asistente (puede borrar, etc.) — así lo pidió el gerente.
+  const canGestionar = currentUser?.categoria === "admin" || currentUser?.categoria === "asistente" || currentUser?.categoria === "tecnico";
   const esTecnicoSonido = currentUser?.categoria === "tecnico"; // solo técnicos escuchan el sonido de alarmas
   // ---- Vista celular: igual que en Entrenamiento, una navegación por
   // pestañas abajo en vez de todo apilado, para que quepa bien en el
@@ -6728,7 +6730,8 @@ function MonitoreoNotifier() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  const esMovilNotifier = anchoNotifier <= 820;
+  const [vistaModoNotifier, setVistaModoNotifier] = useState("auto"); // "auto" | "movil" | "pc" — igual que en Entrenamiento
+  const esMovilNotifier = vistaModoNotifier === "movil" ? true : vistaModoNotifier === "pc" ? false : anchoNotifier <= 820;
   const [seccionMovil, setSeccionMovil] = useState("eventos"); // "resumen" | "eventos" | "equipos" | "tendencias"
   const [eventos, setEventos] = useState([]);
   const [dispositivos, setDispositivos] = useState([]);
@@ -6772,6 +6775,7 @@ function MonitoreoNotifier() {
   const pulsoTimerRef = React.useRef(null);
   const modoSonandoRef = React.useRef(0);
   const ultimoEventoVistoRef = React.useRef(null);
+  const sonidoOnRef = React.useRef(true); // evita que una reproducción ya en camino (resume() pendiente) suene después de apagar
 
   useEffect(() => {
     if (!esTecnicoSonido) return;
@@ -6810,10 +6814,11 @@ function MonitoreoNotifier() {
   };
 
   const sonar = (modo, duracionMs) => {
-    if (!esTecnicoSonido || !sonidoOn) return;
+    if (!esTecnicoSonido || !sonidoOnRef.current) return;
     const ctx = prepararAudio();
     if (!ctx) return;
     const reproducir = () => {
+      if (!sonidoOnRef.current) return; // se apagó el sonido mientras esperábamos el permiso del navegador
       setSonidoBloqueado(false);
       clearInterval(pulsoTimerRef.current);
       pulsoTimerRef.current = null;
@@ -6846,25 +6851,34 @@ function MonitoreoNotifier() {
     return () => ["pointerdown", "keydown", "click"].forEach((ev) => document.removeEventListener(ev, desbloquear));
   }, [esTecnicoSonido, sonidoOn]);
 
-  // Detecta eventos NUEVOS (no los que ya existían al abrir la página) y
-  // suena según su categoría — así cada evento real del panel se escucha
-  // apenas llega, igual que en el dashboard del propio equipo.
+  // Al cambiar de sitio, reiniciamos desde dónde contamos "nuevo" — así no
+  // se arrastra ni se mezcla el estado de sonido de un sitio con el de otro.
+  useEffect(() => { ultimoEventoVistoRef.current = null; }, [sitioSeleccionado]);
+
+  // Detecta eventos NUEVOS del sitio que se está viendo ahora mismo (no los
+  // que ya existían al abrir la página, y NO los de otros sitios aunque
+  // estén llegando al mismo tiempo) y suena según su categoría.
   useEffect(() => {
-    if (!esTecnicoSonido || !eventos.length) return;
-    const masReciente = eventos[0].fecha_panel;
+    if (!esTecnicoSonido) return;
+    const delSitio = sitioSeleccionado === "Todos" ? eventos : eventos.filter((e) => e.sitio === sitioSeleccionado);
+    if (!delSitio.length) return;
+    const masReciente = delSitio[0].fecha_panel;
     if (ultimoEventoVistoRef.current === null) {
-      ultimoEventoVistoRef.current = masReciente; // primera carga: no suena por eventos viejos
+      ultimoEventoVistoRef.current = masReciente; // recién abierto (o recién cambiado de sitio): no suena por eventos viejos
       return;
     }
     if (masReciente === ultimoEventoVistoRef.current) return;
-    const nuevos = eventos.filter((e) => new Date(e.fecha_panel) > new Date(ultimoEventoVistoRef.current));
+    const nuevos = delSitio.filter((e) => new Date(e.fecha_panel) > new Date(ultimoEventoVistoRef.current));
     ultimoEventoVistoRef.current = masReciente;
     if (nuevos.some((e) => e.categoria === "alarma" || e.categoria === "prealarma")) sonar(2);
     else if (nuevos.some((e) => ["problema", "supervision", "seguridad"].includes(e.categoria))) sonar(1, 6000);
-  }, [eventos, esTecnicoSonido, sonidoOn]);
+  }, [eventos, esTecnicoSonido, sonidoOn, sitioSeleccionado]);
+
+  useEffect(() => { sonidoOnRef.current = sonidoOn; }, [sonidoOn]);
 
   const toggleSonido = () => {
     const nuevo = !sonidoOn;
+    sonidoOnRef.current = nuevo; // inmediato, sin esperar el re-render
     setSonidoOn(nuevo);
     try { localStorage.setItem("ignisSonidoWeb", nuevo ? "1" : "0"); } catch (e) {}
     if (!nuevo) detenerSonido();
@@ -6956,7 +6970,7 @@ function MonitoreoNotifier() {
           </div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 1.5, textTransform: "uppercase" }}>IgnisMonitor</div>
-            <div style={{ fontSize: 10.5, color: IGNIS.dim2 }}>Monitoreo Notifier — todos los sitios en vivo</div>
+            <div style={{ fontSize: 10.5, color: IGNIS.dim2 }}>Monitoreo — todos los sitios en vivo</div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -6987,6 +7001,10 @@ function MonitoreoNotifier() {
               {sonidoOn ? <Volume2 size={13} /> : <VolumeX size={13} />} {sonidoOn ? "Sonido activo" : "Sonido apagado"}
             </button>
           )}
+          <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${IGNIS.border}` }}>
+            <button onClick={() => setVistaModoNotifier(vistaModoNotifier === "movil" ? "auto" : "movil")} title="Ver como celular" style={{ background: vistaModoNotifier === "movil" ? IGNIS.panel2 : "transparent", color: vistaModoNotifier === "movil" ? IGNIS.text : IGNIS.dim, border: "none", padding: "7px 10px", fontSize: 13, cursor: "pointer" }}>📱</button>
+            <button onClick={() => setVistaModoNotifier(vistaModoNotifier === "pc" ? "auto" : "pc")} title="Ver como PC" style={{ background: vistaModoNotifier === "pc" ? IGNIS.panel2 : "transparent", color: vistaModoNotifier === "pc" ? IGNIS.text : IGNIS.dim, border: "none", padding: "7px 10px", fontSize: 13, cursor: "pointer" }}>💻</button>
+          </div>
         </div>
       </div>
 
@@ -7140,6 +7158,11 @@ function MonitoreoNotifier() {
                           {sitioSeleccionado === "Todos" ? `${e.sitio || "—"} · ` : ""}{ETIQUETA_CATEGORIA_PANEL[e.categoria] || e.categoria || "Otro"} · {new Date(e.fecha_panel).toLocaleString("es-CR", { dateStyle: "short", timeStyle: "medium" })}
                         </div>
                       </div>
+                      {esTecnicoSonido && modoSonando > 0 && (
+                        <button onClick={detenerSonido} title="Silenciar el sonido de alarma" style={{ flex: "none", background: "transparent", border: "none", cursor: "pointer", color: "#8f8870", padding: 2 }}>
+                          <VolumeX size={15} />
+                        </button>
+                      )}
                     </div>
                   );
                 })}

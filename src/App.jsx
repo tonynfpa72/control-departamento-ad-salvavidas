@@ -6726,6 +6726,8 @@ function MonitoreoNotifier() {
   const [vista, setVista] = useState("eventos"); // "eventos" | "tendencias"
   const [historialHtml, setHistorialHtml] = useState("");
   const [cargandoHistorial, setCargandoHistorial] = useState(false);
+  const [categoriaSeleccionada, setCategoriaSeleccionada] = useState(null); // tarjeta activa (filtro)
+  const [errorCarga, setErrorCarga] = useState("");
 
   useEffect(() => {
     const cargar = async () => {
@@ -6735,6 +6737,7 @@ function MonitoreoNotifier() {
       ]);
       if (!errEv && ev) setEventos(ev);
       if (!errDisp && disp) setDispositivos(disp);
+      setErrorCarga(errEv?.message || errDisp?.message || "");
       setCargando(false);
     };
     cargar();
@@ -6759,9 +6762,18 @@ function MonitoreoNotifier() {
 
   const eventosFiltrados = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
-    if (!q) return eventosDelSitio;
-    return eventosDelSitio.filter((e) => (e.texto || "").toLowerCase().includes(q) || (e.sitio || "").toLowerCase().includes(q));
-  }, [eventosDelSitio, busqueda]);
+    let lista = eventosDelSitio;
+    if (categoriaSeleccionada) {
+      lista = lista.filter((e) =>
+        categoriaSeleccionada === "otro" ? !CATEGORIAS_PANEL_TILES.includes(e.categoria) : e.categoria === categoriaSeleccionada
+      );
+    }
+    if (!q) return lista;
+    return lista.filter((e) => (e.texto || "").toLowerCase().includes(q) || (e.sitio || "").toLowerCase().includes(q));
+  }, [eventosDelSitio, busqueda, categoriaSeleccionada]);
+
+  // Si cambian de sitio o se borra la categoría visible, quita el filtro de tarjeta.
+  useEffect(() => { setCategoriaSeleccionada(null); }, [sitioSeleccionado]);
 
   const conteos = useMemo(() => {
     const c = {};
@@ -6810,7 +6822,7 @@ function MonitoreoNotifier() {
   const selectEstilo = { background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 13, fontFamily: "inherit" };
 
   return (
-    <div style={{ background: IGNIS.bg, borderRadius: 14, padding: 18, display: "flex", flexDirection: "column", gap: 14, color: IGNIS.text }}>
+    <div style={{ background: IGNIS.bg, minHeight: "100vh", padding: 18, display: "flex", flexDirection: "column", gap: 14, color: IGNIS.text, boxSizing: "border-box" }}>
       {/* ---- Encabezado estilo IgnisMonitor ---- */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, borderBottom: `1px solid ${IGNIS.border}`, paddingBottom: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -6841,13 +6853,33 @@ function MonitoreoNotifier() {
         </div>
       </div>
 
-      {/* ---- Tarjetas de conteo (como .stats del dashboard real) ---- */}
+      {!cargando && !errorCarga && sitios.length === 0 && (
+        <div style={{ background: "#3a2a12", border: "1px solid #6b4a1a", color: "#f2c177", borderRadius: 10, padding: "10px 14px", fontSize: 12.5, lineHeight: 1.5 }}>
+          <b>Todavía no ha llegado ningún dato a Supabase.</b> Si tu IgnisMonitor ya está encendido y conectado a WiFi pero no aparece aquí, lo más común es que en el firmware (<code>IgnisMonitor_ESP8266_V5.1.ino</code>) las líneas <code>SUPABASE_URL</code> y <code>SUPABASE_ANON_KEY</code> todavía tengan los valores de ejemplo y no los reales de tu proyecto — revísalas y vuelve a cargar el firmware. También confirma que le pusiste un "Nombre de este sitio" en la página de Configuración del equipo.
+        </div>
+      )}
+      {errorCarga && (
+        <div style={{ background: "#3a1212", border: "1px solid #6b1a1a", color: "#f29a9a", borderRadius: 10, padding: "10px 14px", fontSize: 12.5 }}>
+          <b>Error leyendo Supabase:</b> {errorCarga}
+        </div>
+      )}
+
+      {/* ---- Tarjetas de conteo (como .stats del dashboard real) — clic para filtrar la bitácora ---- */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(122px,1fr))", gap: 8 }}>
         {CATEGORIAS_PANEL_TILES.map((cat) => {
           const Icono = CATEGORIA_PANEL_ICONO[cat] || HelpCircle;
           const color = CATEGORIA_PANEL_COLOR_DARK[cat];
+          const activa = categoriaSeleccionada === cat;
           return (
-            <div key={cat} style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 10, padding: "9px 12px", position: "relative", overflow: "hidden" }}>
+            <div
+              key={cat}
+              onClick={() => setCategoriaSeleccionada((prev) => (prev === cat ? null : cat))}
+              style={{
+                background: activa ? IGNIS.panel2 : IGNIS.panel, border: `1px solid ${activa ? color : IGNIS.border}`, borderRadius: 10,
+                padding: "9px 12px", position: "relative", overflow: "hidden", cursor: "pointer",
+                boxShadow: activa ? `0 0 0 1px ${color}` : "none",
+              }}
+            >
               <div style={{ position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: "0 3px 3px 0", background: color }} />
               <div style={{ fontSize: 20, fontWeight: 750, lineHeight: 1.1 }}>{conteos[cat] || 0}</div>
               <div style={{ color: IGNIS.dim, fontSize: 11.5, marginTop: 3, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -13778,11 +13810,13 @@ function AppInner() {
       </div>
 
       {/* Main */}
-      <div style={{ flex: 1, padding: "28px 32px", overflowY: "auto" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 22 }}>
-          {current && <current.icon size={20} color={current.color} />}
-          <h1 style={{ margin: 0, fontSize: 21, fontWeight: 800, letterSpacing: -0.4 }}>{current?.label}</h1>
-        </div>
+      <div style={{ flex: 1, padding: tab === "monitoreo_notifier" ? 0 : "28px 32px", overflowY: "auto" }}>
+        {tab !== "monitoreo_notifier" && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 22 }}>
+            {current && <current.icon size={20} color={current.color} />}
+            <h1 style={{ margin: 0, fontSize: 21, fontWeight: 800, letterSpacing: -0.4 }}>{current?.label}</h1>
+          </div>
+        )}
 
         {tab === "inspecciones" && <AreaOperativa area="inspecciones" color={T.steel} />}
         {tab === "proyectos" && <AreaOperativa area="proyectos" color={T.green} />}

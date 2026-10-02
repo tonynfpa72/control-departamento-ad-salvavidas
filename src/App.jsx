@@ -154,6 +154,32 @@ function LogoUploadButton({ small }) {
 // solo acepta usuarios categoría "cliente" y guarda su sesión aparte.
 const MODO_CLIENTE = typeof window !== "undefined" && !!window.__MODO_CLIENTE__;
 const CLAVE_SESION = MODO_CLIENTE ? "sesion_cliente" : "sesion_usuario";
+// Dentro del APK (WebView de Android) no hay ventanas nuevas ni impresión ni
+// descargas de archivos, así que ahí se ocultan los botones de PDF/CSV.
+const EN_APK = typeof navigator !== "undefined" && /SalvavidasAPK/.test(navigator.userAgent || "");
+
+// ---- Notificaciones PUSH (alertas con la app cerrada) ----
+// Llave pública VAPID: la privada vive solo en Supabase (secreto de la
+// Edge Function "notificar-alarma"), nunca en la app.
+const VAPID_PUBLICA = "BJJy3NXCGBbqph-dK_p5T9gj51Y_66ZhLaEpW4GHbsTQQAVeLtqw6u-M4ihvfdrVcPQ_JUk5Or6pKxbWl5tTf8o";
+const PUSH_SOPORTADO = typeof window !== "undefined" && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const b64urlAUint8 = (s) => {
+  const b64 = (s + "===".slice((s.length + 3) % 4)).replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(b64);
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+};
+// Al cerrar sesión se da de baja este celular, para que no siga recibiendo
+// alertas de un usuario que ya salió.
+async function bajaPushDeEsteDispositivo() {
+  if (!PUSH_SOPORTADO) return;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = reg && (await reg.pushManager.getSubscription());
+    if (!sub) return;
+    await supabase.from("push_suscripciones").delete().eq("endpoint", sub.endpoint);
+    await sub.unsubscribe();
+  } catch (e) {}
+}
 
 const AREAS = [
   { id: "inspecciones", label: "Inspecciones", icon: ClipboardList, color: T.steel },
@@ -6591,17 +6617,18 @@ const IGNIS = {
   paper: "#f3f0e8", paperInk: "#2a2620", paperLine: "#e6e0d2",
   alarma: "#e5484d", prealarma: "#ff6b6e", problema: "#f2b705", supervision: "#ff8c3d",
   seguridad: "#2f81f7", sinclasificar: "#9198a1", borrado: "#57606a", ok: "#3fb950", general: "#a371f7",
+  historial: "#39c5cf", mantenimiento: "#2ea043",
 };
 const CATEGORIA_PANEL_ICONO = {
-  general: LayoutDashboard, alarma: Flame, prealarma: Clock, problema: AlertTriangle, supervision: Settings,
+  general: LayoutDashboard, historial: FileText, mantenimiento: Wrench, alarma: Flame, prealarma: Clock, problema: AlertTriangle, supervision: Settings,
   seguridad: Shield, sinclasificar: HelpCircle, borrado: Trash2, otro: HelpCircle,
 };
 const CATEGORIA_PANEL_COLOR_DARK = {
-  general: IGNIS.general, alarma: IGNIS.alarma, prealarma: IGNIS.prealarma, problema: IGNIS.problema, supervision: IGNIS.supervision,
+  general: IGNIS.general, historial: IGNIS.historial, mantenimiento: IGNIS.mantenimiento, alarma: IGNIS.alarma, prealarma: IGNIS.prealarma, problema: IGNIS.problema, supervision: IGNIS.supervision,
   seguridad: IGNIS.seguridad, sinclasificar: IGNIS.sinclasificar, borrado: IGNIS.borrado, otro: IGNIS.dim,
 };
 const ETIQUETA_CATEGORIA_PANEL = {
-  general: "General", alarma: "Alarma", prealarma: "Prealarma", problema: "Problema", supervision: "Supervisión",
+  general: "General", historial: "Historial", mantenimiento: "Mantenimiento", alarma: "Alarma", prealarma: "Prealarma", problema: "Problema", supervision: "Supervisión",
   seguridad: "Seguridad", borrado: "Borrado", sinclasificar: "Administrativo", otro: "Otro",
 };
 // Mismas 7 categorías que manda el ESP8266 en vivo (Historial/Mantenimiento
@@ -6857,7 +6884,9 @@ function MonitoreoNotifier() {
   // En este módulo, a diferencia del resto de la app, Técnico tiene el mismo
   // acceso que Admin/Asistente (puede borrar, etc.) — así lo pidió el gerente.
   const canGestionar = currentUser?.categoria === "admin" || currentUser?.categoria === "asistente" || currentUser?.categoria === "tecnico";
-  const esTecnicoSonido = currentUser?.categoria === "tecnico"; // solo técnicos escuchan el sonido de alarmas
+  // Escuchan el sonido de alarmas: Técnicos (todos los sitios que estén
+  // viendo) y Clientes (solo su sitio, porque solo reciben esos eventos).
+  const esTecnicoSonido = currentUser?.categoria === "tecnico" || currentUser?.categoria === "cliente";
   // Usuario "cliente": solo ve SU sitio asignado (guardado en usuarios.area).
   // Los datos se piden a Supabase ya filtrados por ese sitio, así que los
   // otros equipos ni siquiera llegan a su navegador.
@@ -6889,6 +6918,61 @@ function MonitoreoNotifier() {
   const [historialHtml, setHistorialHtml] = useState("");
   const [cargandoHistorial, setCargandoHistorial] = useState(false);
   const [mantLineas, setMantLineas] = useState([]); // informe de mantenimiento subido por el equipo
+
+  // ---- Alertas push: "activo" | "inactivo" | "bloqueado" | "no-soportado" | "trabajando" | "cargando" ----
+  const [pushEstado, setPushEstado] = useState("cargando");
+  const guardarSuscripcionPush = (sub) => {
+    const j = sub.toJSON();
+    return supabase.from("push_suscripciones").upsert({
+      endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
+      sitio: esCliente ? sitioCliente : null, // personal: todos los sitios
+      url_app: MODO_CLIENTE ? "/cliente.html" : "/",
+      usuario_id: String(currentUser?.id || ""), usuario_nombre: currentUser?.name || "",
+    }, { onConflict: "endpoint" });
+  };
+  useEffect(() => {
+    if (!PUSH_SOPORTADO || EN_APK) { setPushEstado("no-soportado"); return; }
+    if (Notification.permission === "denied") { setPushEstado("bloqueado"); return; }
+    navigator.serviceWorker.getRegistration().then(async (reg) => {
+      const sub = reg ? await reg.pushManager.getSubscription() : null;
+      if (sub && Notification.permission === "granted") { setPushEstado("activo"); guardarSuscripcionPush(sub); }
+      else setPushEstado("inactivo");
+    }).catch(() => setPushEstado("inactivo"));
+  }, []);
+  const activarPush = async () => {
+    if (!PUSH_SOPORTADO || EN_APK) {
+      const esIphone = /iPhone|iPad/.test(navigator.userAgent || "");
+      alert(esIphone
+        ? "En iPhone las alertas con la app cerrada funcionan cuando la app está agregada a la pantalla de inicio: en Safari toca Compartir → Agregar a inicio, ábrela desde ese ícono y vuelve a tocar \"Activar alertas\"."
+        : "Esta versión de la app no puede recibir alertas con la app cerrada. Para tenerlas, abre el enlace del monitoreo en Google Chrome → menú ⋮ → \"Instalar app\", entra desde ese ícono y toca \"Activar alertas\".");
+      return;
+    }
+    if (pushEstado === "bloqueado" || Notification.permission === "denied") {
+      alert("Las notificaciones están bloqueadas para esta app. Actívalas en los ajustes del navegador o del celular (Notificaciones → permitir) y vuelve a intentarlo.");
+      return;
+    }
+    setPushEstado("trabajando");
+    try {
+      const permiso = await Notification.requestPermission();
+      if (permiso !== "granted") { setPushEstado(permiso === "denied" ? "bloqueado" : "inactivo"); return; }
+      const reg = (await navigator.serviceWorker.getRegistration()) || (await navigator.serviceWorker.register("/sw.js"));
+      await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64urlAUint8(VAPID_PUBLICA) });
+      const { error } = await guardarSuscripcionPush(sub);
+      if (error) throw new Error(error.message);
+      setPushEstado("activo");
+    } catch (e) {
+      alert("No se pudieron activar las alertas: " + (e?.message || e));
+      setPushEstado("inactivo");
+    }
+  };
+  const desactivarPush = async () => {
+    if (!(await confirmar("¿Dejar de recibir alertas de alarma en este dispositivo?", { confirmLabel: "Sí, desactivar" }))) return;
+    setPushEstado("trabajando");
+    await bajaPushDeEsteDispositivo();
+    setPushEstado("inactivo");
+  };
   const [generandoReporte, setGenerandoReporte] = useState(false);
   const refListaEventos = React.useRef(null);
   const [categoriaSeleccionada, setCategoriaSeleccionada] = useState(null); // tarjeta activa (filtro)
@@ -7049,15 +7133,52 @@ function MonitoreoNotifier() {
     [eventos, sitioSeleccionado]
   );
 
+  // Historial y mantenimiento del sitio elegido (los sube el IgnisMonitor a
+  // Supabase Storage). Alimentan las tarjetas Historial / Mantenimiento y la
+  // vista Tendencias. Se vuelven a leer cada minuto.
+  const [histTexto, setHistTexto] = useState("");
+  useEffect(() => {
+    setHistTexto(""); setMantLineas([]); setHistorialHtml("");
+    if (sitioSeleccionado === "Todos") return;
+    let cancelado = false;
+    setCargandoHistorial(true);
+    const cargarArchivos = async () => {
+      const base = nombreArchivoSitioPanel(sitioSeleccionado);
+      const [texto, textoMant] = await Promise.all([
+        descargarTextoHistorial(`${base}.txt`),
+        descargarTextoHistorial(`${base}_mant.txt`),
+      ]);
+      if (cancelado) return;
+      setHistTexto(texto || "");
+      setHistorialHtml(generarHtmlTendenciasPanel(texto));
+      setMantLineas(textoMant ? textoMant.split(/\r?\n/) : []);
+      setCargandoHistorial(false);
+    };
+    cargarArchivos();
+    const intervalo = setInterval(cargarArchivos, 60000);
+    return () => { cancelado = true; clearInterval(intervalo); };
+  }, [sitioSeleccionado]);
+
+  // Líneas del historial / informe de mantenimiento como "eventos" para
+  // mostrarlas en la bitácora al tocar sus tarjetas.
+  const lineasHistorial = useMemo(() => (histTexto || "").split(/\r?\n/).map((t) => t.trim()).filter(Boolean)
+    .map((texto, i) => ({ id: `hist-${i}`, categoria: "historial", texto, sitio: sitioSeleccionado, fecha_panel: null })), [histTexto, sitioSeleccionado]);
+  const lineasMantenimiento = useMemo(() => mantLineas.map((t) => String(t).trim()).filter(Boolean)
+    .map((texto, i) => ({ id: `mant-${i}`, categoria: "mantenimiento", texto, sitio: sitioSeleccionado, fecha_panel: null })), [mantLineas, sitioSeleccionado]);
+
   const eventosFiltrados = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
     let lista = eventosDelSitio;
+    if (categoriaSeleccionada === "historial" || categoriaSeleccionada === "mantenimiento") {
+      const base = categoriaSeleccionada === "historial" ? lineasHistorial : lineasMantenimiento;
+      return q ? base.filter((e) => e.texto.toLowerCase().includes(q)) : base;
+    }
     if (categoriaSeleccionada) {
       lista = lista.filter((e) => coincideCategoriaPanel(e, categoriaSeleccionada));
     }
     if (!q) return lista;
     return lista.filter((e) => (e.texto || "").toLowerCase().includes(q) || (e.sitio || "").toLowerCase().includes(q));
-  }, [eventosDelSitio, busqueda, categoriaSeleccionada]);
+  }, [eventosDelSitio, busqueda, categoriaSeleccionada, lineasHistorial, lineasMantenimiento]);
 
   // Si cambian de sitio o se borra la categoría visible, quita el filtro de tarjeta.
   useEffect(() => { setCategoriaSeleccionada(null); }, [sitioSeleccionado]);
@@ -7067,8 +7188,10 @@ function MonitoreoNotifier() {
     CATEGORIAS_PANEL_TILES.forEach((cat) => { c[cat] = 0; });
     eventosDelSitio.forEach((e) => { if (c[e.categoria] !== undefined) c[e.categoria]++; else c.otro = (c.otro || 0) + 1; });
     c.general = CATEGORIAS_PANEL_GENERAL.reduce((t, k) => t + (c[k] || 0), 0);
+    c.historial = lineasHistorial.length;
+    c.mantenimiento = lineasMantenimiento.length;
     return c;
-  }, [eventosDelSitio]);
+  }, [eventosDelSitio, lineasHistorial, lineasMantenimiento]);
 
   // Vuelve a "eventos" si cambian de sitio mientras ven Tendencias (el
   // historial es por sitio — no tiene sentido en "Todos").
@@ -7090,23 +7213,6 @@ function MonitoreoNotifier() {
     return generarHtmlMantenimientoPanel(analizarMantenimientoPanel([...mantLineas, ...vivas]));
   }, [mantLineas, eventosDelSitio, sitioSeleccionado]);
 
-  useEffect(() => {
-    if (vista !== "tendencias" || sitioSeleccionado === "Todos") return;
-    let cancelado = false;
-    setCargandoHistorial(true);
-    (async () => {
-      const base = nombreArchivoSitioPanel(sitioSeleccionado);
-      const [texto, textoMant] = await Promise.all([
-        descargarTextoHistorial(`${base}.txt`),
-        descargarTextoHistorial(`${base}_mant.txt`),
-      ]);
-      if (cancelado) return;
-      setHistorialHtml(generarHtmlTendenciasPanel(texto));
-      setMantLineas(textoMant ? textoMant.split(/\r?\n/) : []);
-      setCargandoHistorial(false);
-    })();
-    return () => { cancelado = true; };
-  }, [vista, sitioSeleccionado]);
 
   const borrarEventosDelSitio = async () => {
     if (sitioSeleccionado === "Todos") return;
@@ -7170,7 +7276,7 @@ function MonitoreoNotifier() {
       const chipCat = (cat) => `<span class="cat" style="background:${CATEGORIA_PANEL_COLOR_DARK[cat] || "#888"}">${esc(ETIQUETA_CATEGORIA_PANEL[cat] || cat || "Otro")}</span>`;
       const q = busqueda.trim().toLowerCase();
       const pasaFiltro = (e) =>
-        coincideCategoriaPanel(e, categoriaSeleccionada) &&
+        (categoriaSeleccionada === "historial" || categoriaSeleccionada === "mantenimiento" || coincideCategoriaPanel(e, categoriaSeleccionada)) &&
         (!q || (e.texto || "").toLowerCase().includes(q));
       const listaSitios = sitioSeleccionado === "Todos" ? sitios : [sitioSeleccionado];
 
@@ -7308,6 +7414,22 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               <Trash2 size={13} /> Borrar este sitio
             </Btn>
           )}
+          {pushEstado !== "cargando" && (
+            <button
+              onClick={pushEstado === "activo" ? desactivarPush : activarPush}
+              disabled={pushEstado === "trabajando"}
+              title={pushEstado === "activo" ? "Este dispositivo recibe alertas aunque la app esté cerrada. Clic para desactivar." : "Recibir alertas de alarma en este dispositivo aunque la app esté cerrada."}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 999, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                background: pushEstado === "activo" ? "rgba(63,185,80,.15)" : IGNIS.alarma,
+                border: `1px solid ${pushEstado === "activo" ? IGNIS.ok : IGNIS.alarma}`,
+                color: pushEstado === "activo" ? IGNIS.ok : "#fff",
+                opacity: pushEstado === "trabajando" ? 0.6 : 1,
+              }}
+            >
+              {pushEstado === "activo" ? "🔔 Alertas activas" : pushEstado === "trabajando" ? "Activando..." : pushEstado === "bloqueado" ? "🔕 Alertas bloqueadas" : "🔔 Activar alertas"}
+            </button>
+          )}
           {esTecnicoSonido && (
             <button
               onClick={toggleSonido}
@@ -7369,14 +7491,18 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
       {/* ---- Tarjetas de conteo (como .stats del dashboard real) — clic para filtrar la bitácora ---- */}
       {(!esMovilNotifier || seccionMovil === "resumen") && (
       <div style={{ display: "grid", gridTemplateColumns: esMovilNotifier ? "repeat(auto-fill,minmax(98px,1fr))" : "repeat(auto-fill,minmax(122px,1fr))", gap: 8 }}>
-        {["general", ...CATEGORIAS_PANEL_TILES].map((cat) => {
+        {["general", ...CATEGORIAS_PANEL_TILES, "historial", "mantenimiento"].map((cat) => {
           const Icono = CATEGORIA_PANEL_ICONO[cat] || HelpCircle;
           const color = CATEGORIA_PANEL_COLOR_DARK[cat];
           const activa = categoriaSeleccionada === cat;
+          // Historial y Mantenimiento son por sitio (el archivo que sube cada equipo)
+          const porSitio = cat === "historial" || cat === "mantenimiento";
+          const sinSitio = porSitio && sitioSeleccionado === "Todos";
           return (
             <div
               key={cat}
-              onClick={() => elegirCategoria(cat)}
+              onClick={() => { if (!sinSitio) elegirCategoria(cat); }}
+              title={sinSitio ? "Elige un sitio para ver su " + ETIQUETA_CATEGORIA_PANEL[cat].toLowerCase() : undefined}
               style={{
                 background: activa ? IGNIS.panel2 : IGNIS.panel, border: `1px solid ${activa ? color : IGNIS.border}`, borderRadius: 10,
                 padding: "9px 12px", position: "relative", overflow: "hidden", cursor: "pointer",
@@ -7384,7 +7510,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               }}
             >
               <div style={{ position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: "0 3px 3px 0", background: color }} />
-              <div style={{ fontSize: 20, fontWeight: 750, lineHeight: 1.1 }}>{conteos[cat] || 0}</div>
+              <div style={{ fontSize: 20, fontWeight: 750, lineHeight: 1.1, opacity: sinSitio ? 0.4 : 1 }}>{sinSitio ? "—" : conteos[cat] || 0}</div>
               <div style={{ color: IGNIS.dim, fontSize: 11.5, marginTop: 3, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                 <Icono size={13} style={{ opacity: 0.85 }} color={color} /> {ETIQUETA_CATEGORIA_PANEL[cat]}
               </div>
@@ -7444,7 +7570,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         <div style={{ background: "#fff", borderRadius: 10, padding: 16 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
             <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: "#888", fontWeight: 700 }}>Tendencias del historial — {sitioSeleccionado}</div>
-            {!cargandoHistorial && historialHtml && (
+            {!EN_APK && !cargandoHistorial && historialHtml && (
               <Btn small variant="accent" onClick={imprimirTendencias}><Download size={13} /> Imprimir / Guardar PDF</Btn>
             )}
           </div>
@@ -7484,6 +7610,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                   onChange={(e) => setBusqueda(e.target.value)}
                 />
               </div>
+{!EN_APK && (<>
               <button
                 onClick={imprimirReporteEventos}
                 disabled={generandoReporte}
@@ -7499,6 +7626,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               >
                 <Download size={13} /> CSV
               </button>
+              </>)}
             </div>
           </div>
           <div style={{ background: IGNIS.paper, color: IGNIS.paperInk, borderRadius: 10, overflow: "hidden", border: "1px solid #d9d3c3" }}>
@@ -7506,7 +7634,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               <div style={{ color: "#9a9377", padding: 24, fontSize: 12.5, textAlign: "center" }}>Cargando eventos...</div>
             ) : eventosFiltrados.length === 0 ? (
               <div style={{ color: "#9a9377", padding: 24, fontSize: 12.5, textAlign: "center" }}>
-                {eventosDelSitio.length === 0
+                {categoriaSeleccionada === "historial" && !busqueda.trim()
+                  ? "Todavía no hay historial capturado de este sitio. Imprime el historial desde el panel (INICIO HIST / IMPRES.HIST / HISTORY PRINT); el IgnisMonitor lo sube solo."
+                  : categoriaSeleccionada === "mantenimiento" && !busqueda.trim()
+                  ? "Todavía no hay informe de mantenimiento de este sitio. Imprime desde el panel el reporte de mantenimiento de detectores; el IgnisMonitor lo sube solo."
+                  : eventosDelSitio.length === 0
                   ? "Todavía no ha llegado ningún evento. Verifica que el IgnisMonitor tenga el nombre de sitio configurado y conexión a internet."
                   : `Ningún evento coincide con "${busqueda}".`}
               </div>
@@ -7521,7 +7653,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.45 }}>{e.texto || "—"}</div>
                         <div style={{ fontSize: 10, color: "#8f8870", marginTop: 2, textTransform: "uppercase", letterSpacing: 0.4, fontFamily: "system-ui,-apple-system,sans-serif" }}>
-                          {sitioSeleccionado === "Todos" ? `${e.sitio || "—"} · ` : ""}{ETIQUETA_CATEGORIA_PANEL[e.categoria] || e.categoria || "Otro"} · {new Date(e.fecha_panel).toLocaleString("es-CR", { dateStyle: "short", timeStyle: "medium" })}
+                          {sitioSeleccionado === "Todos" ? `${e.sitio || "—"} · ` : ""}{ETIQUETA_CATEGORIA_PANEL[e.categoria] || e.categoria || "Otro"} · {e.fecha_panel ? new Date(e.fecha_panel).toLocaleString("es-CR", { dateStyle: "short", timeStyle: "medium" }) : e.categoria === "historial" ? "impreso en el historial del panel" : "informe de mantenimiento del panel"}
                         </div>
                       </div>
                       {esTecnicoSonido && modoSonando > 0 && (
@@ -14325,6 +14457,7 @@ function AppInner() {
     try { localStorage.setItem(CLAVE_SESION, JSON.stringify(u)); } catch {}
   };
   const cerrarSesion = () => {
+    bajaPushDeEsteDispositivo();
     setUser(null);
     setTab(null);
     try { localStorage.removeItem(CLAVE_SESION); } catch {}

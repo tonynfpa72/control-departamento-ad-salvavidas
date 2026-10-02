@@ -8,7 +8,8 @@ import {
   LogOut, Plus, Download, Check, X, Clock, ClipboardList,
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
   ChevronLeft, ChevronRight, ChevronUp, ChevronDown, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck, Package, GraduationCap, Award,
-  Star, Trophy, Zap, Target, Medal, Rocket, Crown, Sparkles, ShieldCheck, Gem, Repeat, Lock, Search
+  Star, Trophy, Zap, Target, Medal, Rocket, Crown, Sparkles, ShieldCheck, Gem, Repeat, Lock, Search,
+  AlertTriangle, Settings, Shield, HelpCircle, Trash2, Wrench, Wifi, TrendingUp
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -6512,30 +6513,205 @@ function ResumenGastosCard() {
 }
 
 // ---------------------------------------------------------------------
-// MONITOREO NOTIFIER: eventos en vivo que mandan los equipos IgnisMonitor
-// (ESP8266) instalados en cada sitio — se guardan en la tabla
-// eventos_panel apenas el panel los imprime, así se ven acá sin
-// necesidad de estar conectado a la red local de ese panel. Se
-// refresca sola cada pocos segundos (no usa Realtime de Supabase, igual
-// que el resto de la app).
+// MONITOREO NOTIFIER: réplica del dashboard del propio IgnisMonitor
+// (ESP8266) dentro de la app, con los mismos colores/fondo oscuro, las
+// mismas categorías y una bitácora estilo "papel de impresora" — pero
+// alimentada desde Supabase (eventos_panel / dispositivos_panel), no
+// desde el equipo directo, así se ve desde cualquier lado. Se refresca
+// sola cada pocos segundos (no usa Realtime de Supabase, igual que el
+// resto de la app).
 // ---------------------------------------------------------------------
-const CATEGORIA_PANEL_COLOR = {
-  alarma: [T.red, T.redSoft],
-  prealarma: [T.red, T.redSoft],
-  problema: [T.amber, T.amberSoft],
-  supervision: [T.blue, T.blueSoft],
-  seguridad: [T.steel, T.steelSoft],
-  borrado: [T.gray, T.graySoft],
-  historial: [T.gray, T.graySoft],
-  mantenimiento: [T.gray, T.graySoft],
-  sinclasificar: [T.gray, T.graySoft],
-  otro: [T.gray, T.graySoft],
+const IGNIS = {
+  bg: "#0b0f14", panel: "#131920", panel2: "#1a212b", border: "#252d38", border2: "#323c49",
+  text: "#e6edf3", dim: "#8b949e", dim2: "#6e7681",
+  paper: "#f3f0e8", paperInk: "#2a2620", paperLine: "#e6e0d2",
+  alarma: "#e5484d", prealarma: "#ff6b6e", problema: "#f2b705", supervision: "#ff8c3d",
+  seguridad: "#2f81f7", sinclasificar: "#9198a1", borrado: "#57606a", ok: "#3fb950",
+};
+const CATEGORIA_PANEL_ICONO = {
+  alarma: Flame, prealarma: Clock, problema: AlertTriangle, supervision: Settings,
+  seguridad: Shield, sinclasificar: HelpCircle, borrado: Trash2, otro: HelpCircle,
+};
+const CATEGORIA_PANEL_COLOR_DARK = {
+  alarma: IGNIS.alarma, prealarma: IGNIS.prealarma, problema: IGNIS.problema, supervision: IGNIS.supervision,
+  seguridad: IGNIS.seguridad, sinclasificar: IGNIS.sinclasificar, borrado: IGNIS.borrado, otro: IGNIS.dim,
 };
 const ETIQUETA_CATEGORIA_PANEL = {
   alarma: "Alarma", prealarma: "Prealarma", problema: "Problema", supervision: "Supervisión",
-  seguridad: "Seguridad", borrado: "Borrado", historial: "Historial", mantenimiento: "Mantenimiento",
-  sinclasificar: "Administrativo", otro: "Otro",
+  seguridad: "Seguridad", borrado: "Borrado", sinclasificar: "Administrativo", otro: "Otro",
 };
+// Mismas 7 categorías que manda el ESP8266 en vivo (Historial/Mantenimiento
+// no se mandan — ver nota en el firmware).
+const CATEGORIAS_PANEL_TILES = ["alarma", "prealarma", "problema", "supervision", "seguridad", "sinclasificar", "borrado"];
+
+// El ESP8266 sube el historial a Supabase Storage con este mismo nombre
+// de archivo (ver nombreArchivoSitio() en el firmware) — si uno cambia,
+// hay que cambiar el otro.
+const nombreArchivoSitioPanel = (sitio) => (sitio || "").replace(/[^a-zA-Z0-9]/g, "_");
+
+// ---- Tendencias del historial: mismo análisis que hace tendencias.js en
+// el propio IgnisMonitor (Reporte ejecutivo), portado tal cual a React. ----
+const TENDENCIAS_CATS = {
+  alarma: { n: "Alarmas", s: "Alarma", c: "#c62828" },
+  problema: { n: "Averías", s: "Avería", c: "#b07d00" },
+  supervision: { n: "Supervisiones", s: "Supervisión", c: "#d4601a" },
+};
+const TENDENCIAS_ORDEN = ["alarma", "problema", "supervision"];
+const TENDENCIAS_MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+const TENDENCIAS_RE_FECHA = /(\d{1,2}):(\d{2})(?::\d{2})?\s*([AP])M?\s+(\d{2})(\d{2})(\d{2})(?![0-9])/i;
+const TENDENCIAS_RE_DIR = /(?:^|\s)(L?\d{1,2}[DM]\d{2,3}|B\d{2})(?=\s|$)/g;
+const tf2 = (n) => String(n).padStart(2, "0");
+const tFechaCorta = (d) => `${tf2(d.getDate())}/${tf2(d.getMonth() + 1)}/${String(d.getFullYear()).slice(2)}`;
+const tNormal = (t) => String(t).normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase();
+const tEsc = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+function tendenciasCategoria(u) {
+  if (/^(REARME|RESET|SILENC|CONFIRMA|RECONOC|BLOQUE|PROGRAM|SISTEMA NORMAL|SIMULACRO|SIGNAL|ACKNOWLEDGE|ACK |SYSTEM|BLOCK|DRILL|SEGUR|SECUR)/.test(u)) return null;
+  if (/^(SUPERV|SUPV|SPV|ACTTRACK|ACTIVE TRACK)/.test(u)) return "supervision";
+  if (/^(PROBLEMA|PRB|AVERIA|FALLA|FALLO|TROUBL|TBL|TB |FAULT|GROUND FAULT|GNDFLT)/.test(u)) return "problema";
+  if (/^(ALARM|FUEGO|INCENDIO|FIRE|PRE-ALARM|PREALARM|PRE ALARM)/.test(u)) return "alarma";
+  return null;
+}
+
+function tendenciasAnalizar(texto) {
+  const crudas = []; let a12 = false, b12 = false, br = 0;
+  (texto || "").split(/\r?\n/).forEach((l) => {
+    l = l.replace(/\s+/g, " ").trim(); if (!l) return;
+    const u = tNormal(l).replace(/^#?\d{1,5}[.:)]?\s+(?=[A-Z])/, "");
+    if (/^(BR|CLR)\b/.test(u)) { br++; return; }
+    const cat = tendenciasCategoria(u); if (!cat) return;
+    const m = u.match(TENDENCIAS_RE_FECHA);
+    if (m) { if (+m[4] > 12) a12 = true; if (+m[5] > 12) b12 = true; }
+    crudas.push({ u, cat, m });
+  });
+  const ddmm = a12 && !b12;
+  const ev = crudas.map((x) => {
+    let fecha = null; let s = x.u; const m = x.m;
+    if (m) {
+      let h = (+m[1]) % 12; if (m[3].toUpperCase() === "P") h += 12;
+      const mes = ddmm ? +m[5] : +m[4], dia = ddmm ? +m[4] : +m[5];
+      const d = new Date(2000 + +m[6], mes - 1, dia, h, +m[2]);
+      if (!isNaN(d) && mes >= 1 && mes <= 12) fecha = d;
+      s = s.replace(m[0], " ");
+    }
+    const dirs = []; s.replace(TENDENCIAS_RE_DIR, (_, g) => { dirs.push(g); return _; });
+    const dir = dirs.length ? dirs[dirs.length - 1] : "";
+    const cuerpo = s.replace(TENDENCIAS_RE_DIR, " ").replace(/\s+/g, " ").trim();
+    return { cat: x.cat, fecha, dir, etiqueta: cuerpo, clave: `${x.cat}|${dir}|${cuerpo}` };
+  });
+  return { ev, br };
+}
+
+function tendenciasTendencia(v) {
+  const n = v.length; if (n < 4) return "—";
+  const k = Math.floor(n / 2); let a = 0, b = 0;
+  for (let i = 0; i < k; i++) a += v[i];
+  for (let i = n - k; i < n; i++) b += v[i];
+  if (!a && !b) return "sin eventos";
+  if (!a) return "▲ aparecen en la 2.ª mitad";
+  const p = Math.round(((b - a) / a) * 100);
+  if (Math.abs(p) < 10) return "● estable";
+  return (p > 0 ? "▲ subiendo +" : "▼ bajando ") + p + "%";
+}
+
+function tendenciasPaso(max) {
+  const br = Math.max(1, max) / 4, p = Math.pow(10, Math.floor(Math.log10(br))), r = br / p;
+  return Math.max(1, (r <= 1 ? 1 : r <= 2 ? 2 : r <= 5 ? 5 : 10) * p);
+}
+
+function tendenciasGrafico(etq, val, color) {
+  const W = 760, H = 150, ml = 34, mr = 8, mt = 8, mb = 22, iw = W - ml - mr, ih = H - mt - mb;
+  const max = Math.max(1, ...val), st = tendenciasPaso(max), top = Math.ceil(max / st) * st;
+  const n = val.length || 1, bd = iw / n, an = Math.max(1, Math.min(bd - 2, bd * 0.72, 34));
+  const y = (v) => mt + ih - (v / top) * ih;
+  let o = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" style="display:block">`;
+  for (let v = 0; v <= top; v += st) {
+    o += `<line x1="${ml}" x2="${W - mr}" y1="${y(v)}" y2="${y(v)}" stroke="${v ? "#e6e6e6" : "#9aa0a6"}"/>` +
+         `<text x="${ml - 5}" y="${y(v) + 3.5}" text-anchor="end" font-size="10" fill="#666">${v}</text>`;
+  }
+  const cada = Math.max(1, Math.ceil(n / Math.floor(iw / 58)));
+  val.forEach((v, i) => {
+    const cx = ml + bd * i + bd / 2, x0 = cx - an / 2, h = (ih * v) / top, yb = mt + ih, yt = yb - h, rr = Math.min(4, an / 2, h);
+    if (v > 0) o += `<path fill="${color}" d="M${x0},${yb}V${yt + rr}Q${x0},${yt} ${x0 + rr},${yt}H${x0 + an - rr}Q${x0 + an},${yt} ${x0 + an},${yt + rr}V${yb}Z"><title>${tEsc(etq[i])}: ${v}</title></path>`;
+    if (v > 0 && n <= 16) o += `<text x="${cx}" y="${yt - 3}" text-anchor="middle" font-size="9.5" fill="#333">${v}</text>`;
+    if (!(i % cada)) o += `<text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="10" fill="#666">${tEsc(etq[i])}</text>`;
+  });
+  if (n >= 4) {
+    let sx = 0, sy = 0, sxy = 0, sxx = 0;
+    val.forEach((v, i) => { sx += i; sy += v; sxy += i * v; sxx += i * i; });
+    const pe = (n * sxy - sx * sy) / ((n * sxx - sx * sx) || 1), b0 = (sy - pe * sx) / n;
+    const yy = (v) => y(Math.max(0, Math.min(top, v)));
+    o += `<line x1="${ml + bd / 2}" x2="${ml + bd * (n - 1) + bd / 2}" y1="${yy(b0)}" y2="${yy(b0 + pe * (n - 1))}" stroke="#444" stroke-width="1.6" stroke-dasharray="5 4" opacity=".7"/>`;
+  }
+  return o + "</svg>";
+}
+
+function generarHtmlTendenciasPanel(texto) {
+  const r = tendenciasAnalizar(texto); const ev = r.ev;
+  if (!ev.length) {
+    return '<p style="margin:6px 0 0;color:#666;font-size:13px">Todavía no hay un historial capturado para este sitio. Imprime el historial desde el panel (volcado <b>INICIO HIST…</b>, <b>IMPRES.HIST…</b> o <b>HISTORY PRINT…</b>); el equipo lo sube solo y esta sección se completa sola.</p>';
+  }
+  const fs = ev.filter((e) => e.fecha).map((e) => +e.fecha);
+  const min = fs.length ? new Date(Math.min(...fs)) : null, max = fs.length ? new Date(Math.max(...fs)) : null;
+  let tipo = "mes"; const dias = fs.length ? (max - min) / 864e5 : 0;
+  if (dias <= 45) tipo = "dia"; else if (dias <= 280) tipo = "semana";
+  const ini = tipo === "dia" ? (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
+    : tipo === "semana" ? (d) => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
+    : (d) => new Date(d.getFullYear(), d.getMonth(), 1);
+  const claves = [], etq = [];
+  if (min) {
+    let d = ini(min), g = 0;
+    while (d <= max && g++ < 2000) {
+      claves.push(+d);
+      etq.push(tipo === "mes" ? `${TENDENCIAS_MESES[d.getMonth()]} ${String(d.getFullYear()).slice(2)}` : tipo === "semana" ? `sem ${tFechaCorta(d)}` : tFechaCorta(d));
+      d = tipo === "dia" ? new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)
+        : tipo === "semana" ? new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7) : new Date(d.getFullYear(), d.getMonth() + 1, 1);
+    }
+  }
+  const serie = (cat) => {
+    const ix = {}; const v = claves.map((k, i) => { ix[k] = i; return 0; });
+    ev.forEach((e) => { if (e.fecha && e.cat === cat) { const i = ix[+ini(e.fecha)]; if (i !== undefined) v[i]++; } });
+    return v;
+  };
+  const grupos = (cat) => {
+    const m = {};
+    ev.forEach((e) => {
+      if (cat && e.cat !== cat) return;
+      const x = m[e.clave] || (m[e.clave] = { e, n: 0, ult: null });
+      x.n++; if (e.fecha && (!x.ult || e.fecha > x.ult)) x.ult = e.fecha;
+    });
+    return Object.values(m).sort((a, b) => b.n - a.n);
+  };
+  const th = 'style="text-align:left;padding:6px 4px;border-bottom:1px solid #ddd"';
+  const td = 'style="padding:6px 4px;border-bottom:1px solid #eee"';
+  const nomAgr = { dia: "por día", semana: "por semana", mes: "por mes" }[tipo];
+  let h = `<p style="margin:4px 0 12px;color:#666;font-size:12.5px">Fuente: último historial impreso por el panel · <b>${ev.length}</b> eventos` +
+    (min ? ` del <b>${tFechaCorta(min)}</b> al <b>${tFechaCorta(max)}</b>` : "") +
+    (r.br ? ` · ${r.br} restablecimientos (BR) no contados` : "") + "</p>";
+
+  h += `<table style="width:100%;border-collapse:collapse;font-size:12.5px"><tr><th ${th}>Categoría</th><th ${th}>Total</th><th ${th}>Tendencia</th><th ${th}>Evento más repetido</th><th ${th}>Veces</th></tr>`;
+  TENDENCIAS_ORDEN.forEach((c) => {
+    const tot = ev.filter((e) => e.cat === c).length, g = grupos(c)[0];
+    h += `<tr><td ${td}><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${TENDENCIAS_CATS[c].c};margin-right:6px"></span>${TENDENCIAS_CATS[c].n}</td>` +
+      `<td ${td}><b>${tot}</b></td><td ${td}>${tendenciasTendencia(serie(c))}</td>` +
+      `<td ${td} style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${g ? tEsc(g.e.etiqueta + (g.e.dir ? " · " + g.e.dir : "")) : "—"}</td>` +
+      `<td ${td}>${g ? `${g.n} <span style="color:#777">(${Math.round((g.n / tot) * 100)}%)</span>` : "—"}</td></tr>`;
+  });
+  h += "</table>";
+
+  if (claves.length) TENDENCIAS_ORDEN.forEach((c) => {
+    const v = serie(c), t = v.reduce((a, b) => a + b, 0);
+    h += `<div><div style="font-size:13px;font-weight:600;margin:14px 0 4px;color:#222"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${TENDENCIAS_CATS[c].c};margin-right:6px"></span>${TENDENCIAS_CATS[c].n} <span style="font-weight:400;color:#666">${nomAgr} · ${t} eventos · tendencia: ${tendenciasTendencia(v)}</span></div>${tendenciasGrafico(etq, v, TENDENCIAS_CATS[c].c)}</div>`;
+  });
+
+  const top = grupos(null).slice(0, 10);
+  h += `<h3 style="font-size:13px;margin:18px 0 0;color:#222">Eventos más recurrentes</h3><table style="width:100%;border-collapse:collapse;font-size:12.5px"><tr><th ${th}>#</th><th ${th}>Evento</th><th ${th}>Categoría</th><th ${th}>Veces</th><th ${th}>Última</th></tr>`;
+  top.forEach((x, i) => {
+    h += `<tr><td ${td}>${i + 1}</td><td ${td} style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${tEsc(x.e.etiqueta + (x.e.dir ? " · " + x.e.dir : ""))}</td><td ${td}>${TENDENCIAS_CATS[x.e.cat].s}</td><td ${td}><b>${x.n}</b></td><td ${td}>${x.ult ? tFechaCorta(x.ult) : "—"}</td></tr>`;
+  });
+  h += '</table><p style="margin:8px 0 0;font-size:11.5px;color:#888">La línea punteada de cada gráfico es la tendencia (mínimos cuadrados). La tendencia compara la segunda mitad del período con la primera.</p>';
+  return h;
+}
 
 function MonitoreoNotifier() {
   const currentUser = useContext(CurrentUserContext);
@@ -6547,6 +6723,9 @@ function MonitoreoNotifier() {
   const [sitioSeleccionado, setSitioSeleccionado] = useState("Todos");
   const [busqueda, setBusqueda] = useState("");
   const [borrando, setBorrando] = useState(false);
+  const [vista, setVista] = useState("eventos"); // "eventos" | "tendencias"
+  const [historialHtml, setHistorialHtml] = useState("");
+  const [cargandoHistorial, setCargandoHistorial] = useState(false);
 
   useEffect(() => {
     const cargar = async () => {
@@ -6573,36 +6752,126 @@ function MonitoreoNotifier() {
     return [...lista].sort((a, b) => (a.sitio || "").localeCompare(b.sitio || ""));
   }, [dispositivos, sitioSeleccionado]);
 
+  const eventosDelSitio = useMemo(
+    () => (sitioSeleccionado === "Todos" ? eventos : eventos.filter((e) => e.sitio === sitioSeleccionado)),
+    [eventos, sitioSeleccionado]
+  );
+
   const eventosFiltrados = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
-    return eventos.filter((e) => {
-      const matchSitio = sitioSeleccionado === "Todos" || e.sitio === sitioSeleccionado;
-      const matchTexto = !q || (e.texto || "").toLowerCase().includes(q) || (e.sitio || "").toLowerCase().includes(q);
-      return matchSitio && matchTexto;
-    });
-  }, [eventos, sitioSeleccionado, busqueda]);
+    if (!q) return eventosDelSitio;
+    return eventosDelSitio.filter((e) => (e.texto || "").toLowerCase().includes(q) || (e.sitio || "").toLowerCase().includes(q));
+  }, [eventosDelSitio, busqueda]);
+
+  const conteos = useMemo(() => {
+    const c = {};
+    CATEGORIAS_PANEL_TILES.forEach((cat) => { c[cat] = 0; });
+    eventosDelSitio.forEach((e) => { if (c[e.categoria] !== undefined) c[e.categoria]++; else c.otro = (c.otro || 0) + 1; });
+    return c;
+  }, [eventosDelSitio]);
+
+  // Vuelve a "eventos" si cambian de sitio mientras ven Tendencias (el
+  // historial es por sitio — no tiene sentido en "Todos").
+  useEffect(() => { if (sitioSeleccionado === "Todos" && vista === "tendencias") setVista("eventos"); }, [sitioSeleccionado, vista]);
+
+  useEffect(() => {
+    if (vista !== "tendencias" || sitioSeleccionado === "Todos") return;
+    let cancelado = false;
+    setCargandoHistorial(true);
+    (async () => {
+      const archivo = `${nombreArchivoSitioPanel(sitioSeleccionado)}.txt`;
+      const { data, error } = await supabase.storage.from("historial_paneles").download(archivo);
+      if (cancelado) return;
+      if (error || !data) {
+        setHistorialHtml(generarHtmlTendenciasPanel(""));
+      } else {
+        const texto = await data.text();
+        setHistorialHtml(generarHtmlTendenciasPanel(texto));
+      }
+      setCargandoHistorial(false);
+    })();
+    return () => { cancelado = true; };
+  }, [vista, sitioSeleccionado]);
 
   const borrarEventosDelSitio = async () => {
     if (sitioSeleccionado === "Todos") return;
-    if (!(await confirmar(`¿Borrar TODOS los eventos guardados del sitio "${sitioSeleccionado}"? Esto no se puede deshacer.`, { confirmLabel: "Sí, borrar", variant: "danger" }))) return;
+    if (!(await confirmar(`¿Borrar TODOS los eventos y el historial guardados del sitio "${sitioSeleccionado}"? Esto no se puede deshacer.`, { confirmLabel: "Sí, borrar", variant: "danger" }))) return;
     setBorrando(true);
-    const { error } = await supabase.from("eventos_panel").delete().eq("sitio", sitioSeleccionado);
+    const [{ error }] = await Promise.all([
+      supabase.from("eventos_panel").delete().eq("sitio", sitioSeleccionado),
+      supabase.storage.from("historial_paneles").remove([`${nombreArchivoSitioPanel(sitioSeleccionado)}.txt`]),
+    ]);
     setBorrando(false);
     if (!error) setEventos((prev) => prev.filter((e) => e.sitio !== sitioSeleccionado));
+    setHistorialHtml("");
+    if (vista === "tendencias") setVista("eventos");
   };
 
+  const selectEstilo = { background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 13, fontFamily: "inherit" };
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <Card title="Equipos conectados">
+    <div style={{ background: IGNIS.bg, borderRadius: 14, padding: 18, display: "flex", flexDirection: "column", gap: 14, color: IGNIS.text }}>
+      {/* ---- Encabezado estilo IgnisMonitor ---- */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, borderBottom: `1px solid ${IGNIS.border}`, paddingBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 30, height: 30, borderRadius: 8, background: IGNIS.panel2, border: `1px solid ${IGNIS.border}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Flame size={16} color={IGNIS.alarma} />
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 1.5, textTransform: "uppercase" }}>IgnisMonitor</div>
+            <div style={{ fontSize: 10.5, color: IGNIS.dim2 }}>Monitoreo Notifier — todos los sitios en vivo</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <select style={{ ...selectEstilo, width: 220 }} value={sitioSeleccionado} onChange={(e) => setSitioSeleccionado(e.target.value)}>
+            <option value="Todos">Todos los sitios ({sitios.length})</option>
+            {sitios.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+          {sitioSeleccionado !== "Todos" && (
+            <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${IGNIS.border}` }}>
+              <button onClick={() => setVista("eventos")} style={{ padding: "7px 12px", fontSize: 12.5, border: "none", cursor: "pointer", background: vista === "eventos" ? IGNIS.panel2 : IGNIS.panel, color: vista === "eventos" ? IGNIS.text : IGNIS.dim, fontWeight: 600 }}>Eventos</button>
+              <button onClick={() => setVista("tendencias")} style={{ padding: "7px 12px", fontSize: 12.5, border: "none", cursor: "pointer", background: vista === "tendencias" ? IGNIS.panel2 : IGNIS.panel, color: vista === "tendencias" ? IGNIS.text : IGNIS.dim, fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}><TrendingUp size={13} /> Tendencias</button>
+            </div>
+          )}
+          {canGestionar && sitioSeleccionado !== "Todos" && (
+            <Btn small variant="danger" onClick={borrarEventosDelSitio} disabled={borrando}>
+              <Trash2 size={13} /> Borrar este sitio
+            </Btn>
+          )}
+        </div>
+      </div>
+
+      {/* ---- Tarjetas de conteo (como .stats del dashboard real) ---- */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(122px,1fr))", gap: 8 }}>
+        {CATEGORIAS_PANEL_TILES.map((cat) => {
+          const Icono = CATEGORIA_PANEL_ICONO[cat] || HelpCircle;
+          const color = CATEGORIA_PANEL_COLOR_DARK[cat];
+          return (
+            <div key={cat} style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 10, padding: "9px 12px", position: "relative", overflow: "hidden" }}>
+              <div style={{ position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: "0 3px 3px 0", background: color }} />
+              <div style={{ fontSize: 20, fontWeight: 750, lineHeight: 1.1 }}>{conteos[cat] || 0}</div>
+              <div style={{ color: IGNIS.dim, fontSize: 11.5, marginTop: 3, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                <Icono size={13} style={{ opacity: 0.85 }} color={color} /> {ETIQUETA_CATEGORIA_PANEL[cat]}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ---- Equipos conectados ---- */}
+      <div style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 10, padding: 14 }}>
+        <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: IGNIS.dim, fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+          <Wifi size={13} /> Equipos conectados
+        </div>
         {dispositivosFiltrados.length === 0 ? (
-          <div style={{ color: T.gray, fontSize: 13 }}>
+          <div style={{ color: IGNIS.dim, fontSize: 13 }}>
             Todavía no se ha conectado ningún equipo. Verifica que el IgnisMonitor tenga el nombre de sitio configurado y conexión a internet (avisa cada minuto).
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
-                <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                <tr style={{ textAlign: "left", color: IGNIS.dim, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
                   <th style={{ padding: "6px 8px" }}>Sitio</th><th>Estado</th><th>Red (SSID)</th><th>MAC</th><th>IP</th><th>Señal</th><th>Última actualización</th>
                 </tr>
               </thead>
@@ -6611,18 +6880,18 @@ function MonitoreoNotifier() {
                   const segundos = (Date.now() - new Date(d.actualizado_en).getTime()) / 1000;
                   const enLinea = segundos < 150; // sin aviso en más de ~2.5 min (el equipo avisa cada 1 min) = se asume caído
                   return (
-                    <tr key={d.sitio} style={{ borderTop: `1px solid ${T.line}` }}>
+                    <tr key={d.sitio} style={{ borderTop: `1px solid ${IGNIS.border}` }}>
                       <td style={{ padding: "8px", fontWeight: 600 }}>{d.sitio}</td>
                       <td>
-                        <Badge color={enLinea ? T.green : T.red} soft={enLinea ? T.greenSoft : T.redSoft}>
-                          <Dot color={enLinea ? T.green : T.red} />{enLinea ? "En línea" : "Sin conexión"}
-                        </Badge>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 9px", borderRadius: 999, fontSize: 12, fontWeight: 600, background: enLinea ? "rgba(63,185,80,.14)" : "rgba(229,72,77,.14)", color: enLinea ? IGNIS.ok : IGNIS.alarma }}>
+                          <Dot color={enLinea ? IGNIS.ok : IGNIS.alarma} />{enLinea ? "En línea" : "Sin conexión"}
+                        </span>
                       </td>
                       <td>{d.ssid || "—"}</td>
                       <td style={{ fontFamily: "monospace", fontSize: 12 }}>{d.mac || "—"}</td>
                       <td style={{ fontFamily: "monospace", fontSize: 12 }}>{d.ip || "—"}</td>
                       <td>{d.rssi != null ? `${d.rssi} dBm` : "—"}</td>
-                      <td style={{ fontSize: 12, color: T.inkSoft }}>{new Date(d.actualizado_en).toLocaleString("es-CR", { dateStyle: "short", timeStyle: "medium" })}</td>
+                      <td style={{ fontSize: 12, color: IGNIS.dim }}>{new Date(d.actualizado_en).toLocaleString("es-CR", { dateStyle: "short", timeStyle: "medium" })}</td>
                     </tr>
                   );
                 })}
@@ -6630,56 +6899,64 @@ function MonitoreoNotifier() {
             </table>
           </div>
         )}
-      </Card>
-      <Card title="Eventos en vivo" action={
-        <div style={{ display: "flex", gap: 8 }}>
-          <select style={{ ...inputStyle, width: 220 }} value={sitioSeleccionado} onChange={(e) => setSitioSeleccionado(e.target.value)}>
-            <option value="Todos">Todos los sitios ({sitios.length})</option>
-            {sitios.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-          {canGestionar && sitioSeleccionado !== "Todos" && (
-            <Btn small variant="danger" onClick={borrarEventosDelSitio} disabled={borrando}>
-              <X size={13} /> Borrar eventos de este sitio
-            </Btn>
+      </div>
+
+      {vista === "tendencias" && sitioSeleccionado !== "Todos" ? (
+        // ---- Tendencias: mismo análisis que el Reporte ejecutivo del equipo, sobre papel blanco (igual que allá) ----
+        <div style={{ background: "#fff", borderRadius: 10, padding: 16 }}>
+          <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: "#888", fontWeight: 700, marginBottom: 6 }}>Tendencias del historial — {sitioSeleccionado}</div>
+          {cargandoHistorial ? (
+            <div style={{ color: "#666", fontSize: 13 }}>Cargando historial...</div>
+          ) : (
+            <div dangerouslySetInnerHTML={{ __html: historialHtml }} />
           )}
         </div>
-      }>
-        <div style={{ position: "relative", marginBottom: 12 }}>
-          <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T.gray }} />
-          <input
-            style={{ ...inputStyle, paddingLeft: 30 }}
-            placeholder="Buscar por texto o sitio..."
-            value={busqueda}
-            onChange={(e) => setBusqueda(e.target.value)}
-          />
-        </div>
-        {cargando ? (
-          <div style={{ color: T.gray, fontSize: 13 }}>Cargando eventos...</div>
-        ) : eventosFiltrados.length === 0 ? (
-          <div style={{ color: T.gray, fontSize: 13 }}>
-            {eventos.length === 0
-              ? "Todavía no ha llegado ningún evento. Verifica que el IgnisMonitor tenga el nombre de sitio configurado y conexión a internet."
-              : `Ningún evento coincide con "${busqueda}".`}
+      ) : (
+        // ---- Bitácora estilo "papel de impresora" (igual que el dashboard real) ----
+        <div style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 10, padding: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+            <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: IGNIS.dim, fontWeight: 700 }}>Eventos en vivo</div>
+            <div style={{ position: "relative" }}>
+              <Search size={13} style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", color: IGNIS.dim }} />
+              <input
+                style={{ ...selectEstilo, paddingLeft: 28, width: 230 }}
+                placeholder="Buscar por texto o sitio..."
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
+              />
+            </div>
           </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 560, overflowY: "auto" }}>
-            {eventosFiltrados.map((e) => {
-              const [colorTxt, colorFondo] = CATEGORIA_PANEL_COLOR[e.categoria] || CATEGORIA_PANEL_COLOR.otro;
-              return (
-                <div key={e.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, padding: "9px 10px", background: T.bg, borderRadius: 8 }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, wordBreak: "break-word" }}>{e.texto || "—"}</div>
-                    <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 2 }}>
-                      {e.sitio || "—"} · {new Date(e.fecha_panel).toLocaleString("es-CR", { dateStyle: "short", timeStyle: "medium" })}
+          <div style={{ background: IGNIS.paper, color: IGNIS.paperInk, borderRadius: 10, overflow: "hidden", border: "1px solid #d9d3c3" }}>
+            {cargando ? (
+              <div style={{ color: "#9a9377", padding: 24, fontSize: 12.5, textAlign: "center" }}>Cargando eventos...</div>
+            ) : eventosFiltrados.length === 0 ? (
+              <div style={{ color: "#9a9377", padding: 24, fontSize: 12.5, textAlign: "center" }}>
+                {eventosDelSitio.length === 0
+                  ? "Todavía no ha llegado ningún evento. Verifica que el IgnisMonitor tenga el nombre de sitio configurado y conexión a internet."
+                  : `Ningún evento coincide con "${busqueda}".`}
+              </div>
+            ) : (
+              <div style={{ maxHeight: 520, overflowY: "auto", padding: "4px 12px 8px 14px", fontFamily: "ui-monospace,SFMono-Regular,Consolas,monospace", fontSize: 12.5 }}>
+                {eventosFiltrados.map((e) => {
+                  const Icono = CATEGORIA_PANEL_ICONO[e.categoria] || HelpCircle;
+                  const color = CATEGORIA_PANEL_COLOR_DARK[e.categoria] || IGNIS.dim;
+                  return (
+                    <div key={e.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "7px 8px", borderBottom: `1px solid ${IGNIS.paperLine}`, borderRadius: 6, background: e.categoria === "alarma" ? "rgba(229,72,77,.07)" : e.categoria === "problema" ? "rgba(242,183,5,.07)" : "transparent" }}>
+                      <Icono size={16} color={color} style={{ flex: "none", marginTop: 1 }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.45 }}>{e.texto || "—"}</div>
+                        <div style={{ fontSize: 10, color: "#8f8870", marginTop: 2, textTransform: "uppercase", letterSpacing: 0.4, fontFamily: "system-ui,-apple-system,sans-serif" }}>
+                          {sitioSeleccionado === "Todos" ? `${e.sitio || "—"} · ` : ""}{ETIQUETA_CATEGORIA_PANEL[e.categoria] || e.categoria || "Otro"} · {new Date(e.fecha_panel).toLocaleString("es-CR", { dateStyle: "short", timeStyle: "medium" })}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <Badge color={colorTxt} soft={colorFondo}><Dot color={colorTxt} />{ETIQUETA_CATEGORIA_PANEL[e.categoria] || e.categoria || "Otro"}</Badge>
-                </div>
-              );
-            })}
+                  );
+                })}
+              </div>
+            )}
           </div>
-        )}
-      </Card>
+        </div>
+      )}
     </div>
   );
 }

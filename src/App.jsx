@@ -156,6 +156,7 @@ const AREAS = [
   { id: "apertura", label: "Apertura de OD", icon: Building2, color: T.blue },
   { id: "equipos", label: "Equipos", icon: Package, color: T.amber },
   { id: "facturacion_publica", label: "Facturación", icon: LayoutDashboard, color: T.green },
+  { id: "monitoreo_notifier", label: "Monitoreo Notifier", icon: Flame, color: T.red },
   { id: "gastos_tarjeta", label: "Gastos de Tarjeta", icon: CreditCard, color: T.red },
   { id: "vehiculos", label: "Vehículos", icon: Truck, color: T.blue },
   { id: "planilla", label: "Planilla", icon: Wallet, color: T.amber },
@@ -6507,6 +6508,135 @@ function ResumenGastosCard() {
         </>
       )}
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------
+// MONITOREO NOTIFIER: eventos en vivo que mandan los equipos IgnisMonitor
+// (ESP8266) instalados en cada sitio — se guardan en la tabla
+// eventos_panel apenas el panel los imprime, así se ven acá sin
+// necesidad de estar conectado a la red local de ese panel. Se
+// refresca sola cada pocos segundos (no usa Realtime de Supabase, igual
+// que el resto de la app).
+// ---------------------------------------------------------------------
+const CATEGORIA_PANEL_COLOR = {
+  alarma: [T.red, T.redSoft],
+  prealarma: [T.red, T.redSoft],
+  problema: [T.amber, T.amberSoft],
+  supervision: [T.blue, T.blueSoft],
+  seguridad: [T.steel, T.steelSoft],
+  borrado: [T.gray, T.graySoft],
+  historial: [T.gray, T.graySoft],
+  mantenimiento: [T.gray, T.graySoft],
+  sinclasificar: [T.gray, T.graySoft],
+  otro: [T.gray, T.graySoft],
+};
+const ETIQUETA_CATEGORIA_PANEL = {
+  alarma: "Alarma", prealarma: "Prealarma", problema: "Problema", supervision: "Supervisión",
+  seguridad: "Seguridad", borrado: "Borrado", historial: "Historial", mantenimiento: "Mantenimiento",
+  sinclasificar: "Administrativo", otro: "Otro",
+};
+
+function MonitoreoNotifier() {
+  const currentUser = useContext(CurrentUserContext);
+  const confirmar = useContext(ConfirmContext);
+  const canGestionar = currentUser?.categoria === "admin" || currentUser?.categoria === "asistente";
+  const [eventos, setEventos] = useState([]);
+  const [cargando, setCargando] = useState(true);
+  const [sitioSeleccionado, setSitioSeleccionado] = useState("Todos");
+  const [busqueda, setBusqueda] = useState("");
+  const [borrando, setBorrando] = useState(false);
+
+  useEffect(() => {
+    const cargar = async () => {
+      const { data, error } = await supabase
+        .from("eventos_panel")
+        .select("*")
+        .order("fecha_panel", { ascending: false })
+        .limit(500);
+      if (!error && data) setEventos(data);
+      setCargando(false);
+    };
+    cargar();
+    const intervalo = setInterval(cargar, 5000); // "en vivo": se refresca sola cada 5s
+    return () => clearInterval(intervalo);
+  }, []);
+
+  const sitios = useMemo(() => {
+    const unicos = [...new Set(eventos.map((e) => e.sitio).filter(Boolean))];
+    return unicos.sort((a, b) => a.localeCompare(b));
+  }, [eventos]);
+
+  const eventosFiltrados = useMemo(() => {
+    const q = busqueda.trim().toLowerCase();
+    return eventos.filter((e) => {
+      const matchSitio = sitioSeleccionado === "Todos" || e.sitio === sitioSeleccionado;
+      const matchTexto = !q || (e.texto || "").toLowerCase().includes(q) || (e.sitio || "").toLowerCase().includes(q);
+      return matchSitio && matchTexto;
+    });
+  }, [eventos, sitioSeleccionado, busqueda]);
+
+  const borrarEventosDelSitio = async () => {
+    if (sitioSeleccionado === "Todos") return;
+    if (!(await confirmar(`¿Borrar TODOS los eventos guardados del sitio "${sitioSeleccionado}"? Esto no se puede deshacer.`, { confirmLabel: "Sí, borrar", variant: "danger" }))) return;
+    setBorrando(true);
+    const { error } = await supabase.from("eventos_panel").delete().eq("sitio", sitioSeleccionado);
+    setBorrando(false);
+    if (!error) setEventos((prev) => prev.filter((e) => e.sitio !== sitioSeleccionado));
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <Card title="Eventos en vivo" action={
+        <div style={{ display: "flex", gap: 8 }}>
+          <select style={{ ...inputStyle, width: 220 }} value={sitioSeleccionado} onChange={(e) => setSitioSeleccionado(e.target.value)}>
+            <option value="Todos">Todos los sitios ({sitios.length})</option>
+            {sitios.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+          {canGestionar && sitioSeleccionado !== "Todos" && (
+            <Btn small variant="danger" onClick={borrarEventosDelSitio} disabled={borrando}>
+              <X size={13} /> Borrar eventos de este sitio
+            </Btn>
+          )}
+        </div>
+      }>
+        <div style={{ position: "relative", marginBottom: 12 }}>
+          <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T.gray }} />
+          <input
+            style={{ ...inputStyle, paddingLeft: 30 }}
+            placeholder="Buscar por texto o sitio..."
+            value={busqueda}
+            onChange={(e) => setBusqueda(e.target.value)}
+          />
+        </div>
+        {cargando ? (
+          <div style={{ color: T.gray, fontSize: 13 }}>Cargando eventos...</div>
+        ) : eventosFiltrados.length === 0 ? (
+          <div style={{ color: T.gray, fontSize: 13 }}>
+            {eventos.length === 0
+              ? "Todavía no ha llegado ningún evento. Verifica que el IgnisMonitor tenga el nombre de sitio configurado y conexión a internet."
+              : `Ningún evento coincide con "${busqueda}".`}
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 560, overflowY: "auto" }}>
+            {eventosFiltrados.map((e) => {
+              const [colorTxt, colorFondo] = CATEGORIA_PANEL_COLOR[e.categoria] || CATEGORIA_PANEL_COLOR.otro;
+              return (
+                <div key={e.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, padding: "9px 10px", background: T.bg, borderRadius: 8 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, wordBreak: "break-word" }}>{e.texto || "—"}</div>
+                    <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 2 }}>
+                      {e.sitio || "—"} · {new Date(e.fecha_panel).toLocaleString("es-CR", { dateStyle: "short", timeStyle: "medium" })}
+                    </div>
+                  </div>
+                  <Badge color={colorTxt} soft={colorFondo}><Dot color={colorTxt} />{ETIQUETA_CATEGORIA_PANEL[e.categoria] || e.categoria || "Otro"}</Badge>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+    </div>
   );
 }
 
@@ -13339,6 +13469,7 @@ function AppInner() {
         {tab === "salud" && <SaludOcupacional />}
         {tab === "apertura" && <AperturaOD />}
         {tab === "facturacion_publica" && <FacturacionPublica />}
+        {tab === "monitoreo_notifier" && <MonitoreoNotifier />}
         {tab === "gastos_tarjeta" && <GastosTarjeta />}
         {tab === "vehiculos" && <Vehiculos />}
         {tab === "equipos" && <EquiposCorrectivos irInicial={odParaEquipos} onIrConsumido={() => setOdParaEquipos(null)} />}

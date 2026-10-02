@@ -6542,6 +6542,7 @@ function MonitoreoNotifier() {
   const confirmar = useContext(ConfirmContext);
   const canGestionar = currentUser?.categoria === "admin" || currentUser?.categoria === "asistente";
   const [eventos, setEventos] = useState([]);
+  const [dispositivos, setDispositivos] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [sitioSeleccionado, setSitioSeleccionado] = useState("Todos");
   const [busqueda, setBusqueda] = useState("");
@@ -6549,12 +6550,12 @@ function MonitoreoNotifier() {
 
   useEffect(() => {
     const cargar = async () => {
-      const { data, error } = await supabase
-        .from("eventos_panel")
-        .select("*")
-        .order("fecha_panel", { ascending: false })
-        .limit(500);
-      if (!error && data) setEventos(data);
+      const [{ data: ev, error: errEv }, { data: disp, error: errDisp }] = await Promise.all([
+        supabase.from("eventos_panel").select("*").order("fecha_panel", { ascending: false }).limit(500),
+        supabase.from("dispositivos_panel").select("*"),
+      ]);
+      if (!errEv && ev) setEventos(ev);
+      if (!errDisp && disp) setDispositivos(disp);
       setCargando(false);
     };
     cargar();
@@ -6563,9 +6564,14 @@ function MonitoreoNotifier() {
   }, []);
 
   const sitios = useMemo(() => {
-    const unicos = [...new Set(eventos.map((e) => e.sitio).filter(Boolean))];
-    return unicos.sort((a, b) => a.localeCompare(b));
-  }, [eventos]);
+    const unicos = new Set([...eventos.map((e) => e.sitio), ...dispositivos.map((d) => d.sitio)].filter(Boolean));
+    return [...unicos].sort((a, b) => a.localeCompare(b));
+  }, [eventos, dispositivos]);
+
+  const dispositivosFiltrados = useMemo(() => {
+    const lista = sitioSeleccionado === "Todos" ? dispositivos : dispositivos.filter((d) => d.sitio === sitioSeleccionado);
+    return [...lista].sort((a, b) => (a.sitio || "").localeCompare(b.sitio || ""));
+  }, [dispositivos, sitioSeleccionado]);
 
   const eventosFiltrados = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
@@ -6587,6 +6593,44 @@ function MonitoreoNotifier() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <Card title="Equipos conectados">
+        {dispositivosFiltrados.length === 0 ? (
+          <div style={{ color: T.gray, fontSize: 13 }}>
+            Todavía no se ha conectado ningún equipo. Verifica que el IgnisMonitor tenga el nombre de sitio configurado y conexión a internet (avisa cada minuto).
+          </div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                  <th style={{ padding: "6px 8px" }}>Sitio</th><th>Estado</th><th>Red (SSID)</th><th>MAC</th><th>IP</th><th>Señal</th><th>Última actualización</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dispositivosFiltrados.map((d) => {
+                  const segundos = (Date.now() - new Date(d.actualizado_en).getTime()) / 1000;
+                  const enLinea = segundos < 150; // sin aviso en más de ~2.5 min (el equipo avisa cada 1 min) = se asume caído
+                  return (
+                    <tr key={d.sitio} style={{ borderTop: `1px solid ${T.line}` }}>
+                      <td style={{ padding: "8px", fontWeight: 600 }}>{d.sitio}</td>
+                      <td>
+                        <Badge color={enLinea ? T.green : T.red} soft={enLinea ? T.greenSoft : T.redSoft}>
+                          <Dot color={enLinea ? T.green : T.red} />{enLinea ? "En línea" : "Sin conexión"}
+                        </Badge>
+                      </td>
+                      <td>{d.ssid || "—"}</td>
+                      <td style={{ fontFamily: "monospace", fontSize: 12 }}>{d.mac || "—"}</td>
+                      <td style={{ fontFamily: "monospace", fontSize: 12 }}>{d.ip || "—"}</td>
+                      <td>{d.rssi != null ? `${d.rssi} dBm` : "—"}</td>
+                      <td style={{ fontSize: 12, color: T.inkSoft }}>{new Date(d.actualizado_en).toLocaleString("es-CR", { dateStyle: "short", timeStyle: "medium" })}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
       <Card title="Eventos en vivo" action={
         <div style={{ display: "flex", gap: 8 }}>
           <select style={{ ...inputStyle, width: 220 }} value={sitioSeleccionado} onChange={(e) => setSitioSeleccionado(e.target.value)}>

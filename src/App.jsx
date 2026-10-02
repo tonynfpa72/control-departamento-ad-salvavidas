@@ -6646,7 +6646,12 @@ const coincideCategoriaPanel = (e, sel) =>
 // El ESP8266 sube el historial a Supabase Storage con este mismo nombre
 // de archivo (ver nombreArchivoSitio() en el firmware) — si uno cambia,
 // hay que cambiar el otro.
-const nombreArchivoSitioPanel = (sitio) => (sitio || "").replace(/[^a-zA-Z0-9]/g, "_");
+// OJO: el firmware recorre el nombre BYTE por BYTE (UTF-8), así que una
+// letra con tilde (é = 2 bytes) se vuelve "__". Se replica igual aquí.
+const nombreArchivoSitioPanel = (sitio) =>
+  Array.from(new TextEncoder().encode(sitio || ""))
+    .map((b) => ((b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) ? String.fromCharCode(b) : "_"))
+    .join("");
 
 // ---- Tendencias del historial: mismo análisis que hace tendencias.js en
 // el propio IgnisMonitor (Reporte ejecutivo), portado tal cual a React. ----
@@ -7161,8 +7166,16 @@ function MonitoreoNotifier() {
 
   // Líneas del historial / informe de mantenimiento como "eventos" para
   // mostrarlas en la bitácora al tocar sus tarjetas.
-  const lineasHistorial = useMemo(() => (histTexto || "").split(/\r?\n/).map((t) => t.trim()).filter(Boolean)
-    .map((texto, i) => ({ id: `hist-${i}`, categoria: "historial", texto, sitio: sitioSeleccionado, fecha_panel: null })), [histTexto, sitioSeleccionado]);
+  // Cada línea del historial se clasifica igual que en Tendencias
+  // (Alarma / Problema / Supervisión / Borrado); las demás quedan "otras".
+  const lineasHistorial = useMemo(() => (histTexto || "").split(/\r?\n/).map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean)
+    .map((texto, i) => {
+      const u = tNormal(texto).replace(/^#?\d{1,5}[.:)]?\s+(?=[A-Z])/, "");
+      const subcat = /^(BR|CLR)\b/.test(u) ? "borrado" : tendenciasCategoria(u) || "otro";
+      return { id: `hist-${i}`, categoria: "historial", subcat, texto, sitio: sitioSeleccionado, fecha_panel: null };
+    }), [histTexto, sitioSeleccionado]);
+  const [histSubcat, setHistSubcat] = useState(null); // filtro dentro del historial
+  useEffect(() => { setHistSubcat(null); }, [sitioSeleccionado, categoriaSeleccionada]);
   const lineasMantenimiento = useMemo(() => mantLineas.map((t) => String(t).trim()).filter(Boolean)
     .map((texto, i) => ({ id: `mant-${i}`, categoria: "mantenimiento", texto, sitio: sitioSeleccionado, fecha_panel: null })), [mantLineas, sitioSeleccionado]);
 
@@ -7170,7 +7183,8 @@ function MonitoreoNotifier() {
     const q = busqueda.trim().toLowerCase();
     let lista = eventosDelSitio;
     if (categoriaSeleccionada === "historial" || categoriaSeleccionada === "mantenimiento") {
-      const base = categoriaSeleccionada === "historial" ? lineasHistorial : lineasMantenimiento;
+      let base = categoriaSeleccionada === "historial" ? lineasHistorial : lineasMantenimiento;
+      if (categoriaSeleccionada === "historial" && histSubcat) base = base.filter((e) => e.subcat === histSubcat);
       return q ? base.filter((e) => e.texto.toLowerCase().includes(q)) : base;
     }
     if (categoriaSeleccionada) {
@@ -7178,7 +7192,7 @@ function MonitoreoNotifier() {
     }
     if (!q) return lista;
     return lista.filter((e) => (e.texto || "").toLowerCase().includes(q) || (e.sitio || "").toLowerCase().includes(q));
-  }, [eventosDelSitio, busqueda, categoriaSeleccionada, lineasHistorial, lineasMantenimiento]);
+  }, [eventosDelSitio, busqueda, categoriaSeleccionada, lineasHistorial, lineasMantenimiento, histSubcat]);
 
   // Si cambian de sitio o se borra la categoría visible, quita el filtro de tarjeta.
   useEffect(() => { setCategoriaSeleccionada(null); }, [sitioSeleccionado]);
@@ -7629,6 +7643,20 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               </>)}
             </div>
           </div>
+          {categoriaSeleccionada === "historial" && lineasHistorial.length > 0 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+              {[[null, "Todo"], ["alarma", "Alarmas"], ["problema", "Problemas"], ["supervision", "Supervisiones"], ["borrado", "Borrados"], ["otro", "Otros"]].map(([k, n]) => {
+                const cant = k ? lineasHistorial.filter((e) => e.subcat === k).length : lineasHistorial.length;
+                const activa = histSubcat === k;
+                const color = k && k !== "otro" ? CATEGORIA_PANEL_COLOR_DARK[k] : IGNIS.historial;
+                return (
+                  <button key={n} onClick={() => setHistSubcat(k)} style={{ padding: "4px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: "pointer", border: `1px solid ${color}`, background: activa ? color : "transparent", color: activa ? "#fff" : IGNIS.text }}>
+                    {n} ({cant})
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <div style={{ background: IGNIS.paper, color: IGNIS.paperInk, borderRadius: 10, overflow: "hidden", border: "1px solid #d9d3c3" }}>
             {cargando ? (
               <div style={{ color: "#9a9377", padding: 24, fontSize: 12.5, textAlign: "center" }}>Cargando eventos...</div>
@@ -7645,15 +7673,16 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             ) : (
               <div style={{ maxHeight: 520, overflowY: "auto", padding: "4px 12px 8px 14px", fontFamily: "ui-monospace,SFMono-Regular,Consolas,monospace", fontSize: 12.5 }}>
                 {eventosFiltrados.map((e) => {
-                  const Icono = CATEGORIA_PANEL_ICONO[e.categoria] || HelpCircle;
-                  const color = CATEGORIA_PANEL_COLOR_DARK[e.categoria] || IGNIS.dim;
+                  const catVer = e.subcat && e.subcat !== "otro" ? e.subcat : e.categoria;
+                  const Icono = CATEGORIA_PANEL_ICONO[catVer] || HelpCircle;
+                  const color = CATEGORIA_PANEL_COLOR_DARK[catVer] || IGNIS.dim;
                   return (
-                    <div key={e.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "7px 8px", borderBottom: `1px solid ${IGNIS.paperLine}`, borderRadius: 6, background: e.categoria === "alarma" ? "rgba(229,72,77,.07)" : e.categoria === "problema" ? "rgba(242,183,5,.07)" : "transparent" }}>
+                    <div key={e.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "7px 8px", borderBottom: `1px solid ${IGNIS.paperLine}`, borderRadius: 6, background: catVer === "alarma" ? "rgba(229,72,77,.07)" : catVer === "problema" ? "rgba(242,183,5,.07)" : catVer === "supervision" ? "rgba(255,140,61,.07)" : "transparent" }}>
                       <Icono size={16} color={color} style={{ flex: "none", marginTop: 1 }} />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.45 }}>{e.texto || "—"}</div>
                         <div style={{ fontSize: 10, color: "#8f8870", marginTop: 2, textTransform: "uppercase", letterSpacing: 0.4, fontFamily: "system-ui,-apple-system,sans-serif" }}>
-                          {sitioSeleccionado === "Todos" ? `${e.sitio || "—"} · ` : ""}{ETIQUETA_CATEGORIA_PANEL[e.categoria] || e.categoria || "Otro"} · {e.fecha_panel ? new Date(e.fecha_panel).toLocaleString("es-CR", { dateStyle: "short", timeStyle: "medium" }) : e.categoria === "historial" ? "impreso en el historial del panel" : "informe de mantenimiento del panel"}
+                          {sitioSeleccionado === "Todos" ? `${e.sitio || "—"} · ` : ""}{ETIQUETA_CATEGORIA_PANEL[e.categoria] || e.categoria || "Otro"}{e.subcat && e.subcat !== "otro" ? ` · ${ETIQUETA_CATEGORIA_PANEL[e.subcat]}` : ""} · {e.fecha_panel ? new Date(e.fecha_panel).toLocaleString("es-CR", { dateStyle: "short", timeStyle: "medium" }) : e.categoria === "historial" ? "impreso en el historial del panel" : "informe de mantenimiento del panel"}
                         </div>
                       </div>
                       {esTecnicoSonido && modoSonando > 0 && (

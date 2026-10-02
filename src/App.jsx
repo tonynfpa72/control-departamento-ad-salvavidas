@@ -9,7 +9,7 @@ import {
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
   ChevronLeft, ChevronRight, ChevronUp, ChevronDown, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck, Package, GraduationCap, Award,
   Star, Trophy, Zap, Target, Medal, Rocket, Crown, Sparkles, ShieldCheck, Gem, Repeat, Lock, Search,
-  AlertTriangle, Settings, Shield, HelpCircle, Trash2, Wrench, Wifi, TrendingUp, Volume2, VolumeX
+  AlertTriangle, Settings, Shield, HelpCircle, Trash2, Wrench, Wifi, TrendingUp, Volume2, VolumeX, Menu
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -6961,7 +6961,7 @@ function MonitoreoNotifier() {
   const selectEstilo = { background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 13, fontFamily: "inherit" };
 
   return (
-    <div style={{ background: IGNIS.bg, minHeight: "100vh", padding: 18, display: "flex", flexDirection: "column", gap: 14, color: IGNIS.text, boxSizing: "border-box" }}>
+    <div style={{ background: IGNIS.bg, minHeight: "100vh", padding: 18, paddingTop: esMovilNotifier ? 58 : 18, display: "flex", flexDirection: "column", gap: 14, color: IGNIS.text, boxSizing: "border-box" }}>
       {/* ---- Encabezado estilo IgnisMonitor ---- */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, borderBottom: `1px solid ${IGNIS.border}`, paddingBottom: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -13951,6 +13951,11 @@ function AppInner() {
     window.addEventListener("resize", revisar);
     return () => window.removeEventListener("resize", revisar);
   }, []);
+  // El menú lateral, en celular, se guarda como un panel que se desliza
+  // encima (en vez de robarle 220px fijos a la pantalla, que es lo que
+  // dejaba todo el contenido apachurrado en un celular real).
+  const [sidebarAbierto, setSidebarAbierto] = useState(false);
+  useEffect(() => { if (!esPantallaAngosta) setSidebarAbierto(false); }, [esPantallaAngosta]);
 
   const iniciarSesion = (u) => {
     setUser(u);
@@ -13985,9 +13990,19 @@ function AppInner() {
   return (
     <CurrentUserContext.Provider value={user}>
     <EquiposNavContext.Provider value={{ irAEquipos }}>
-    <div style={{ minHeight: "100%", background: T.bg, fontFamily: "'Inter', -apple-system, sans-serif", color: T.ink, display: "flex" }}>
+    <div style={{ minHeight: "100%", background: T.bg, fontFamily: "'Inter', -apple-system, sans-serif", color: T.ink, display: "flex", position: "relative" }}>
+      {esPantallaAngosta && sidebarAbierto && (
+        <div onClick={() => setSidebarAbierto(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 29 }} />
+      )}
       {/* Sidebar */}
-      <div style={{ width: 220, background: T.steel, color: "#fff", display: "flex", flexDirection: "column", padding: "20px 14px", flexShrink: 0 }}>
+      <div style={{
+        width: 220, background: T.steel, color: "#fff", display: "flex", flexDirection: "column", padding: "20px 14px", flexShrink: 0,
+        ...(esPantallaAngosta ? {
+          position: "fixed", top: 0, bottom: 0, left: 0, zIndex: 30, overflowY: "auto",
+          transform: sidebarAbierto ? "translateX(0)" : "translateX(-100%)", transition: "transform .22s ease",
+          boxShadow: sidebarAbierto ? "4px 0 18px rgba(0,0,0,.35)" : "none",
+        } : {}),
+      }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 8px", marginBottom: 14 }}>
           <div style={{ width: 30, height: 30, borderRadius: 8, background: logo ? "transparent" : T.accent, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, overflow: "hidden" }}>
             {logo ? <img src={logo} alt="Logo" style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <Flame size={16} color="#fff" />}
@@ -14005,7 +14020,7 @@ function AppInner() {
             const Icon = a.icon;
             const activeTab = tab === a.id;
             return (
-              <button key={a.id} onClick={() => setTab(a.id)} style={{
+              <button key={a.id} onClick={() => { setTab(a.id); setSidebarAbierto(false); }} style={{
                 display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 9,
                 background: activeTab ? "rgba(255,255,255,0.14)" : "transparent", border: "none",
                 color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, textAlign: "left",
@@ -14031,7 +14046,20 @@ function AppInner() {
       </div>
 
       {/* Main */}
-      <div style={{ flex: 1, padding: tab === "monitoreo_notifier" ? 0 : "28px 32px", overflowY: "auto" }}>
+      {esPantallaAngosta && (
+        <button
+          onClick={() => setSidebarAbierto(true)}
+          title="Menú"
+          style={{
+            position: "fixed", top: 10, right: 10, zIndex: 25, width: 38, height: 38, borderRadius: 10,
+            background: T.steel, color: "#fff", border: "none", display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: "pointer", boxShadow: "0 2px 8px rgba(0,0,0,.3)",
+          }}
+        >
+          <Menu size={18} />
+        </button>
+      )}
+      <div style={{ flex: 1, minWidth: 0, width: esPantallaAngosta ? "100%" : undefined, padding: tab === "monitoreo_notifier" ? 0 : "28px 32px", paddingTop: esPantallaAngosta && tab !== "monitoreo_notifier" ? 60 : undefined, overflowY: "auto" }}>
         {tab !== "monitoreo_notifier" && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 22 }}>
             {current && <current.icon size={20} color={current.color} />}

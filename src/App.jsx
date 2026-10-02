@@ -7032,6 +7032,58 @@ function MonitoreoNotifier() {
 
   // Descarga la bitácora que se está viendo (ya filtrada por sitio/categoría/
   // búsqueda) como CSV, para abrirla en Excel.
+  // Reporte ejecutivo imprimible / PDF: estadísticas por categoría + equipos
+  // + lista de eventos (respeta el sitio, la tarjeta y la búsqueda activos).
+  const imprimirReporteEventos = () => {
+    const esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const titulo = sitioSeleccionado === "Todos" ? "Todos los sitios" : sitioSeleccionado;
+    const total = eventosDelSitio.length;
+    const tarjetas = [...CATEGORIAS_PANEL_TILES, ...(conteos.otro ? ["otro"] : [])].map((cat) => {
+      const n = conteos[cat] || 0;
+      const pct = total ? Math.round((n / total) * 100) : 0;
+      const color = CATEGORIA_PANEL_COLOR_DARK[cat] || "#888";
+      return `<div class="tile" style="border-top:4px solid ${color}"><div class="lab">${esc(ETIQUETA_CATEGORIA_PANEL[cat] || cat)}</div><div class="num">${n}</div><div class="pct">${pct}% del total</div></div>`;
+    }).join("");
+    const filasEquipos = dispositivosFiltrados.map((d) => {
+      const visto = d.actualizado_en;
+      return `<tr><td>${esc(d.sitio)}</td><td>${esc(d.ip || "")}</td><td>${visto ? esc(new Date(visto).toLocaleString("es-CR")) : ""}</td></tr>`;
+    }).join("");
+    const filasEventos = eventosFiltrados.map((e) =>
+      `<tr><td>${e.fecha_panel ? esc(new Date(e.fecha_panel).toLocaleString("es-CR")) : ""}</td>` +
+      (sitioSeleccionado === "Todos" ? `<td>${esc(e.sitio)}</td>` : "") +
+      `<td><span class="cat" style="background:${CATEGORIA_PANEL_COLOR_DARK[e.categoria] || "#888"}">${esc(ETIQUETA_CATEGORIA_PANEL[e.categoria] || e.categoria || "Otro")}</span></td>` +
+      `<td class="txt">${esc(e.texto)}</td></tr>`
+    ).join("");
+    const filtros = [
+      categoriaSeleccionada ? `Categoría: ${ETIQUETA_CATEGORIA_PANEL[categoriaSeleccionada] || categoriaSeleccionada}` : "",
+      busqueda.trim() ? `Búsqueda: "${busqueda.trim()}"` : "",
+    ].filter(Boolean).join(" · ");
+    const ventana = window.open("", "_blank");
+    if (!ventana) { alert("El navegador bloqueó la ventana nueva. Permite las ventanas emergentes para poder imprimir."); return; }
+    ventana.document.write(`<!doctype html><html><head><meta charset="utf-8" /><title>Reporte de monitoreo - ${esc(titulo)}</title>
+<style>
+  *{box-sizing:border-box} body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;margin:28px;color:#1f2430;font-size:12.5px}
+  h1{font-size:20px;margin:0 0 2px} .sub{color:#667;margin-bottom:18px} h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#556;margin:22px 0 8px}
+  .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px} .tile{border:1px solid #dde;border-radius:8px;padding:10px}
+  .lab{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:#667;font-weight:700} .num{font-size:24px;font-weight:800;margin-top:2px} .pct{font-size:10.5px;color:#889}
+  table{width:100%;border-collapse:collapse} th{text-align:left;font-size:10.5px;text-transform:uppercase;color:#667;border-bottom:2px solid #ccd;padding:5px 6px}
+  td{border-bottom:1px solid #e6e8ee;padding:5px 6px;vertical-align:top} .txt{font-family:ui-monospace,Consolas,monospace;font-size:11px;white-space:pre-wrap}
+  .cat{color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:700;white-space:nowrap;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .tile{-webkit-print-color-adjust:exact;print-color-adjust:exact} .pie{margin-top:24px;color:#99a;font-size:10.5px}
+</style></head><body>
+<h1>Reporte de monitoreo — ${esc(titulo)}</h1>
+<div class="sub">Generado el ${esc(new Date().toLocaleString("es-CR"))} · ${total} eventos registrados${filtros ? " · " + esc(filtros) : ""}</div>
+<h2>Estadísticas por categoría</h2><div class="tiles">${tarjetas}</div>
+${filasEquipos ? `<h2>Equipos</h2><table><thead><tr><th>Sitio</th><th>IP</th><th>Último contacto</th></tr></thead><tbody>${filasEquipos}</tbody></table>` : ""}
+<h2>Eventos (${eventosFiltrados.length})</h2>
+<table><thead><tr><th>Fecha</th>${sitioSeleccionado === "Todos" ? "<th>Sitio</th>" : ""}<th>Categoría</th><th>Evento</th></tr></thead><tbody>${filasEventos || '<tr><td colspan="4">Sin eventos.</td></tr>'}</tbody></table>
+<div class="pie">IgnisMonitor · Departamento A&amp;D Salvavidas</div>
+</body></html>`);
+    ventana.document.close();
+    ventana.focus();
+    setTimeout(() => ventana.print(), 400);
+  };
+
   const descargarCsvEventos = () => {
     const filas = [["Sitio", "Categoria", "Evento", "Fecha"]];
     eventosFiltrados.forEach((e) => {
@@ -7244,9 +7296,19 @@ function MonitoreoNotifier() {
                   onChange={(e) => setBusqueda(e.target.value)}
                 />
               </div>
-              <Btn small variant="ghost" onClick={descargarCsvEventos} disabled={!eventosFiltrados.length}>
+              <button
+                onClick={imprimirReporteEventos}
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: IGNIS.alarma, color: "#fff", border: `1px solid ${IGNIS.alarma}` }}
+              >
+                <Download size={13} /> PDF
+              </button>
+              <button
+                onClick={descargarCsvEventos}
+                disabled={!eventosFiltrados.length}
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: eventosFiltrados.length ? "pointer" : "not-allowed", opacity: eventosFiltrados.length ? 1 : 0.5, background: "#1f7a4d", color: "#fff", border: "1px solid #2fa36a" }}
+              >
                 <Download size={13} /> CSV
-              </Btn>
+              </button>
             </div>
           </div>
           <div style={{ background: IGNIS.paper, color: IGNIS.paperInk, borderRadius: 10, overflow: "hidden", border: "1px solid #d9d3c3" }}>

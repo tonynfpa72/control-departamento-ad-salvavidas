@@ -6571,23 +6571,31 @@ const IGNIS = {
   text: "#e6edf3", dim: "#8b949e", dim2: "#6e7681",
   paper: "#f3f0e8", paperInk: "#2a2620", paperLine: "#e6e0d2",
   alarma: "#e5484d", prealarma: "#ff6b6e", problema: "#f2b705", supervision: "#ff8c3d",
-  seguridad: "#2f81f7", sinclasificar: "#9198a1", borrado: "#57606a", ok: "#3fb950",
+  seguridad: "#2f81f7", sinclasificar: "#9198a1", borrado: "#57606a", ok: "#3fb950", general: "#a371f7",
 };
 const CATEGORIA_PANEL_ICONO = {
-  alarma: Flame, prealarma: Clock, problema: AlertTriangle, supervision: Settings,
+  general: LayoutDashboard, alarma: Flame, prealarma: Clock, problema: AlertTriangle, supervision: Settings,
   seguridad: Shield, sinclasificar: HelpCircle, borrado: Trash2, otro: HelpCircle,
 };
 const CATEGORIA_PANEL_COLOR_DARK = {
-  alarma: IGNIS.alarma, prealarma: IGNIS.prealarma, problema: IGNIS.problema, supervision: IGNIS.supervision,
+  general: IGNIS.general, alarma: IGNIS.alarma, prealarma: IGNIS.prealarma, problema: IGNIS.problema, supervision: IGNIS.supervision,
   seguridad: IGNIS.seguridad, sinclasificar: IGNIS.sinclasificar, borrado: IGNIS.borrado, otro: IGNIS.dim,
 };
 const ETIQUETA_CATEGORIA_PANEL = {
-  alarma: "Alarma", prealarma: "Prealarma", problema: "Problema", supervision: "Supervisión",
+  general: "General", alarma: "Alarma", prealarma: "Prealarma", problema: "Problema", supervision: "Supervisión",
   seguridad: "Seguridad", borrado: "Borrado", sinclasificar: "Administrativo", otro: "Otro",
 };
 // Mismas 7 categorías que manda el ESP8266 en vivo (Historial/Mantenimiento
 // no se mandan — ver nota en el firmware).
 const CATEGORIAS_PANEL_TILES = ["alarma", "prealarma", "problema", "supervision", "seguridad", "sinclasificar", "borrado"];
+// Tarjeta "General" del IgnisMonitor: suma Alarma + Problema + Supervisión
+// + Seguridad, y al tocarla filtra esas cuatro (igual que en el equipo).
+const CATEGORIAS_PANEL_GENERAL = ["alarma", "problema", "supervision", "seguridad"];
+const coincideCategoriaPanel = (e, sel) =>
+  !sel ? true
+  : sel === "general" ? CATEGORIAS_PANEL_GENERAL.includes(e.categoria)
+  : sel === "otro" ? !CATEGORIAS_PANEL_TILES.includes(e.categoria)
+  : e.categoria === sel;
 
 // El ESP8266 sube el historial a Supabase Storage con este mismo nombre
 // de archivo (ver nombreArchivoSitio() en el firmware) — si uno cambia,
@@ -6689,6 +6697,72 @@ function tendenciasGrafico(etq, val, color) {
     o += `<line x1="${ml + bd / 2}" x2="${ml + bd * (n - 1) + bd / 2}" y1="${yy(b0)}" y2="${yy(b0 + pe * (n - 1))}" stroke="#444" stroke-width="1.6" stroke-dasharray="5 4" opacity=".7"/>`;
   }
   return o + "</svg>";
+}
+
+// ---- Mantenimiento de detectores (Drift Compensation) ----
+// Líneas del informe de mantenimiento del panel, ej.:
+//   "AVERIA HUMO(FOTO) ... Comp:012% Pk:0045% ... 1D002"
+// Niveles según la tabla D.2.2 del manual (Iónico / Foto / Láser).
+const RE_DRIFT_PANEL = /COMP\s*[:=]\s*(\d+)\s*%?[\s\S]*?(?:PK|PICO|PEAK)\s*[:=]\s*(\d+)/i;
+
+function tipoDetectorPanel(u) {
+  if (/LASER|LÁSER/.test(u)) return "laser";
+  if (/\bION/.test(u)) return "ionico";
+  return "foto";
+}
+
+function nivelDriftPanel(tipo, comp) {
+  if (comp >= 100) return { id: "urgente", txt: "MANT. URGENTE", c: "#c62828" };
+  const req = tipo === "laser" ? 83 : 92;
+  const bajo = tipo === "laser" ? 2 : 5;
+  if (comp >= req) return { id: "requerido", txt: "MANT. REQUERIDO", c: "#d4601a" };
+  if (comp <= bajo) return { id: "bajo", txt: "UMBRAL BAJO", c: "#b07d00" };
+  return { id: "normal", txt: "Normal", c: "#2e7d32" };
+}
+
+// Recibe líneas (más viejas primero); si un detector aparece varias
+// veces, queda su lectura más reciente.
+function analizarMantenimientoPanel(lineas) {
+  const porDetector = new Map();
+  (lineas || []).forEach((l) => {
+    const texto = String(l || "").replace(/\s+/g, " ").trim();
+    if (!texto) return;
+    const m = texto.match(RE_DRIFT_PANEL);
+    if (!m) return;
+    const u = tNormal(texto);
+    const dirs = []; u.replace(TENDENCIAS_RE_DIR, (_, g) => { dirs.push(g); return _; });
+    const dir = dirs.length ? dirs[dirs.length - 1] : "";
+    const tipo = tipoDetectorPanel(u);
+    const comp = +m[1], pk = +m[2];
+    porDetector.set(dir || texto, { dir, tipo, comp, pk, nivel: nivelDriftPanel(tipo, comp), texto });
+  });
+  return [...porDetector.values()].sort((a, b) => b.comp - a.comp);
+}
+
+function generarHtmlMantenimientoPanel(filas) {
+  if (!filas.length) {
+    return '<p style="margin:6px 0 0;color:#666;font-size:13px">Todavía no hay un informe de mantenimiento de detectores para este sitio. Imprime desde el panel el reporte de mantenimiento (compensación de deriva); el equipo lo sube solo.</p>';
+  }
+  const cuenta = { urgente: 0, requerido: 0, bajo: 0, normal: 0 };
+  filas.forEach((f) => { cuenta[f.nivel.id]++; });
+  const nombreTipo = { foto: "Fotoeléctrico", ionico: "Iónico", laser: "Láser" };
+  const chip = (txt, c) => `<span style="background:${c};color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:700;white-space:nowrap;-webkit-print-color-adjust:exact;print-color-adjust:exact">${txt}</span>`;
+  const barra = (v, c) => `<div style="background:#eee;border-radius:4px;height:8px;width:110px;overflow:hidden;-webkit-print-color-adjust:exact;print-color-adjust:exact"><div style="background:${c};height:100%;width:${Math.min(100, v)}%"></div></div>`;
+  let o = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0 12px">` +
+    [["urgente", "Mant. urgente", "#c62828"], ["requerido", "Mant. requerido", "#d4601a"], ["bajo", "Umbral bajo", "#b07d00"], ["normal", "Normales", "#2e7d32"]]
+      .map(([k, n, c]) => `<div style="border:1px solid #e3e3e3;border-top:4px solid ${c};border-radius:8px;padding:8px 10px;-webkit-print-color-adjust:exact;print-color-adjust:exact"><div style="font-size:10.5px;color:#666;text-transform:uppercase;font-weight:700">${n}</div><div style="font-size:22px;font-weight:800">${cuenta[k]}</div></div>`).join("") +
+    `</div>`;
+  o += `<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;color:#666;font-size:10.5px;text-transform:uppercase">` +
+    `<th style="padding:5px 6px;border-bottom:2px solid #ddd">Detector</th><th style="padding:5px 6px;border-bottom:2px solid #ddd">Tipo</th><th style="padding:5px 6px;border-bottom:2px solid #ddd">Compensación</th><th style="padding:5px 6px;border-bottom:2px solid #ddd">Pico</th><th style="padding:5px 6px;border-bottom:2px solid #ddd">Estado</th></tr></thead><tbody>`;
+  filas.forEach((f) => {
+    o += `<tr><td style="padding:5px 6px;border-bottom:1px solid #eee;font-family:ui-monospace,Consolas,monospace">${tEsc(f.dir || "—")}</td>` +
+      `<td style="padding:5px 6px;border-bottom:1px solid #eee">${nombreTipo[f.tipo]}</td>` +
+      `<td style="padding:5px 6px;border-bottom:1px solid #eee"><div style="display:flex;align-items:center;gap:6px">${barra(f.comp, f.nivel.c)}<b>${f.comp}%</b></div></td>` +
+      `<td style="padding:5px 6px;border-bottom:1px solid #eee">${f.pk}%</td>` +
+      `<td style="padding:5px 6px;border-bottom:1px solid #eee">${chip(f.nivel.txt, f.nivel.c)}</td></tr>`;
+  });
+  o += `</tbody></table><p style="font-size:11px;color:#777;margin:8px 0 0">Niveles según la tabla D.2.2 del manual Notifier: Mant. requerido 92–99% (83–99% en láser), Mant. urgente 100%, Umbral bajo 0–5% (0–2% en láser) = posible problema de hardware.</p>`;
+  return o;
 }
 
 function generarHtmlTendenciasPanel(texto) {
@@ -6795,6 +6869,9 @@ function MonitoreoNotifier() {
   const [vista, setVista] = useState("eventos"); // "eventos" | "tendencias"
   const [historialHtml, setHistorialHtml] = useState("");
   const [cargandoHistorial, setCargandoHistorial] = useState(false);
+  const [mantLineas, setMantLineas] = useState([]); // informe de mantenimiento subido por el equipo
+  const [generandoReporte, setGenerandoReporte] = useState(false);
+  const refListaEventos = React.useRef(null);
   const [categoriaSeleccionada, setCategoriaSeleccionada] = useState(null); // tarjeta activa (filtro)
   const [errorCarga, setErrorCarga] = useState("");
 
@@ -6957,9 +7034,7 @@ function MonitoreoNotifier() {
     const q = busqueda.trim().toLowerCase();
     let lista = eventosDelSitio;
     if (categoriaSeleccionada) {
-      lista = lista.filter((e) =>
-        categoriaSeleccionada === "otro" ? !CATEGORIAS_PANEL_TILES.includes(e.categoria) : e.categoria === categoriaSeleccionada
-      );
+      lista = lista.filter((e) => coincideCategoriaPanel(e, categoriaSeleccionada));
     }
     if (!q) return lista;
     return lista.filter((e) => (e.texto || "").toLowerCase().includes(q) || (e.sitio || "").toLowerCase().includes(q));
@@ -6972,6 +7047,7 @@ function MonitoreoNotifier() {
     const c = {};
     CATEGORIAS_PANEL_TILES.forEach((cat) => { c[cat] = 0; });
     eventosDelSitio.forEach((e) => { if (c[e.categoria] !== undefined) c[e.categoria]++; else c.otro = (c.otro || 0) + 1; });
+    c.general = CATEGORIAS_PANEL_GENERAL.reduce((t, k) => t + (c[k] || 0), 0);
     return c;
   }, [eventosDelSitio]);
 
@@ -6979,20 +7055,35 @@ function MonitoreoNotifier() {
   // historial es por sitio — no tiene sentido en "Todos").
   useEffect(() => { if (sitioSeleccionado === "Todos" && vista === "tendencias") setVista("eventos"); }, [sitioSeleccionado, vista]);
 
+  // Baja un .txt del bucket de historiales; si no existe devuelve "".
+  const descargarTextoHistorial = async (archivo) => {
+    const { data, error } = await supabase.storage.from("historial_paneles").download(archivo);
+    if (error || !data) return "";
+    try { return await data.text(); } catch (e) { return ""; }
+  };
+
+  // Mantenimiento: lo que subió el equipo + las líneas Comp:/Pk: que
+  // hayan llegado en vivo (los eventos vienen del más nuevo al más viejo,
+  // por eso se invierten: así gana la lectura más reciente).
+  const mantenimientoHtml = useMemo(() => {
+    if (sitioSeleccionado === "Todos") return "";
+    const vivas = eventosDelSitio.map((e) => e.texto).reverse();
+    return generarHtmlMantenimientoPanel(analizarMantenimientoPanel([...mantLineas, ...vivas]));
+  }, [mantLineas, eventosDelSitio, sitioSeleccionado]);
+
   useEffect(() => {
     if (vista !== "tendencias" || sitioSeleccionado === "Todos") return;
     let cancelado = false;
     setCargandoHistorial(true);
     (async () => {
-      const archivo = `${nombreArchivoSitioPanel(sitioSeleccionado)}.txt`;
-      const { data, error } = await supabase.storage.from("historial_paneles").download(archivo);
+      const base = nombreArchivoSitioPanel(sitioSeleccionado);
+      const [texto, textoMant] = await Promise.all([
+        descargarTextoHistorial(`${base}.txt`),
+        descargarTextoHistorial(`${base}_mant.txt`),
+      ]);
       if (cancelado) return;
-      if (error || !data) {
-        setHistorialHtml(generarHtmlTendenciasPanel(""));
-      } else {
-        const texto = await data.text();
-        setHistorialHtml(generarHtmlTendenciasPanel(texto));
-      }
+      setHistorialHtml(generarHtmlTendenciasPanel(texto));
+      setMantLineas(textoMant ? textoMant.split(/\r?\n/) : []);
       setCargandoHistorial(false);
     })();
     return () => { cancelado = true; };
@@ -7010,6 +7101,18 @@ function MonitoreoNotifier() {
     if (!error) setEventos((prev) => prev.filter((e) => e.sitio !== sitioSeleccionado));
     setHistorialHtml("");
     if (vista === "tendencias") setVista("eventos");
+  };
+
+  // Clic en una tarjeta: filtra Y lleva a la lista de eventos (desde
+  // Tendencias o desde la pestaña Resumen del celular), y la enfoca.
+  const elegirCategoria = (cat) => {
+    const nueva = categoriaSeleccionada === cat ? null : cat;
+    setCategoriaSeleccionada(nueva);
+    if (nueva) {
+      setVista("eventos");
+      if (esMovilNotifier) setSeccionMovil("eventos");
+      setTimeout(() => refListaEventos.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+    }
   };
 
   const selectEstilo = { background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 13, fontFamily: "inherit" };
@@ -7032,56 +7135,107 @@ function MonitoreoNotifier() {
 
   // Descarga la bitácora que se está viendo (ya filtrada por sitio/categoría/
   // búsqueda) como CSV, para abrirla en Excel.
-  // Reporte ejecutivo imprimible / PDF: estadísticas por categoría + equipos
-  // + lista de eventos (respeta el sitio, la tarjeta y la búsqueda activos).
-  const imprimirReporteEventos = () => {
-    const esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    const titulo = sitioSeleccionado === "Todos" ? "Todos los sitios" : sitioSeleccionado;
-    const total = eventosDelSitio.length;
-    const tarjetas = [...CATEGORIAS_PANEL_TILES, ...(conteos.otro ? ["otro"] : [])].map((cat) => {
-      const n = conteos[cat] || 0;
-      const pct = total ? Math.round((n / total) * 100) : 0;
-      const color = CATEGORIA_PANEL_COLOR_DARK[cat] || "#888";
-      return `<div class="tile" style="border-top:4px solid ${color}"><div class="lab">${esc(ETIQUETA_CATEGORIA_PANEL[cat] || cat)}</div><div class="num">${n}</div><div class="pct">${pct}% del total</div></div>`;
-    }).join("");
-    const filasEquipos = dispositivosFiltrados.map((d) => {
-      const visto = d.actualizado_en;
-      return `<tr><td>${esc(d.sitio)}</td><td>${esc(d.ip || "")}</td><td>${visto ? esc(new Date(visto).toLocaleString("es-CR")) : ""}</td></tr>`;
-    }).join("");
-    const filasEventos = eventosFiltrados.map((e) =>
-      `<tr><td>${e.fecha_panel ? esc(new Date(e.fecha_panel).toLocaleString("es-CR")) : ""}</td>` +
-      (sitioSeleccionado === "Todos" ? `<td>${esc(e.sitio)}</td>` : "") +
-      `<td><span class="cat" style="background:${CATEGORIA_PANEL_COLOR_DARK[e.categoria] || "#888"}">${esc(ETIQUETA_CATEGORIA_PANEL[e.categoria] || e.categoria || "Otro")}</span></td>` +
-      `<td class="txt">${esc(e.texto)}</td></tr>`
-    ).join("");
-    const filtros = [
-      categoriaSeleccionada ? `Categoría: ${ETIQUETA_CATEGORIA_PANEL[categoriaSeleccionada] || categoriaSeleccionada}` : "",
-      busqueda.trim() ? `Búsqueda: "${busqueda.trim()}"` : "",
-    ].filter(Boolean).join(" · ");
+  // Reporte COMPLETO imprimible / PDF, por sitio: estadísticas, equipos,
+  // mantenimiento de detectores, problemas, tendencias del historial con
+  // histogramas, y la bitácora de eventos. Respeta el sitio elegido, la
+  // tarjeta y la búsqueda activos (si es "Todos", arma una sección por sitio).
+  const imprimirReporteEventos = async () => {
     const ventana = window.open("", "_blank");
     if (!ventana) { alert("El navegador bloqueó la ventana nueva. Permite las ventanas emergentes para poder imprimir."); return; }
-    ventana.document.write(`<!doctype html><html><head><meta charset="utf-8" /><title>Reporte de monitoreo - ${esc(titulo)}</title>
+    ventana.document.write('<p style="font-family:system-ui,sans-serif;padding:30px;color:#555">Generando reporte completo… (descargando historial y mantenimiento)</p>');
+    setGenerandoReporte(true);
+    try {
+      const esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const fecha = (f) => (f ? esc(new Date(f).toLocaleString("es-CR")) : "");
+      const pintar = "-webkit-print-color-adjust:exact;print-color-adjust:exact";
+      const chipCat = (cat) => `<span class="cat" style="background:${CATEGORIA_PANEL_COLOR_DARK[cat] || "#888"}">${esc(ETIQUETA_CATEGORIA_PANEL[cat] || cat || "Otro")}</span>`;
+      const q = busqueda.trim().toLowerCase();
+      const pasaFiltro = (e) =>
+        coincideCategoriaPanel(e, categoriaSeleccionada) &&
+        (!q || (e.texto || "").toLowerCase().includes(q));
+      const listaSitios = sitioSeleccionado === "Todos" ? sitios : [sitioSeleccionado];
+
+      const tarjetasHtml = (evs) => {
+        const c = {}; CATEGORIAS_PANEL_TILES.forEach((k) => { c[k] = 0; });
+        evs.forEach((e) => { if (c[e.categoria] !== undefined) c[e.categoria]++; else c.otro = (c.otro || 0) + 1; });
+        c.general = CATEGORIAS_PANEL_GENERAL.reduce((t, k) => t + (c[k] || 0), 0);
+        const total = evs.length;
+        return `<div class="tiles">` + ["general", ...CATEGORIAS_PANEL_TILES, ...(c.otro ? ["otro"] : [])].map((k) => {
+          const n = c[k] || 0, pct = total ? Math.round((n / total) * 100) : 0;
+          return `<div class="tile" style="border-top:4px solid ${CATEGORIA_PANEL_COLOR_DARK[k] || "#888"}"><div class="lab">${esc(ETIQUETA_CATEGORIA_PANEL[k] || k)}</div><div class="num">${n}</div><div class="pct">${pct}% del total</div></div>`;
+        }).join("") + `</div>`;
+      };
+
+      const secciones = await Promise.all(listaSitios.map(async (sitio) => {
+        const base = nombreArchivoSitioPanel(sitio);
+        const [hist, mant] = await Promise.all([
+          descargarTextoHistorial(`${base}.txt`),
+          descargarTextoHistorial(`${base}_mant.txt`),
+        ]);
+        const evs = eventos.filter((e) => e.sitio === sitio);
+        const evsFiltrados = evs.filter(pasaFiltro);
+        const equipos = dispositivos.filter((d) => d.sitio === sitio);
+        const mantFilas = analizarMantenimientoPanel([...(mant ? mant.split(/\r?\n/) : []), ...evs.map((e) => e.texto).reverse()]);
+        const problemas = evs.filter((e) => e.categoria === "problema").slice(0, 40);
+
+        let h = `<section class="sitio"><h1>${esc(sitio)}</h1>`;
+        h += `<div class="sub">${evs.length} eventos en la bitácora en vivo${equipos.length ? ` · ${equipos.length} equipo(s)` : ""}</div>`;
+        h += `<h2>1. Estadísticas por categoría</h2>` + tarjetasHtml(evs);
+        h += `<h2>2. Equipos</h2>` + (equipos.length
+          ? `<table><thead><tr><th>Red WiFi</th><th>IP</th><th>Señal</th><th>Último contacto</th></tr></thead><tbody>` +
+            equipos.map((d) => `<tr><td>${esc(d.ssid || "")}</td><td>${esc(d.ip || "")}</td><td>${d.rssi != null ? esc(d.rssi) + " dBm" : ""}</td><td>${fecha(d.actualizado_en)}</td></tr>`).join("") + `</tbody></table>`
+          : `<p class="vacio">Sin equipos reportando.</p>`);
+        h += `<h2>3. Mantenimiento de detectores (Drift Compensation)</h2>` + generarHtmlMantenimientoPanel(mantFilas);
+        h += `<h2>4. Problemas registrados (últimos ${problemas.length})</h2>` + (problemas.length
+          ? `<table><thead><tr><th style="width:150px">Fecha</th><th>Evento</th></tr></thead><tbody>` +
+            problemas.map((e) => `<tr><td>${fecha(e.fecha_panel)}</td><td class="txt">${esc(e.texto)}</td></tr>`).join("") + `</tbody></table>`
+          : `<p class="vacio">No hay problemas registrados.</p>`);
+        h += `<h2>5. Tendencias e histogramas del historial</h2><div class="tend">${generarHtmlTendenciasPanel(hist)}</div>`;
+        h += `<h2>6. Bitácora de eventos (${evsFiltrados.length})</h2>` + (evsFiltrados.length
+          ? `<table><thead><tr><th style="width:150px">Fecha</th><th style="width:110px">Categoría</th><th>Evento</th></tr></thead><tbody>` +
+            evsFiltrados.map((e) => `<tr><td>${fecha(e.fecha_panel)}</td><td>${chipCat(e.categoria)}</td><td class="txt">${esc(e.texto)}</td></tr>`).join("") + `</tbody></table>`
+          : `<p class="vacio">Sin eventos.</p>`);
+        h += `<div class="notas">Notas del técnico:</div><div class="firma"><div>Técnico · nombre y firma</div><div>Fecha de visita</div></div></section>`;
+        return h;
+      }));
+
+      const filtros = [
+        categoriaSeleccionada ? `Bitácora filtrada: ${ETIQUETA_CATEGORIA_PANEL[categoriaSeleccionada] || categoriaSeleccionada}` : "",
+        busqueda.trim() ? `Búsqueda: "${busqueda.trim()}"` : "",
+      ].filter(Boolean).join(" · ");
+      const titulo = sitioSeleccionado === "Todos" ? "Todos los sitios" : sitioSeleccionado;
+
+      const html = `<!doctype html><html><head><meta charset="utf-8" /><title>Reporte de monitoreo - ${esc(titulo)}</title>
 <style>
   *{box-sizing:border-box} body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;margin:28px;color:#1f2430;font-size:12.5px}
-  h1{font-size:20px;margin:0 0 2px} .sub{color:#667;margin-bottom:18px} h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#556;margin:22px 0 8px}
-  .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px} .tile{border:1px solid #dde;border-radius:8px;padding:10px}
+  .portada{border-bottom:3px solid #c62828;padding-bottom:10px;margin-bottom:6px} .portada .t{font-size:22px;font-weight:800} .portada .s{color:#667;margin-top:2px}
+  h1{font-size:19px;margin:0 0 2px} .sub{color:#667;margin-bottom:6px} h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#445;margin:22px 0 8px;border-bottom:1px solid #e3e5ea;padding-bottom:4px}
+  .sitio{padding-top:18px} .sitio + .sitio{page-break-before:always}
+  .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px} .tile{border:1px solid #dde;border-radius:8px;padding:10px;${pintar}}
   .lab{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:#667;font-weight:700} .num{font-size:24px;font-weight:800;margin-top:2px} .pct{font-size:10.5px;color:#889}
   table{width:100%;border-collapse:collapse} th{text-align:left;font-size:10.5px;text-transform:uppercase;color:#667;border-bottom:2px solid #ccd;padding:5px 6px}
-  td{border-bottom:1px solid #e6e8ee;padding:5px 6px;vertical-align:top} .txt{font-family:ui-monospace,Consolas,monospace;font-size:11px;white-space:pre-wrap}
-  .cat{color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:700;white-space:nowrap;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  .tile{-webkit-print-color-adjust:exact;print-color-adjust:exact} .pie{margin-top:24px;color:#99a;font-size:10.5px}
+  td{border-bottom:1px solid #e6e8ee;padding:5px 6px;vertical-align:top} tr{page-break-inside:avoid} .txt{font-family:ui-monospace,Consolas,monospace;font-size:11px;white-space:pre-wrap}
+  .cat{color:#fff;border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:700;white-space:nowrap;${pintar}}
+  .tend *{${pintar}} .tend svg{page-break-inside:avoid} .vacio{color:#888}
+  .notas{margin-top:26px;border:1px solid #ccc;border-radius:8px;padding:12px;min-height:80px;font-size:12px;color:#999;page-break-inside:avoid}
+  .firma{margin-top:50px;display:flex;gap:40px;page-break-inside:avoid} .firma div{flex:1;border-top:1px solid #999;padding-top:6px;font-size:12px;color:#666}
+  .pie{margin-top:24px;color:#99a;font-size:10.5px}
 </style></head><body>
-<h1>Reporte de monitoreo — ${esc(titulo)}</h1>
-<div class="sub">Generado el ${esc(new Date().toLocaleString("es-CR"))} · ${total} eventos registrados${filtros ? " · " + esc(filtros) : ""}</div>
-<h2>Estadísticas por categoría</h2><div class="tiles">${tarjetas}</div>
-${filasEquipos ? `<h2>Equipos</h2><table><thead><tr><th>Sitio</th><th>IP</th><th>Último contacto</th></tr></thead><tbody>${filasEquipos}</tbody></table>` : ""}
-<h2>Eventos (${eventosFiltrados.length})</h2>
-<table><thead><tr><th>Fecha</th>${sitioSeleccionado === "Todos" ? "<th>Sitio</th>" : ""}<th>Categoría</th><th>Evento</th></tr></thead><tbody>${filasEventos || '<tr><td colspan="4">Sin eventos.</td></tr>'}</tbody></table>
+<div class="portada"><div class="t">Reporte de monitoreo — ${esc(titulo)}</div>
+<div class="s">IgnisMonitor · Panel Notifier · generado el ${esc(new Date().toLocaleString("es-CR"))}${filtros ? " · " + esc(filtros) : ""}</div></div>
+${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
 <div class="pie">IgnisMonitor · Departamento A&amp;D Salvavidas</div>
-</body></html>`);
-    ventana.document.close();
-    ventana.focus();
-    setTimeout(() => ventana.print(), 400);
+</body></html>`;
+      ventana.document.open();
+      ventana.document.write(html);
+      ventana.document.close();
+      ventana.focus();
+      setTimeout(() => ventana.print(), 500);
+    } catch (err) {
+      ventana.document.body.innerHTML = `<p style="font-family:sans-serif;padding:30px;color:#c62828">No se pudo generar el reporte: ${String(err?.message || err)}</p>`;
+    } finally {
+      setGenerandoReporte(false);
+    }
   };
 
   const descargarCsvEventos = () => {
@@ -7196,14 +7350,14 @@ ${filasEquipos ? `<h2>Equipos</h2><table><thead><tr><th>Sitio</th><th>IP</th><th
       {/* ---- Tarjetas de conteo (como .stats del dashboard real) — clic para filtrar la bitácora ---- */}
       {(!esMovilNotifier || seccionMovil === "resumen") && (
       <div style={{ display: "grid", gridTemplateColumns: esMovilNotifier ? "repeat(auto-fill,minmax(98px,1fr))" : "repeat(auto-fill,minmax(122px,1fr))", gap: 8 }}>
-        {CATEGORIAS_PANEL_TILES.map((cat) => {
+        {["general", ...CATEGORIAS_PANEL_TILES].map((cat) => {
           const Icono = CATEGORIA_PANEL_ICONO[cat] || HelpCircle;
           const color = CATEGORIA_PANEL_COLOR_DARK[cat];
           const activa = categoriaSeleccionada === cat;
           return (
             <div
               key={cat}
-              onClick={() => setCategoriaSeleccionada((prev) => (prev === cat ? null : cat))}
+              onClick={() => elegirCategoria(cat)}
               style={{
                 background: activa ? IGNIS.panel2 : IGNIS.panel, border: `1px solid ${activa ? color : IGNIS.border}`, borderRadius: 10,
                 padding: "9px 12px", position: "relative", overflow: "hidden", cursor: "pointer",
@@ -7278,14 +7432,29 @@ ${filasEquipos ? `<h2>Equipos</h2><table><thead><tr><th>Sitio</th><th>IP</th><th
           {cargandoHistorial ? (
             <div style={{ color: "#666", fontSize: 13 }}>Cargando historial...</div>
           ) : (
-            <div dangerouslySetInnerHTML={{ __html: historialHtml }} />
+            <>
+              <div dangerouslySetInnerHTML={{ __html: historialHtml }} />
+              <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: "#888", fontWeight: 700, margin: "22px 0 4px" }}>Mantenimiento de detectores (Drift Compensation)</div>
+              <div dangerouslySetInnerHTML={{ __html: mantenimientoHtml }} />
+            </>
           )}
         </div>
       ) : (
         // ---- Bitácora estilo "papel de impresora" (igual que el dashboard real) ----
-        <div style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 10, padding: 14 }}>
+        <div ref={refListaEventos} style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 10, padding: 14, scrollMarginTop: 10 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
-            <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: IGNIS.dim, fontWeight: 700 }}>Eventos en vivo</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: IGNIS.dim, fontWeight: 700 }}>Eventos en vivo</div>
+              {categoriaSeleccionada && (
+                <button
+                  onClick={() => setCategoriaSeleccionada(null)}
+                  title="Quitar filtro y ver todos los eventos"
+                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: "pointer", background: CATEGORIA_PANEL_COLOR_DARK[categoriaSeleccionada] || IGNIS.panel2, color: "#fff", border: "none" }}
+                >
+                  Solo {ETIQUETA_CATEGORIA_PANEL[categoriaSeleccionada] || categoriaSeleccionada} ({eventosFiltrados.length}) <X size={12} />
+                </button>
+              )}
+            </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <div style={{ position: "relative" }}>
                 <Search size={13} style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", color: IGNIS.dim }} />
@@ -7298,9 +7467,11 @@ ${filasEquipos ? `<h2>Equipos</h2><table><thead><tr><th>Sitio</th><th>IP</th><th
               </div>
               <button
                 onClick={imprimirReporteEventos}
-                style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer", background: IGNIS.alarma, color: "#fff", border: `1px solid ${IGNIS.alarma}` }}
+                disabled={generandoReporte}
+                title="Reporte completo: estadísticas, equipos, mantenimiento de detectores, problemas, tendencias con histogramas y bitácora"
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: generandoReporte ? "wait" : "pointer", opacity: generandoReporte ? 0.7 : 1, background: IGNIS.alarma, color: "#fff", border: `1px solid ${IGNIS.alarma}` }}
               >
-                <Download size={13} /> PDF
+                <Download size={13} /> {generandoReporte ? "Generando..." : "Reporte PDF"}
               </button>
               <button
                 onClick={descargarCsvEventos}

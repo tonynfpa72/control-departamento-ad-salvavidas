@@ -149,6 +149,24 @@ function LogoUploadButton({ small }) {
   );
 }
 
+// Recuerda la pestaña / menú / vista donde estaba el usuario, para que al
+// REFRESCAR la página vuelva exactamente ahí (se guarda por pestaña del
+// navegador, en sessionStorage).
+function useEstadoRecordado(clave, inicial) {
+  const k = "vista:" + clave;
+  const [valor, setValor] = useState(() => {
+    try {
+      const g = sessionStorage.getItem(k);
+      if (g !== null) return JSON.parse(g);
+    } catch (e) {}
+    return typeof inicial === "function" ? inicial() : inicial;
+  });
+  useEffect(() => {
+    try { sessionStorage.setItem(k, JSON.stringify(valor)); } catch (e) {}
+  }, [k, valor]);
+  return [valor, setValor];
+}
+
 // "App de clientes": cuando la página se abre desde /cliente.html (la que
 // usa el APK de clientes), la app entra en modo cliente — login propio,
 // solo acepta usuarios categoría "cliente" y guarda su sesión aparte.
@@ -1451,7 +1469,7 @@ function HorasExtras({ area, color }) {
   const [rows, setRows] = useState([]);
   const [empleados, setEmpleados] = useState([]);
   const [form, setForm] = useState({ od: "", personalCodigo: "", horaInicio: "07:00", horaFin: "15:00", fechaEjecucion: "" });
-  const [subTab, setSubTab] = useState("solicitud");
+  const [subTab, setSubTab] = useEstadoRecordado(`horas-${area}`, "solicitud");
   const mismoPeriodo = (fechaISO) => {
     if (!fechaISO) return false;
     return etiquetaPeriodo(fechaISO, fechasCorte) === etiquetaPeriodo(todayISO(), fechasCorte);
@@ -1832,10 +1850,10 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const [form, setForm] = useState({ od: "", cliente: "", tecnico: "" });
   const [filtroTexto, setFiltroTexto] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("Todos");
-  const [subTabCorrectivo, setSubTabCorrectivo] = useState("Pendientes");
+  const [subTabCorrectivo, setSubTabCorrectivo] = useEstadoRecordado(`ot-correctivo-${area}-${tipoOD}`, "Pendientes");
   // Para IPM: los inactivos ya no se mezclan en la lista principal, quedan
   // en su propia pestaña aparte.
-  const [subTabIpmEstado, setSubTabIpmEstado] = useState("Activos");
+  const [subTabIpmEstado, setSubTabIpmEstado] = useEstadoRecordado(`ot-ipm-${area}-${tipoOD}`, "Activos");
   const [editandoId, setEditandoId] = useState(null);
   const fileInputRef = React.useRef(null);
 
@@ -2511,7 +2529,7 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
   const isAdmin = currentUser?.categoria === "admin";
   const confirmar = useContext(ConfirmContext);
   const [cursor, setCursor] = useState(new Date());
-  const [vista, setVista] = useState("mes");
+  const [vista, setVista] = useEstadoRecordado(`calendario-${area}`, "mes");
   const [diaSeleccionado, setDiaSeleccionado] = useState(todayISO());
   const [eventos, setEventos] = useState([]);
   const [errorMsg, setErrorMsg] = useState("");
@@ -3146,7 +3164,7 @@ function Cotizaciones() {
   const [rows, setRows] = useState([]);
   const [open, setOpen] = useState(false);
   const [printRow, setPrintRow] = useState(null);
-  const [subTab, setSubTab] = useState("Todas");
+  const [subTab, setSubTab] = useEstadoRecordado("cotizaciones", "Todas");
   const [avisoForm, setAvisoForm] = useState("");
   const [filtroSolicitante, setFiltroSolicitante] = useState("");
   const [filtroCliente, setFiltroCliente] = useState("");
@@ -3449,7 +3467,7 @@ function CursosEHS() {
   const confirmar = useContext(ConfirmContext);
   const [rows, setRows] = useState([]);
   const [empleados, setEmpleados] = useState([]);
-  const [subTab, setSubTab] = useState("activos");
+  const [subTab, setSubTab] = useEstadoRecordado("cursos-ehs", "activos");
   const [form, setForm] = useState({ solicitante: "", personal: "", lugar: "", tipo: CURSO_TIPOS[0], fecha: "" });
   const [personalSeleccionado, setPersonalSeleccionado] = useState([]);
 
@@ -3656,7 +3674,7 @@ function EquipoSeguridad() {
   const [empleados, setEmpleados] = useState([]);
   const [tiposEPP, setTiposEPP] = useState(EPP_TIPOS);
   const [nuevoTipoEPP, setNuevoTipoEPP] = useState("");
-  const [subTab, setSubTab] = useState("solicitado");
+  const [subTab, setSubTab] = useEstadoRecordado("epp", "solicitado");
   const [filtroTipo, setFiltroTipo] = useState("Todos");
   const [filtroPersonal, setFiltroPersonal] = useState("");
   const [form, setForm] = useState({ solicitante: "", personalCodigo: "" });
@@ -4159,7 +4177,7 @@ function Pretareas() {
 }
 
 function SaludOcupacional() {
-  const [tab, setTab] = useState("cursos");
+  const [tab, setTab] = useEstadoRecordado("salud", "cursos");
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
@@ -4334,7 +4352,7 @@ function HorasExtrasQuincenales({ area, color }) {
 }
 
 function AreaOperativa({ area, color }) {
-  const [tab, setTab] = useState("horas");
+  const [tab, setTab] = useEstadoRecordado(`area-${area}`, "horas");
   const tecnicoLabel = area === "proyectos" ? "Encargado" : "Técnico";
   const tabs = [
     { id: "horas", label: "Horas extras", icon: Clock },
@@ -5772,7 +5790,7 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
 }
 
 function Administrativo() {
-  const [tab, setTab] = useState("resumen");
+  const [tab, setTab] = useEstadoRecordado("administrativo", "resumen");
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
@@ -5916,7 +5934,7 @@ function CalendarioGlobal() {
   const [eventos, setEventos] = useState([]);
   const [eventosGoogle, setEventosGoogle] = useState([]);
   const [filtroArea, setFiltroArea] = useState("Todos");
-  const [vista, setVista] = useState("agenda");
+  const [vista, setVista] = useEstadoRecordado("calendario-global", "agenda");
   const [cursor, setCursor] = useState(new Date());
   useEffect(() => {
     (async () => {
@@ -6194,7 +6212,7 @@ function AperturaOD() {
   const isAdmin = currentUser?.categoria === "admin";
   const confirmar = useContext(ConfirmContext);
   const [rows, setRows] = useState([]);
-  const [subTab, setSubTab] = useState("pendientes");
+  const [subTab, setSubTab] = useEstadoRecordado("apertura", "pendientes");
   const [form, setForm] = useState({ solicitante: "", od: "", cliente: "", fecha: todayISO(), tipo: "Normal", consecutivo: "" });
   const ESTADOS = ["Pendiente", "Solicitado", "Cancelado"];
   const ESTADO_COLOR = { Pendiente: [T.amber, T.amberSoft], Solicitado: [T.green, T.greenSoft], Cancelado: [T.red, T.redSoft] };
@@ -6907,19 +6925,19 @@ function MonitoreoNotifier() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  const [vistaModoNotifier, setVistaModoNotifier] = useState("auto"); // "auto" | "movil" | "pc" — igual que en Entrenamiento
+  const [vistaModoNotifier, setVistaModoNotifier] = useEstadoRecordado("monitoreo-modo", "auto"); // "auto" | "movil" | "pc" — igual que en Entrenamiento
   const esMovilNotifier = vistaModoNotifier === "movil" ? true : vistaModoNotifier === "pc" ? false : anchoNotifier <= 820;
-  const [seccionMovil, setSeccionMovil] = useState("eventos"); // "resumen" | "eventos" | "equipos" | "tendencias"
+  const [seccionMovil, setSeccionMovil] = useEstadoRecordado("monitoreo-seccion-movil", "eventos"); // "resumen" | "eventos" | "equipos" | "tendencias"
   const [eventos, setEventos] = useState([]);
   const [dispositivos, setDispositivos] = useState([]);
   const [cargando, setCargando] = useState(true);
-  const [sitioSeleccionado, setSitioSeleccionado] = useState(() => (esCliente ? sitioCliente : "Todos"));
+  const [sitioSeleccionado, setSitioSeleccionado] = useEstadoRecordado("monitoreo-sitio", () => (esCliente ? sitioCliente : "Todos"));
   useEffect(() => {
     if (esCliente && sitioSeleccionado !== sitioCliente) setSitioSeleccionado(sitioCliente);
   }, [esCliente, sitioCliente, sitioSeleccionado]);
   const [busqueda, setBusqueda] = useState("");
   const [borrando, setBorrando] = useState(false);
-  const [vista, setVista] = useState("eventos"); // "eventos" | "tendencias"
+  const [vista, setVista] = useEstadoRecordado("monitoreo-vista", "eventos"); // "eventos" | "tendencias"
   const [historialHtml, setHistorialHtml] = useState("");
   const [cargandoHistorial, setCargandoHistorial] = useState(false);
   const [mantLineas, setMantLineas] = useState([]); // informe de mantenimiento subido por el equipo
@@ -7138,46 +7156,57 @@ function MonitoreoNotifier() {
     [eventos, sitioSeleccionado]
   );
 
-  // Historial y mantenimiento del sitio elegido (los sube el IgnisMonitor a
-  // Supabase Storage). Alimentan las tarjetas Historial / Mantenimiento y la
-  // vista Tendencias. Se vuelven a leer cada minuto.
-  const [histTexto, setHistTexto] = useState("");
+  // Historial y mantenimiento (los sube cada IgnisMonitor a Supabase
+  // Storage). Con un sitio elegido se lee el de ese sitio; con "Todos" se
+  // juntan los de todos los equipos. Alimentan las tarjetas Historial /
+  // Mantenimiento y la vista Tendencias. Se vuelven a leer cada minuto.
+  const [histArchivos, setHistArchivos] = useState([]); // [{ sitio, texto }]
+  const [mantArchivos, setMantArchivos] = useState([]); // [{ sitio, texto }]
+  const sitiosClave = sitios.join("|"); // texto estable: no recarga cada segundo
   useEffect(() => {
-    setHistTexto(""); setMantLineas([]); setHistorialHtml("");
-    if (sitioSeleccionado === "Todos") return;
+    setHistArchivos([]); setMantArchivos([]); setMantLineas([]); setHistorialHtml("");
+    const lista = sitioSeleccionado === "Todos" ? sitiosClave.split("|").filter(Boolean) : [sitioSeleccionado];
+    if (!lista.length) return;
     let cancelado = false;
     setCargandoHistorial(true);
     const cargarArchivos = async () => {
-      const base = nombreArchivoSitioPanel(sitioSeleccionado);
-      const [texto, textoMant] = await Promise.all([
-        descargarTextoHistorial(`${base}.txt`),
-        descargarTextoHistorial(`${base}_mant.txt`),
-      ]);
+      const res = await Promise.all(lista.map(async (sitio) => {
+        const base = nombreArchivoSitioPanel(sitio);
+        const [texto, textoMant] = await Promise.all([
+          descargarTextoHistorial(`${base}.txt`),
+          descargarTextoHistorial(`${base}_mant.txt`),
+        ]);
+        return { sitio, texto: texto || "", textoMant: textoMant || "" };
+      }));
       if (cancelado) return;
-      setHistTexto(texto || "");
-      setHistorialHtml(generarHtmlTendenciasPanel(texto));
-      setMantLineas(textoMant ? textoMant.split(/\r?\n/) : []);
+      setHistArchivos(res.map((r) => ({ sitio: r.sitio, texto: r.texto })));
+      setMantArchivos(res.map((r) => ({ sitio: r.sitio, texto: r.textoMant })));
+      if (sitioSeleccionado !== "Todos") {
+        setHistorialHtml(generarHtmlTendenciasPanel(res[0].texto));
+        setMantLineas(res[0].textoMant ? res[0].textoMant.split(/\r?\n/) : []);
+      }
       setCargandoHistorial(false);
     };
     cargarArchivos();
     const intervalo = setInterval(cargarArchivos, 60000);
     return () => { cancelado = true; clearInterval(intervalo); };
-  }, [sitioSeleccionado]);
+  }, [sitioSeleccionado, sitioSeleccionado === "Todos" ? sitiosClave : ""]);
 
   // Líneas del historial / informe de mantenimiento como "eventos" para
-  // mostrarlas en la bitácora al tocar sus tarjetas.
-  // Cada línea del historial se clasifica igual que en Tendencias
-  // (Alarma / Problema / Supervisión / Borrado); las demás quedan "otras".
-  const lineasHistorial = useMemo(() => (histTexto || "").split(/\r?\n/).map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean)
-    .map((texto, i) => {
-      const u = tNormal(texto).replace(/^#?\d{1,5}[.:)]?\s+(?=[A-Z])/, "");
+  // mostrarlas en la bitácora al tocar sus tarjetas. Cada línea del
+  // historial se clasifica igual que en Tendencias (Alarma / Problema /
+  // Supervisión / Borrado); las demás quedan "otras".
+  const lineasHistorial = useMemo(() => histArchivos.flatMap(({ sitio, texto }, a) =>
+    texto.split(/\r?\n/).map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean).map((linea, i) => {
+      const u = tNormal(linea).replace(/^#?\d{1,5}[.:)]?\s+(?=[A-Z])/, "");
       const subcat = /^(BR|CLR)\b/.test(u) ? "borrado" : tendenciasCategoria(u) || "otro";
-      return { id: `hist-${i}`, categoria: "historial", subcat, texto, sitio: sitioSeleccionado, fecha_panel: null };
-    }), [histTexto, sitioSeleccionado]);
+      return { id: `hist-${a}-${i}`, categoria: "historial", subcat, texto: linea, sitio, fecha_panel: null };
+    })), [histArchivos]);
+  const lineasMantenimiento = useMemo(() => mantArchivos.flatMap(({ sitio, texto }, a) =>
+    texto.split(/\r?\n/).map((t) => t.trim()).filter(Boolean)
+      .map((linea, i) => ({ id: `mant-${a}-${i}`, categoria: "mantenimiento", texto: linea, sitio, fecha_panel: null }))), [mantArchivos]);
   const [histSubcat, setHistSubcat] = useState(null); // filtro dentro del historial
   useEffect(() => { setHistSubcat(null); }, [sitioSeleccionado, categoriaSeleccionada]);
-  const lineasMantenimiento = useMemo(() => mantLineas.map((t) => String(t).trim()).filter(Boolean)
-    .map((texto, i) => ({ id: `mant-${i}`, categoria: "mantenimiento", texto, sitio: sitioSeleccionado, fecha_panel: null })), [mantLineas, sitioSeleccionado]);
 
   const eventosFiltrados = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
@@ -7510,8 +7539,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           const color = CATEGORIA_PANEL_COLOR_DARK[cat];
           const activa = categoriaSeleccionada === cat;
           // Historial y Mantenimiento son por sitio (el archivo que sube cada equipo)
-          const porSitio = cat === "historial" || cat === "mantenimiento";
-          const sinSitio = porSitio && sitioSeleccionado === "Todos";
+          const sinSitio = false;
           return (
             <div
               key={cat}
@@ -7555,7 +7583,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               <tbody>
                 {dispositivosFiltrados.map((d) => {
                   const segundos = (Date.now() - new Date(d.actualizado_en).getTime()) / 1000;
-                  const enLinea = segundos < 150; // sin aviso en más de ~2.5 min (el equipo avisa cada 1 min) = se asume caído
+                  const enLinea = segundos < 200; // sin aviso en más de ~3 min (el equipo avisa cada 1 min y reintenta a los 15 s) = se asume caído
                   return (
                     <tr key={d.sitio} style={{ borderTop: `1px solid ${IGNIS.border}` }}>
                       <td style={{ padding: "8px", fontWeight: 600 }}>{d.sitio}</td>
@@ -8098,13 +8126,13 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
   const confirmar = useContext(ConfirmContext);
   const [areaActiva, setAreaActiva] = useState(irInicial?.area || "inspecciones");
   const [tipoOdActivo, setTipoOdActivo] = useState("Correctivo");
-  const [subTab, setSubTab] = useState("pendientes");
+  const [subTab, setSubTab] = useEstadoRecordado("equipos-subtab", "pendientes");
   const [odsDelArea, setRows] = useClientesArea(areaActiva);
 
   const [filtroOd, setFiltroOd] = useState(irInicial?.od || "");
   const [filtroCliente, setFiltroCliente] = useState("");
   const [filtroPo, setFiltroPo] = useState("");
-  const [vista, setVista] = useState("tarjetas");
+  const [vista, setVista] = useEstadoRecordado("equipos-vista", "tarjetas");
 
   useEffect(() => {
     if (!irInicial) return;
@@ -8352,8 +8380,8 @@ function Vehiculos() {
   const isAdmin = currentUser?.categoria === "admin";
   const canGestionar = isAdmin || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
-  const [areaActiva, setAreaActiva] = useState("inspecciones");
-  const [subTab, setSubTab] = useState("flota");
+  const [areaActiva, setAreaActiva] = useEstadoRecordado("vehiculos-area", "inspecciones");
+  const [subTab, setSubTab] = useEstadoRecordado("vehiculos-subtab", "flota");
   const [vehiculos, setVehiculos] = useState([]);
   const [registros, setRegistros] = useState([]);
   const [empleados, setEmpleados] = useState([]);
@@ -8983,7 +9011,7 @@ function Entrenamiento() {
   const [empleados, setEmpleados] = useState([]);
   const [jugadorCodigo, setJugadorCodigo] = useState("");
   const [puntajes, setPuntajes] = useState([]);
-  const [modulo, setModulo] = useState(null);
+  const [modulo, setModulo] = useEstadoRecordado("entrenamiento-modulo", null);
   const [mostrarRanking, setMostrarRanking] = useState(false);
   const [subioDeRango, setSubioDeRango] = useState(null);
   const rangoAnteriorRef = React.useRef(null);
@@ -9079,7 +9107,7 @@ function Entrenamiento() {
   const racha = calcularRacha(puntajes);
   const misionesDiarias = calcularMisionesDiarias(puntajes);
   const [mostrarPerfil, setMostrarPerfil] = useState(false);
-  const [vistaModo, setVistaModo] = useState("auto"); // "auto" | "movil" | "pc"
+  const [vistaModo, setVistaModo] = useEstadoRecordado("entrenamiento-modo", "auto"); // "auto" | "movil" | "pc"
   const [pantallaMovil, setPantallaMovil] = useState("inicio"); // "inicio" | "modulos" | "ranking" | "perfil"
   // Detecta si el dispositivo REAL ya es angosto (un celular de verdad),
   // para no ponerle encima el marco de teléfono simulado — en un celular
@@ -11232,7 +11260,7 @@ const PREGUNTAS_MANTENIMIENTO_NOTIFIER = [
 
 function JuegoNotifier({ onGanarPuntos, esAdmin, onReiniciar }) {
   const [mostrarIntro, setMostrarIntro] = useState(true);
-  const [tabNotifier, setTabNotifier] = useState("examen"); // "examen" | "mantenimiento"
+  const [tabNotifier, setTabNotifier] = useEstadoRecordado("juego-notifier", "examen"); // "examen" | "mantenimiento"
   // Cada pregunta permite un máximo de 2 intentos. Si acierta, queda
   // marcada en VERDE de inmediato y suma puntos al instante. Si falla
   // los 2 intentos, queda marcada en ROJO y fija, sin puntos — en
@@ -12484,7 +12512,7 @@ function EjercicioResistenciasSeriesParalelo({ onGanar }) {
 
 function JuegoEquiposMedicion({ onGanarPuntos, esAdmin, onReiniciar }) {
   const [mostrarIntro, setMostrarIntro] = useState(true);
-  const [tabEquipos, setTabEquipos] = useState("multimetro"); // "multimetro" | "megometro" | "practica"
+  const [tabEquipos, setTabEquipos] = useEstadoRecordado("juego-equipos", "multimetro"); // "multimetro" | "megometro" | "practica"
 
   const [respuestasMM, setRespuestasMM] = useState({});
   const [intentosMM, setIntentosMM] = useState({});
@@ -14300,7 +14328,7 @@ function Planilla() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
   const confirmar = useContext(ConfirmContext);
-  const [tab, setTab] = useState("personal");
+  const [tab, setTab] = useEstadoRecordado("planilla", "personal");
   const [empleados, setEmpleados] = useState([]);
   const [form, setForm] = useState({ codigo: "", nombre: "", puesto: "", area: "" });
   const fileInputRef = React.useRef(null);
@@ -14461,7 +14489,7 @@ function AppInner() {
       return null;
     }
   });
-  const [tab, setTab] = useState(null);
+  const [tab, setTab] = useEstadoRecordado(`menu-${CLAVE_SESION}`, null);
   const [odParaEquipos, setOdParaEquipos] = useState(null);
   const irAEquipos = (area, od) => {
     setOdParaEquipos({ area, od });
@@ -14624,7 +14652,7 @@ function AppInner() {
    Solo 4 secciones esenciales, tarjetas grandes, sin tablas.
    --------------------------------------------------------- */
 function VistaMovilTecnico({ user, onLogout }) {
-  const [tab, setTab] = useState("od");
+  const [tab, setTab] = useEstadoRecordado("movil-tecnico", "od");
   const confirmar = useContext(ConfirmContext);
   const { clientes } = useContext(ClientesContext);
   const nombre = (user.name || "").trim().toLowerCase();

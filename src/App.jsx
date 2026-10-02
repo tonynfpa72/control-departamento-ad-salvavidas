@@ -149,6 +149,12 @@ function LogoUploadButton({ small }) {
   );
 }
 
+// "App de clientes": cuando la página se abre desde /cliente.html (la que
+// usa el APK de clientes), la app entra en modo cliente — login propio,
+// solo acepta usuarios categoría "cliente" y guarda su sesión aparte.
+const MODO_CLIENTE = typeof window !== "undefined" && !!window.__MODO_CLIENTE__;
+const CLAVE_SESION = MODO_CLIENTE ? "sesion_cliente" : "sesion_usuario";
+
 const AREAS = [
   { id: "inspecciones", label: "Inspecciones", icon: ClipboardList, color: T.steel },
   { id: "proyectos", label: "Proyectos", icon: HardHat, color: T.green },
@@ -1326,6 +1332,10 @@ function Login({ onLogin }) {
     setLoading(false);
     if (err) { setError("No se pudo conectar. Intenta de nuevo."); return; }
     if (!data || data.length === 0) { setError("Email o PIN incorrecto."); return; }
+    if (MODO_CLIENTE && data[0].categoria !== "cliente") {
+      setError("Esta app es solo para clientes. El personal de Salvavidas usa la app del departamento.");
+      return;
+    }
     onLogin(data[0]);
   };
 
@@ -1336,7 +1346,15 @@ function Login({ onLogin }) {
       position: "relative", overflow: "hidden",
     }}>
       <Flame size={380} color="#fff" style={{ position: "absolute", opacity: 0.09, right: "5%", top: "48%", transform: "translateY(-50%)", pointerEvents: "none" }} />
-      <div style={{ width: 360, background: T.panel, borderRadius: 16, padding: 32, boxShadow: "0 20px 60px rgba(0,0,0,.3)", position: "relative" }}>
+      <div style={{ width: 360, maxWidth: "100%", background: T.panel, borderRadius: 16, padding: 32, boxShadow: "0 20px 60px rgba(0,0,0,.3)", position: "relative" }}>
+        {MODO_CLIENTE ? (
+          <div style={{ textAlign: "center", marginBottom: 22 }}>
+            <img src="/icons/icon-192.png" alt="Salvavidas" style={{ width: 84, height: 84, borderRadius: 18, display: "block", margin: "0 auto 10px" }} />
+            <div style={{ fontWeight: 800, fontSize: 19, color: T.ink, letterSpacing: -0.3 }}>Monitoreo Salvavidas</div>
+            <div style={{ fontSize: 11.5, color: T.accent, fontWeight: 700, letterSpacing: 0.4, marginTop: 2 }}>ACCESO PARA CLIENTES</div>
+            <div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 8 }}>Estado en vivo de su sistema contra incendio</div>
+          </div>
+        ) : (<>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
           <div style={{ width: 40, height: 40, borderRadius: 10, background: logo ? "transparent" : `linear-gradient(135deg, ${T.accent}, #C2410C)`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>
             {logo ? <img src={logo} alt="Logo" style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <Flame size={22} color="#fff" />}
@@ -1347,6 +1365,7 @@ function Login({ onLogin }) {
           </div>
         </div>
         <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 24, marginTop: 6 }}>Inspecciones · Proyectos · Cotizaciones · EHS</div>
+        </>)}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Field label="Correo electrónico">
@@ -7126,7 +7145,7 @@ function MonitoreoNotifier() {
     ventana.document.write(
       `<!doctype html><html><head><meta charset="utf-8" /><title>Tendencias - ${sitioSeleccionado}</title>` +
       `<style>body{font-family:system-ui,-apple-system,sans-serif;margin:24px;color:#2a2620;}</style></head>` +
-      `<body>${historialHtml}</body></html>`
+      `<body>${historialHtml}<p style="margin-top:24px;color:#99a;font-size:10.5px">IgnisMonitor · Departamento A&amp;D Salvavidas · <i>by Anthony Campos Medina</i></p></body></html>`
     );
     ventana.document.close();
     ventana.focus();
@@ -7224,7 +7243,7 @@ function MonitoreoNotifier() {
 <div class="portada"><div class="t">Reporte de monitoreo — ${esc(titulo)}</div>
 <div class="s">IgnisMonitor · Panel Notifier · generado el ${esc(new Date().toLocaleString("es-CR"))}${filtros ? " · " + esc(filtros) : ""}</div></div>
 ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
-<div class="pie">IgnisMonitor · Departamento A&amp;D Salvavidas</div>
+<div class="pie">IgnisMonitor · Departamento A&amp;D Salvavidas · <i>by Anthony Campos Medina</i></div>
 </body></html>`;
       ventana.document.open();
       ventana.document.write(html);
@@ -7259,7 +7278,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
   };
 
   return (
-    <div style={{ background: IGNIS.bg, minHeight: "100vh", padding: 18, paddingTop: esMovilNotifier ? 58 : 18, display: "flex", flexDirection: "column", gap: 14, color: IGNIS.text, boxSizing: "border-box" }}>
+    <div style={{ background: IGNIS.bg, minHeight: "100vh", padding: 18, paddingTop: esMovilNotifier ? 58 : 18, paddingBottom: esMovilNotifier ? 100 : 30, display: "flex", flexDirection: "column", gap: 14, color: IGNIS.text, boxSizing: "border-box" }}>
       {/* ---- Encabezado estilo IgnisMonitor ---- */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, borderBottom: `1px solid ${IGNIS.border}`, paddingBottom: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -7521,7 +7540,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
 
       {esMovilNotifier && (
         <div style={{
-          position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 20, display: "flex",
+          position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 20, display: "flex", paddingBottom: 20, // franja para la firma "by Anthony"
           background: IGNIS.panel2, borderTop: `1px solid ${IGNIS.border}`, boxShadow: "0 -4px 14px rgba(0,0,0,.35)",
         }}>
           {[
@@ -14273,8 +14292,10 @@ function Planilla() {
 function AppInner() {
   const [user, setUser] = useState(() => {
     try {
-      const guardado = localStorage.getItem("sesion_usuario");
-      return guardado ? JSON.parse(guardado) : null;
+      const guardado = localStorage.getItem(CLAVE_SESION);
+      const u = guardado ? JSON.parse(guardado) : null;
+      if (MODO_CLIENTE && u && u.categoria !== "cliente") return null;
+      return u;
     } catch {
       return null;
     }
@@ -14301,12 +14322,12 @@ function AppInner() {
 
   const iniciarSesion = (u) => {
     setUser(u);
-    try { localStorage.setItem("sesion_usuario", JSON.stringify(u)); } catch {}
+    try { localStorage.setItem(CLAVE_SESION, JSON.stringify(u)); } catch {}
   };
   const cerrarSesion = () => {
     setUser(null);
     setTab(null);
-    try { localStorage.removeItem("sesion_usuario"); } catch {}
+    try { localStorage.removeItem(CLAVE_SESION); } catch {}
   };
 
   const visibleAreas = useMemo(() => {
@@ -14741,6 +14762,23 @@ function MovilCalendario({ cardStyle }) {
   );
 }
 
+// Firma del autor, visible en todas las vistas (login, módulos, app de
+// clientes y vista celular). No bloquea clics de lo que quede debajo.
+function FirmaAutor() {
+  return (
+    <div
+      style={{
+        position: "fixed", right: 10, bottom: 6, zIndex: 9999, pointerEvents: "none",
+        fontSize: 11, fontWeight: 700, letterSpacing: 0.4, fontStyle: "italic",
+        color: "rgba(255,255,255,.85)", background: "rgba(15,23,36,.55)",
+        padding: "2px 9px", borderRadius: 999, backdropFilter: "blur(2px)",
+      }}
+    >
+      by Anthony Campos Medina
+    </div>
+  );
+}
+
 export default function App() {
   const [logo, setLogoState] = useState(null);
   const setLogo = (value) => {
@@ -14811,6 +14849,7 @@ export default function App() {
           <FechasCorteContext.Provider value={{ fechasCorte, refetchFechasCorte }}>
             <ConfirmProvider>
               <AppInner />
+              <FirmaAutor />
             </ConfirmProvider>
           </FechasCorteContext.Provider>
         </ClientesContext.Provider>

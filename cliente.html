@@ -3,17 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>Departamento A&amp;D Salvavidas</title>
+    <title>Monitoreo Salvavidas</title>
 
-    <!-- App instalable (PWA) / base para el APK -->
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- App de CLIENTES (la que usa el APK de clientes) -->
+    <link rel="manifest" href="/manifest-cliente.webmanifest" />
     <meta name="theme-color" content="#0b0f14" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="A&amp;D Salvavidas" />
+    <meta name="apple-mobile-web-app-title" content="Monitoreo" />
+    <script>window.__MODO_CLIENTE__ = true;</script>
   </head>
   <body>
     <div id="root"></div>

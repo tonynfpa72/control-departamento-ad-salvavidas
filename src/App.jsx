@@ -7001,6 +7001,11 @@ function MonitoreoNotifier() {
               {sonidoOn ? <Volume2 size={13} /> : <VolumeX size={13} />} {sonidoOn ? "Sonido activo" : "Sonido apagado"}
             </button>
           )}
+          {esTecnicoSonido && (
+            <Btn small variant={modoSonando > 0 ? "danger" : "ghost"} style={modoSonando > 0 ? {} : { background: IGNIS.panel, color: IGNIS.dim, border: `1px solid ${IGNIS.border}` }} onClick={detenerSonido}>
+              <VolumeX size={13} /> Silenciar
+            </Btn>
+          )}
           <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${IGNIS.border}` }}>
             <button onClick={() => setVistaModoNotifier(vistaModoNotifier === "movil" ? "auto" : "movil")} title="Ver como celular" style={{ background: vistaModoNotifier === "movil" ? IGNIS.panel2 : "transparent", color: vistaModoNotifier === "movil" ? IGNIS.text : IGNIS.dim, border: "none", padding: "7px 10px", fontSize: 13, cursor: "pointer" }}>📱</button>
             <button onClick={() => setVistaModoNotifier(vistaModoNotifier === "pc" ? "auto" : "pc")} title="Ver como PC" style={{ background: vistaModoNotifier === "pc" ? IGNIS.panel2 : "transparent", color: vistaModoNotifier === "pc" ? IGNIS.text : IGNIS.dim, border: "none", padding: "7px 10px", fontSize: 13, cursor: "pointer" }}>💻</button>

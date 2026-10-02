@@ -172,6 +172,7 @@ const CATEGORIAS_USUARIO = [
   { id: "tecnico", label: "Técnico" },
   { id: "ehs", label: "EHS" },
   { id: "entrenamiento", label: "Entrenamiento" },
+  { id: "cliente", label: "Cliente (solo Monitoreo)" },
 ];
 
 // Los usuarios ya NO viven aquí: se guardan en Supabase (tabla "usuarios").
@@ -4914,10 +4915,37 @@ function GestionUsuarios() {
   const [errorMsg, setErrorMsg] = useState("");
 
   const catInfo = (id) => CATEGORIAS_USUARIO.find((c) => c.id === id) || CATEGORIAS_USUARIO[1];
-  const catColor = { admin: [T.accent, T.accentSoft], asistente: [T.blue, T.blueSoft], tecnico: [T.steel, T.graySoft] };
+  const catColor = { admin: [T.accent, T.accentSoft], asistente: [T.blue, T.blueSoft], tecnico: [T.steel, T.graySoft], cliente: [T.red, T.redSoft] };
+
+  // Sitios del Monitoreo (nombres que mandan los IgnisMonitor) para poder
+  // asignarle uno a cada usuario "Cliente".
+  const [sitiosMonitoreo, setSitiosMonitoreo] = useState([]);
+  useEffect(() => {
+    (async () => {
+      const [{ data: disp }, { data: ev }] = await Promise.all([
+        supabase.from("dispositivos_panel").select("sitio"),
+        supabase.from("eventos_panel").select("sitio").limit(2000),
+      ]);
+      const set = new Set();
+      [...(disp || []), ...(ev || [])].forEach((r) => { if (r.sitio) set.add(r.sitio); });
+      setSitiosMonitoreo([...set].sort((a, b) => a.localeCompare(b)));
+    })();
+  }, []);
+  const selectSitioCliente = ({ value, onChange, compacto }) => (
+    <select
+      style={{ ...inputStyle, ...(compacto ? { fontSize: 12.5, padding: "5px 8px", marginTop: 4 } : {}) }}
+      value={value || ""}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      <option value="">— Elegir sitio —</option>
+      {value && !sitiosMonitoreo.includes(value) && <option value={value}>{value}</option>}
+      {sitiosMonitoreo.map((s) => <option key={s} value={s}>{s}</option>)}
+    </select>
+  );
 
   const add = async () => {
     if (!form.name || !form.email || form.pin.length < 4) return;
+    if (form.categoria === "cliente" && !form.area) { setErrorMsg("Elige el sitio que podrá ver este cliente."); return; }
     setBusy(true);
     setErrorMsg("");
     const { error } = await supabase.rpc("crear_usuario", {
@@ -4931,6 +4959,7 @@ function GestionUsuarios() {
   const startEdit = (u) => { setEditId(u.id); setEditForm({ ...u }); };
   const cancelEdit = () => { setEditId(null); setEditForm(null); };
   const saveEdit = async () => {
+    if (editForm.categoria === "cliente" && !editForm.area) { setErrorMsg("Elige el sitio que podrá ver este cliente."); return; }
     setBusy(true);
     setErrorMsg("");
     const { error } = await supabase.rpc("actualizar_usuario", {
@@ -4985,11 +5014,21 @@ function GestionUsuarios() {
                   </td>
                   <td>
                     {editing ? (
-                      <select style={{ ...inputStyle, fontSize: 12.5, padding: "5px 8px" }} value={editForm.categoria} onChange={(e) => setEditForm({ ...editForm, categoria: e.target.value })}>
-                        {CATEGORIAS_USUARIO.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
-                      </select>
+                      <>
+                        <select style={{ ...inputStyle, fontSize: 12.5, padding: "5px 8px" }} value={editForm.categoria} onChange={(e) => setEditForm({ ...editForm, categoria: e.target.value })}>
+                          {CATEGORIAS_USUARIO.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                        </select>
+                        {editForm.categoria === "cliente" && (
+                          selectSitioCliente({ compacto: true, value: editForm.area, onChange: (v) => setEditForm({ ...editForm, area: v }) })
+                        )}
+                      </>
                     ) : (
-                      <Badge color={catColor[u.categoria]?.[0] || T.gray} soft={catColor[u.categoria]?.[1] || T.graySoft}>{catInfo(u.categoria).label}</Badge>
+                      <>
+                        <Badge color={catColor[u.categoria]?.[0] || T.gray} soft={catColor[u.categoria]?.[1] || T.graySoft}>{catInfo(u.categoria).label}</Badge>
+                        {u.categoria === "cliente" && (
+                          <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 3 }}>Sitio: {u.area || <span style={{ color: T.red }}>sin asignar</span>}</div>
+                        )}
+                      </>
                     )}
                   </td>
                   <td style={{ display: "flex", gap: 6, padding: "9px 8px" }}>
@@ -5022,6 +5061,12 @@ function GestionUsuarios() {
               {CATEGORIAS_USUARIO.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
             </select>
           </Field>
+          {form.categoria === "cliente" && (
+            <Field label="Sitio que podrá ver">
+              {selectSitioCliente({ value: form.area, onChange: (v) => setForm({ ...form, area: v }) })}
+              <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 4 }}>Es el "Nombre de este sitio" que tiene configurado el IgnisMonitor del cliente.</div>
+            </Field>
+          )}
           <Btn variant="accent" onClick={add} disabled={busy} style={{ justifyContent: "center" }}><Plus size={14} /> {busy ? "Guardando..." : "Crear usuario"}</Btn>
           {errorMsg && <div style={{ color: T.red, fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}><AlertCircle size={13} />{errorMsg}</div>}
         </div>
@@ -6720,6 +6765,11 @@ function MonitoreoNotifier() {
   // acceso que Admin/Asistente (puede borrar, etc.) — así lo pidió el gerente.
   const canGestionar = currentUser?.categoria === "admin" || currentUser?.categoria === "asistente" || currentUser?.categoria === "tecnico";
   const esTecnicoSonido = currentUser?.categoria === "tecnico"; // solo técnicos escuchan el sonido de alarmas
+  // Usuario "cliente": solo ve SU sitio asignado (guardado en usuarios.area).
+  // Los datos se piden a Supabase ya filtrados por ese sitio, así que los
+  // otros equipos ni siquiera llegan a su navegador.
+  const esCliente = currentUser?.categoria === "cliente";
+  const sitioCliente = esCliente ? String(currentUser?.area || "").trim() : "";
   // ---- Vista celular: igual que en Entrenamiento, una navegación por
   // pestañas abajo en vez de todo apilado, para que quepa bien en el
   // teléfono (ahí no hay espacio para tener tarjetas + equipos + bitácora
@@ -6736,7 +6786,10 @@ function MonitoreoNotifier() {
   const [eventos, setEventos] = useState([]);
   const [dispositivos, setDispositivos] = useState([]);
   const [cargando, setCargando] = useState(true);
-  const [sitioSeleccionado, setSitioSeleccionado] = useState("Todos");
+  const [sitioSeleccionado, setSitioSeleccionado] = useState(() => (esCliente ? sitioCliente : "Todos"));
+  useEffect(() => {
+    if (esCliente && sitioSeleccionado !== sitioCliente) setSitioSeleccionado(sitioCliente);
+  }, [esCliente, sitioCliente, sitioSeleccionado]);
   const [busqueda, setBusqueda] = useState("");
   const [borrando, setBorrando] = useState(false);
   const [vista, setVista] = useState("eventos"); // "eventos" | "tendencias"
@@ -6747,10 +6800,11 @@ function MonitoreoNotifier() {
 
   useEffect(() => {
     const cargar = async () => {
-      const [{ data: ev, error: errEv }, { data: disp, error: errDisp }] = await Promise.all([
-        supabase.from("eventos_panel").select("*").order("fecha_panel", { ascending: false }).limit(500),
-        supabase.from("dispositivos_panel").select("*"),
-      ]);
+      if (esCliente && !sitioCliente) { setEventos([]); setDispositivos([]); setCargando(false); return; }
+      let qEv = supabase.from("eventos_panel").select("*").order("fecha_panel", { ascending: false }).limit(500);
+      let qDisp = supabase.from("dispositivos_panel").select("*");
+      if (esCliente) { qEv = qEv.eq("sitio", sitioCliente); qDisp = qDisp.eq("sitio", sitioCliente); }
+      const [{ data: ev, error: errEv }, { data: disp, error: errDisp }] = await Promise.all([qEv, qDisp]);
       if (!errEv && ev) setEventos(ev);
       if (!errDisp && disp) setDispositivos(disp);
       setErrorCarga(errEv?.message || errDisp?.message || "");
@@ -6960,6 +7014,44 @@ function MonitoreoNotifier() {
 
   const selectEstilo = { background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 13, fontFamily: "inherit" };
 
+  // Abre el análisis de Tendencias (igual al Reporte ejecutivo del equipo)
+  // en una pestaña nueva, limpia, lista para imprimir o "Guardar como PDF"
+  // desde el propio diálogo de impresión del navegador.
+  const imprimirTendencias = () => {
+    const ventana = window.open("", "_blank");
+    if (!ventana) { alert("El navegador bloqueó la ventana nueva. Permite las ventanas emergentes para poder imprimir."); return; }
+    ventana.document.write(
+      `<!doctype html><html><head><meta charset="utf-8" /><title>Tendencias - ${sitioSeleccionado}</title>` +
+      `<style>body{font-family:system-ui,-apple-system,sans-serif;margin:24px;color:#2a2620;}</style></head>` +
+      `<body>${historialHtml}</body></html>`
+    );
+    ventana.document.close();
+    ventana.focus();
+    setTimeout(() => ventana.print(), 400); // tiempo para que el navegador termine de pintar antes de imprimir
+  };
+
+  // Descarga la bitácora que se está viendo (ya filtrada por sitio/categoría/
+  // búsqueda) como CSV, para abrirla en Excel.
+  const descargarCsvEventos = () => {
+    const filas = [["Sitio", "Categoria", "Evento", "Fecha"]];
+    eventosFiltrados.forEach((e) => {
+      filas.push([
+        e.sitio || "",
+        ETIQUETA_CATEGORIA_PANEL[e.categoria] || e.categoria || "Otro",
+        (e.texto || "").replace(/\r?\n/g, " "),
+        e.fecha_panel ? new Date(e.fecha_panel).toLocaleString("es-CR") : "",
+      ]);
+    });
+    const csv = filas.map((f) => f.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `eventos_${sitioSeleccionado === "Todos" ? "todos_los_sitios" : nombreArchivoSitioPanel(sitioSeleccionado)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div style={{ background: IGNIS.bg, minHeight: "100vh", padding: 18, paddingTop: esMovilNotifier ? 58 : 18, display: "flex", flexDirection: "column", gap: 14, color: IGNIS.text, boxSizing: "border-box" }}>
       {/* ---- Encabezado estilo IgnisMonitor ---- */}
@@ -6970,14 +7062,16 @@ function MonitoreoNotifier() {
           </div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 1.5, textTransform: "uppercase" }}>IgnisMonitor</div>
-            <div style={{ fontSize: 10.5, color: IGNIS.dim2 }}>Monitoreo — todos los sitios en vivo</div>
+            <div style={{ fontSize: 10.5, color: IGNIS.dim2 }}>{esCliente ? `Monitoreo en vivo — ${sitioCliente || "sin sitio asignado"}` : "Monitoreo — todos los sitios en vivo"}</div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {!esCliente && (
           <select style={{ ...selectEstilo, width: 220 }} value={sitioSeleccionado} onChange={(e) => setSitioSeleccionado(e.target.value)}>
             <option value="Todos">Todos los sitios ({sitios.length})</option>
             {sitios.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
+          )}
           {!esMovilNotifier && sitioSeleccionado !== "Todos" && (
             <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${IGNIS.border}` }}>
               <button onClick={() => setVista("eventos")} style={{ padding: "7px 12px", fontSize: 12.5, border: "none", cursor: "pointer", background: vista === "eventos" ? IGNIS.panel2 : IGNIS.panel, color: vista === "eventos" ? IGNIS.text : IGNIS.dim, fontWeight: 600 }}>Eventos</button>
@@ -7031,7 +7125,12 @@ function MonitoreoNotifier() {
         </div>
       )}
 
-      {!cargando && !errorCarga && sitios.length === 0 && (
+      {esCliente && !sitioCliente && (
+        <div style={{ background: "#3a2a12", border: "1px solid #6b4a1a", color: "#f2c177", borderRadius: 10, padding: "10px 14px", fontSize: 12.5, lineHeight: 1.5 }}>
+          <b>Tu usuario todavía no tiene un sitio asignado.</b> Pídele al administrador que te asigne tu sitio para ver su monitoreo.
+        </div>
+      )}
+      {!esCliente && !cargando && !errorCarga && sitios.length === 0 && (
         <div style={{ background: "#3a2a12", border: "1px solid #6b4a1a", color: "#f2c177", borderRadius: 10, padding: "10px 14px", fontSize: 12.5, lineHeight: 1.5 }}>
           <b>Todavía no ha llegado ningún dato a Supabase.</b> Si tu IgnisMonitor ya está encendido y conectado a WiFi pero no aparece aquí, lo más común es que en el firmware (<code>IgnisMonitor_ESP8266_V5.1.ino</code>) las líneas <code>SUPABASE_URL</code> y <code>SUPABASE_ANON_KEY</code> todavía tengan los valores de ejemplo y no los reales de tu proyecto — revísalas y vuelve a cargar el firmware. También confirma que le pusiste un "Nombre de este sitio" en la página de Configuración del equipo.
         </div>
@@ -7118,7 +7217,12 @@ function MonitoreoNotifier() {
       {(!esMovilNotifier || seccionMovil === "eventos" || seccionMovil === "tendencias") && (vista === "tendencias" && sitioSeleccionado !== "Todos" ? (
         // ---- Tendencias: mismo análisis que el Reporte ejecutivo del equipo, sobre papel blanco (igual que allá) ----
         <div style={{ background: "#fff", borderRadius: 10, padding: 16 }}>
-          <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: "#888", fontWeight: 700, marginBottom: 6 }}>Tendencias del historial — {sitioSeleccionado}</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
+            <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: "#888", fontWeight: 700 }}>Tendencias del historial — {sitioSeleccionado}</div>
+            {!cargandoHistorial && historialHtml && (
+              <Btn small variant="accent" onClick={imprimirTendencias}><Download size={13} /> Imprimir / Guardar PDF</Btn>
+            )}
+          </div>
           {cargandoHistorial ? (
             <div style={{ color: "#666", fontSize: 13 }}>Cargando historial...</div>
           ) : (
@@ -7130,14 +7234,19 @@ function MonitoreoNotifier() {
         <div style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 10, padding: 14 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
             <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: IGNIS.dim, fontWeight: 700 }}>Eventos en vivo</div>
-            <div style={{ position: "relative" }}>
-              <Search size={13} style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", color: IGNIS.dim }} />
-              <input
-                style={{ ...selectEstilo, paddingLeft: 28, width: 230 }}
-                placeholder="Buscar por texto o sitio..."
-                value={busqueda}
-                onChange={(e) => setBusqueda(e.target.value)}
-              />
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <div style={{ position: "relative" }}>
+                <Search size={13} style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", color: IGNIS.dim }} />
+                <input
+                  style={{ ...selectEstilo, paddingLeft: 28, width: esMovilNotifier ? 180 : 230 }}
+                  placeholder="Buscar por texto o sitio..."
+                  value={busqueda}
+                  onChange={(e) => setBusqueda(e.target.value)}
+                />
+              </div>
+              <Btn small variant="ghost" onClick={descargarCsvEventos} disabled={!eventosFiltrados.length}>
+                <Download size={13} /> CSV
+              </Btn>
             </div>
           </div>
           <div style={{ background: IGNIS.paper, color: IGNIS.paperInk, borderRadius: 10, overflow: "hidden", border: "1px solid #d9d3c3" }}>
@@ -13974,6 +14083,8 @@ function AppInner() {
     // categoría "admin". Los técnicos, además, no ven Proyectos ni Planilla.
     // El perfil "entrenamiento" solo ve el área de Entrenamiento — nada más.
     if (user.categoria === "entrenamiento") return AREAS.filter((a) => a.id === "entrenamiento");
+    // El perfil "cliente" solo ve Monitoreo (y dentro, solo su sitio asignado).
+    if (user.categoria === "cliente") return AREAS.filter((a) => a.id === "monitoreo_notifier");
     if (user.categoria === "admin") return AREAS;
     if (user.categoria === "tecnico") return AREAS.filter((a) => a.id !== "admin" && a.id !== "proyectos" && a.id !== "planilla");
     return AREAS.filter((a) => a.id !== "admin");
@@ -13982,6 +14093,11 @@ function AppInner() {
   useEffect(() => {
     if (user && !tab) setTab(visibleAreas[0]?.id);
   }, [user]);
+  // Si por cualquier camino se intenta abrir un área que este usuario no
+  // tiene permitida (ej. un cliente), se le regresa a su primera área válida.
+  useEffect(() => {
+    if (user && tab && !visibleAreas.some((a) => a.id === tab)) setTab(visibleAreas[0]?.id);
+  }, [user, tab, visibleAreas]);
 
   if (!user) return <Login onLogin={iniciarSesion} />;
 

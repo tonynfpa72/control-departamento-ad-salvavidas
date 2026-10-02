@@ -9,7 +9,7 @@ import {
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
   ChevronLeft, ChevronRight, ChevronUp, ChevronDown, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck, Package, GraduationCap, Award,
   Star, Trophy, Zap, Target, Medal, Rocket, Crown, Sparkles, ShieldCheck, Gem, Repeat, Lock, Search,
-  AlertTriangle, Settings, Shield, HelpCircle, Trash2, Wrench, Wifi, TrendingUp
+  AlertTriangle, Settings, Shield, HelpCircle, Trash2, Wrench, Wifi, TrendingUp, Volume2, VolumeX
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -6717,6 +6717,19 @@ function MonitoreoNotifier() {
   const currentUser = useContext(CurrentUserContext);
   const confirmar = useContext(ConfirmContext);
   const canGestionar = currentUser?.categoria === "admin" || currentUser?.categoria === "asistente";
+  const esTecnicoSonido = currentUser?.categoria === "tecnico"; // solo técnicos escuchan el sonido de alarmas
+  // ---- Vista celular: igual que en Entrenamiento, una navegación por
+  // pestañas abajo en vez de todo apilado, para que quepa bien en el
+  // teléfono (ahí no hay espacio para tener tarjetas + equipos + bitácora
+  // visibles a la vez). En pantallas anchas se ve todo junto, como siempre. ----
+  const [anchoNotifier, setAnchoNotifier] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 1024));
+  useEffect(() => {
+    const onResize = () => setAnchoNotifier(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const esMovilNotifier = anchoNotifier <= 820;
+  const [seccionMovil, setSeccionMovil] = useState("eventos"); // "resumen" | "eventos" | "equipos" | "tendencias"
   const [eventos, setEventos] = useState([]);
   const [dispositivos, setDispositivos] = useState([]);
   const [cargando, setCargando] = useState(true);
@@ -6741,9 +6754,121 @@ function MonitoreoNotifier() {
       setCargando(false);
     };
     cargar();
-    const intervalo = setInterval(cargar, 5000); // "en vivo": se refresca sola cada 5s
+    const intervalo = setInterval(cargar, 1000); // "en vivo": se refresca sola cada 1s (lo más seguido posible)
     return () => clearInterval(intervalo);
   }, []);
+
+  // -----------------------------------------------------------------
+  // SONIDO DE ALARMAS — igual que el IgnisMonitor original (tono agudo
+  // continuo para Alarma/Prealarma, pulsante para Problema/Supervisión/
+  // Seguridad), pero SOLO lo escuchan los usuarios "Técnico". Admin y
+  // Asistente ven los eventos igual, sin sonido.
+  // -----------------------------------------------------------------
+  const [sonidoOn, setSonidoOn] = useState(true);
+  const [sonidoBloqueado, setSonidoBloqueado] = useState(true); // falta el primer toque del usuario
+  const [modoSonando, setModoSonando] = useState(0); // 0 silencio, 1 pulsante, 2 continuo
+  const audioCtxRef = React.useRef(null);
+  const gananciaRef = React.useRef(null);
+  const pulsoTimerRef = React.useRef(null);
+  const modoSonandoRef = React.useRef(0);
+  const ultimoEventoVistoRef = React.useRef(null);
+
+  useEffect(() => {
+    if (!esTecnicoSonido) return;
+    try { setSonidoOn(localStorage.getItem("ignisSonidoWeb") !== "0"); } catch (e) {}
+  }, [esTecnicoSonido]);
+
+  const prepararAudio = () => {
+    if (audioCtxRef.current) return audioCtxRef.current;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    const ctx = new Ctx();
+    const ganancia = ctx.createGain();
+    ganancia.gain.value = 0;
+    ganancia.connect(ctx.destination);
+    const osc = ctx.createOscillator();
+    osc.type = "square";
+    osc.frequency.value = 2800; // tono agudo tipo sirena, igual que el equipo
+    osc.connect(ganancia);
+    osc.start();
+    audioCtxRef.current = ctx;
+    gananciaRef.current = ganancia;
+    return ctx;
+  };
+
+  const volumen = (v) => {
+    const ctx = audioCtxRef.current, ganancia = gananciaRef.current;
+    if (ctx && ganancia) ganancia.gain.setTargetAtTime(v, ctx.currentTime, 0.005);
+  };
+
+  const detenerSonido = () => {
+    clearInterval(pulsoTimerRef.current);
+    pulsoTimerRef.current = null;
+    volumen(0);
+    modoSonandoRef.current = 0;
+    setModoSonando(0);
+  };
+
+  const sonar = (modo, duracionMs) => {
+    if (!esTecnicoSonido || !sonidoOn) return;
+    const ctx = prepararAudio();
+    if (!ctx) return;
+    const reproducir = () => {
+      setSonidoBloqueado(false);
+      clearInterval(pulsoTimerRef.current);
+      pulsoTimerRef.current = null;
+      modoSonandoRef.current = modo;
+      setModoSonando(modo);
+      if (modo === 2) {
+        volumen(0.5);
+      } else {
+        let on = false;
+        pulsoTimerRef.current = setInterval(() => { on = !on; volumen(on ? 0.5 : 0); }, 200);
+      }
+      if (duracionMs) {
+        setTimeout(() => { if (modoSonandoRef.current === modo) detenerSonido(); }, duracionMs);
+      }
+    };
+    if (ctx.state !== "running") ctx.resume().then(reproducir).catch(() => setSonidoBloqueado(true));
+    else reproducir();
+  };
+
+  // Desbloquea el audio con el primer toque/clic del técnico en la página
+  // (los navegadores no dejan sonar nada sin esa interacción).
+  useEffect(() => {
+    if (!esTecnicoSonido || !sonidoOn) return;
+    const desbloquear = () => {
+      const ctx = prepararAudio();
+      if (ctx && ctx.state !== "running") ctx.resume().then(() => setSonidoBloqueado(false)).catch(() => {});
+      else if (ctx) setSonidoBloqueado(false);
+    };
+    ["pointerdown", "keydown", "click"].forEach((ev) => document.addEventListener(ev, desbloquear));
+    return () => ["pointerdown", "keydown", "click"].forEach((ev) => document.removeEventListener(ev, desbloquear));
+  }, [esTecnicoSonido, sonidoOn]);
+
+  // Detecta eventos NUEVOS (no los que ya existían al abrir la página) y
+  // suena según su categoría — así cada evento real del panel se escucha
+  // apenas llega, igual que en el dashboard del propio equipo.
+  useEffect(() => {
+    if (!esTecnicoSonido || !eventos.length) return;
+    const masReciente = eventos[0].fecha_panel;
+    if (ultimoEventoVistoRef.current === null) {
+      ultimoEventoVistoRef.current = masReciente; // primera carga: no suena por eventos viejos
+      return;
+    }
+    if (masReciente === ultimoEventoVistoRef.current) return;
+    const nuevos = eventos.filter((e) => new Date(e.fecha_panel) > new Date(ultimoEventoVistoRef.current));
+    ultimoEventoVistoRef.current = masReciente;
+    if (nuevos.some((e) => e.categoria === "alarma" || e.categoria === "prealarma")) sonar(2);
+    else if (nuevos.some((e) => ["problema", "supervision", "seguridad"].includes(e.categoria))) sonar(1, 6000);
+  }, [eventos, esTecnicoSonido, sonidoOn]);
+
+  const toggleSonido = () => {
+    const nuevo = !sonidoOn;
+    setSonidoOn(nuevo);
+    try { localStorage.setItem("ignisSonidoWeb", nuevo ? "1" : "0"); } catch (e) {}
+    if (!nuevo) detenerSonido();
+  };
 
   const sitios = useMemo(() => {
     const unicos = new Set([...eventos.map((e) => e.sitio), ...dispositivos.map((d) => d.sitio)].filter(Boolean));
@@ -6839,7 +6964,7 @@ function MonitoreoNotifier() {
             <option value="Todos">Todos los sitios ({sitios.length})</option>
             {sitios.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
-          {sitioSeleccionado !== "Todos" && (
+          {!esMovilNotifier && sitioSeleccionado !== "Todos" && (
             <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${IGNIS.border}` }}>
               <button onClick={() => setVista("eventos")} style={{ padding: "7px 12px", fontSize: 12.5, border: "none", cursor: "pointer", background: vista === "eventos" ? IGNIS.panel2 : IGNIS.panel, color: vista === "eventos" ? IGNIS.text : IGNIS.dim, fontWeight: 600 }}>Eventos</button>
               <button onClick={() => setVista("tendencias")} style={{ padding: "7px 12px", fontSize: 12.5, border: "none", cursor: "pointer", background: vista === "tendencias" ? IGNIS.panel2 : IGNIS.panel, color: vista === "tendencias" ? IGNIS.text : IGNIS.dim, fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}><TrendingUp size={13} /> Tendencias</button>
@@ -6850,8 +6975,38 @@ function MonitoreoNotifier() {
               <Trash2 size={13} /> Borrar este sitio
             </Btn>
           )}
+          {esTecnicoSonido && (
+            <button
+              onClick={toggleSonido}
+              title={sonidoOn ? "Sonido de alarmas ACTIVO. Clic para apagarlo." : "Sonido APAGADO. Clic para encenderlo."}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 999, fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+                background: sonidoOn ? IGNIS.panel : "rgba(229,72,77,.14)", border: `1px solid ${sonidoOn ? IGNIS.border : IGNIS.alarma}`, color: sonidoOn ? IGNIS.text : IGNIS.alarma,
+              }}
+            >
+              {sonidoOn ? <Volume2 size={13} /> : <VolumeX size={13} />} {sonidoOn ? "Sonido activo" : "Sonido apagado"}
+            </button>
+          )}
         </div>
       </div>
+
+      {esTecnicoSonido && sonidoOn && sonidoBloqueado && (
+        <div style={{ background: "#1a2a3a", border: `1px solid ${IGNIS.seguridad}`, color: "#9dc6ff", borderRadius: 10, padding: "9px 14px", fontSize: 12.5, cursor: "pointer" }}
+             onClick={() => { const ctx = prepararAudio(); if (ctx && ctx.state !== "running") ctx.resume().then(() => setSonidoBloqueado(false)).catch(() => {}); else setSonidoBloqueado(false); }}>
+          🔈 Toca aquí para habilitar el sonido de alarmas en este dispositivo.
+        </div>
+      )}
+
+      {esTecnicoSonido && modoSonando > 0 && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, borderRadius: 10, padding: "10px 14px",
+          background: modoSonando === 2 ? "rgba(229,72,77,.18)" : "rgba(242,183,5,.18)", border: `1px solid ${modoSonando === 2 ? IGNIS.alarma : IGNIS.problema}`,
+          color: modoSonando === 2 ? "#ffb3b5" : "#ffe08a", fontWeight: 700, fontSize: 13,
+        }}>
+          <span>{modoSonando === 2 ? "🔥 ALARMA" : "⚠️ EVENTO NUEVO"}</span>
+          <Btn small onClick={detenerSonido}><VolumeX size={13} /> Silenciar</Btn>
+        </div>
+      )}
 
       {!cargando && !errorCarga && sitios.length === 0 && (
         <div style={{ background: "#3a2a12", border: "1px solid #6b4a1a", color: "#f2c177", borderRadius: 10, padding: "10px 14px", fontSize: 12.5, lineHeight: 1.5 }}>
@@ -6865,7 +7020,8 @@ function MonitoreoNotifier() {
       )}
 
       {/* ---- Tarjetas de conteo (como .stats del dashboard real) — clic para filtrar la bitácora ---- */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(122px,1fr))", gap: 8 }}>
+      {(!esMovilNotifier || seccionMovil === "resumen") && (
+      <div style={{ display: "grid", gridTemplateColumns: esMovilNotifier ? "repeat(auto-fill,minmax(98px,1fr))" : "repeat(auto-fill,minmax(122px,1fr))", gap: 8 }}>
         {CATEGORIAS_PANEL_TILES.map((cat) => {
           const Icono = CATEGORIA_PANEL_ICONO[cat] || HelpCircle;
           const color = CATEGORIA_PANEL_COLOR_DARK[cat];
@@ -6889,8 +7045,10 @@ function MonitoreoNotifier() {
           );
         })}
       </div>
+      )}
 
       {/* ---- Equipos conectados ---- */}
+      {(!esMovilNotifier || seccionMovil === "equipos") && (
       <div style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 10, padding: 14 }}>
         <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: IGNIS.dim, fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
           <Wifi size={13} /> Equipos conectados
@@ -6932,8 +7090,9 @@ function MonitoreoNotifier() {
           </div>
         )}
       </div>
+      )}
 
-      {vista === "tendencias" && sitioSeleccionado !== "Todos" ? (
+      {(!esMovilNotifier || seccionMovil === "eventos" || seccionMovil === "tendencias") && (vista === "tendencias" && sitioSeleccionado !== "Todos" ? (
         // ---- Tendencias: mismo análisis que el Reporte ejecutivo del equipo, sobre papel blanco (igual que allá) ----
         <div style={{ background: "#fff", borderRadius: 10, padding: 16 }}>
           <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: "#888", fontWeight: 700, marginBottom: 6 }}>Tendencias del historial — {sitioSeleccionado}</div>
@@ -6988,7 +7147,41 @@ function MonitoreoNotifier() {
             )}
           </div>
         </div>
+      ))}
+
+      {esMovilNotifier && (
+        <div style={{
+          position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 20, display: "flex",
+          background: IGNIS.panel2, borderTop: `1px solid ${IGNIS.border}`, boxShadow: "0 -4px 14px rgba(0,0,0,.35)",
+        }}>
+          {[
+            { id: "resumen", label: "Resumen", Icono: Flame },
+            { id: "eventos", label: "Eventos", Icono: Search },
+            { id: "equipos", label: "Equipos", Icono: Wifi },
+            { id: "tendencias", label: "Tendencias", Icono: TrendingUp },
+          ].map(({ id, label, Icono }) => {
+            const deshabilitada = id === "tendencias" && sitioSeleccionado === "Todos";
+            const activa = seccionMovil === id;
+            return (
+              <button
+                key={id}
+                disabled={deshabilitada}
+                onClick={() => { setSeccionMovil(id); if (id === "eventos") setVista("eventos"); if (id === "tendencias") setVista("tendencias"); }}
+                style={{
+                  flex: 1, border: "none", background: "transparent", padding: "9px 4px 10px", cursor: deshabilitada ? "default" : "pointer",
+                  color: deshabilitada ? IGNIS.dim2 : activa ? IGNIS.text : IGNIS.dim, opacity: deshabilitada ? 0.45 : 1,
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 3, fontSize: 10.5, fontWeight: 700,
+                  borderTop: activa ? `2px solid ${IGNIS.alarma}` : "2px solid transparent",
+                }}
+              >
+                <Icono size={17} />
+                {label}
+              </button>
+            );
+          })}
+        </div>
       )}
+      {esMovilNotifier && <div style={{ height: 54 }} />}
     </div>
   );
 }

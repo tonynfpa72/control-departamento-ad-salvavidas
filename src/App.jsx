@@ -180,6 +180,31 @@ const sitiosDeTexto = (t) => String(t || "").split(SEP_SITIOS).map((x) => x.trim
 // descargas de archivos, así que ahí se ocultan los botones de PDF/CSV.
 const EN_APK = typeof navigator !== "undefined" && /SalvavidasAPK/.test(navigator.userAgent || "");
 
+// ACTUALIZACIÓN AUTOMÁTICA: el APK (y una pestaña que queda abierta días)
+// seguía usando la versión vieja de la app hasta cerrarla del todo. Cada
+// 60 s se revisa si Vercel publicó una versión nueva y, si es así, la
+// página se recarga sola (también al volver a abrir el APK).
+if (typeof window !== "undefined" && !window.__revisaVersion) {
+  window.__revisaVersion = true;
+  const scriptActual = () => {
+    const s = document.querySelector('script[type="module"][src*="/assets/"]');
+    return s ? new URL(s.getAttribute("src"), location.href).pathname : null;
+  };
+  const revisar = async () => {
+    try {
+      const actual = scriptActual();
+      if (!actual) return; // modo desarrollo
+      const r = await fetch(location.pathname + "?v=" + Date.now(), { cache: "no-store" });
+      if (!r.ok) return;
+      const html = await r.text();
+      const m = html.match(/<script[^>]+type="module"[^>]+src="([^"]+)"/) || html.match(/src="(\/assets\/[^"]+\.js)"/);
+      if (m && new URL(m[1], location.href).pathname !== actual) location.reload();
+    } catch (e) { /* sin internet: se revisa la próxima vez */ }
+  };
+  setInterval(revisar, 60000);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") revisar(); });
+}
+
 // ---- Notificaciones PUSH (alertas con la app cerrada) ----
 // Llave pública VAPID: la privada vive solo en Supabase (secreto de la
 // Edge Function "notificar-alarma"), nunca en la app.

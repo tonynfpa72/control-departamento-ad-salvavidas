@@ -89,7 +89,7 @@ function ConfirmProvider({ children }) {
               <div style={{ fontSize: 14, color: T.ink, lineHeight: 1.5 }}>{pending.mensaje}</div>
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <Btn variant="ghost" onClick={() => responder(false)}>Cancelar</Btn>
+              {!pending.soloAviso && <Btn variant="ghost" onClick={() => responder(false)}>Cancelar</Btn>}
               <Btn variant={esDestructivo ? "danger" : "accent"} onClick={() => responder(true)}>
                 {pending.confirmLabel || (esDestructivo ? "Sí, eliminar" : "Sí, continuar")}
               </Btn>
@@ -7125,6 +7125,9 @@ function MonitoreoNotifier() {
   const refListaEventos = React.useRef(null);
   const [categoriaSeleccionada, setCategoriaSeleccionada] = useState(null); // tarjeta activa (filtro)
   const [errorCarga, setErrorCarga] = useState("");
+  // Momento del último borrado: una consulta que salió ANTES de borrar no
+  // puede volver a pintar los eventos ya borrados.
+  const ultimoBorradoRef = React.useRef(0);
 
   useEffect(() => {
     let enCurso = false, otraVez = false;
@@ -7134,11 +7137,12 @@ function MonitoreoNotifier() {
       enCurso = true;
       try {
       if (esCliente && !sitiosCliente.length) { setEventos([]); setDispositivos([]); setCargando(false); return; }
+      const inicioConsulta = Date.now();
       let qEv = supabase.from("eventos_panel").select("*").order("fecha_panel", { ascending: false }).limit(500);
       let qDisp = supabase.from("dispositivos_panel").select("*");
       if (esCliente) { qEv = qEv.in("sitio", sitiosCliente); qDisp = qDisp.in("sitio", sitiosCliente); }
       const [{ data: ev, error: errEv }, { data: disp, error: errDisp }] = await Promise.all([qEv, qDisp]);
-      if (!errEv && ev) setEventos(ev);
+      if (!errEv && ev && inicioConsulta > ultimoBorradoRef.current) setEventos(ev);
       if (!errDisp && disp) setDispositivos(disp);
       setErrorCarga(errEv?.message || errDisp?.message || "");
       setCargando(false);
@@ -7473,8 +7477,10 @@ function MonitoreoNotifier() {
       supabase.from("eventos_panel").delete().eq("sitio", sitioSeleccionado),
       todos.length ? supabase.storage.from("historial_paneles").remove(todos) : Promise.resolve({}),
     ]);
+    ultimoBorradoRef.current = Date.now();
     setBorrando(false);
     if (!error) setEventos((prev) => prev.filter((e) => e.sitio !== sitioSeleccionado));
+    else await confirmar(`No se pudieron borrar los eventos: ${error.message}`, { confirmLabel: "Entendido", soloAviso: true });
     setHistorialHtml(""); setHistArchivos([]); setMantArchivos([]); setMantLineas([]);
     if (vista === "tendencias") setVista("eventos");
   };
@@ -7485,14 +7491,24 @@ function MonitoreoNotifier() {
     if (sitioSeleccionado === "Todos" || !sitiosCliente.includes(sitioSeleccionado)) return;
     if (!(await confirmar(`¿Borrar todos los eventos de "${sitioSeleccionado}"? El historial y el informe de mantenimiento se conservan. Esto no se puede deshacer.`, { confirmLabel: "Sí, borrar eventos", variant: "danger" }))) return;
     setBorrando(true);
-    const { error } = await supabase.from("eventos_panel").delete().eq("sitio", sitioSeleccionado);
+    const habia = eventos.filter((e) => e.sitio === sitioSeleccionado).length;
+    // .select() devuelve las filas que Supabase REALMENTE borró, para
+    // confirmarle al cliente lo que pasó (y detectar si no tenía permiso).
+    const { data: borrados, error } = await supabase.from("eventos_panel").delete().eq("sitio", sitioSeleccionado).select("id");
+    ultimoBorradoRef.current = Date.now();
     setBorrando(false);
-    if (!error) {
-      setEventos((prev) => prev.filter((e) => e.sitio !== sitioSeleccionado));
-      if (categoriaSeleccionada !== "historial" && categoriaSeleccionada !== "mantenimiento") setCategoriaSeleccionada(null);
-    } else {
-      await confirmar(`No se pudieron borrar los eventos: ${error.message}`, { confirmLabel: "Entendido" });
+    if (error) {
+      await confirmar(`No se pudieron borrar los eventos: ${error.message}`, { confirmLabel: "Entendido", soloAviso: true });
+      return;
     }
+    const n = Array.isArray(borrados) ? borrados.length : 0;
+    if (n === 0 && habia > 0) {
+      await confirmar("Supabase no borró ningún evento (falta el permiso de borrar en la tabla eventos_panel). Avise al administrador.", { confirmLabel: "Entendido", soloAviso: true });
+      return;
+    }
+    setEventos((prev) => prev.filter((e) => e.sitio !== sitioSeleccionado));
+    if (categoriaSeleccionada !== "historial" && categoriaSeleccionada !== "mantenimiento") setCategoriaSeleccionada(null);
+    await confirmar(n === 1 ? "Se borró 1 evento." : `Se borraron ${n} eventos.`, { confirmLabel: "Listo", soloAviso: true, variant: "info" });
   };
 
   // Clic en una tarjeta: filtra Y lleva a la lista de eventos (desde

@@ -1,9 +1,11 @@
-// Service worker mínimo: lo necesita el navegador (y PWABuilder) para
-// tratar la página como app instalable. NO guarda nada en caché a
-// propósito: el monitoreo siempre tiene que mostrar datos en vivo y la
-// app siempre la versión nueva que se suba a Vercel.
+// Service worker de la app (personal y clientes).
+// - Hace la app instalable.
+// - NO guarda nada en caché: el monitoreo siempre muestra datos en vivo.
+// - Recibe las notificaciones PUSH de alarmas (aunque la app esté cerrada).
+// by Anthony Campos Medina
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   event.respondWith(
@@ -15,5 +17,35 @@ self.addEventListener("fetch", (event) => {
         { headers: { "Content-Type": "text/html; charset=utf-8" } }
       )
     )
+  );
+});
+
+// ---- Notificación de alarma ----
+self.addEventListener("push", (event) => {
+  let d = {};
+  try { d = event.data ? event.data.json() : {}; } catch (e) { d = { body: event.data ? event.data.text() : "" }; }
+  const urgente = d.categoria === "alarma" || d.categoria === "prealarma";
+  event.waitUntil(
+    self.registration.showNotification(d.title || "Monitoreo Salvavidas", {
+      body: d.body || "",
+      icon: "/icons/icon-192.png",
+      tag: "evento-" + Date.now(),
+      requireInteraction: urgente, // la de alarma se queda hasta que la toquen
+      vibrate: urgente ? [700, 250, 700, 250, 700, 250, 1500] : [300, 150, 300],
+      data: { url: d.url || "/" },
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((lista) => {
+      for (const c of lista) {
+        if (c.url.indexOf(url) >= 0 && "focus" in c) return c.focus();
+      }
+      return self.clients.openWindow(url);
+    })
   );
 });

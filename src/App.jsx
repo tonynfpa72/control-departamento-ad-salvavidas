@@ -172,6 +172,10 @@ function useEstadoRecordado(clave, inicial) {
 // solo acepta usuarios categoría "cliente" y guarda su sesión aparte.
 const MODO_CLIENTE = typeof window !== "undefined" && !!window.__MODO_CLIENTE__;
 const CLAVE_SESION = MODO_CLIENTE ? "sesion_cliente" : "sesion_usuario";
+// Un cliente puede tener uno o varios sitios asignados; se guardan en
+// usuarios.area separados por "|" (ej. "Hotel Belén|Hotel Escazú").
+const SEP_SITIOS = "|";
+const sitiosDeTexto = (t) => String(t || "").split(SEP_SITIOS).map((x) => x.trim()).filter(Boolean);
 // Dentro del APK (WebView de Android) no hay ventanas nuevas ni impresión ni
 // descargas de archivos, así que ahí se ocultan los botones de PDF/CSV.
 const EN_APK = typeof navigator !== "undefined" && /SalvavidasAPK/.test(navigator.userAgent || "");
@@ -4994,21 +4998,30 @@ function GestionUsuarios() {
       setSitiosMonitoreo([...set].sort((a, b) => a.localeCompare(b)));
     })();
   }, []);
-  const selectSitioCliente = ({ value, onChange, compacto }) => (
-    <select
-      style={{ ...inputStyle, ...(compacto ? { fontSize: 12.5, padding: "5px 8px", marginTop: 4 } : {}) }}
-      value={value || ""}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      <option value="">— Elegir sitio —</option>
-      {value && !sitiosMonitoreo.includes(value) && <option value={value}>{value}</option>}
-      {sitiosMonitoreo.map((s) => <option key={s} value={s}>{s}</option>)}
-    </select>
-  );
+  // Uno o varios sitios por cliente (casillas). Se guardan como "a|b|c".
+  const selectSitioCliente = ({ value, onChange, compacto }) => {
+    const elegidos = sitiosDeTexto(value);
+    const opciones = [...new Set([...sitiosMonitoreo, ...elegidos])].sort((a, b) => a.localeCompare(b));
+    const alternar = (sitio) => {
+      const nuevos = elegidos.includes(sitio) ? elegidos.filter((x) => x !== sitio) : [...elegidos, sitio];
+      onChange(nuevos.join(SEP_SITIOS));
+    };
+    return (
+      <div style={{ border: `1px solid ${T.line}`, borderRadius: 8, padding: compacto ? "4px 6px" : "6px 8px", marginTop: compacto ? 4 : 0, maxHeight: 170, overflowY: "auto", background: "#fff" }}>
+        {opciones.length === 0 && <div style={{ fontSize: 12, color: T.inkSoft }}>Todavía no hay sitios reportando.</div>}
+        {opciones.map((sitio) => (
+          <label key={sitio} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: compacto ? 12 : 13, padding: "3px 0", cursor: "pointer" }}>
+            <input type="checkbox" checked={elegidos.includes(sitio)} onChange={() => alternar(sitio)} />
+            {sitio}
+          </label>
+        ))}
+      </div>
+    );
+  };
 
   const add = async () => {
     if (!form.name || !form.email || form.pin.length < 4) return;
-    if (form.categoria === "cliente" && !form.area) { setErrorMsg("Elige el sitio que podrá ver este cliente."); return; }
+    if (form.categoria === "cliente" && !sitiosDeTexto(form.area).length) { setErrorMsg("Marca al menos un sitio que podrá ver este cliente."); return; }
     setBusy(true);
     setErrorMsg("");
     const { error } = await supabase.rpc("crear_usuario", {
@@ -5022,7 +5035,7 @@ function GestionUsuarios() {
   const startEdit = (u) => { setEditId(u.id); setEditForm({ ...u }); };
   const cancelEdit = () => { setEditId(null); setEditForm(null); };
   const saveEdit = async () => {
-    if (editForm.categoria === "cliente" && !editForm.area) { setErrorMsg("Elige el sitio que podrá ver este cliente."); return; }
+    if (editForm.categoria === "cliente" && !sitiosDeTexto(editForm.area).length) { setErrorMsg("Marca al menos un sitio que podrá ver este cliente."); return; }
     setBusy(true);
     setErrorMsg("");
     const { error } = await supabase.rpc("actualizar_usuario", {
@@ -5089,7 +5102,7 @@ function GestionUsuarios() {
                       <>
                         <Badge color={catColor[u.categoria]?.[0] || T.gray} soft={catColor[u.categoria]?.[1] || T.graySoft}>{catInfo(u.categoria).label}</Badge>
                         {u.categoria === "cliente" && (
-                          <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 3 }}>Sitio: {u.area || <span style={{ color: T.red }}>sin asignar</span>}</div>
+                          <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 3 }}>{sitiosDeTexto(u.area).length > 1 ? "Sitios" : "Sitio"}: {sitiosDeTexto(u.area).join(", ") || <span style={{ color: T.red }}>sin asignar</span>}</div>
                         )}
                       </>
                     )}
@@ -5125,7 +5138,7 @@ function GestionUsuarios() {
             </select>
           </Field>
           {form.categoria === "cliente" && (
-            <Field label="Sitio que podrá ver">
+            <Field label="Sitios que podrá ver (uno o varios)">
               {selectSitioCliente({ value: form.area, onChange: (v) => setForm({ ...form, area: v }) })}
               <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 4 }}>Es el "Nombre de este sitio" que tiene configurado el IgnisMonitor del cliente.</div>
             </Field>
@@ -6696,9 +6709,10 @@ function tendenciasCategoria(u) {
 }
 
 function tendenciasAnalizar(texto) {
-  const crudas = []; let a12 = false, b12 = false, br = 0;
+  const crudas = []; let a12 = false, b12 = false, br = 0; const vistas = new Set();
   (texto || "").split(/\r?\n/).forEach((l) => {
     l = l.replace(/\s+/g, " ").trim(); if (!l) return;
+    if (vistas.has(l)) return; vistas.add(l); // el historial se acumula en el equipo: repetidas cuentan una vez
     const u = tNormal(l).replace(/^#?\d{1,5}[.:)]?\s+(?=[A-Z])/, "");
     if (/^(BR|CLR)\b/.test(u)) { br++; return; }
     const cat = tendenciasCategoria(u); if (!cat) return;
@@ -6914,7 +6928,9 @@ function MonitoreoNotifier() {
   // Los datos se piden a Supabase ya filtrados por ese sitio, así que los
   // otros equipos ni siquiera llegan a su navegador.
   const esCliente = currentUser?.categoria === "cliente";
-  const sitioCliente = esCliente ? String(currentUser?.area || "").trim() : "";
+  const sitiosCliente = useMemo(() => (esCliente ? sitiosDeTexto(currentUser?.area) : []), [esCliente, currentUser?.area]);
+  // Con un solo sitio se abre directo en ese sitio; con varios, elige entre los suyos.
+  const sitioCliente = sitiosCliente.length === 1 ? sitiosCliente[0] : "";
   // ---- Vista celular: igual que en Entrenamiento, una navegación por
   // pestañas abajo en vez de todo apilado, para que quepa bien en el
   // teléfono (ahí no hay espacio para tener tarjetas + equipos + bitácora
@@ -6931,10 +6947,12 @@ function MonitoreoNotifier() {
   const [eventos, setEventos] = useState([]);
   const [dispositivos, setDispositivos] = useState([]);
   const [cargando, setCargando] = useState(true);
-  const [sitioSeleccionado, setSitioSeleccionado] = useEstadoRecordado("monitoreo-sitio", () => (esCliente ? sitioCliente : "Todos"));
+  const [sitioSeleccionado, setSitioSeleccionado] = useEstadoRecordado("monitoreo-sitio", () => (esCliente && sitioCliente ? sitioCliente : "Todos"));
   useEffect(() => {
-    if (esCliente && sitioSeleccionado !== sitioCliente) setSitioSeleccionado(sitioCliente);
-  }, [esCliente, sitioCliente, sitioSeleccionado]);
+    if (!esCliente) return;
+    if (sitioCliente) { if (sitioSeleccionado !== sitioCliente) setSitioSeleccionado(sitioCliente); }
+    else if (sitioSeleccionado !== "Todos" && !sitiosCliente.includes(sitioSeleccionado)) setSitioSeleccionado("Todos");
+  }, [esCliente, sitioCliente, sitiosCliente, sitioSeleccionado]);
   const [busqueda, setBusqueda] = useState("");
   const [borrando, setBorrando] = useState(false);
   const [vista, setVista] = useEstadoRecordado("monitoreo-vista", "eventos"); // "eventos" | "tendencias"
@@ -6948,7 +6966,7 @@ function MonitoreoNotifier() {
     const j = sub.toJSON();
     return supabase.from("push_suscripciones").upsert({
       endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
-      sitio: esCliente ? sitioCliente : null, // personal: todos los sitios
+      sitio: esCliente ? sitiosCliente.join(SEP_SITIOS) : null, // cliente: sus sitios; personal: todos
       url_app: MODO_CLIENTE ? "/cliente.html" : "/",
       usuario_id: String(currentUser?.id || ""), usuario_nombre: currentUser?.name || "",
     }, { onConflict: "endpoint" });
@@ -7003,10 +7021,10 @@ function MonitoreoNotifier() {
 
   useEffect(() => {
     const cargar = async () => {
-      if (esCliente && !sitioCliente) { setEventos([]); setDispositivos([]); setCargando(false); return; }
+      if (esCliente && !sitiosCliente.length) { setEventos([]); setDispositivos([]); setCargando(false); return; }
       let qEv = supabase.from("eventos_panel").select("*").order("fecha_panel", { ascending: false }).limit(500);
       let qDisp = supabase.from("dispositivos_panel").select("*");
-      if (esCliente) { qEv = qEv.eq("sitio", sitioCliente); qDisp = qDisp.eq("sitio", sitioCliente); }
+      if (esCliente) { qEv = qEv.in("sitio", sitiosCliente); qDisp = qDisp.in("sitio", sitiosCliente); }
       const [{ data: ev, error: errEv }, { data: disp, error: errDisp }] = await Promise.all([qEv, qDisp]);
       if (!errEv && ev) setEventos(ev);
       if (!errDisp && disp) setDispositivos(disp);
@@ -7142,9 +7160,12 @@ function MonitoreoNotifier() {
   };
 
   const sitios = useMemo(() => {
-    const unicos = new Set([...eventos.map((e) => e.sitio), ...dispositivos.map((d) => d.sitio)].filter(Boolean));
+    const unicos = new Set([...eventos.map((e) => e.sitio), ...dispositivos.map((d) => d.sitio), ...sitiosCliente].filter(Boolean));
     return [...unicos].sort((a, b) => a.localeCompare(b));
-  }, [eventos, dispositivos]);
+  }, [eventos, dispositivos, sitiosCliente]);
+  // Sitios que se pueden elegir: el cliente ve SOLO los que tiene asignados
+  // (aunque todavía no hayan mandado datos); el personal ve todos.
+  const sitiosElegibles = esCliente ? [...sitiosCliente].sort((a, b) => a.localeCompare(b)) : sitios;
 
   const dispositivosFiltrados = useMemo(() => {
     const lista = sitioSeleccionado === "Todos" ? dispositivos : dispositivos.filter((d) => d.sitio === sitioSeleccionado);
@@ -7171,11 +7192,7 @@ function MonitoreoNotifier() {
     setCargandoHistorial(true);
     const cargarArchivos = async () => {
       const res = await Promise.all(lista.map(async (sitio) => {
-        const base = nombreArchivoSitioPanel(sitio);
-        const [texto, textoMant] = await Promise.all([
-          descargarTextoHistorial(`${base}.txt`),
-          descargarTextoHistorial(`${base}_mant.txt`),
-        ]);
+        const { texto, textoMant } = await descargarHistorialSitio(sitio);
         return { sitio, texto: texto || "", textoMant: textoMant || "" };
       }));
       if (cancelado) return;
@@ -7196,14 +7213,15 @@ function MonitoreoNotifier() {
   // mostrarlas en la bitácora al tocar sus tarjetas. Cada línea del
   // historial se clasifica igual que en Tendencias (Alarma / Problema /
   // Supervisión / Borrado); las demás quedan "otras".
+  const unicas = (texto) => { const v = new Set(); return texto.split(/\r?\n/).map((t) => t.replace(/\s+/g, " ").trim()).filter((t) => t && !v.has(t) && v.add(t)); };
   const lineasHistorial = useMemo(() => histArchivos.flatMap(({ sitio, texto }, a) =>
-    texto.split(/\r?\n/).map((t) => t.replace(/\s+/g, " ").trim()).filter(Boolean).map((linea, i) => {
+    unicas(texto).map((linea, i) => {
       const u = tNormal(linea).replace(/^#?\d{1,5}[.:)]?\s+(?=[A-Z])/, "");
       const subcat = /^(BR|CLR)\b/.test(u) ? "borrado" : tendenciasCategoria(u) || "otro";
       return { id: `hist-${a}-${i}`, categoria: "historial", subcat, texto: linea, sitio, fecha_panel: null };
     })), [histArchivos]);
   const lineasMantenimiento = useMemo(() => mantArchivos.flatMap(({ sitio, texto }, a) =>
-    texto.split(/\r?\n/).map((t) => t.trim()).filter(Boolean)
+    unicas(texto)
       .map((linea, i) => ({ id: `mant-${a}-${i}`, categoria: "mantenimiento", texto: linea, sitio, fecha_panel: null }))), [mantArchivos]);
   const [histSubcat, setHistSubcat] = useState(null); // filtro dentro del historial
   useEffect(() => { setHistSubcat(null); }, [sitioSeleccionado, categoriaSeleccionada]);
@@ -7247,6 +7265,29 @@ function MonitoreoNotifier() {
     try { return await data.text(); } catch (e) { return ""; }
   };
 
+  // El IgnisMonitor sube el historial y el mantenimiento POR PARTES (cada
+  // impresión nueva es un archivo aparte, nunca se sobrescribe nada):
+  //   <sitio>__h_0000000000.txt, <sitio>__h_0000052311.txt ... (historial)
+  //   <sitio>__m_....txt (mantenimiento)
+  // También se leen los archivos viejos <sitio>.txt / <sitio>_mant.txt.
+  const archivosDelSitio = async (sitio) => {
+    const base = nombreArchivoSitioPanel(sitio);
+    const viejosH = [`${base}.txt`], viejosM = [`${base}_mant.txt`];
+    const { data, error } = await supabase.storage.from("historial_paneles")
+      .list("", { limit: 1000, search: base, sortBy: { column: "name", order: "asc" } });
+    if (error || !data) return { hist: viejosH, mant: viejosM, todos: [...viejosH, ...viejosM] };
+    const nombres = data.map((o) => o.name);
+    const hist = [...nombres.filter((n) => n === `${base}.txt`), ...nombres.filter((n) => n.startsWith(`${base}__h_`)).sort()];
+    const mant = [...nombres.filter((n) => n === `${base}_mant.txt`), ...nombres.filter((n) => n.startsWith(`${base}__m_`)).sort()];
+    return { hist, mant, todos: [...hist, ...mant] };
+  };
+  const descargarHistorialSitio = async (sitio) => {
+    const { hist, mant } = await archivosDelSitio(sitio);
+    const bajar = async (lista) => (await Promise.all(lista.map((n) => descargarTextoHistorial(n)))).filter(Boolean).join("\n");
+    const [texto, textoMant] = await Promise.all([bajar(hist), bajar(mant)]);
+    return { texto, textoMant };
+  };
+
   // Mantenimiento: lo que subió el equipo + las líneas Comp:/Pk: que
   // hayan llegado en vivo (los eventos vienen del más nuevo al más viejo,
   // por eso se invierten: así gana la lectura más reciente).
@@ -7259,15 +7300,16 @@ function MonitoreoNotifier() {
 
   const borrarEventosDelSitio = async () => {
     if (sitioSeleccionado === "Todos") return;
-    if (!(await confirmar(`¿Borrar TODOS los eventos y el historial guardados del sitio "${sitioSeleccionado}"? Esto no se puede deshacer.`, { confirmLabel: "Sí, borrar", variant: "danger" }))) return;
+    if (!(await confirmar(`¿Borrar TODOS los eventos, el historial y el informe de mantenimiento guardados del sitio "${sitioSeleccionado}"? Esto no se puede deshacer.`, { confirmLabel: "Sí, borrar", variant: "danger" }))) return;
     setBorrando(true);
+    const { todos } = await archivosDelSitio(sitioSeleccionado);
     const [{ error }] = await Promise.all([
       supabase.from("eventos_panel").delete().eq("sitio", sitioSeleccionado),
-      supabase.storage.from("historial_paneles").remove([`${nombreArchivoSitioPanel(sitioSeleccionado)}.txt`]),
+      todos.length ? supabase.storage.from("historial_paneles").remove(todos) : Promise.resolve({}),
     ]);
     setBorrando(false);
     if (!error) setEventos((prev) => prev.filter((e) => e.sitio !== sitioSeleccionado));
-    setHistorialHtml("");
+    setHistorialHtml(""); setHistArchivos([]); setMantArchivos([]); setMantLineas([]);
     if (vista === "tendencias") setVista("eventos");
   };
 
@@ -7335,11 +7377,7 @@ function MonitoreoNotifier() {
       };
 
       const secciones = await Promise.all(listaSitios.map(async (sitio) => {
-        const base = nombreArchivoSitioPanel(sitio);
-        const [hist, mant] = await Promise.all([
-          descargarTextoHistorial(`${base}.txt`),
-          descargarTextoHistorial(`${base}_mant.txt`),
-        ]);
+        const { texto: hist, textoMant: mant } = await descargarHistorialSitio(sitio);
         const evs = eventos.filter((e) => e.sitio === sitio);
         const evsFiltrados = evs.filter(pasaFiltro);
         const equipos = dispositivos.filter((d) => d.sitio === sitio);
@@ -7436,14 +7474,14 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           </div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 1.5, textTransform: "uppercase" }}>IgnisMonitor</div>
-            <div style={{ fontSize: 10.5, color: IGNIS.dim2 }}>{esCliente ? `Monitoreo en vivo — ${sitioCliente || "sin sitio asignado"}` : "Monitoreo — todos los sitios en vivo"}</div>
+            <div style={{ fontSize: 10.5, color: IGNIS.dim2 }}>{esCliente ? `Monitoreo en vivo — ${sitiosCliente.length ? (sitioSeleccionado !== "Todos" ? sitioSeleccionado : `${sitiosCliente.length} sitios`) : "sin sitio asignado"}` : "Monitoreo — todos los sitios en vivo"}</div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          {!esCliente && (
+          {(!esCliente || sitiosCliente.length > 1) && (
           <select style={{ ...selectEstilo, width: 220 }} value={sitioSeleccionado} onChange={(e) => setSitioSeleccionado(e.target.value)}>
-            <option value="Todos">Todos los sitios ({sitios.length})</option>
-            {sitios.map((s) => <option key={s} value={s}>{s}</option>)}
+            <option value="Todos">— Elegir sitio — ({sitiosElegibles.length})</option>
+            {sitiosElegibles.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
           )}
           {!esMovilNotifier && sitioSeleccionado !== "Todos" && (
@@ -7515,7 +7553,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         </div>
       )}
 
-      {esCliente && !sitioCliente && (
+      {esCliente && !sitiosCliente.length && (
         <div style={{ background: "#3a2a12", border: "1px solid #6b4a1a", color: "#f2c177", borderRadius: 10, padding: "10px 14px", fontSize: 12.5, lineHeight: 1.5 }}>
           <b>Tu usuario todavía no tiene un sitio asignado.</b> Pídele al administrador que te asigne tu sitio para ver su monitoreo.
         </div>
@@ -7531,8 +7569,42 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         </div>
       )}
 
+      {/* ---- Sin sitio elegido: solo la lista de sitios (no se muestran eventos) ---- */}
+      {sitioSeleccionado === "Todos" && (
+        <div style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: IGNIS.dim, fontWeight: 700, marginBottom: 4 }}>Sitios monitoreados</div>
+          <div style={{ fontSize: 12.5, color: IGNIS.dim2, marginBottom: 12 }}>Elige un sitio para ver sus eventos, historial y tendencias.</div>
+          {sitiosElegibles.length === 0 ? (
+            <div style={{ color: IGNIS.dim, fontSize: 13 }}>Todavía no hay sitios reportando.</div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(230px,1fr))", gap: 10 }}>
+              {sitiosElegibles.map((sitio) => {
+                const d = dispositivos.find((x) => x.sitio === sitio);
+                const segundos = d?.actualizado_en ? (Date.now() - new Date(d.actualizado_en).getTime()) / 1000 : Infinity;
+                const enLinea = segundos < 200;
+                return (
+                  <button
+                    key={sitio}
+                    onClick={() => { setSitioSeleccionado(sitio); setVista("eventos"); setSeccionMovil("eventos"); }}
+                    style={{ textAlign: "left", cursor: "pointer", background: IGNIS.panel2, border: `1px solid ${IGNIS.border}`, borderRadius: 10, padding: "12px 14px", color: IGNIS.text, display: "flex", flexDirection: "column", gap: 6 }}
+                  >
+                    <div style={{ fontWeight: 750, fontSize: 14, lineHeight: 1.25 }}>{sitio}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 999, background: d ? (enLinea ? IGNIS.ok : IGNIS.alarma) : IGNIS.dim2 }} />
+                      <span style={{ color: d ? (enLinea ? IGNIS.ok : IGNIS.alarma) : IGNIS.dim, fontWeight: 600 }}>{d ? (enLinea ? "En línea" : "Sin conexión") : "Sin equipo reportando"}</span>
+                      {d?.ssid && <span style={{ color: IGNIS.dim2 }}>· {d.ssid}</span>}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: IGNIS.dim, marginTop: 2 }}>Ver sitio →</div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ---- Tarjetas de conteo (como .stats del dashboard real) — clic para filtrar la bitácora ---- */}
-      {(!esMovilNotifier || seccionMovil === "resumen") && (
+      {sitioSeleccionado !== "Todos" && (!esMovilNotifier || seccionMovil === "resumen") && (
       <div style={{ display: "grid", gridTemplateColumns: esMovilNotifier ? "repeat(auto-fill,minmax(98px,1fr))" : "repeat(auto-fill,minmax(122px,1fr))", gap: 8 }}>
         {["general", ...CATEGORIAS_PANEL_TILES, "historial", "mantenimiento"].map((cat) => {
           const Icono = CATEGORIA_PANEL_ICONO[cat] || HelpCircle;
@@ -7563,7 +7635,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
       )}
 
       {/* ---- Equipos conectados ---- */}
-      {(!esMovilNotifier || seccionMovil === "equipos") && (
+      {sitioSeleccionado !== "Todos" && (!esMovilNotifier || seccionMovil === "equipos") && (
       <div style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 10, padding: 14 }}>
         <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: IGNIS.dim, fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
           <Wifi size={13} /> Equipos conectados
@@ -7607,7 +7679,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
       </div>
       )}
 
-      {(!esMovilNotifier || seccionMovil === "eventos" || seccionMovil === "tendencias") && (vista === "tendencias" && sitioSeleccionado !== "Todos" ? (
+      {sitioSeleccionado !== "Todos" && (!esMovilNotifier || seccionMovil === "eventos" || seccionMovil === "tendencias") && (vista === "tendencias" ? (
         // ---- Tendencias: mismo análisis que el Reporte ejecutivo del equipo, sobre papel blanco (igual que allá) ----
         <div style={{ background: "#fff", borderRadius: 10, padding: 16 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
@@ -7727,7 +7799,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         </div>
       ))}
 
-      {esMovilNotifier && (
+      {esMovilNotifier && sitioSeleccionado !== "Todos" && (
         <div style={{
           position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 20, display: "flex", paddingBottom: 20, // franja para la firma "by Anthony"
           background: IGNIS.panel2, borderTop: `1px solid ${IGNIS.border}`, boxShadow: "0 -4px 14px rgba(0,0,0,.35)",

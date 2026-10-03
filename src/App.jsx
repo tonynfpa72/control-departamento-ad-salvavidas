@@ -7127,7 +7127,12 @@ function MonitoreoNotifier() {
   const [errorCarga, setErrorCarga] = useState("");
 
   useEffect(() => {
+    let enCurso = false, otraVez = false;
     const cargar = async () => {
+      // Si ya hay una consulta en camino, se repite al terminar (no se pierde ningún aviso)
+      if (enCurso) { otraVez = true; return; }
+      enCurso = true;
+      try {
       if (esCliente && !sitiosCliente.length) { setEventos([]); setDispositivos([]); setCargando(false); return; }
       let qEv = supabase.from("eventos_panel").select("*").order("fecha_panel", { ascending: false }).limit(500);
       let qDisp = supabase.from("dispositivos_panel").select("*");
@@ -7137,10 +7142,23 @@ function MonitoreoNotifier() {
       if (!errDisp && disp) setDispositivos(disp);
       setErrorCarga(errEv?.message || errDisp?.message || "");
       setCargando(false);
+      } finally {
+        enCurso = false;
+        if (otraVez) { otraVez = false; cargar(); }
+      }
     };
     cargar();
-    const intervalo = setInterval(cargar, 1000); // "en vivo": se refresca sola cada 1s (lo más seguido posible)
-    return () => clearInterval(intervalo);
+    // Tiempo real: Supabase avisa al instante cada evento nuevo (Realtime);
+    // además se revisa cada 1 s por si el aviso no llega (red del celular).
+    let canal = null;
+    try {
+      canal = supabase.channel(`eventos-vivo-${Math.random().toString(36).slice(2)}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "eventos_panel" }, () => cargar())
+        .on("postgres_changes", { event: "*", schema: "public", table: "dispositivos_panel" }, () => cargar())
+        .subscribe();
+    } catch (e) { canal = null; }
+    const intervalo = setInterval(cargar, 1000);
+    return () => { clearInterval(intervalo); try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
   }, []);
 
   // -----------------------------------------------------------------
@@ -7353,7 +7371,7 @@ function MonitoreoNotifier() {
     };
     recargarHistRef.current = async () => { setActualizandoHist(true); try { await cargarArchivos(true); } finally { setActualizandoHist(false); } };
     cargarArchivos(true);
-    const intervalo = setInterval(() => cargarArchivos(false), 1500); // revisión cada 1,5 s
+    const intervalo = setInterval(() => cargarArchivos(false), 1000); // revisión cada 1 s
     return () => { cancelado = true; clearInterval(intervalo); recargarHistRef.current = null; };
   }, [sitioSeleccionado, sitioSeleccionado === "Todos" ? sitiosClave : ""]);
 

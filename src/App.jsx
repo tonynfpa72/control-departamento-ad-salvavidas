@@ -7034,6 +7034,7 @@ function MonitoreoNotifier() {
   // Los datos se piden a Supabase ya filtrados por ese sitio, así que los
   // otros equipos ni siquiera llegan a su navegador.
   const esCliente = currentUser?.categoria === "cliente";
+  const esAdminMonitoreo = currentUser?.categoria === "admin"; // el admin ve todas las conexiones, aun sin elegir sitio
   const sitiosCliente = useMemo(() => (esCliente ? sitiosDeTexto(currentUser?.area) : []), [esCliente, currentUser?.area]);
   // Con un solo sitio se abre directo en ese sitio; con varios, elige entre los suyos.
   const sitioCliente = sitiosCliente.length === 1 ? sitiosCliente[0] : "";
@@ -7286,8 +7287,12 @@ function MonitoreoNotifier() {
   // Historial y mantenimiento (los sube cada IgnisMonitor a Supabase
   // Storage). Con un sitio elegido se lee el de ese sitio; con "Todos" se
   // juntan los de todos los equipos. Alimentan las tarjetas Historial /
-  // Mantenimiento y la vista Tendencias. Se vuelven a leer cada minuto.
+  // Mantenimiento y la vista Tendencias. Se revisan cada 1,5 s, y con el
+  // botón "↻ Actualizar" al instante.
   const [histArchivos, setHistArchivos] = useState([]); // [{ sitio, texto }]
+  const recargarHistRef = React.useRef(null);
+  const [histActualizado, setHistActualizado] = useState(null);
+  const [actualizandoHist, setActualizandoHist] = useState(false);
   const [mantArchivos, setMantArchivos] = useState([]); // [{ sitio, texto }]
   const sitiosClave = sitios.join("|"); // texto estable: no recarga cada segundo
   useEffect(() => {
@@ -7296,23 +7301,60 @@ function MonitoreoNotifier() {
     if (!lista.length) return;
     let cancelado = false;
     setCargandoHistorial(true);
-    const cargarArchivos = async () => {
-      const res = await Promise.all(lista.map(async (sitio) => {
-        const { texto, textoMant } = await descargarHistorialSitio(sitio);
-        return { sitio, texto: texto || "", textoMant: textoMant || "" };
-      }));
-      if (cancelado) return;
-      setHistArchivos(res.map((r) => ({ sitio: r.sitio, texto: r.texto })));
-      setMantArchivos(res.map((r) => ({ sitio: r.sitio, texto: r.textoMant })));
-      if (sitioSeleccionado !== "Todos") {
-        setHistorialHtml(generarHtmlTendenciasPanel(res[0].texto));
-        setMantLineas(res[0].textoMant ? res[0].textoMant.split(/\r?\n/) : []);
+    // Cada 1,5 s solo se PREGUNTA qué archivos hay (consulta liviana: nombres
+    // y fecha de cambio). Solo se descarga lo que es nuevo o cambió; lo demás
+    // sale de la memoria de la página. Así la revisión es rápida y barata.
+    const cache = new Map(); // nombre -> { marca, texto }
+    let firmaAnterior = null, enCurso = false;
+    const cargarArchivos = async (forzar) => {
+      if (enCurso) return;
+      enCurso = true;
+      try {
+        const opciones = { limit: 1000, sortBy: { column: "name", order: "asc" } };
+        if (lista.length === 1) opciones.search = nombreArchivoSitioPanel(lista[0]);
+        const { data, error } = await supabase.storage.from("historial_paneles").list("", opciones);
+        if (cancelado) return;
+        if (error || !data) { setCargandoHistorial(false); return; }
+        const marca = (o) => `${o.updated_at || o.created_at || ""}|${o.metadata?.size ?? ""}`;
+        const porNombre = new Map(data.map((o) => [o.name, o]));
+        const partesDe = (sitio) => {
+          const base = nombreArchivoSitioPanel(sitio);
+          const nombres = data.map((o) => o.name);
+          const hist = [...nombres.filter((n) => n === `${base}.txt`), ...nombres.filter((n) => n.startsWith(`${base}__h_`)).sort()];
+          const mant = [...nombres.filter((n) => n === `${base}_mant.txt`), ...nombres.filter((n) => n.startsWith(`${base}__m_`)).sort()];
+          return { hist, mant };
+        };
+        const porSitio = lista.map((sitio) => ({ sitio, ...partesDe(sitio) }));
+        const usados = porSitio.flatMap((x) => [...x.hist, ...x.mant]);
+        const firma = usados.map((n) => `${n}:${marca(porNombre.get(n))}`).join(";");
+        if (!forzar && firma === firmaAnterior) { setHistActualizado(new Date()); return; }
+        // Descargar solo lo nuevo o cambiado
+        await Promise.all(usados.map(async (n) => {
+          const m = marca(porNombre.get(n));
+          if (!forzar && cache.get(n)?.marca === m) return;
+          const texto = await descargarTextoHistorial(n);
+          cache.set(n, { marca: m, texto });
+        }));
+        if (cancelado) return;
+        firmaAnterior = firma;
+        const juntar = (nombres) => nombres.map((n) => cache.get(n)?.texto || "").filter(Boolean).join("\n");
+        const res = porSitio.map((x) => ({ sitio: x.sitio, texto: juntar(x.hist), textoMant: juntar(x.mant) }));
+        setHistArchivos(res.map((r) => ({ sitio: r.sitio, texto: r.texto })));
+        setMantArchivos(res.map((r) => ({ sitio: r.sitio, texto: r.textoMant })));
+        if (sitioSeleccionado !== "Todos") {
+          setHistorialHtml(generarHtmlTendenciasPanel(res[0].texto));
+          setMantLineas(res[0].textoMant ? res[0].textoMant.split(/\r?\n/) : []);
+        }
+        setCargandoHistorial(false);
+        setHistActualizado(new Date());
+      } finally {
+        enCurso = false;
       }
-      setCargandoHistorial(false);
     };
-    cargarArchivos();
-    const intervalo = setInterval(cargarArchivos, 60000);
-    return () => { cancelado = true; clearInterval(intervalo); };
+    recargarHistRef.current = async () => { setActualizandoHist(true); try { await cargarArchivos(true); } finally { setActualizandoHist(false); } };
+    cargarArchivos(true);
+    const intervalo = setInterval(() => cargarArchivos(false), 1500); // revisión cada 1,5 s
+    return () => { cancelado = true; clearInterval(intervalo); recargarHistRef.current = null; };
   }, [sitioSeleccionado, sitioSeleccionado === "Todos" ? sitiosClave : ""]);
 
   // Líneas del historial / informe de mantenimiento como "eventos" para
@@ -7741,10 +7783,10 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
       )}
 
       {/* ---- Equipos conectados ---- */}
-      {sitioSeleccionado !== "Todos" && (!esMovilNotifier || seccionMovil === "equipos") && (
+      {(sitioSeleccionado !== "Todos" ? (!esMovilNotifier || seccionMovil === "equipos") : esAdminMonitoreo) && (
       <div style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 10, padding: 14 }}>
         <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: IGNIS.dim, fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
-          <Wifi size={13} /> Equipos conectados
+          <Wifi size={13} /> Equipos conectados{sitioSeleccionado === "Todos" ? ` — todos los sitios (${dispositivosFiltrados.length})` : ""}
         </div>
         {dispositivosFiltrados.length === 0 ? (
           <div style={{ color: IGNIS.dim, fontSize: 13 }}>
@@ -7789,7 +7831,14 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         // ---- Tendencias: mismo análisis que el Reporte ejecutivo del equipo, sobre papel blanco (igual que allá) ----
         <div style={{ background: "#fff", borderRadius: 10, padding: 16 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
-            <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: "#888", fontWeight: 700 }}>Tendencias del historial — {sitioSeleccionado}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: "#888", fontWeight: 700 }}>Tendencias del historial — {sitioSeleccionado}</div>
+              <button onClick={() => recargarHistRef.current && recargarHistRef.current()} disabled={actualizandoHist}
+                style={{ padding: "3px 10px", borderRadius: 999, fontSize: 11.5, fontWeight: 700, cursor: "pointer", border: "1px solid #0e9aa7", background: "#fff", color: "#0e7c86" }}>
+                {actualizandoHist ? "Actualizando..." : "↻ Actualizar"}
+              </button>
+              {histActualizado && <span style={{ fontSize: 11, color: "#999" }}>actualizado {histActualizado.toLocaleTimeString("es-CR")}</span>}
+            </div>
             {!EN_APK && !cargandoHistorial && historialHtml && (
               <Btn small variant="accent" onClick={imprimirTendencias}><Download size={13} /> Imprimir / Guardar PDF</Btn>
             )}
@@ -7849,6 +7898,15 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               </>)}
             </div>
           </div>
+          {(categoriaSeleccionada === "historial" || categoriaSeleccionada === "mantenimiento") && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+              <button onClick={() => recargarHistRef.current && recargarHistRef.current()} disabled={actualizandoHist}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: actualizandoHist ? "wait" : "pointer", border: `1px solid ${IGNIS.historial}`, background: "transparent", color: IGNIS.historial }}>
+                {actualizandoHist ? "Actualizando..." : "↻ Actualizar"}
+              </button>
+              <span style={{ fontSize: 11.5, color: IGNIS.dim }}>{histActualizado ? `actualizado ${histActualizado.toLocaleTimeString("es-CR")}` : ""} · se revisa sola cada 1,5 s</span>
+            </div>
+          )}
           {categoriaSeleccionada === "historial" && lineasHistorial.length > 0 && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
               {[[null, "Todo"], ["alarma", "Alarmas"], ["problema", "Problemas"], ["supervision", "Supervisiones"], ["borrado", "Borrados"], ["otro", "Otros"]].map(([k, n]) => {

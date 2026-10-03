@@ -7479,6 +7479,22 @@ function MonitoreoNotifier() {
     if (vista === "tendencias") setVista("eventos");
   };
 
+  // Cliente: borra SOLO los eventos en vivo de SU sitio. El historial y el
+  // informe de mantenimiento se conservan (son el respaldo técnico).
+  const borrarEventosCliente = async () => {
+    if (sitioSeleccionado === "Todos" || !sitiosCliente.includes(sitioSeleccionado)) return;
+    if (!(await confirmar(`¿Borrar todos los eventos de "${sitioSeleccionado}"? El historial y el informe de mantenimiento se conservan. Esto no se puede deshacer.`, { confirmLabel: "Sí, borrar eventos", variant: "danger" }))) return;
+    setBorrando(true);
+    const { error } = await supabase.from("eventos_panel").delete().eq("sitio", sitioSeleccionado);
+    setBorrando(false);
+    if (!error) {
+      setEventos((prev) => prev.filter((e) => e.sitio !== sitioSeleccionado));
+      if (categoriaSeleccionada !== "historial" && categoriaSeleccionada !== "mantenimiento") setCategoriaSeleccionada(null);
+    } else {
+      await confirmar(`No se pudieron borrar los eventos: ${error.message}`, { confirmLabel: "Entendido" });
+    }
+  };
+
   // Clic en una tarjeta: filtra Y lleva a la lista de eventos (desde
   // Tendencias o desde la pestaña Resumen del celular), y la enfoca.
   const elegirCategoria = (cat) => {
@@ -7659,6 +7675,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           {canGestionar && sitioSeleccionado !== "Todos" && (
             <Btn small variant="danger" onClick={borrarEventosDelSitio} disabled={borrando}>
               <Trash2 size={13} /> Borrar este sitio
+            </Btn>
+          )}
+          {esCliente && sitioSeleccionado !== "Todos" && (
+            <Btn small variant="danger" onClick={borrarEventosCliente} disabled={borrando}>
+              <Trash2 size={13} /> {borrando ? "Borrando..." : "Borrar eventos"}
             </Btn>
           )}
           {pushEstado !== "cargando" && (

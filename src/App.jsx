@@ -1589,10 +1589,15 @@ function Login({ onLogin }) {
     if (!email.trim() || pin.length < 4) { setError("Ingresa correo y contraseña (mínimo 4 caracteres)."); return; }
     setLoading(true);
     setError("");
-    const { data, error: err } = await supabase.rpc("login_usuario", {
+    let { data, error: err } = await supabase.rpc("login_usuario", {
       p_email: email.trim(),
       p_pin: pin,
     });
+    // En el celular el teclado suele poner la primera letra del correo en
+    // mayúscula: si no entra así, se prueba con el correo en minúsculas.
+    if (!err && (!data || data.length === 0) && email.trim() !== email.trim().toLowerCase()) {
+      ({ data, error: err } = await supabase.rpc("login_usuario", { p_email: email.trim().toLowerCase(), p_pin: pin }));
+    }
     setLoading(false);
     if (err) { setError("No se pudo conectar. Intenta de nuevo."); return; }
     if (!data || data.length === 0) { setError("Email o PIN incorrecto."); return; }
@@ -1629,7 +1634,7 @@ function Login({ onLogin }) {
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Field label="Correo electrónico">
-            <input style={inputStyle} type="email" placeholder="usuario@empresa.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <input style={inputStyle} type="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="usuario@empresa.com" value={email} onChange={(e) => setEmail(e.target.value)} />
           </Field>
           <Field label="Contraseña">
             <input style={inputStyle} type="password" placeholder="••••••••" value={pin}
@@ -15109,6 +15114,9 @@ function AgendaVisitas() {
   const [equipos, setEquipos] = useState(() => AGENDA_COLORES.map((_, k) => nombreColorPorDefecto(k)));
   const [busqueda, setBusqueda] = useState("");
   const [filtroEquipo, setFiltroEquipo] = useState(null); // índice de color 0..15
+  const [diaFiltro, setDiaFiltro] = useState(null); // "AAAA-MM-DD" = ver solo ese día
+  const tiraDiasRef = React.useRef(null);
+  const [verColores, setVerColores] = useState(() => typeof window === "undefined" || window.innerWidth >= 820);
   // Agendas separadas: Inspecciones / Proyectos (o las dos juntas)
   const [vistaArea, setVistaArea] = useEstadoRecordado("agenda-area", "inspecciones");
   const [verEvento, setVerEvento] = useState(null);
@@ -15153,7 +15161,7 @@ function AgendaVisitas() {
   }, []);
 
   // Días del mes que tienen eventos (un evento de varios días aparece en cada día)
-  const dias = useMemo(() => {
+  const todosLosDias = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
     const mapa = {};
     eventos.forEach((ev) => {
@@ -15170,6 +15178,22 @@ function AgendaVisitas() {
     if (hoy >= inicioMes && hoy <= finMes && !mapa[hoy]) mapa[hoy] = [];
     return Object.keys(mapa).sort().map((f) => ({ fecha: f, items: mapa[f] }));
   }, [eventos, busqueda, filtroEquipo, vistaArea, inicioMes, finMes, hoy]);
+  // Filtro por día: si hay un día elegido, solo se muestra ese
+  const dias = useMemo(() => {
+    if (!diaFiltro) return todosLosDias;
+    return [todosLosDias.find((d) => d.fecha === diaFiltro) || { fecha: diaFiltro, items: [] }];
+  }, [todosLosDias, diaFiltro]);
+  const cantidadPorDia = useMemo(() => Object.fromEntries(todosLosDias.map((d) => [d.fecha, d.items.length])), [todosLosDias]);
+  const diasDelMes = useMemo(() => {
+    const n = new Date(mes.a, mes.m + 1, 0).getDate();
+    return Array.from({ length: n }, (_, i) => fechaLocalISO(new Date(mes.a, mes.m, i + 1)));
+  }, [mes.a, mes.m]);
+  // La tira de días se acomoda para que se vea el día elegido (o hoy)
+  useEffect(() => {
+    const tira = tiraDiasRef.current;
+    const el = tira?.querySelector(`[data-dia="${diaFiltro || hoy}"]`);
+    if (tira && el) tira.scrollTo({ left: el.offsetLeft - tira.clientWidth / 2 + el.clientWidth / 2, behavior: "smooth" });
+  }, [diaFiltro, mes.a, mes.m, cargando]);
 
   // Al abrir el mes actual, la lista se ubica en HOY
   const irAFechaEnLista = (fecha, suave) => {
@@ -15188,8 +15212,8 @@ function AgendaVisitas() {
     return () => window.removeEventListener("resize", f);
   }, []);
 
-  const cambiarMes = (delta) => setMes(({ a, m }) => { const d = new Date(a, m + delta, 1); return { a: d.getFullYear(), m: d.getMonth() }; });
-  const irAHoy = () => { const d = new Date(); setMes({ a: d.getFullYear(), m: d.getMonth() }); setTimeout(() => irAFechaEnLista(fechaLocalISO(), true), 300); };
+  const cambiarMes = (delta) => setDiaFiltro(null) || setMes(({ a, m }) => { const d = new Date(a, m + delta, 1); return { a: d.getFullYear(), m: d.getMonth() }; });
+  const irAHoy = () => { const d = new Date(); setDiaFiltro(null); setMes({ a: d.getFullYear(), m: d.getMonth() }); setTimeout(() => irAFechaEnLista(fechaLocalISO(), true), 300); };
 
   const tituloEvento = (ev) => {
     const sinOd = AGENDA_SIN_OD.find((x) => x.id === ev.tipo);
@@ -15317,7 +15341,40 @@ function AgendaVisitas() {
             <input style={{ ...inputStyle, paddingLeft: 30, fontSize: 13 }} placeholder="Buscar cliente, OD, persona..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
           </div>
         </div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "10px 16px", borderBottom: `1px solid ${T.line}`, alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: `1px solid ${T.line}` }}>
+          <div ref={tiraDiasRef} style={{ display: "flex", gap: 5, overflowX: "auto", flex: 1, paddingBottom: 3, WebkitOverflowScrolling: "touch" }}>
+            {diasDelMes.map((f) => {
+              const d = fechaDesdeISO(f);
+              const sel = diaFiltro === f;
+              const esHoy = f === hoy;
+              const n = cantidadPorDia[f] || 0;
+              return (
+                <button
+                  key={f}
+                  data-dia={f}
+                  type="button"
+                  onClick={() => setDiaFiltro(sel ? null : f)}
+                  title={sel ? "Ver todo el mes" : `Ver solo el ${d.getDate()} de ${MESES_LARGO[mes.m].toLowerCase()}`}
+                  style={{ flexShrink: 0, width: 44, padding: "5px 0 4px", borderRadius: 10, cursor: "pointer", fontFamily: "inherit", textAlign: "center",
+                    border: `1.5px solid ${sel ? T.accent : esHoy ? T.steel : T.line}`, background: sel ? T.accent : "#fff", color: sel ? "#fff" : T.ink }}
+                >
+                  <div style={{ fontSize: 10.5, fontWeight: 600, color: sel ? "#fff" : T.inkSoft }}>{AGENDA_DIAS[d.getDay()]}</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, lineHeight: 1.2 }}>{d.getDate()}</div>
+                  <div style={{ height: 6, display: "flex", justifyContent: "center", alignItems: "center", marginTop: 1 }}>
+                    {n > 0 && <span style={{ fontSize: 9.5, fontWeight: 800, color: sel ? "#fff" : T.accent, lineHeight: 1 }}>{n > 9 ? "9+" : n}</span>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          {diaFiltro && <Btn small variant="ghost" onClick={() => setDiaFiltro(null)}>Todo el mes</Btn>}
+        </div>
+        {/* En el celular los colores se pueden plegar para dejar más espacio a la agenda */}
+        <button type="button" onClick={() => setVerColores(!verColores)} style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", border: "none", borderBottom: verColores ? "none" : `1px solid ${T.line}`, background: "transparent", padding: "8px 16px", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700, color: T.inkSoft }}>
+          {verColores ? <ChevronUp size={14} /> : <ChevronDown size={14} />} Colores{filtroEquipo !== null ? ` · viendo: ${equipos[filtroEquipo]}` : ""}
+        </button>
+        {verColores && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "0 16px 10px", borderBottom: `1px solid ${T.line}`, alignItems: "center" }}>
           {(vistaArea === "todas" ? AGENDA_AREAS : AGENDA_AREAS.filter((a) => a.id === vistaArea)).map((a) => (
             <div key={a.id} style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", width: vistaArea === "todas" ? "100%" : undefined }}>
               {vistaArea === "todas" && <span style={{ fontSize: 11, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, minWidth: 92 }}>{a.label}</span>}
@@ -15352,6 +15409,7 @@ function AgendaVisitas() {
             </button>
           )}
         </div>
+        )}
 
         {errorTabla ? (
           <div style={{ padding: 20, color: T.red, fontSize: 13.5 }}>
@@ -15377,7 +15435,7 @@ function AgendaVisitas() {
                   </div>
                   <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 7, paddingTop: 2 }}>
                     {items.length === 0 ? (
-                      <div style={{ color: T.gray, fontSize: 13, padding: "10px 4px" }}>Sin visitas hoy{puedeEditar ? " — toque el día para agregar" : ""}</div>
+                      <div style={{ color: T.gray, fontSize: 13, padding: "10px 4px" }}>Sin visitas {esHoy ? "hoy" : "este día"}{puedeEditar ? " — toque la fecha para agregar" : ""}</div>
                     ) : items.map((it, k) => pill(it, `${it.ev.id}-${k}`))}
                     {esHoy && <div style={{ display: "flex", alignItems: "center", marginTop: 2 }}><span style={{ width: 10, height: 10, borderRadius: 999, background: T.ink }} /><span style={{ flex: 1, height: 2, background: T.ink }} /></div>}
                   </div>
@@ -15418,6 +15476,7 @@ function AgendaVisitas() {
             {puedeEditar && (
               <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 18 }}>
                 <Btn variant="danger" onClick={() => eliminar(verEvento)}><Trash2 size={14} /> Eliminar</Btn>
+                <Btn variant="ghost" onClick={() => editar(verEvento)}><Plus size={14} /> Personal</Btn>
                 <Btn variant="ghost" onClick={() => editar(verEvento)}>Editar</Btn>
               </div>
             )}
@@ -15538,7 +15597,7 @@ function AgendaVisitas() {
                   );})}
                 </div>
               </CampoAgenda>
-              <CampoAgenda label={`Personal (${form.personal.length} elegido${form.personal.length === 1 ? "" : "s"})`}>
+              <CampoAgenda label={`Personal — puede elegir varios (${form.personal.length} elegido${form.personal.length === 1 ? "" : "s"})`}>
                 {form.personal.length > 0 && (
                   <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 6 }}>
                     {form.personal.map((n) => (
@@ -15546,9 +15605,33 @@ function AgendaVisitas() {
                     ))}
                   </div>
                 )}
-                <input style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} placeholder="Buscar en la planilla..." value={form.buscarPersonal} onChange={(e) => setForm({ ...form, buscarPersonal: e.target.value })} />
-                <div style={{ border: `1px solid ${T.line}`, borderRadius: 9, marginTop: 6, maxHeight: 170, overflowY: "auto" }}>
-                  {opcionesPersonal.length === 0 && <div style={{ padding: 10, fontSize: 12.5, color: T.gray }}>{empleados.length ? "Nadie con ese nombre." : "No hay personal activo en Planilla."}</div>}
+                <input
+                  style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
+                  placeholder="Buscar en la planilla o escribir otro nombre..."
+                  value={form.buscarPersonal}
+                  onChange={(e) => setForm({ ...form, buscarPersonal: e.target.value })}
+                  onKeyDown={(e) => {
+                    const nombre = (form.buscarPersonal || "").trim();
+                    if (e.key === "Enter" && nombre) {
+                      e.preventDefault();
+                      const enPlanilla = empleados.find((x) => String(x.nombre).toLowerCase() === nombre.toLowerCase());
+                      const final = enPlanilla ? enPlanilla.nombre : nombre;
+                      if (!form.personal.includes(final)) setForm({ ...form, personal: [...form.personal, final], buscarPersonal: "" });
+                    }
+                  }}
+                />
+                <div style={{ border: `1px solid ${T.line}`, borderRadius: 9, marginTop: 6, maxHeight: 230, overflowY: "auto" }}>
+                  {(() => {
+                    // Persona que no está en Planilla (subcontratista, apoyo, etc.)
+                    const nombre = (form.buscarPersonal || "").trim();
+                    if (!nombre || empleados.some((x) => String(x.nombre).toLowerCase() === nombre.toLowerCase()) || form.personal.includes(nombre)) return null;
+                    return (
+                      <div onClick={() => setForm({ ...form, personal: [...form.personal, nombre], buscarPersonal: "" })} style={{ padding: "8px 10px", fontSize: 13, cursor: "pointer", borderBottom: `1px solid ${T.line}55`, color: T.accent, fontWeight: 700 }}>
+                        + Agregar «{nombre}» (no está en Planilla)
+                      </div>
+                    );
+                  })()}
+                  {opcionesPersonal.length === 0 && !(form.buscarPersonal || "").trim() && <div style={{ padding: 10, fontSize: 12.5, color: T.gray }}>No hay personal activo en Planilla. Escriba un nombre arriba para agregarlo.</div>}
                   {opcionesPersonal.map((e) => {
                     const sel = form.personal.includes(e.nombre);
                     return (

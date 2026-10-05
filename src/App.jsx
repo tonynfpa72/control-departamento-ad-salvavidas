@@ -231,6 +231,7 @@ async function bajaPushDeEsteDispositivo() {
 const AREAS = [
   { id: "inspecciones", label: "Inspecciones", icon: ClipboardList, color: T.steel },
   { id: "proyectos", label: "Proyectos", icon: HardHat, color: T.green },
+  { id: "agenda", label: "Agenda", icon: CalendarDays, color: T.blue },
   { id: "cotizaciones", label: "Cotizaciones", icon: FileText, color: T.amber },
   { id: "salud", label: "Salud Ocupacional", icon: CalendarDays, color: T.red },
   { id: "apertura", label: "Apertura de OD", icon: Building2, color: T.blue },
@@ -404,6 +405,196 @@ function claveOrdenamientoIpm(r, hoy) {
     return siguiente ? siguiente + "-01" : "9999-12-31";
   }
   return r.proximaFacturaIpm || "9999-12-31";
+}
+
+// Contenedor de gráfica que NO se aprieta en pantallas angostas: si no cabe,
+// aparece una barra para correrla de izquierda a derecha. Arranca mostrando
+// el final (las quincenas más recientes).
+function GraficaDesplazable({ minWidth, innerRef, children }) {
+  const cajaRef = React.useRef(null);
+  useEffect(() => {
+    const c = cajaRef.current;
+    if (c) c.scrollLeft = c.scrollWidth;
+  }, [minWidth]);
+  return (
+    <div ref={cajaRef} style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 4 }}>
+      <div ref={innerRef} style={{ minWidth }}>{children}</div>
+    </div>
+  );
+}
+
+// Mes siguiente a una clave "AAAA-MM" (para rangos de fechas en consultas).
+function claveMesSiguiente(clave) {
+  const [a, m] = clave.split("-").map(Number);
+  return m === 12 ? `${a + 1}-01` : `${a}-${String(m + 1).padStart(2, "0")}`;
+}
+
+// Nota de una OD en una sola línea; al tocarla se agranda para escribir.
+function NotaCompactaOD({ valor, onChange }) {
+  const [foco, setFoco] = useState(false);
+  return (
+    <textarea
+      rows={foco ? 4 : 1}
+      onFocus={() => setFoco(true)}
+      onBlur={() => setFoco(false)}
+      style={{ ...inputStyle, fontSize: 12, padding: "6px 9px", width: foco ? 240 : 170, minHeight: 0, resize: "none", fontFamily: "inherit", whiteSpace: foco ? "pre-wrap" : "nowrap", overflow: "hidden", textOverflow: "ellipsis", transition: "width .15s" }}
+      placeholder="Notas..."
+      value={valor || ""}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  );
+}
+
+// Fechas de visita / facturación de una OD de IPM (vista optimizada):
+// solo se ven las fechas que se agregaron, cada una con su color de estado.
+// "+ Agregar fecha" abre una pestaña con el año y los 12 meses para ir
+// agregando una por una. Tocar una fecha la marca (o desmarca) facturada.
+function AgendaFechasIpm({ row, puedeAgendar, puedeFacturar, mesesFacturados, onToggleMes, onFacturar, onDesfacturar }) {
+  const hoy = todayISO();
+  const mesActual = hoy.slice(0, 7);
+  const fechas = mesesValidosOrdenados(row.mesesVisita);
+  const [abierto, setAbierto] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const [anioVista, setAnioVista] = useState(new Date().getFullYear());
+  const botonRef = React.useRef(null);
+  const popRef = React.useRef(null);
+
+  useEffect(() => {
+    if (!abierto) return;
+    const fuera = (e) => {
+      if (popRef.current?.contains(e.target) || botonRef.current?.contains(e.target)) return;
+      setAbierto(false);
+    };
+    const cerrar = () => setAbierto(false);
+    document.addEventListener("mousedown", fuera);
+    document.addEventListener("touchstart", fuera);
+    window.addEventListener("resize", cerrar);
+    window.addEventListener("scroll", cerrar, true);
+    return () => {
+      document.removeEventListener("mousedown", fuera);
+      document.removeEventListener("touchstart", fuera);
+      window.removeEventListener("resize", cerrar);
+      window.removeEventListener("scroll", cerrar, true);
+    };
+  }, [abierto]);
+
+  const abrir = () => {
+    if (abierto) { setAbierto(false); return; }
+    const r = botonRef.current?.getBoundingClientRect();
+    if (r) {
+      const ancho = 250;
+      const left = Math.max(8, Math.min(r.left, window.innerWidth - ancho - 8));
+      const altoAprox = 250;
+      const top = r.bottom + 8 + altoAprox > window.innerHeight ? Math.max(8, r.top - altoAprox - 8) : r.bottom + 8;
+      setPos({ top, left });
+    }
+    setAbierto(true);
+  };
+
+  const estadoDe = (clave) => {
+    if (mesesFacturados.has(clave)) return "fact";
+    if (clave === mesActual) return "toca";
+    if (clave < mesActual) return "venc";
+    return "prog";
+  };
+  const ESTILO = {
+    fact: { background: T.greenSoft, color: T.green, border: `1.5px solid ${T.green}55` },
+    toca: { background: T.accent, color: "#fff", border: `1.5px solid ${T.accent}`, boxShadow: `0 0 0 3px ${T.accentSoft}` },
+    venc: { background: T.redSoft, color: T.red, border: `1.5px solid ${T.red}55` },
+    prog: { background: "#fff", color: T.accent, border: `1.5px solid ${T.accent}88` },
+  };
+  const TITULO = { fact: "Facturada", toca: "Toca este mes", venc: "Atrasada: no se ha marcado facturada", prog: "Pendiente: todavía no toca" };
+
+  const tocarFecha = (clave) => {
+    if (!puedeFacturar) return;
+    const e = estadoDe(clave);
+    if (e === "fact") onDesfacturar(row, clave);
+    else if (e !== "prog") onFacturar(row, clave);
+  };
+
+  const nFact = fechas.filter((f) => estadoDe(f) === "fact").length;
+  const nVenc = fechas.filter((f) => estadoDe(f) === "venc").length;
+  const tocaHoy = fechas.includes(mesActual) && !mesesFacturados.has(mesActual);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 5, minWidth: 250, maxWidth: 340 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center" }}>
+        {fechas.map((clave) => {
+          const e = estadoDe(clave);
+          return (
+            <span
+              key={clave}
+              onClick={() => tocarFecha(clave)}
+              title={TITULO[e] + (puedeFacturar && e !== "prog" ? (e === "fact" ? " — toque para quitar la marca" : " — toque para marcarla facturada") : "")}
+              style={{ ...ESTILO[e], borderRadius: 7, fontSize: 11.5, fontWeight: 700, padding: "3px 8px", display: "inline-flex", alignItems: "center", gap: 5, cursor: puedeFacturar && e !== "prog" ? "pointer" : "default", whiteSpace: "nowrap" }}
+            >
+              {e === "fact" ? "✓ " : e === "venc" ? "! " : ""}{formatMesAno(clave)}
+              {puedeAgendar && (
+                <span
+                  onClick={(ev) => { ev.stopPropagation(); onToggleMes(row.id, clave); }}
+                  title="Quitar esta fecha"
+                  style={{ fontWeight: 400, opacity: 0.6, fontSize: 11, cursor: "pointer", padding: "0 1px" }}
+                >✕</span>
+              )}
+            </span>
+          );
+        })}
+        {puedeAgendar && (
+          <button
+            ref={botonRef}
+            type="button"
+            onClick={abrir}
+            style={{ border: `1.5px dashed ${abierto ? T.accent : "#cbd5e1"}`, background: abierto ? T.accentSoft : "#f8fafc", color: abierto ? T.accent : T.inkSoft, borderRadius: 7, fontSize: 11.5, fontWeight: 700, padding: "3px 9px", cursor: "pointer", fontFamily: "inherit" }}
+          >+ Agregar fecha</button>
+        )}
+        {!puedeAgendar && fechas.length === 0 && <span style={{ color: T.gray, fontSize: 12 }}>Sin fechas</span>}
+      </div>
+      {fechas.length > 0 && (
+        <div style={{ fontSize: 11, color: T.gray, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <span>{nFact} de {fechas.length} facturada{fechas.length === 1 ? "" : "s"}</span>
+          {nVenc > 0 && <span style={{ color: T.red, fontWeight: 600 }}>· {nVenc} atrasada{nVenc === 1 ? "" : "s"}</span>}
+          {tocaHoy ? (
+            puedeFacturar ? (
+              <button type="button" onClick={() => onFacturar(row, mesActual)} style={{ border: "none", background: T.accent, color: "#fff", borderRadius: 7, fontSize: 11.5, fontWeight: 700, padding: "3px 9px", cursor: "pointer", fontFamily: "inherit" }}>
+                ✓ Facturar {formatMesAno(mesActual).split(" ")[0]}
+              </button>
+            ) : <span style={{ color: T.accent, fontWeight: 700 }}>· toca {formatMesAno(mesActual).split(" ")[0]}</span>
+          ) : nVenc === 0 && <span style={{ color: T.green, fontWeight: 600 }}>· al día</span>}
+        </div>
+      )}
+      {abierto && (
+        <div ref={popRef} style={{ position: "fixed", top: pos.top, left: pos.left, width: 250, background: "#fff", border: `1px solid ${T.line}`, borderRadius: 12, boxShadow: "0 12px 40px rgba(0,0,0,.18)", padding: 14, zIndex: 3000 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <button type="button" onClick={() => setAnioVista((a) => a - 1)} style={{ border: "none", background: T.graySoft, borderRadius: 7, width: 30, height: 28, cursor: "pointer", color: T.inkSoft, fontSize: 14 }}>‹</button>
+            <span style={{ fontWeight: 800, fontSize: 14, color: T.ink }}>{anioVista}</span>
+            <button type="button" onClick={() => setAnioVista((a) => a + 1)} style={{ border: "none", background: T.graySoft, borderRadius: 7, width: 30, height: 28, cursor: "pointer", color: T.inkSoft, fontSize: 14 }}>›</button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
+            {MESES_ABREV.map((mes, i) => {
+              const clave = claveMesAno(anioVista, i);
+              const ya = fechas.includes(clave);
+              const esHoy = clave === mesActual;
+              return (
+                <button
+                  key={clave}
+                  type="button"
+                  onClick={() => onToggleMes(row.id, clave)}
+                  title={ya ? `Quitar ${mes} ${anioVista}` : `Agregar ${mes} ${anioVista}`}
+                  style={{
+                    border: `1px solid ${ya ? T.accent : esHoy ? T.accent + "66" : T.line}`, borderRadius: 8, padding: "8px 0", cursor: "pointer", fontSize: 12.5, fontWeight: 700, fontFamily: "inherit",
+                    background: ya ? T.accent : "#fff", color: ya ? "#fff" : T.ink,
+                  }}
+                >{mes}</button>
+              );
+            })}
+          </div>
+          <div style={{ fontSize: 11, color: T.gray, marginTop: 10, lineHeight: 1.4 }}>
+            Toque un mes para agregarlo (o quitarlo). Puede agregar varias, una por una; se cierra al tocar afuera. <b style={{ color: T.accent }}>Naranja</b> = ya agregada.
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Selector de la agenda de meses de visita de una OD de IPM. Tiene su
@@ -1405,8 +1596,10 @@ function Login({ onLogin }) {
     setLoading(false);
     if (err) { setError("No se pudo conectar. Intenta de nuevo."); return; }
     if (!data || data.length === 0) { setError("Email o PIN incorrecto."); return; }
-    if (MODO_CLIENTE && data[0].categoria !== "cliente") {
-      setError("Esta app es solo para clientes. El personal de Salvavidas usa la app del departamento.");
+    // App de Monitoreo (APK): entran los clientes (solo sus sitios) y los
+    // técnicos (todos los sitios). El resto del personal usa la app normal.
+    if (MODO_CLIENTE && !["cliente", "tecnico"].includes(data[0].categoria)) {
+      setError("Esta app es para clientes y técnicos. El resto del personal de Salvavidas usa la app del departamento.");
       return;
     }
     onLogin(data[0]);
@@ -1424,7 +1617,7 @@ function Login({ onLogin }) {
           <div style={{ textAlign: "center", marginBottom: 22 }}>
             <img src="/icons/icon-192.png" alt="Salvavidas" style={{ width: 84, height: 84, borderRadius: 18, display: "block", margin: "0 auto 10px" }} />
             <div style={{ fontWeight: 800, fontSize: 19, color: T.ink, letterSpacing: -0.3 }}>Monitoreo Salvavidas</div>
-            <div style={{ fontSize: 11.5, color: T.accent, fontWeight: 700, letterSpacing: 0.4, marginTop: 2 }}>ACCESO PARA CLIENTES</div>
+            <div style={{ fontSize: 11.5, color: T.accent, fontWeight: 700, letterSpacing: 0.4, marginTop: 2 }}>ACCESO PARA CLIENTES Y TÉCNICOS</div>
             <div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 8 }}>Estado en vivo de su sistema contra incendio</div>
           </div>
         ) : (<>
@@ -1885,6 +2078,26 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const [subTabIpmEstado, setSubTabIpmEstado] = useEstadoRecordado(`ot-ipm-${area}-${tipoOD}`, "Activos");
   const [editandoId, setEditandoId] = useState(null);
   const fileInputRef = React.useRef(null);
+  // Facturas de IPM por OD: { od_id: ["2026-07-14", ...] } — para pintar
+  // cada fecha de la agenda como facturada / atrasada.
+  const [facturasPorOd, setFacturasPorOd] = useState({});
+  const usaFacturasIpm = isInspecciones && !esCorrectivo;
+  useEffect(() => {
+    if (!usaFacturasIpm) return;
+    let cancelado = false;
+    (async () => {
+      const mapa = {};
+      for (let desde = 0; desde < 50000; desde += 1000) {
+        const { data, error } = await supabase.from("facturas_ipm").select("od_id, fecha_facturada").range(desde, desde + 999);
+        if (error || !data) break;
+        data.forEach((f) => { if (f.fecha_facturada) (mapa[f.od_id] = mapa[f.od_id] || []).push(String(f.fecha_facturada).slice(0, 10)); });
+        if (data.length < 1000) break;
+      }
+      if (!cancelado) setFacturasPorOd(mapa);
+    })();
+    return () => { cancelado = true; };
+  }, [usaFacturasIpm]);
+  const mesesFacturadosDe = (odId) => new Set((facturasPorOd[odId] || []).map((f) => f.slice(0, 7)));
 
   const add = async () => {
     if (!form.od || !form.cliente) return;
@@ -1975,6 +2188,33 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, ultimaFacturaIpm: hoy, proximaFacturaIpm: proxima } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ ultimaFacturaIpm: hoy, proximaFacturaIpm: proxima })).eq("id", id).then();
     supabase.from("facturas_ipm").insert({ od_id: id, fecha_facturada: hoy }).then();
+    setFacturasPorOd((prev) => ({ ...prev, [id]: [...(prev[id] || []), hoy] }));
+  };
+  // Marca facturada UNA fecha de la agenda (la de este mes o una atrasada).
+  // La factura se registra con una fecha dentro de ese mes (hoy si es el mes
+  // actual) para que la fecha quede en verde.
+  const facturarMesIpm = async (r, clave) => {
+    const hoy = todayISO();
+    const esActual = clave === hoy.slice(0, 7);
+    if (!(await confirmar(`¿Marcar ${formatMesAno(clave)} de la OD ${r.od} como facturado?`, { confirmLabel: "Sí, ya facturé", variant: "accent" }))) return;
+    const fecha = esActual ? hoy : `${clave}-01`;
+    const { error } = await supabase.from("facturas_ipm").insert({ od_id: r.id, fecha_facturada: fecha });
+    if (error) { await confirmar(`No se pudo guardar: ${error.message}`, { confirmLabel: "Entendido", soloAviso: true }); return; }
+    setFacturasPorOd((prev) => ({ ...prev, [r.id]: [...(prev[r.id] || []), fecha] }));
+    const ultima = !r.ultimaFacturaIpm || fecha > r.ultimaFacturaIpm ? fecha : r.ultimaFacturaIpm;
+    setRows((prev) => prev.map((x) => x.id === r.id ? { ...x, ultimaFacturaIpm: ultima } : x));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ ultimaFacturaIpm: ultima })).eq("id", r.id).then();
+  };
+  // Quita la marca de facturado de una fecha (por si fue un toque por error).
+  const desfacturarMesIpm = async (r, clave) => {
+    if (!(await confirmar(`¿Quitar la marca de facturado de ${formatMesAno(clave)} (OD ${r.od})?`, { confirmLabel: "Sí, quitar", variant: "danger" }))) return;
+    const { error } = await supabase.from("facturas_ipm").delete().eq("od_id", r.id).gte("fecha_facturada", `${clave}-01`).lt("fecha_facturada", `${claveMesSiguiente(clave)}-01`);
+    if (error) { await confirmar(`No se pudo quitar: ${error.message}`, { confirmLabel: "Entendido", soloAviso: true }); return; }
+    const quedan = (facturasPorOd[r.id] || []).filter((f) => f.slice(0, 7) !== clave);
+    setFacturasPorOd((prev) => ({ ...prev, [r.id]: quedan }));
+    const ultima = quedan.length ? [...quedan].sort().pop() : "";
+    setRows((prev) => prev.map((x) => x.id === r.id ? { ...x, ultimaFacturaIpm: ultima } : x));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ ultimaFacturaIpm: ultima })).eq("id", r.id).then();
   };
   const setProximaFacturaIpm = (id, proximaFacturaIpm) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, proximaFacturaIpm } : r));
@@ -1989,7 +2229,11 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     if (!(await confirmar(`¿Deshacer la última factura marcada de la OD ${actual.od} (${actual.ultimaFacturaIpm})? Se quita del historial.`, { confirmLabel: "Sí, deshacer", variant: "danger" }))) return;
     const usaAgenda = Array.isArray(actual.mesesVisita) && actual.mesesVisita.length > 0;
     const { data: historial } = await supabase.from("facturas_ipm").select("id, fecha_facturada").eq("od_id", id).order("fecha_facturada", { ascending: false }).order("created_at", { ascending: false });
-    if (historial && historial[0]) await supabase.from("facturas_ipm").delete().eq("id", historial[0].id);
+    if (historial && historial[0]) {
+      await supabase.from("facturas_ipm").delete().eq("id", historial[0].id);
+      const quitada = String(historial[0].fecha_facturada).slice(0, 10);
+      setFacturasPorOd((prev) => { const l = [...(prev[id] || [])]; const i = l.indexOf(quitada); if (i >= 0) l.splice(i, 1); return { ...prev, [id]: l }; });
+    }
     const anterior = historial && historial[1] ? historial[1].fecha_facturada : "";
     const proximaRestaurada = usaAgenda ? actual.proximaFacturaIpm : (anterior ? sumarIntervaloFrecuencia(anterior, actual.frecuencia) : "");
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, ultimaFacturaIpm: anterior, proximaFacturaIpm: proximaRestaurada } : r));
@@ -2181,11 +2425,11 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                 {esCorrectivo && <th style={{ minWidth: 160 }}>Equipos</th>}
                 {!esCorrectivo && isInspecciones && <th>Fecha de Vencimiento</th>}
                 {!esCorrectivo && isInspecciones && <th>Frecuencia</th>}
-                {!esCorrectivo && isInspecciones && <th style={{ minWidth: 150 }}>Facturación IPM</th>}
+                {!esCorrectivo && isInspecciones && <th style={{ minWidth: 280 }}>Fechas de visita / facturación</th>}
                 {!esCorrectivo && isProyectos && <th>Fecha de Inicio</th>}
                 {!esCorrectivo && isProyectos && <th>Fecha de Entrega</th>}
-                <th>Acción</th>
-                {!esCorrectivo && isInspecciones && <th style={{ minWidth: 260 }}>Notas</th>}
+                {!(!esCorrectivo && isInspecciones) && <th>Acción</th>}
+                {!esCorrectivo && isInspecciones && <th>Notas</th>}
                 {esCorrectivo && <th>Progreso</th>}
                 {esCorrectivo && <th>Facturado</th>}
                 <th></th>
@@ -2289,24 +2533,25 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                     const usaAgenda = Array.isArray(r.mesesVisita) && r.mesesVisita.length > 0;
                     const estado = estadoFacturacionIpm(r, hoy);
                     return (
-                      <td>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
-                          <Badge color={estado.colorTxt} soft={estado.colorFondo}>
-                            <Dot color={estado.colorTxt} />
-                            {estado.etiqueta}
-                          </Badge>
-                          {canEditEstado && (
-                            <>
-                              <Btn small variant="ghost" onClick={() => marcarFacturadoIpm(r.id)}><Check size={13} /> Marcar facturado</Btn>
-                              {r.ultimaFacturaIpm && (
-                                <Btn small variant="ghost" onClick={() => deshacerFacturaIpm(r.id)} title={`Última marca: ${r.ultimaFacturaIpm}`}><X size={13} /> Deshacer última</Btn>
-                              )}
-                              {isAdmin && !usaAgenda && (
-                                <input type="date" style={{ ...inputStyle, fontSize: 11, padding: "3px 6px", width: 130 }} value={r.proximaFacturaIpm || ""} onChange={(e) => setProximaFacturaIpm(r.id, e.target.value)} title="Ajustar próxima fecha de factura manualmente" />
-                              )}
-                            </>
-                          )}
-                        </div>
+                      <td style={{ padding: "8px 8px" }}>
+                        {!usaAgenda && (
+                          // OD sin fechas agregadas: se mantiene el control anterior por frecuencia
+                          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 5 }}>
+                            <Badge color={estado.colorTxt} soft={estado.colorFondo}><Dot color={estado.colorTxt} />{estado.etiqueta}</Badge>
+                            {canEditEstado && <Btn small variant="ghost" onClick={() => marcarFacturadoIpm(r.id)}><Check size={13} /> Marcar facturado</Btn>}
+                            {canEditEstado && r.ultimaFacturaIpm && <Btn small variant="ghost" onClick={() => deshacerFacturaIpm(r.id)} title={`Última marca: ${r.ultimaFacturaIpm}`}><X size={13} /> Deshacer</Btn>}
+                            {isAdmin && <input type="date" style={{ ...inputStyle, fontSize: 11, padding: "3px 6px", width: 130 }} value={r.proximaFacturaIpm || ""} onChange={(e) => setProximaFacturaIpm(r.id, e.target.value)} title="Ajustar próxima fecha de factura manualmente" />}
+                          </div>
+                        )}
+                        <AgendaFechasIpm
+                          row={r}
+                          puedeAgendar={isAdmin}
+                          puedeFacturar={canEditEstado}
+                          mesesFacturados={mesesFacturadosDe(r.id)}
+                          onToggleMes={toggleMesVisita}
+                          onFacturar={facturarMesIpm}
+                          onDesfacturar={desfacturarMesIpm}
+                        />
                       </td>
                     );
                   })()}
@@ -2324,28 +2569,19 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                       ) : (r.fechaEntrega || "—")}
                     </td>
                   )}
+                  {!(!esCorrectivo && isInspecciones) && (
                   <td>
-                    {!esCorrectivo && isInspecciones ? (
-                      // Para IPM, "Acción" es la agenda de meses de visita: se
-                      // marca en qué meses (de este año o del siguiente) toca
-                      // visitar/facturar esa OD.
-                      <AgendaMesesIpm row={r} isAdmin={isAdmin} onToggle={toggleMesVisita} />
-                    ) : isAdmin ? (
+                    {isAdmin ? (
                       <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }} placeholder="Acción tomada..." value={r.accion} onChange={(e) => setAccion(r.id, e.target.value)} />
                     ) : <span style={{ color: T.gray, fontSize: 12 }}>{r.accion || "—"}</span>}
                   </td>
+                  )}
                   {!esCorrectivo && isInspecciones && (
                     <td>
                       {canEditEstado ? (
-                        <textarea
-                          rows={5}
-                          style={{ ...inputStyle, fontSize: 12, padding: "8px 10px", width: 260, minHeight: 100, resize: "vertical", fontFamily: "inherit" }}
-                          placeholder="Notas..."
-                          value={r.notas || ""}
-                          onChange={(e) => setNotasOD(r.id, e.target.value)}
-                        />
+                        <NotaCompactaOD valor={r.notas} onChange={(v) => setNotasOD(r.id, v)} />
                       ) : (
-                        <div style={{ fontSize: 12, color: T.inkSoft, whiteSpace: "pre-wrap", maxWidth: 260 }}>{r.notas || "—"}</div>
+                        <div title={r.notas || ""} style={{ fontSize: 12, color: T.inkSoft, maxWidth: 170, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.notas || "—"}</div>
                       )}
                     </td>
                   )}
@@ -2373,10 +2609,10 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                       )}
                     </td>
                   )}
-                  <td style={{ display: "flex", gap: 6 }}>
+                  <td style={{ display: "flex", gap: 6, alignItems: "center", paddingTop: 10 }}>
                     {canMoverTipo && (
-                      <Btn small variant="ghost" onClick={() => moverTipoOD(r.id, r.od, esCorrectivo ? "Normal" : "Correctivo")} title={esCorrectivo ? `Mover a OD ${isProyectos ? "Proyectos" : "IPM"}` : "Mover a OD Correctivos"}>
-                        {esCorrectivo ? `← ${isProyectos ? "Proyectos" : "IPM"}` : "→ Correctivo"}
+                      <Btn small variant="ghost" onClick={() => moverTipoOD(r.id, r.od, esCorrectivo ? "Normal" : "Correctivo")} title={esCorrectivo ? `Mover a OD ${isProyectos ? "Proyectos" : "IPM"}` : "Pasar a OD Correctivos"}>
+                        {esCorrectivo ? `← ${isProyectos ? "Proyectos" : "IPM"}` : (isInspecciones ? "↗" : "→ Correctivo")}
                       </Btn>
                     )}
                     {isAdmin && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}
@@ -4363,10 +4599,11 @@ function HorasExtrasQuincenales({ area, color }) {
       {data.length === 0 ? (
         <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay quincenas cargadas (se editan desde Administrativo).</div>
       ) : (
+        <GraficaDesplazable minWidth={Math.max(320, data.length * 72)}>
         <ResponsiveContainer width="100%" height={280}>
           <LineChart data={data} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
-            <XAxis dataKey="quincena" tick={{ fontSize: 11 }} />
+            <XAxis dataKey="quincena" tick={{ fontSize: 11 }} interval={0} />
             <YAxis tick={{ fontSize: 12 }} allowDecimals={false} domain={[0, (dataMax) => Math.max(180, Math.ceil(dataMax * 1.15))]} />
             <Tooltip formatter={(v) => `${v} h`} />
             <ReferenceLine y={156} stroke={T.accent} strokeDasharray="6 4" label={{ value: "Límite 156h", fill: T.accent, fontSize: 11, position: "insideTopRight" }} />
@@ -4375,6 +4612,7 @@ function HorasExtrasQuincenales({ area, color }) {
             </Line>
           </LineChart>
         </ResponsiveContainer>
+        </GraficaDesplazable>
       )}
     </Card>
   );
@@ -4974,11 +5212,11 @@ function ResumenEjecutivo() {
         {horasQuincenalesData.length === 0 ? (
           <div style={{ color: T.gray, fontSize: 13 }}>Todavía no hay quincenas cargadas.</div>
         ) : (
-          <div ref={graficoRef}>
+          <GraficaDesplazable innerRef={graficoRef} minWidth={Math.max(320, horasQuincenalesData.length * 72)}>
           <ResponsiveContainer width="100%" height={260}>
             <LineChart data={horasQuincenalesData} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={T.line} />
-              <XAxis dataKey="quincena" tick={{ fontSize: 11 }} />
+              <XAxis dataKey="quincena" tick={{ fontSize: 11 }} interval={0} />
               <YAxis tick={{ fontSize: 12 }} allowDecimals={false} domain={[0, (dataMax) => Math.max(180, Math.ceil(dataMax * 1.15))]} />
               <Tooltip formatter={(v) => `${v} h`} />
               <Legend />
@@ -4988,7 +5226,7 @@ function ResumenEjecutivo() {
               <Line type="monotone" dataKey="Total" stroke={T.steel} strokeWidth={2.5} strokeDasharray="5 3" dot={{ r: 3 }} />
             </LineChart>
           </ResponsiveContainer>
-          </div>
+          </GraficaDesplazable>
         )}
       </Card>
 
@@ -14794,12 +15032,440 @@ function Planilla() {
   );
 }
 
+/* ---------------------------------------------------------
+   AGENDA DE VISITAS A CLIENTES (menú principal)
+   Eventos por cliente/OD (IPM, Correctivo o Proyecto), con personal de
+   Planilla, descripción y 8 colores para distinguir a cada equipo.
+   Tabla Supabase: agenda_visitas (+ agenda_equipos para los nombres).
+   --------------------------------------------------------- */
+const AGENDA_COLORES = ["#33B679", "#F6BF26", "#F4511E", "#039BE5", "#8E24AA", "#616161", "#E67C73", "#0B8043"];
+const AGENDA_TIPOS = [
+  { id: "IPM", label: "IPM", corto: "INSP." },
+  { id: "Correctivo", label: "Correctivo", corto: "CORR." },
+  { id: "Proyecto", label: "Proyecto", corto: "PROY." },
+];
+const AGENDA_DIAS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+const MESES_LARGO = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Setiembre", "Octubre", "Noviembre", "Diciembre"];
+
+function fechaLocalISO(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function fechaDesdeISO(iso) { const [a, m, d] = iso.split("-").map(Number); return new Date(a, m - 1, d); }
+function diasEntre(desdeISO, hastaISO) { return Math.round((fechaDesdeISO(hastaISO) - fechaDesdeISO(desdeISO)) / 86400000); }
+function textoSobreColor(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) > 165 ? "#1f2937" : "#fff";
+}
+function tipoDeOrden(o) {
+  if ((o.tipo_od || "Normal") === "Correctivo") return "Correctivo";
+  return o.area === "proyectos" ? "Proyecto" : "IPM";
+}
+
+// Igual que Field pero con <div> (Field usa <label>, y dentro de esta ventana
+// hay listas con casillas: un <label> dentro de otro hace clics raros).
+function CampoAgenda({ label, children }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12.5, color: T.inkSoft, fontWeight: 600 }}>
+      <span>{label}</span>
+      {children}
+    </div>
+  );
+}
+
+function AgendaVisitas() {
+  const currentUser = useContext(CurrentUserContext);
+  const confirmar = useContext(ConfirmContext);
+  const cat = currentUser?.categoria;
+  const isAdmin = cat === "admin";
+  const puedeEditar = isAdmin || cat === "tecnico" || cat === "asistente";
+  const hoy = fechaLocalISO();
+  const [mes, setMes] = useState(() => { const d = new Date(); return { a: d.getFullYear(), m: d.getMonth() }; });
+  const [eventos, setEventos] = useState([]);
+  const [cargando, setCargando] = useState(true);
+  const [errorTabla, setErrorTabla] = useState("");
+  const [ordenes, setOrdenes] = useState([]);
+  const [empleados, setEmpleados] = useState([]);
+  const [equipos, setEquipos] = useState(() => AGENDA_COLORES.map((_, i) => `Equipo ${i + 1}`));
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroEquipo, setFiltroEquipo] = useState(null);
+  const [verEvento, setVerEvento] = useState(null);
+  const [form, setForm] = useState(null); // null = cerrado
+  const [guardando, setGuardando] = useState(false);
+  const listaRef = React.useRef(null);
+
+  const inicioMes = `${mes.a}-${String(mes.m + 1).padStart(2, "0")}-01`;
+  const finMes = fechaLocalISO(new Date(mes.a, mes.m + 1, 0));
+
+  const cargarEventos = React.useCallback(async () => {
+    const { data, error } = await supabase.from("agenda_visitas").select("*")
+      .lte("fecha_inicio", finMes).gte("fecha_fin", inicioMes).order("fecha_inicio", { ascending: true });
+    if (error) setErrorTabla(error.message);
+    else { setErrorTabla(""); setEventos(data || []); }
+    setCargando(false);
+  }, [inicioMes, finMes]);
+
+  useEffect(() => {
+    setCargando(true);
+    cargarEventos();
+    let canal = null;
+    try {
+      canal = supabase.channel(`agenda-${Math.random().toString(36).slice(2)}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "agenda_visitas" }, () => cargarEventos())
+        .subscribe();
+    } catch (e) { canal = null; }
+    const t = setInterval(cargarEventos, 30000);
+    return () => { clearInterval(t); try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
+  }, [cargarEventos]);
+
+  useEffect(() => {
+    (async () => {
+      const { data: ods } = await supabase.from("ordenes_trabajo").select("id, od, cliente, area, tipo_od, estado");
+      if (ods) setOrdenes(ods);
+      const { data: emps } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
+      if (emps) setEmpleados(emps);
+      const { data: eqs } = await supabase.from("agenda_equipos").select("*");
+      if (eqs && eqs.length) setEquipos((prev) => prev.map((n, i) => eqs.find((e) => e.numero === i + 1)?.nombre || n));
+    })();
+  }, []);
+
+  // Días del mes que tienen eventos (un evento de varios días aparece en cada día)
+  const dias = useMemo(() => {
+    const q = busqueda.trim().toLowerCase();
+    const mapa = {};
+    eventos.forEach((ev) => {
+      if (filtroEquipo && ev.equipo !== filtroEquipo) return;
+      if (q && ![ev.cliente, ev.od, ev.descripcion, (ev.personal || []).join(" "), ev.tipo].join(" ").toLowerCase().includes(q)) return;
+      const total = diasEntre(ev.fecha_inicio, ev.fecha_fin) + 1;
+      for (let i = 0; i < total; i++) {
+        const f = fechaLocalISO(new Date(fechaDesdeISO(ev.fecha_inicio).getTime() + i * 86400000 + 3600000));
+        if (f < inicioMes || f > finMes) continue;
+        (mapa[f] = mapa[f] || []).push({ ev, dia: i + 1, total });
+      }
+    });
+    if (hoy >= inicioMes && hoy <= finMes && !mapa[hoy]) mapa[hoy] = [];
+    return Object.keys(mapa).sort().map((f) => ({ fecha: f, items: mapa[f] }));
+  }, [eventos, busqueda, filtroEquipo, inicioMes, finMes, hoy]);
+
+  // Al abrir el mes actual, la lista se ubica en HOY
+  const irAFechaEnLista = (fecha, suave) => {
+    const lista = listaRef.current;
+    const el = lista?.querySelector(`[data-fecha="${fecha}"]`);
+    if (lista && el) lista.scrollTo({ top: el.offsetTop - 4, behavior: suave ? "smooth" : "auto" });
+  };
+  useEffect(() => {
+    if (cargando) return;
+    irAFechaEnLista(hoy, false);
+  }, [cargando, mes.a, mes.m]);
+  const [angosta, setAngosta] = useState(() => typeof window !== "undefined" && window.innerWidth < 820);
+  useEffect(() => {
+    const f = () => setAngosta(window.innerWidth < 820);
+    window.addEventListener("resize", f);
+    return () => window.removeEventListener("resize", f);
+  }, []);
+
+  const cambiarMes = (delta) => setMes(({ a, m }) => { const d = new Date(a, m + delta, 1); return { a: d.getFullYear(), m: d.getMonth() }; });
+  const irAHoy = () => { const d = new Date(); setMes({ a: d.getFullYear(), m: d.getMonth() }); setTimeout(() => irAFechaEnLista(fechaLocalISO(), true), 300); };
+
+  const tituloEvento = (ev) => {
+    const t = AGENDA_TIPOS.find((x) => x.id === ev.tipo)?.corto || "";
+    return `${t} ${ev.od ? `(${ev.od}) ` : ""}${ev.cliente || ""}`.trim();
+  };
+
+  const nuevo = (fecha) => setForm({ id: null, tipo: "IPM", od_id: "", od: "", cliente: "", fecha_inicio: fecha || hoy, fecha_fin: fecha || hoy, equipo: 1, personal: [], descripcion: "", buscarCliente: "", buscarPersonal: "" });
+  const editar = (ev) => { setVerEvento(null); setForm({ ...ev, personal: ev.personal || [], buscarCliente: "", buscarPersonal: "" }); };
+
+  const guardar = async () => {
+    if (!form.cliente) { await confirmar("Elija el cliente / OD.", { confirmLabel: "Entendido", soloAviso: true }); return; }
+    if (!form.fecha_inicio) { await confirmar("Elija la fecha.", { confirmLabel: "Entendido", soloAviso: true }); return; }
+    const fin = form.fecha_fin && form.fecha_fin >= form.fecha_inicio ? form.fecha_fin : form.fecha_inicio;
+    const fila = {
+      fecha_inicio: form.fecha_inicio, fecha_fin: fin, tipo: form.tipo, od_id: form.od_id || null, od: form.od || null,
+      cliente: form.cliente, descripcion: form.descripcion?.trim() || null, personal: form.personal, equipo: form.equipo,
+    };
+    setGuardando(true);
+    const { error } = form.id
+      ? await supabase.from("agenda_visitas").update(fila).eq("id", form.id)
+      : await supabase.from("agenda_visitas").insert({ ...fila, creado_por: currentUser?.name || currentUser?.email || "" });
+    setGuardando(false);
+    if (error) { await confirmar(`No se pudo guardar: ${error.message}`, { confirmLabel: "Entendido", soloAviso: true }); return; }
+    setForm(null);
+    const f = fechaDesdeISO(fila.fecha_inicio);
+    if (f.getFullYear() !== mes.a || f.getMonth() !== mes.m) setMes({ a: f.getFullYear(), m: f.getMonth() });
+    else cargarEventos();
+  };
+
+  const eliminar = async (ev) => {
+    if (!(await confirmar(`¿Eliminar el evento "${tituloEvento(ev)}" del ${ev.fecha_inicio}${ev.fecha_fin !== ev.fecha_inicio ? ` al ${ev.fecha_fin}` : ""}?`, { confirmLabel: "Sí, eliminar", variant: "danger" }))) return;
+    const { error } = await supabase.from("agenda_visitas").delete().eq("id", ev.id);
+    if (error) { await confirmar(`No se pudo eliminar: ${error.message}`, { confirmLabel: "Entendido", soloAviso: true }); return; }
+    setVerEvento(null);
+    setEventos((prev) => prev.filter((x) => x.id !== ev.id));
+  };
+
+  const reiniciarTodo = async () => {
+    if (!(await confirmar("¿Reiniciar TODA la agenda? Se borran todos los eventos de todos los meses, también de Supabase. No se puede deshacer.", { confirmLabel: "Sí, reiniciar", variant: "danger" }))) return;
+    if (!(await confirmar("Confirme otra vez: se borrará la agenda completa.", { confirmLabel: "Borrar todo", variant: "danger" }))) return;
+    const { data, error } = await supabase.from("agenda_visitas").delete().neq("id", "00000000-0000-0000-0000-000000000000").select("id");
+    if (error) { await confirmar(`No se pudo reiniciar: ${error.message}`, { confirmLabel: "Entendido", soloAviso: true }); return; }
+    setEventos([]);
+    await confirmar(`Agenda reiniciada: se borraron ${Array.isArray(data) ? data.length : 0} eventos.`, { confirmLabel: "Listo", soloAviso: true, variant: "info" });
+  };
+
+  const renombrarEquipo = async (i) => {
+    if (!isAdmin) { setFiltroEquipo(filtroEquipo === i + 1 ? null : i + 1); return; }
+    const nombre = window.prompt(`Nombre para el color ${i + 1} (ej. "Equipo Andrés"):`, equipos[i]);
+    if (!nombre || !nombre.trim()) return;
+    setEquipos((prev) => prev.map((n, j) => (j === i ? nombre.trim() : n)));
+    await supabase.from("agenda_equipos").upsert({ numero: i + 1, nombre: nombre.trim() });
+  };
+
+  // Clientes de la plataforma según el tipo elegido
+  const opcionesClientes = useMemo(() => {
+    if (!form) return [];
+    const q = (form.buscarCliente || "").trim().toLowerCase();
+    return ordenes
+      .filter((o) => tipoDeOrden(o) === form.tipo)
+      .filter((o) => !q || `${o.od} ${o.cliente}`.toLowerCase().includes(q))
+      .sort((a, b) => ((a.estado === "Activo" ? 0 : 1) - (b.estado === "Activo" ? 0 : 1)) || String(a.cliente).localeCompare(String(b.cliente)))
+      .slice(0, 60);
+  }, [ordenes, form?.tipo, form?.buscarCliente]);
+
+  const opcionesPersonal = useMemo(() => {
+    if (!form) return [];
+    const q = (form.buscarPersonal || "").trim().toLowerCase();
+    return empleados.filter((e) => !q || String(e.nombre).toLowerCase().includes(q));
+  }, [empleados, form?.buscarPersonal]);
+
+  const pill = (item, key) => {
+    const { ev, dia, total } = item;
+    const color = AGENDA_COLORES[(ev.equipo || 1) - 1] || AGENDA_COLORES[0];
+    const personal = (ev.personal || []).join(", ");
+    return (
+      <div
+        key={key}
+        onClick={() => setVerEvento(ev)}
+        title={ev.descripcion || ""}
+        style={{ background: color, color: textoSobreColor(color), borderRadius: 10, padding: "9px 14px", fontSize: 14.5, fontWeight: 500, cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,.08)" }}
+      >
+        <span style={{ overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", lineHeight: 1.3, wordBreak: "break-word" }}>
+          {tituloEvento(ev)}{personal ? ` · ${personal}` : ""}{total > 1 ? ` (Día ${dia}/${total})` : ""}
+        </span>
+      </div>
+    );
+  };
+
+  const chip = (activo) => ({ border: `1px solid ${activo ? T.accent : T.line}`, background: activo ? T.accentSoft : "#fff", color: activo ? T.accent : T.ink, borderRadius: 999, padding: "6px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" });
+
+  return (
+    <div style={{ maxWidth: 920, margin: "0 auto" }}>
+      {((puedeEditar && !angosta) || isAdmin) && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end", marginBottom: 12 }}>
+          {puedeEditar && !angosta && <Btn variant="accent" onClick={() => nuevo()}><Plus size={15} /> Nuevo evento</Btn>}
+          {isAdmin && <Btn variant="danger" small onClick={reiniciarTodo}><Trash2 size={13} /> Reiniciar agenda</Btn>}
+        </div>
+      )}
+
+      <Card style={{ padding: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "14px 16px", borderBottom: `1px solid ${T.line}`, flexWrap: "wrap" }}>
+          <Btn small variant="ghost" onClick={() => cambiarMes(-1)}><ChevronLeft size={15} /></Btn>
+          <div style={{ fontSize: 18, fontWeight: 800, color: T.ink, minWidth: 150, textAlign: "center" }}>{MESES_LARGO[mes.m]} {mes.a}</div>
+          <Btn small variant="ghost" onClick={() => cambiarMes(1)}><ChevronRight size={15} /></Btn>
+          <Btn small variant="ghost" onClick={irAHoy}>Hoy</Btn>
+          <div style={{ flex: 1, minWidth: 180, position: "relative" }}>
+            <Search size={14} color={T.gray} style={{ position: "absolute", left: 10, top: 10 }} />
+            <input style={{ ...inputStyle, paddingLeft: 30, fontSize: 13 }} placeholder="Buscar cliente, OD, persona..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "10px 16px", borderBottom: `1px solid ${T.line}`, alignItems: "center" }}>
+          {AGENDA_COLORES.map((c, i) => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => setFiltroEquipo(filtroEquipo === i + 1 ? null : i + 1)}
+              onDoubleClick={() => isAdmin && renombrarEquipo(i)}
+              title={isAdmin ? "Clic: ver solo este equipo · Doble clic: cambiar el nombre" : "Ver solo este equipo"}
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, border: `1.5px solid ${filtroEquipo === i + 1 ? c : T.line}`, background: filtroEquipo === i + 1 ? c + "22" : "#fff", borderRadius: 999, padding: "4px 10px 4px 6px", fontSize: 12, fontWeight: 600, color: T.ink, cursor: "pointer", fontFamily: "inherit", opacity: filtroEquipo && filtroEquipo !== i + 1 ? 0.45 : 1 }}
+            >
+              <span style={{ width: 14, height: 14, borderRadius: 999, background: c, display: "inline-block" }} />{equipos[i]}
+            </button>
+          ))}
+          {filtroEquipo && <button type="button" onClick={() => setFiltroEquipo(null)} style={{ ...chip(false), padding: "4px 10px", fontSize: 12 }}>Ver todos</button>}
+        </div>
+
+        {errorTabla ? (
+          <div style={{ padding: 20, color: T.red, fontSize: 13.5 }}>
+            No se pudo leer la agenda ({errorTabla}). Falta crear la tabla en Supabase: corra el SQL <b>agenda_visitas.sql</b> en el SQL Editor.
+          </div>
+        ) : cargando ? (
+          <div style={{ padding: 24, color: T.gray, fontSize: 13 }}>Cargando agenda...</div>
+        ) : (
+          <div ref={listaRef} style={{ position: "relative", maxHeight: angosta ? "calc(100vh - 230px)" : "calc(100vh - 290px)", minHeight: 300, overflowY: "auto", padding: "8px 12px 80px" }}>
+            {dias.length === 0 && <div style={{ padding: 24, color: T.gray, fontSize: 13.5, textAlign: "center" }}>No hay eventos en {MESES_LARGO[mes.m].toLowerCase()}{busqueda || filtroEquipo ? " con ese filtro" : ""}.</div>}
+            {dias.map(({ fecha, items }) => {
+              const d = fechaDesdeISO(fecha);
+              const esHoy = fecha === hoy;
+              return (
+                <div key={fecha} data-fecha={fecha} style={{ display: "flex", gap: 12, padding: "10px 0", borderBottom: `1px solid ${T.line}55`, scrollMarginTop: 8 }}>
+                  <div
+                    onClick={() => puedeEditar && nuevo(fecha)}
+                    title={puedeEditar ? "Agregar evento este día" : ""}
+                    style={{ width: 54, flexShrink: 0, textAlign: "center", cursor: puedeEditar ? "pointer" : "default" }}
+                  >
+                    <div style={{ fontSize: 13, color: esHoy ? T.blue : T.inkSoft, fontWeight: 600 }}>{AGENDA_DIAS[d.getDay()]}</div>
+                    <div style={{ width: 42, height: 42, margin: "2px auto 0", borderRadius: 999, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 21, fontWeight: 600, background: esHoy ? T.steel : "transparent", color: esHoy ? "#fff" : T.ink }}>{d.getDate()}</div>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 7, paddingTop: 2 }}>
+                    {items.length === 0 ? (
+                      <div style={{ color: T.gray, fontSize: 13, padding: "10px 4px" }}>Sin visitas hoy{puedeEditar ? " — toque el día para agregar" : ""}</div>
+                    ) : items.map((it, k) => pill(it, `${it.ev.id}-${k}`))}
+                    {esHoy && <div style={{ display: "flex", alignItems: "center", marginTop: 2 }}><span style={{ width: 10, height: 10, borderRadius: 999, background: T.ink }} /><span style={{ flex: 1, height: 2, background: T.ink }} /></div>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      {puedeEditar && angosta && (
+        <button type="button" onClick={() => nuevo()} title="Nuevo evento" style={{ position: "fixed", right: 22, bottom: 34, width: 58, height: 58, borderRadius: 18, border: "none", background: "#dfe7fb", color: T.steel, boxShadow: "0 6px 18px rgba(0,0,0,.2)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }}>
+          <Plus size={28} />
+        </button>
+      )}
+
+      {verEvento && (
+        <div onClick={() => setVerEvento(null)} style={{ position: "fixed", inset: 0, background: "rgba(16,24,38,0.5)", zIndex: 1500, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, width: 440, maxWidth: "100%", padding: 22, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+              <span style={{ width: 16, height: 16, borderRadius: 5, background: AGENDA_COLORES[(verEvento.equipo || 1) - 1], marginTop: 5, flexShrink: 0 }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 18, fontWeight: 800, color: T.ink }}>{tituloEvento(verEvento)}</div>
+                <div style={{ fontSize: 13, color: T.inkSoft, marginTop: 3 }}>
+                  {verEvento.fecha_inicio === verEvento.fecha_fin ? verEvento.fecha_inicio : `${verEvento.fecha_inicio} al ${verEvento.fecha_fin} (${diasEntre(verEvento.fecha_inicio, verEvento.fecha_fin) + 1} días)`}
+                </div>
+              </div>
+              <button type="button" onClick={() => setVerEvento(null)} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.gray }}><X size={18} /></button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", gap: "8px 10px", fontSize: 13.5, marginTop: 16 }}>
+              <span style={{ color: T.gray }}>Tipo</span><span>{verEvento.tipo}</span>
+              <span style={{ color: T.gray }}>Equipo</span><span>{equipos[(verEvento.equipo || 1) - 1]}</span>
+              <span style={{ color: T.gray }}>Personal</span><span>{(verEvento.personal || []).join(", ") || "—"}</span>
+              <span style={{ color: T.gray }}>Descripción</span><span style={{ whiteSpace: "pre-wrap" }}>{verEvento.descripcion || "—"}</span>
+              <span style={{ color: T.gray }}>Agregado por</span><span>{verEvento.creado_por || "—"}</span>
+            </div>
+            {puedeEditar && (
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 18 }}>
+                <Btn variant="danger" onClick={() => eliminar(verEvento)}><Trash2 size={14} /> Eliminar</Btn>
+                <Btn variant="ghost" onClick={() => editar(verEvento)}>Editar</Btn>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {form && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(16,24,38,0.5)", zIndex: 1500, display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
+          <div style={{ background: "#fff", borderRadius: 16, width: 520, maxWidth: "100%", maxHeight: "calc(100vh - 24px)", overflowY: "auto", padding: 22, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
+              <div style={{ fontSize: 18, fontWeight: 800, color: T.ink, flex: 1 }}>{form.id ? "Editar evento" : "Nuevo evento"}</div>
+              <button type="button" onClick={() => setForm(null)} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.gray }}><X size={18} /></button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <CampoAgenda label="Tipo">
+                <div style={{ display: "flex", gap: 6 }}>
+                  {AGENDA_TIPOS.map((t) => (
+                    <button key={t.id} type="button" onClick={() => setForm({ ...form, tipo: t.id, od_id: "", od: "", cliente: "" })} style={chip(form.tipo === t.id)}>{t.label}</button>
+                  ))}
+                </div>
+              </CampoAgenda>
+              <CampoAgenda label="Cliente / OD">
+                {form.cliente ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, border: `1px solid ${T.accent}`, background: T.accentSoft, borderRadius: 9, padding: "8px 10px", fontSize: 13.5 }}>
+                    <b>{form.od}</b><span style={{ flex: 1 }}>{form.cliente}</span>
+                    <button type="button" onClick={() => setForm({ ...form, od_id: "", od: "", cliente: "" })} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.accent, fontWeight: 700 }}>Cambiar</button>
+                  </div>
+                ) : (
+                  <div>
+                    <input style={inputStyle} placeholder={`Buscar OD o cliente (${form.tipo})...`} value={form.buscarCliente} onChange={(e) => setForm({ ...form, buscarCliente: e.target.value })} />
+                    <div style={{ border: `1px solid ${T.line}`, borderRadius: 9, marginTop: 6, maxHeight: 190, overflowY: "auto" }}>
+                      {opcionesClientes.length === 0 && <div style={{ padding: 10, fontSize: 12.5, color: T.gray }}>No hay clientes de tipo {form.tipo} con ese texto.</div>}
+                      {opcionesClientes.map((o) => (
+                        <div key={o.id} onClick={() => setForm({ ...form, od_id: String(o.id), od: o.od, cliente: o.cliente, buscarCliente: "" })} style={{ padding: "8px 10px", fontSize: 13, cursor: "pointer", borderBottom: `1px solid ${T.line}55`, display: "flex", gap: 8 }}>
+                          <b style={{ minWidth: 70 }}>{o.od}</b><span style={{ flex: 1 }}>{o.cliente}</span>
+                          {o.estado && o.estado !== "Activo" && <span style={{ fontSize: 11, color: T.gray }}>{o.estado}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </CampoAgenda>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 140 }}>
+                  <CampoAgenda label="Fecha">
+                    <input type="date" style={inputStyle} value={form.fecha_inicio} onChange={(e) => setForm({ ...form, fecha_inicio: e.target.value, fecha_fin: form.fecha_fin < e.target.value ? e.target.value : form.fecha_fin })} />
+                  </CampoAgenda>
+                </div>
+                <div style={{ flex: 1, minWidth: 140 }}>
+                  <CampoAgenda label="Hasta (si son varios días)">
+                    <input type="date" style={inputStyle} min={form.fecha_inicio} value={form.fecha_fin} onChange={(e) => setForm({ ...form, fecha_fin: e.target.value })} />
+                  </CampoAgenda>
+                </div>
+              </div>
+              <CampoAgenda label="Equipo (color)">
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {AGENDA_COLORES.map((c, i) => (
+                    <button key={c} type="button" onClick={() => setForm({ ...form, equipo: i + 1 })} title={equipos[i]}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 6, border: `2px solid ${form.equipo === i + 1 ? c : T.line}`, background: form.equipo === i + 1 ? c + "22" : "#fff", borderRadius: 999, padding: "4px 10px 4px 5px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", color: T.ink }}>
+                      <span style={{ width: 16, height: 16, borderRadius: 999, background: c }} />{equipos[i]}
+                    </button>
+                  ))}
+                </div>
+              </CampoAgenda>
+              <CampoAgenda label={`Personal (${form.personal.length} elegido${form.personal.length === 1 ? "" : "s"})`}>
+                {form.personal.length > 0 && (
+                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 6 }}>
+                    {form.personal.map((n) => (
+                      <span key={n} onClick={() => setForm({ ...form, personal: form.personal.filter((x) => x !== n) })} style={{ background: T.blueSoft, color: T.blue, borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{n} ✕</span>
+                    ))}
+                  </div>
+                )}
+                <input style={inputStyle} placeholder="Buscar en la planilla..." value={form.buscarPersonal} onChange={(e) => setForm({ ...form, buscarPersonal: e.target.value })} />
+                <div style={{ border: `1px solid ${T.line}`, borderRadius: 9, marginTop: 6, maxHeight: 170, overflowY: "auto" }}>
+                  {opcionesPersonal.length === 0 && <div style={{ padding: 10, fontSize: 12.5, color: T.gray }}>{empleados.length ? "Nadie con ese nombre." : "No hay personal activo en Planilla."}</div>}
+                  {opcionesPersonal.map((e) => {
+                    const sel = form.personal.includes(e.nombre);
+                    return (
+                      <label key={e.id || e.nombre} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", fontSize: 13, cursor: "pointer", borderBottom: `1px solid ${T.line}55`, background: sel ? T.accentSoft : "transparent" }}>
+                        <input type="checkbox" checked={sel} onChange={() => setForm({ ...form, personal: sel ? form.personal.filter((x) => x !== e.nombre) : [...form.personal, e.nombre] })} />
+                        <span style={{ flex: 1 }}>{e.nombre}</span>
+                        {e.puesto && <span style={{ fontSize: 11, color: T.gray }}>{e.puesto}</span>}
+                      </label>
+                    );
+                  })}
+                </div>
+              </CampoAgenda>
+              <CampoAgenda label="Descripción (opcional)">
+                <textarea rows={3} style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} placeholder="Detalles de la visita..." value={form.descripcion || ""} onChange={(e) => setForm({ ...form, descripcion: e.target.value })} />
+              </CampoAgenda>
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 18 }}>
+              <Btn variant="ghost" onClick={() => setForm(null)}>Cancelar</Btn>
+              <Btn variant="accent" onClick={guardar} disabled={guardando}>{guardando ? "Guardando..." : form.id ? "Guardar cambios" : "Agregar a la agenda"}</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AppInner() {
   const [user, setUser] = useState(() => {
     try {
       const guardado = localStorage.getItem(CLAVE_SESION);
       const u = guardado ? JSON.parse(guardado) : null;
-      if (MODO_CLIENTE && u && u.categoria !== "cliente") return null;
+      if (MODO_CLIENTE && u && !["cliente", "tecnico"].includes(u.categoria)) return null;
       return u;
     } catch {
       return null;
@@ -14845,6 +15511,8 @@ function AppInner() {
     if (user.categoria === "entrenamiento") return AREAS.filter((a) => a.id === "entrenamiento");
     // El perfil "cliente" solo ve Monitoreo (y dentro, solo su sitio asignado).
     if (user.categoria === "cliente") return AREAS.filter((a) => a.id === "monitoreo_notifier");
+    // En el APK el técnico ve Monitoreo (todos los sitios), Agenda y Entrenamiento.
+    if (MODO_CLIENTE && user.categoria === "tecnico") return AREAS.filter((a) => ["monitoreo_notifier", "agenda", "entrenamiento"].includes(a.id));
     if (user.categoria === "admin") return AREAS;
     if (user.categoria === "tecnico") return AREAS.filter((a) => a.id !== "admin" && a.id !== "proyectos" && a.id !== "planilla");
     return AREAS.filter((a) => a.id !== "admin");
@@ -14950,6 +15618,7 @@ function AppInner() {
         {tab === "apertura" && <AperturaOD />}
         {tab === "facturacion_publica" && <FacturacionPublica />}
         {tab === "monitoreo_notifier" && <MonitoreoNotifier />}
+        {tab === "agenda" && <AgendaVisitas />}
         {tab === "gastos_tarjeta" && <GastosTarjeta />}
         {tab === "vehiculos" && <Vehiculos />}
         {tab === "equipos" && <EquiposCorrectivos irInicial={odParaEquipos} onIrConsumido={() => setOdParaEquipos(null)} />}

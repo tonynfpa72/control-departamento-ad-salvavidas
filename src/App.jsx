@@ -449,7 +449,7 @@ function NotaCompactaOD({ valor, onChange }) {
 // solo se ven las fechas que se agregaron, cada una con su color de estado.
 // "+ Agregar fecha" abre una pestaña con el año y los 12 meses para ir
 // agregando una por una. Tocar una fecha la marca (o desmarca) facturada.
-function AgendaFechasIpm({ row, puedeAgendar, puedeFacturar, mesesFacturados, onToggleMes, onFacturar, onDesfacturar }) {
+function AgendaFechasIpm({ row, puedeAgendar, puedeFacturar, mesesFacturados, onToggleMes, onFacturar, onFacturarAtrasadas, onDesfacturar }) {
   const hoy = todayISO();
   const mesActual = hoy.slice(0, 7);
   const fechas = mesesValidosOrdenados(row.mesesVisita);
@@ -551,8 +551,14 @@ function AgendaFechasIpm({ row, puedeAgendar, puedeFacturar, mesesFacturados, on
       </div>
       {fechas.length > 0 && (
         <div style={{ fontSize: 11, color: T.gray, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          {puedeFacturar && <span style={{ width: "100%", fontSize: 10.5 }}>Toque una fecha para marcarla facturada (o para quitar la marca).</span>}
           <span>{nFact} de {fechas.length} facturada{fechas.length === 1 ? "" : "s"}</span>
           {nVenc > 0 && <span style={{ color: T.red, fontWeight: 600 }}>· {nVenc} atrasada{nVenc === 1 ? "" : "s"}</span>}
+          {nVenc > 0 && puedeFacturar && (
+            <button type="button" onClick={() => onFacturarAtrasadas(row, fechas.filter((f) => estadoDe(f) === "venc"))} style={{ border: `1px solid ${T.green}`, background: T.greenSoft, color: T.green, borderRadius: 7, fontSize: 11.5, fontWeight: 700, padding: "3px 9px", cursor: "pointer", fontFamily: "inherit" }}>
+              ✓ Marcar atrasadas como facturadas
+            </button>
+          )}
           {tocaHoy ? (
             puedeFacturar ? (
               <button type="button" onClick={() => onFacturar(row, mesActual)} style={{ border: "none", background: T.accent, color: "#fff", borderRadius: 7, fontSize: 11.5, fontWeight: 700, padding: "3px 9px", cursor: "pointer", fontFamily: "inherit" }}>
@@ -2080,6 +2086,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   // Facturas de IPM por OD: { od_id: ["2026-07-14", ...] } — para pintar
   // cada fecha de la agenda como facturada / atrasada.
   const [facturasPorOd, setFacturasPorOd] = useState({});
+  const [errorFacturas, setErrorFacturas] = useState("");
   const usaFacturasIpm = isInspecciones && !esCorrectivo;
   useEffect(() => {
     if (!usaFacturasIpm) return;
@@ -2088,7 +2095,8 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
       const mapa = {};
       for (let desde = 0; desde < 50000; desde += 1000) {
         const { data, error } = await supabase.from("facturas_ipm").select("od_id, fecha_facturada").range(desde, desde + 999);
-        if (error || !data) break;
+        if (error) { if (!cancelado) setErrorFacturas(error.message); break; }
+        if (!data) break;
         data.forEach((f) => { if (f.fecha_facturada) (mapa[f.od_id] = mapa[f.od_id] || []).push(String(f.fecha_facturada).slice(0, 10)); });
         if (data.length < 1000) break;
       }
@@ -2096,7 +2104,12 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     })();
     return () => { cancelado = true; };
   }, [usaFacturasIpm]);
-  const mesesFacturadosDe = (odId) => new Set((facturasPorOd[odId] || []).map((f) => f.slice(0, 7)));
+  const mesesFacturadosDe = (odId) => {
+    const set = new Set((facturasPorOd[odId] || []).map((f) => f.slice(0, 7)));
+    const r = rows.find((x) => x.id === odId);
+    if (r?.ultimaFacturaIpm) set.add(r.ultimaFacturaIpm.slice(0, 7));
+    return set;
+  };
 
   const add = async () => {
     if (!form.od || !form.cliente) return;
@@ -2201,6 +2214,19 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
     if (error) { await confirmar(`No se pudo guardar: ${error.message}`, { confirmLabel: "Entendido", soloAviso: true }); return; }
     setFacturasPorOd((prev) => ({ ...prev, [r.id]: [...(prev[r.id] || []), fecha] }));
     const ultima = !r.ultimaFacturaIpm || fecha > r.ultimaFacturaIpm ? fecha : r.ultimaFacturaIpm;
+    setRows((prev) => prev.map((x) => x.id === r.id ? { ...x, ultimaFacturaIpm: ultima } : x));
+    supabase.from("ordenes_trabajo").update(odPatchToDb({ ultimaFacturaIpm: ultima })).eq("id", r.id).then();
+  };
+  // Marca de una vez como facturadas todas las fechas atrasadas de la OD.
+  const facturarAtrasadasIpm = async (r, claves) => {
+    if (!claves.length) return;
+    if (!(await confirmar((claves.length === 1 ? `¿Marcar como facturada la fecha atrasada ${formatMesAno(claves[0])} de la OD ${r.od}?` : `¿Marcar como facturadas las ${claves.length} fechas atrasadas de la OD ${r.od} (${claves.map(formatMesAno).join(", ")})?`), { confirmLabel: "Sí, ya están facturadas", variant: "accent" }))) return;
+    const filas = claves.map((c) => ({ od_id: r.id, fecha_facturada: `${c}-01` }));
+    const { error } = await supabase.from("facturas_ipm").insert(filas);
+    if (error) { await confirmar(`No se pudo guardar: ${error.message}`, { confirmLabel: "Entendido", soloAviso: true }); return; }
+    setFacturasPorOd((prev) => ({ ...prev, [r.id]: [...(prev[r.id] || []), ...filas.map((f) => f.fecha_facturada)] }));
+    const ultimaNueva = filas.map((f) => f.fecha_facturada).sort().pop();
+    const ultima = !r.ultimaFacturaIpm || ultimaNueva > r.ultimaFacturaIpm ? ultimaNueva : r.ultimaFacturaIpm;
     setRows((prev) => prev.map((x) => x.id === r.id ? { ...x, ultimaFacturaIpm: ultima } : x));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ ultimaFacturaIpm: ultima })).eq("id", r.id).then();
   };
@@ -2415,6 +2441,11 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
               </select>
             )}
           </div>
+          {usaFacturasIpm && errorFacturas && (
+            <div style={{ background: T.redSoft, color: T.red, borderRadius: 9, padding: "9px 12px", fontSize: 12.5, marginBottom: 10 }}>
+              No se pudieron leer las facturas guardadas ({errorFacturas}). Corra en Supabase el SQL <b>facturas_ipm_permisos.sql</b>; mientras tanto las fechas facturadas pueden salir en rojo.
+            </div>
+          )}
           <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
@@ -2549,6 +2580,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                           mesesFacturados={mesesFacturadosDe(r.id)}
                           onToggleMes={toggleMesVisita}
                           onFacturar={facturarMesIpm}
+                          onFacturarAtrasadas={facturarAtrasadasIpm}
                           onDesfacturar={desfacturarMesIpm}
                         />
                       </td>
@@ -15213,6 +15245,75 @@ function AgendaVisitas() {
   }, []);
 
   const cambiarMes = (delta) => setDiaFiltro(null) || setMes(({ a, m }) => { const d = new Date(a, m + delta, 1); return { a: d.getFullYear(), m: d.getMonth() }; });
+  // ---- PDF de la agenda del mes: total o de un solo equipo (color) ----
+  const [menuPdf, setMenuPdf] = useState(false);
+  const descargarPdfAgenda = (kColor) => {
+    setMenuPdf(false);
+    const ventana = window.open("", "_blank");
+    if (!ventana) { confirmar("El navegador bloqueó la ventana nueva. Permita las ventanas emergentes para descargar el PDF.", { confirmLabel: "Entendido", soloAviso: true }); return; }
+    const esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const areaTxt = vistaArea === "todas" ? "Inspecciones y Proyectos" : vistaArea === "proyectos" ? "Proyectos" : "Inspecciones";
+    const mapa = {};
+    eventos.forEach((ev) => {
+      const area = areaDeEvento(ev);
+      if (vistaArea !== "todas" && area !== vistaArea) return;
+      const k = indiceColor(area, ev.equipo);
+      if (kColor !== null && k !== kColor) return;
+      const total = diasEntre(ev.fecha_inicio, ev.fecha_fin) + 1;
+      for (let i = 0; i < total; i++) {
+        const f = fechaLocalISO(new Date(fechaDesdeISO(ev.fecha_inicio).getTime() + i * 86400000 + 3600000));
+        if (f < inicioMes || f > finMes) continue;
+        (mapa[f] = mapa[f] || []).push({ ev, dia: i + 1, total, k, area });
+      }
+    });
+    const fechas = Object.keys(mapa).sort();
+    const nEventos = new Set(fechas.flatMap((f) => mapa[f].map((x) => x.ev.id))).size;
+    const titulo = `Agenda de visitas — ${MESES_LARGO[mes.m]} ${mes.a}`;
+    const subtitulo = `${areaTxt}${kColor !== null ? ` · ${equipos[kColor]}` : " · Todos los equipos"}`;
+    const filas = fechas.map((f) => {
+      const d = fechaDesdeISO(f);
+      const items = mapa[f].map(({ ev, dia, total, k, area }) => {
+        const sinOd = AGENDA_SIN_OD.find((x) => x.id === ev.tipo);
+        const tipo = sinOd ? sinOd.label : `${ev.tipo}${vistaArea === "todas" ? ` · ${area === "proyectos" ? "Proyectos" : "Inspecciones"}` : ""}`;
+        return `<tr>
+          <td><span class="dot" style="background:${AGENDA_COLORES[k]}"></span>${esc(equipos[k])}</td>
+          <td>${esc(tipo)}</td>
+          <td><b>${esc(ev.od || "—")}</b></td>
+          <td>${esc(ev.cliente || "")}${total > 1 ? ` <span class="multi">Día ${dia}/${total}</span>` : ""}</td>
+          <td>${esc((ev.personal || []).join(", ") || "—")}</td>
+          <td class="desc">${esc(ev.descripcion || "")}</td>
+        </tr>`;
+      }).join("");
+      return `<tr class="dia"><td colspan="6">${esc(AGENDA_DIAS[d.getDay()])} ${d.getDate()} de ${esc(MESES_LARGO[mes.m].toLowerCase())}${f === hoy ? " (hoy)" : ""} — ${mapa[f].length} visita${mapa[f].length === 1 ? "" : "s"}</td></tr>${items}`;
+    }).join("");
+    const pintar = "-webkit-print-color-adjust:exact;print-color-adjust:exact";
+    ventana.document.open();
+    ventana.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(titulo)} - ${esc(subtitulo)}</title>
+      <style>
+        @page { size: A4 landscape; margin: 12mm; }
+        * { ${pintar}; }
+        body { font-family: system-ui, Segoe UI, Arial, sans-serif; color: #1f2937; margin: 0; padding: 18px; }
+        h1 { font-size: 20px; margin: 0; } .sub { color: #555; font-size: 13px; margin: 3px 0 12px; }
+        .res { font-size: 12px; color: #444; margin-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+        th { text-align: left; background: #1E2D45; color: #fff; padding: 6px 7px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px; }
+        td { padding: 5px 7px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+        tr.dia td { background: #eef2f7; font-weight: 800; font-size: 12px; padding-top: 7px; border-top: 2px solid #c9d3e0; }
+        .dot { display: inline-block; width: 10px; height: 10px; border-radius: 99px; margin-right: 6px; vertical-align: -1px; }
+        .multi { background: #fff3e6; color: #c2410c; border-radius: 6px; padding: 0 5px; font-size: 10px; font-weight: 700; }
+        .desc { color: #555; max-width: 260px; }
+        .pie { margin-top: 14px; font-size: 10px; color: #888; display: flex; justify-content: space-between; }
+        tr { page-break-inside: avoid; }
+      </style></head><body>
+      <h1>${esc(titulo)}</h1>
+      <div class="sub">${esc(subtitulo)}</div>
+      <div class="res">${nEventos} evento${nEventos === 1 ? "" : "s"} · ${fechas.length} día${fechas.length === 1 ? "" : "s"} con visitas</div>
+      ${fechas.length ? `<table><thead><tr><th style="width:120px">Equipo</th><th style="width:110px">Tipo</th><th style="width:80px">OD</th><th>Cliente</th><th>Personal</th><th>Descripción</th></tr></thead><tbody>${filas}</tbody></table>` : `<p>No hay visitas en este mes${kColor !== null ? " para este equipo" : ""}.</p>`}
+      <div class="pie"><span>Departamento A&amp;D Salvavidas · generado ${esc(new Date().toLocaleString("es-CR"))}</span><span>by Anthony Campos Medina</span></div>
+      <script>setTimeout(function(){ window.print(); }, 400);<\/script>
+      </body></html>`);
+    ventana.document.close();
+  };
   const irAHoy = () => { const d = new Date(); setDiaFiltro(null); setMes({ a: d.getFullYear(), m: d.getMonth() }); setTimeout(() => irAFechaEnLista(fechaLocalISO(), true), 300); };
 
   const tituloEvento = (ev) => {
@@ -15336,6 +15437,7 @@ function AgendaVisitas() {
           <div style={{ fontSize: 18, fontWeight: 800, color: T.ink, minWidth: 150, textAlign: "center" }}>{MESES_LARGO[mes.m]} {mes.a}</div>
           <Btn small variant="ghost" onClick={() => cambiarMes(1)}><ChevronRight size={15} /></Btn>
           <Btn small variant="ghost" onClick={irAHoy}>Hoy</Btn>
+          {!EN_APK && <Btn small variant="ghost" onClick={() => setMenuPdf(true)}><Download size={13} /> PDF</Btn>}
           <div style={{ flex: 1, minWidth: 180, position: "relative" }}>
             <Search size={14} color={T.gray} style={{ position: "absolute", left: 10, top: 10 }} />
             <input style={{ ...inputStyle, paddingLeft: 30, fontSize: 13 }} placeholder="Buscar cliente, OD, persona..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
@@ -15480,6 +15582,34 @@ function AgendaVisitas() {
                 <Btn variant="ghost" onClick={() => editar(verEvento)}>Editar</Btn>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {menuPdf && (
+        <div onClick={() => setMenuPdf(false)} style={{ position: "fixed", inset: 0, background: "rgba(16,24,38,0.5)", zIndex: 1500, display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, width: 420, maxWidth: "100%", maxHeight: "calc(100vh - 24px)", overflowY: "auto", padding: 22, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
+              <div style={{ fontSize: 18, fontWeight: 800, color: T.ink, flex: 1 }}>Descargar PDF</div>
+              <button type="button" onClick={() => setMenuPdf(false)} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.gray }}><X size={18} /></button>
+            </div>
+            <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 14 }}>
+              {MESES_LARGO[mes.m]} {mes.a} · {vistaArea === "todas" ? "Inspecciones y Proyectos" : vistaArea === "proyectos" ? "Proyectos" : "Inspecciones"}. En la ventana que se abre elija "Guardar como PDF".
+            </div>
+            <Btn variant="accent" onClick={() => descargarPdfAgenda(null)} style={{ width: "100%", justifyContent: "center", marginBottom: 12 }}><Download size={14} /> Agenda total del mes</Btn>
+            <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, marginBottom: 6 }}>O solo un equipo:</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {(vistaArea === "todas" ? AGENDA_AREAS : AGENDA_AREAS.filter((a) => a.id === vistaArea)).flatMap((a) => OCHO.map((i) => indiceColor(a.id, i + 1))).map((k) => {
+                const n = eventos.filter((ev) => indiceColor(areaDeEvento(ev), ev.equipo) === k).length;
+                return (
+                  <button key={k} type="button" onClick={() => descargarPdfAgenda(k)} style={{ display: "flex", alignItems: "center", gap: 10, border: `1px solid ${T.line}`, background: "#fff", borderRadius: 10, padding: "8px 12px", cursor: "pointer", fontFamily: "inherit", fontSize: 13, color: T.ink, textAlign: "left" }}>
+                    <span style={{ width: 16, height: 16, borderRadius: 999, background: AGENDA_COLORES[k], flexShrink: 0 }} />
+                    <span style={{ flex: 1, fontWeight: 600 }}>{equipos[k]}</span>
+                    <span style={{ fontSize: 11.5, color: T.gray }}>{n} evento{n === 1 ? "" : "s"}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}

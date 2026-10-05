@@ -15032,7 +15032,20 @@ function Planilla() {
    Planilla, descripción y 8 colores para distinguir a cada equipo.
    Tabla Supabase: agenda_visitas (+ agenda_equipos para los nombres).
    --------------------------------------------------------- */
-const AGENDA_COLORES = ["#33B679", "#F6BF26", "#F4511E", "#039BE5", "#8E24AA", "#616161", "#E67C73", "#0B8043"];
+// 16 colores: los 8 primeros son de Inspecciones y los 8 siguientes de
+// Proyectos (distintos entre sí). Un evento guarda equipo 1..8 + su agenda.
+const AGENDA_COLORES = [
+  "#33B679", "#F6BF26", "#F4511E", "#039BE5", "#8E24AA", "#616161", "#E67C73", "#0B8043",
+  "#7986CB", "#3949AB", "#D81B60", "#795548", "#00897B", "#9E9D24", "#4FC3F7", "#263238",
+];
+// Nombre que trae cada color mientras no se le ponga uno propio
+const AGENDA_NOMBRES_COLOR = [
+  "Verde", "Amarillo", "Naranja", "Azul", "Morado", "Gris", "Rosado", "Verde oscuro",
+  "Lavanda", "Índigo", "Fucsia", "Café", "Turquesa", "Oliva", "Celeste", "Grafito",
+];
+const nombreColorPorDefecto = (k) => AGENDA_NOMBRES_COLOR[k];
+const indiceColor = (area, equipo) => (area === "proyectos" ? 8 : 0) + Math.min(8, Math.max(1, equipo || 1)) - 1;
+const OCHO = [0, 1, 2, 3, 4, 5, 6, 7];
 const AGENDA_TIPOS = [
   { id: "IPM", label: "IPM", corto: "INSP.", area: "inspecciones" },
   { id: "Proyecto", label: "Proyecto", corto: "PROY.", area: "proyectos" },
@@ -15042,6 +15055,13 @@ const AGENDA_AREAS = [
   { id: "inspecciones", label: "Inspecciones" },
   { id: "proyectos", label: "Proyectos" },
 ];
+// Eventos SIN OD de la plataforma
+const AGENDA_SIN_OD = [
+  { id: "24/7", label: "24/7 Emergencias", corto: "24/7", ayuda: "Nombre o turno (opcional), ej. Andrés Arce" },
+  { id: "Oferta", label: "Visita para ofertar", corto: "OFERTA", ayuda: "Cliente o empresa a visitar" },
+  { id: "Sin OD", label: "Sin OD", corto: "SIN OD", ayuda: "Cliente o lugar" },
+];
+const esTipoSinOd = (tipo) => AGENDA_SIN_OD.some((x) => x.id === tipo);
 const tiposDeArea = (area) => AGENDA_TIPOS.filter((t) => !t.area || t.area === area);
 const areaDeEvento = (ev) => ev.area || (ev.tipo === "Proyecto" ? "proyectos" : "inspecciones");
 const AGENDA_DIAS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
@@ -15086,9 +15106,9 @@ function AgendaVisitas() {
   const [errorTabla, setErrorTabla] = useState("");
   const [ordenes, setOrdenes] = useState([]);
   const [empleados, setEmpleados] = useState([]);
-  const [equipos, setEquipos] = useState(() => AGENDA_COLORES.map((_, i) => `Equipo ${i + 1}`));
+  const [equipos, setEquipos] = useState(() => AGENDA_COLORES.map((_, k) => nombreColorPorDefecto(k)));
   const [busqueda, setBusqueda] = useState("");
-  const [filtroEquipo, setFiltroEquipo] = useState(null);
+  const [filtroEquipo, setFiltroEquipo] = useState(null); // índice de color 0..15
   // Agendas separadas: Inspecciones / Proyectos (o las dos juntas)
   const [vistaArea, setVistaArea] = useEstadoRecordado("agenda-area", "inspecciones");
   const [verEvento, setVerEvento] = useState(null);
@@ -15127,7 +15147,8 @@ function AgendaVisitas() {
       const { data: emps } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
       if (emps) setEmpleados(emps);
       const { data: eqs } = await supabase.from("agenda_equipos").select("*");
-      if (eqs && eqs.length) setEquipos((prev) => prev.map((n, i) => eqs.find((e) => e.numero === i + 1)?.nombre || n));
+      // "Equipo 1..8" eran los nombres de fábrica: se muestran como el color
+      if (eqs && eqs.length) setEquipos((prev) => prev.map((n, k) => { const g = eqs.find((e) => e.numero === k + 1)?.nombre; return g && g !== `Equipo ${k + 1}` ? g : n; }));
     })();
   }, []);
 
@@ -15137,7 +15158,7 @@ function AgendaVisitas() {
     const mapa = {};
     eventos.forEach((ev) => {
       if (vistaArea !== "todas" && areaDeEvento(ev) !== vistaArea) return;
-      if (filtroEquipo && ev.equipo !== filtroEquipo) return;
+      if (filtroEquipo !== null && indiceColor(areaDeEvento(ev), ev.equipo) !== filtroEquipo) return;
       if (q && ![ev.cliente, ev.od, ev.descripcion, (ev.personal || []).join(" "), ev.tipo].join(" ").toLowerCase().includes(q)) return;
       const total = diasEntre(ev.fecha_inicio, ev.fecha_fin) + 1;
       for (let i = 0; i < total; i++) {
@@ -15171,20 +15192,24 @@ function AgendaVisitas() {
   const irAHoy = () => { const d = new Date(); setMes({ a: d.getFullYear(), m: d.getMonth() }); setTimeout(() => irAFechaEnLista(fechaLocalISO(), true), 300); };
 
   const tituloEvento = (ev) => {
+    const sinOd = AGENDA_SIN_OD.find((x) => x.id === ev.tipo);
+    if (sinOd) return ev.cliente && ev.cliente !== sinOd.label ? `${sinOd.corto} ${ev.cliente}` : sinOd.label;
     const t = AGENDA_TIPOS.find((x) => x.id === ev.tipo)?.corto || "";
     return `${t} ${ev.od ? `(${ev.od}) ` : ""}${ev.cliente || ""}`.trim();
   };
 
   const nuevo = (fecha) => { const area = vistaArea === "todas" ? "inspecciones" : vistaArea; setForm({ id: null, area, tipo: area === "proyectos" ? "Proyecto" : "IPM", od_id: "", od: "", cliente: "", fecha_inicio: fecha || hoy, fecha_fin: fecha || hoy, equipo: 1, personal: [], descripcion: "", buscarCliente: "", buscarPersonal: "" }); };
-  const editar = (ev) => { setVerEvento(null); setForm({ ...ev, area: areaDeEvento(ev), personal: ev.personal || [], buscarCliente: "", buscarPersonal: "" }); };
+  const editar = (ev) => { setVerEvento(null); setForm({ ...ev, cliente: AGENDA_SIN_OD.some((x) => x.label === ev.cliente) ? "" : ev.cliente, area: areaDeEvento(ev), personal: ev.personal || [], buscarCliente: "", buscarPersonal: "" }); };
 
   const guardar = async () => {
-    if (!form.cliente) { await confirmar("Elija el cliente / OD.", { confirmLabel: "Entendido", soloAviso: true }); return; }
+    const sinOd = esTipoSinOd(form.tipo);
+    if (!sinOd && !form.cliente) { await confirmar("Elija el cliente / OD.", { confirmLabel: "Entendido", soloAviso: true }); return; }
+    if (sinOd && form.tipo !== "24/7" && !(form.cliente || "").trim()) { await confirmar("Escriba el cliente o lugar de la visita.", { confirmLabel: "Entendido", soloAviso: true }); return; }
     if (!form.fecha_inicio) { await confirmar("Elija la fecha.", { confirmLabel: "Entendido", soloAviso: true }); return; }
     const fin = form.fecha_fin && form.fecha_fin >= form.fecha_inicio ? form.fecha_fin : form.fecha_inicio;
     const fila = {
-      fecha_inicio: form.fecha_inicio, fecha_fin: fin, area: form.area, tipo: form.tipo, od_id: form.od_id || null, od: form.od || null,
-      cliente: form.cliente, descripcion: form.descripcion?.trim() || null, personal: form.personal, equipo: form.equipo,
+      fecha_inicio: form.fecha_inicio, fecha_fin: fin, area: form.area, tipo: form.tipo, od_id: sinOd ? null : (form.od_id || null), od: sinOd ? null : (form.od || null),
+      cliente: (form.cliente || "").trim() || (sinOd ? AGENDA_SIN_OD.find((x) => x.id === form.tipo).label : ""), descripcion: form.descripcion?.trim() || null, personal: form.personal, equipo: form.equipo,
     };
     setGuardando(true);
     const { error } = form.id
@@ -15217,9 +15242,11 @@ function AgendaVisitas() {
 
   // Nombres de los 8 equipos (ventana propia, sirve también en el APK)
   const [nombresForm, setNombresForm] = useState(null);
+  const [focoNombre, setFocoNombre] = useState(0);
+  const editarNombres = (k = vistaArea === "proyectos" ? 8 : 0) => { setFocoNombre(k); setNombresForm([...equipos]); };
   const guardarNombres = async () => {
-    const limpios = nombresForm.map((n, i) => (n || "").trim() || `Equipo ${i + 1}`);
-    const { error } = await supabase.from("agenda_equipos").upsert(limpios.map((nombre, i) => ({ numero: i + 1, nombre })));
+    const limpios = nombresForm.map((n, k) => (n || "").trim() || nombreColorPorDefecto(k));
+    const { error } = await supabase.from("agenda_equipos").upsert(limpios.map((nombre, k) => ({ numero: k + 1, nombre })));
     if (error) { await confirmar(`No se pudieron guardar los nombres: ${error.message}`, { confirmLabel: "Entendido", soloAviso: true }); return; }
     setEquipos(limpios);
     setNombresForm(null);
@@ -15245,7 +15272,7 @@ function AgendaVisitas() {
 
   const pill = (item, key) => {
     const { ev, dia, total } = item;
-    const color = AGENDA_COLORES[(ev.equipo || 1) - 1] || AGENDA_COLORES[0];
+    const color = AGENDA_COLORES[indiceColor(areaDeEvento(ev), ev.equipo)];
     const personal = (ev.personal || []).join(", ");
     return (
       <div
@@ -15274,7 +15301,7 @@ function AgendaVisitas() {
 
       <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
         {[...AGENDA_AREAS, { id: "todas", label: "Todas" }].map((a) => (
-          <Btn key={a.id} small variant={vistaArea === a.id ? "accent" : "ghost"} onClick={() => setVistaArea(a.id)}>
+          <Btn key={a.id} small variant={vistaArea === a.id ? "accent" : "ghost"} onClick={() => { setVistaArea(a.id); setFiltroEquipo(null); }}>
             {a.id === "inspecciones" ? <ClipboardList size={13} /> : a.id === "proyectos" ? <HardHat size={13} /> : <CalendarDays size={13} />} {a.label}
           </Btn>
         ))}
@@ -15291,21 +15318,37 @@ function AgendaVisitas() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "10px 16px", borderBottom: `1px solid ${T.line}`, alignItems: "center" }}>
-          {AGENDA_COLORES.map((c, i) => (
-            <button
-              key={c}
-              type="button"
-              onClick={() => setFiltroEquipo(filtroEquipo === i + 1 ? null : i + 1)}
-              title="Ver solo este equipo"
-              style={{ display: "inline-flex", alignItems: "center", gap: 6, border: `1.5px solid ${filtroEquipo === i + 1 ? c : T.line}`, background: filtroEquipo === i + 1 ? c + "22" : "#fff", borderRadius: 999, padding: "4px 10px 4px 6px", fontSize: 12, fontWeight: 600, color: T.ink, cursor: "pointer", fontFamily: "inherit", opacity: filtroEquipo && filtroEquipo !== i + 1 ? 0.45 : 1 }}
-            >
-              <span style={{ width: 14, height: 14, borderRadius: 999, background: c, display: "inline-block" }} />{equipos[i]}
-            </button>
+          {(vistaArea === "todas" ? AGENDA_AREAS : AGENDA_AREAS.filter((a) => a.id === vistaArea)).map((a) => (
+            <div key={a.id} style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", width: vistaArea === "todas" ? "100%" : undefined }}>
+              {vistaArea === "todas" && <span style={{ fontSize: 11, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, minWidth: 92 }}>{a.label}</span>}
+              {OCHO.map((i) => {
+                const k = indiceColor(a.id, i + 1);
+                const c = AGENDA_COLORES[k];
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setFiltroEquipo(filtroEquipo === k ? null : k)}
+                    title="Ver solo este color"
+                    style={{ display: "inline-flex", alignItems: "center", gap: 6, border: `1.5px solid ${filtroEquipo === k ? c : T.line}`, background: filtroEquipo === k ? c + "22" : "#fff", borderRadius: 999, padding: "4px 8px 4px 6px", fontSize: 12, fontWeight: 600, color: T.ink, cursor: "pointer", fontFamily: "inherit", opacity: filtroEquipo !== null && filtroEquipo !== k ? 0.45 : 1 }}
+                  >
+                    <span style={{ width: 14, height: 14, borderRadius: 999, background: c, display: "inline-block" }} />{equipos[k]}
+                    {puedeEditar && (
+                      <span
+                        onClick={(e) => { e.stopPropagation(); editarNombres(k); }}
+                        title="Cambiar el nombre de este color"
+                        style={{ marginLeft: 2, padding: "0 3px", color: T.gray, fontSize: 12, cursor: "pointer" }}
+                      >✎</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           ))}
-          {filtroEquipo && <button type="button" onClick={() => setFiltroEquipo(null)} style={{ ...chip(false), padding: "4px 10px", fontSize: 12 }}>Ver todos</button>}
+          {filtroEquipo !== null && <button type="button" onClick={() => setFiltroEquipo(null)} style={{ ...chip(false), padding: "4px 10px", fontSize: 12 }}>Ver todos</button>}
           {puedeEditar && (
-            <button type="button" onClick={() => setNombresForm([...equipos])} style={{ ...chip(false), padding: "4px 10px", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5 }}>
-              <Settings size={12} /> Nombres de equipos
+            <button type="button" onClick={() => editarNombres(0)} style={{ ...chip(false), padding: "4px 10px", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5 }}>
+              <Settings size={12} /> Nombres de colores
             </button>
           )}
         </div>
@@ -15318,7 +15361,7 @@ function AgendaVisitas() {
           <div style={{ padding: 24, color: T.gray, fontSize: 13 }}>Cargando agenda...</div>
         ) : (
           <div ref={listaRef} style={{ position: "relative", maxHeight: angosta ? "calc(100vh - 230px)" : "calc(100vh - 290px)", minHeight: 300, overflowY: "auto", padding: "8px 12px 80px" }}>
-            {dias.length === 0 && <div style={{ padding: 24, color: T.gray, fontSize: 13.5, textAlign: "center" }}>No hay eventos en {MESES_LARGO[mes.m].toLowerCase()}{busqueda || filtroEquipo ? " con ese filtro" : ""}.</div>}
+            {dias.length === 0 && <div style={{ padding: 24, color: T.gray, fontSize: 13.5, textAlign: "center" }}>No hay eventos en {MESES_LARGO[mes.m].toLowerCase()}{busqueda || filtroEquipo !== null ? " con ese filtro" : ""}.</div>}
             {dias.map(({ fecha, items }) => {
               const d = fechaDesdeISO(fecha);
               const esHoy = fecha === hoy;
@@ -15355,7 +15398,7 @@ function AgendaVisitas() {
         <div onClick={() => setVerEvento(null)} style={{ position: "fixed", inset: 0, background: "rgba(16,24,38,0.5)", zIndex: 1500, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, width: 440, maxWidth: "100%", padding: 22, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
             <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-              <span style={{ width: 16, height: 16, borderRadius: 5, background: AGENDA_COLORES[(verEvento.equipo || 1) - 1], marginTop: 5, flexShrink: 0 }} />
+              <span style={{ width: 16, height: 16, borderRadius: 5, background: AGENDA_COLORES[indiceColor(areaDeEvento(verEvento), verEvento.equipo)], marginTop: 5, flexShrink: 0 }} />
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 18, fontWeight: 800, color: T.ink }}>{tituloEvento(verEvento)}</div>
                 <div style={{ fontSize: 13, color: T.inkSoft, marginTop: 3 }}>
@@ -15366,8 +15409,8 @@ function AgendaVisitas() {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", gap: "8px 10px", fontSize: 13.5, marginTop: 16 }}>
               <span style={{ color: T.gray }}>Agenda</span><span>{areaDeEvento(verEvento) === "proyectos" ? "Proyectos" : "Inspecciones"}</span>
-              <span style={{ color: T.gray }}>Tipo</span><span>{verEvento.tipo}</span>
-              <span style={{ color: T.gray }}>Equipo</span><span>{equipos[(verEvento.equipo || 1) - 1]}</span>
+              <span style={{ color: T.gray }}>Tipo</span><span>{AGENDA_SIN_OD.find((x) => x.id === verEvento.tipo)?.label || verEvento.tipo}</span>
+              <span style={{ color: T.gray }}>Color</span><span>{equipos[indiceColor(areaDeEvento(verEvento), verEvento.equipo)]}</span>
               <span style={{ color: T.gray }}>Personal</span><span>{(verEvento.personal || []).join(", ") || "—"}</span>
               <span style={{ color: T.gray }}>Descripción</span><span style={{ whiteSpace: "pre-wrap" }}>{verEvento.descripcion || "—"}</span>
               <span style={{ color: T.gray }}>Agregado por</span><span>{verEvento.creado_por || "—"}</span>
@@ -15386,15 +15429,23 @@ function AgendaVisitas() {
         <div style={{ position: "fixed", inset: 0, background: "rgba(16,24,38,0.5)", zIndex: 1500, display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
           <div style={{ background: "#fff", borderRadius: 16, width: 420, maxWidth: "100%", maxHeight: "calc(100vh - 24px)", overflowY: "auto", padding: 22, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
             <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}>
-              <div style={{ fontSize: 18, fontWeight: 800, color: T.ink, flex: 1 }}>Nombres de los equipos</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: T.ink, flex: 1 }}>Nombres de los colores</div>
               <button type="button" onClick={() => setNombresForm(null)} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.gray }}><X size={18} /></button>
             </div>
-            <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 14 }}>Cada color es un equipo. Póngale el nombre que quiera (ej. "Equipo Andrés" o "Cuadrilla Norte").</div>
+            <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 14 }}>Póngale a cada color el nombre que quiera (ej. "Andrés y Rafa", "Cuadrilla Norte", "Guanacaste").</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-              {AGENDA_COLORES.map((c, i) => (
-                <div key={c} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ width: 22, height: 22, borderRadius: 999, background: c, flexShrink: 0 }} />
-                  <input style={{ ...inputStyle, flex: 1, width: "100%" }} maxLength={40} value={nombresForm[i]} placeholder={`Equipo ${i + 1}`} onChange={(e) => setNombresForm(nombresForm.map((n, j) => (j === i ? e.target.value : n)))} />
+              {(vistaArea === "todas" ? AGENDA_AREAS : AGENDA_AREAS.filter((a) => a.id === vistaArea)).map((a) => (
+                <div key={a.id} style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginTop: 4 }}>Colores de {a.label}</div>
+                  {OCHO.map((i) => {
+                    const k = indiceColor(a.id, i + 1);
+                    return (
+                      <div key={k} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ width: 22, height: 22, borderRadius: 999, background: AGENDA_COLORES[k], flexShrink: 0 }} />
+                        <input autoFocus={k === focoNombre} onFocus={(e) => e.target.select()} style={{ ...inputStyle, flex: 1, width: "100%" }} maxLength={40} value={nombresForm[k]} placeholder={nombreColorPorDefecto(k)} onChange={(e) => setNombresForm(nombresForm.map((n, j) => (j === k ? e.target.value : n)))} />
+                      </div>
+                    );
+                  })}
                 </div>
               ))}
             </div>
@@ -15421,15 +15472,30 @@ function AgendaVisitas() {
                   ))}
                 </div>
               </CampoAgenda>
-              <CampoAgenda label="Tipo">
-                <div style={{ display: "flex", gap: 6 }}>
-                  {tiposDeArea(form.area).map((t) => (
-                    <button key={t.id} type="button" onClick={() => setForm({ ...form, tipo: t.id, od_id: "", od: "", cliente: "" })} style={chip(form.tipo === t.id)}>{t.label}</button>
+              {!esTipoSinOd(form.tipo) && (
+                <CampoAgenda label="Tipo">
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {tiposDeArea(form.area).map((t) => (
+                      <button key={t.id} type="button" onClick={() => setForm({ ...form, tipo: t.id, od_id: "", od: "", cliente: "" })} style={chip(form.tipo === t.id)}>{t.label}</button>
+                    ))}
+                  </div>
+                </CampoAgenda>
+              )}
+              <CampoAgenda label="Cliente / OD">
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+                  <button type="button" onClick={() => setForm({ ...form, tipo: form.area === "proyectos" ? "Proyecto" : "IPM", od_id: "", od: "", cliente: "" })} style={chip(!esTipoSinOd(form.tipo))}>Con OD</button>
+                  {AGENDA_SIN_OD.map((x) => (
+                    <button key={x.id} type="button" onClick={() => setForm({ ...form, tipo: x.id, od_id: "", od: "", cliente: "" })} style={chip(form.tipo === x.id)}>{x.label}</button>
                   ))}
                 </div>
-              </CampoAgenda>
-              <CampoAgenda label="Cliente / OD">
-                {form.cliente ? (
+                {esTipoSinOd(form.tipo) ? (
+                  <input
+                    style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
+                    placeholder={AGENDA_SIN_OD.find((x) => x.id === form.tipo).ayuda}
+                    value={form.cliente || ""}
+                    onChange={(e) => setForm({ ...form, cliente: e.target.value })}
+                  />
+                ) : form.cliente ? (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, border: `1px solid ${T.accent}`, background: T.accentSoft, borderRadius: 9, padding: "8px 10px", fontSize: 13.5 }}>
                     <b>{form.od}</b><span style={{ flex: 1 }}>{form.cliente}</span>
                     <button type="button" onClick={() => setForm({ ...form, od_id: "", od: "", cliente: "" })} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.accent, fontWeight: 700 }}>Cambiar</button>
@@ -15462,14 +15528,14 @@ function AgendaVisitas() {
                   </CampoAgenda>
                 </div>
               </div>
-              <CampoAgenda label="Equipo (color)">
+              <CampoAgenda label="Color">
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {AGENDA_COLORES.map((c, i) => (
-                    <button key={c} type="button" onClick={() => setForm({ ...form, equipo: i + 1 })} title={equipos[i]}
+                  {OCHO.map((i) => { const k = indiceColor(form.area, i + 1); const c = AGENDA_COLORES[k]; return (
+                    <button key={c} type="button" onClick={() => setForm({ ...form, equipo: i + 1 })} title={equipos[k]}
                       style={{ display: "inline-flex", alignItems: "center", gap: 6, border: `2px solid ${form.equipo === i + 1 ? c : T.line}`, background: form.equipo === i + 1 ? c + "22" : "#fff", borderRadius: 999, padding: "4px 10px 4px 5px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", color: T.ink }}>
-                      <span style={{ width: 16, height: 16, borderRadius: 999, background: c }} />{equipos[i]}
+                      <span style={{ width: 16, height: 16, borderRadius: 999, background: c }} />{equipos[k]}
                     </button>
-                  ))}
+                  );})}
                 </div>
               </CampoAgenda>
               <CampoAgenda label={`Personal (${form.personal.length} elegido${form.personal.length === 1 ? "" : "s"})`}>

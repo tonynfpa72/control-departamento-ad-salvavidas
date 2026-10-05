@@ -1596,12 +1596,6 @@ function Login({ onLogin }) {
     setLoading(false);
     if (err) { setError("No se pudo conectar. Intenta de nuevo."); return; }
     if (!data || data.length === 0) { setError("Email o PIN incorrecto."); return; }
-    // App de Monitoreo (APK): entran los clientes (solo sus sitios) y los
-    // técnicos (todos los sitios). El resto del personal usa la app normal.
-    if (MODO_CLIENTE && !["cliente", "tecnico"].includes(data[0].categoria)) {
-      setError("Esta app es para clientes y técnicos. El resto del personal de Salvavidas usa la app del departamento.");
-      return;
-    }
     onLogin(data[0]);
   };
 
@@ -1617,7 +1611,7 @@ function Login({ onLogin }) {
           <div style={{ textAlign: "center", marginBottom: 22 }}>
             <img src="/icons/icon-192.png" alt="Salvavidas" style={{ width: 84, height: 84, borderRadius: 18, display: "block", margin: "0 auto 10px" }} />
             <div style={{ fontWeight: 800, fontSize: 19, color: T.ink, letterSpacing: -0.3 }}>Monitoreo Salvavidas</div>
-            <div style={{ fontSize: 11.5, color: T.accent, fontWeight: 700, letterSpacing: 0.4, marginTop: 2 }}>ACCESO PARA CLIENTES Y TÉCNICOS</div>
+            <div style={{ fontSize: 11.5, color: T.accent, fontWeight: 700, letterSpacing: 0.4, marginTop: 2 }}>ACCESO PARA CLIENTES Y PERSONAL</div>
             <div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: 8 }}>Estado en vivo de su sistema contra incendio</div>
           </div>
         ) : (<>
@@ -15040,10 +15034,16 @@ function Planilla() {
    --------------------------------------------------------- */
 const AGENDA_COLORES = ["#33B679", "#F6BF26", "#F4511E", "#039BE5", "#8E24AA", "#616161", "#E67C73", "#0B8043"];
 const AGENDA_TIPOS = [
-  { id: "IPM", label: "IPM", corto: "INSP." },
+  { id: "IPM", label: "IPM", corto: "INSP.", area: "inspecciones" },
+  { id: "Proyecto", label: "Proyecto", corto: "PROY.", area: "proyectos" },
   { id: "Correctivo", label: "Correctivo", corto: "CORR." },
-  { id: "Proyecto", label: "Proyecto", corto: "PROY." },
 ];
+const AGENDA_AREAS = [
+  { id: "inspecciones", label: "Inspecciones" },
+  { id: "proyectos", label: "Proyectos" },
+];
+const tiposDeArea = (area) => AGENDA_TIPOS.filter((t) => !t.area || t.area === area);
+const areaDeEvento = (ev) => ev.area || (ev.tipo === "Proyecto" ? "proyectos" : "inspecciones");
 const AGENDA_DIAS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
 const MESES_LARGO = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Setiembre", "Octubre", "Noviembre", "Diciembre"];
 
@@ -15089,6 +15089,8 @@ function AgendaVisitas() {
   const [equipos, setEquipos] = useState(() => AGENDA_COLORES.map((_, i) => `Equipo ${i + 1}`));
   const [busqueda, setBusqueda] = useState("");
   const [filtroEquipo, setFiltroEquipo] = useState(null);
+  // Agendas separadas: Inspecciones / Proyectos (o las dos juntas)
+  const [vistaArea, setVistaArea] = useEstadoRecordado("agenda-area", "inspecciones");
   const [verEvento, setVerEvento] = useState(null);
   const [form, setForm] = useState(null); // null = cerrado
   const [guardando, setGuardando] = useState(false);
@@ -15134,6 +15136,7 @@ function AgendaVisitas() {
     const q = busqueda.trim().toLowerCase();
     const mapa = {};
     eventos.forEach((ev) => {
+      if (vistaArea !== "todas" && areaDeEvento(ev) !== vistaArea) return;
       if (filtroEquipo && ev.equipo !== filtroEquipo) return;
       if (q && ![ev.cliente, ev.od, ev.descripcion, (ev.personal || []).join(" "), ev.tipo].join(" ").toLowerCase().includes(q)) return;
       const total = diasEntre(ev.fecha_inicio, ev.fecha_fin) + 1;
@@ -15145,7 +15148,7 @@ function AgendaVisitas() {
     });
     if (hoy >= inicioMes && hoy <= finMes && !mapa[hoy]) mapa[hoy] = [];
     return Object.keys(mapa).sort().map((f) => ({ fecha: f, items: mapa[f] }));
-  }, [eventos, busqueda, filtroEquipo, inicioMes, finMes, hoy]);
+  }, [eventos, busqueda, filtroEquipo, vistaArea, inicioMes, finMes, hoy]);
 
   // Al abrir el mes actual, la lista se ubica en HOY
   const irAFechaEnLista = (fecha, suave) => {
@@ -15172,15 +15175,15 @@ function AgendaVisitas() {
     return `${t} ${ev.od ? `(${ev.od}) ` : ""}${ev.cliente || ""}`.trim();
   };
 
-  const nuevo = (fecha) => setForm({ id: null, tipo: "IPM", od_id: "", od: "", cliente: "", fecha_inicio: fecha || hoy, fecha_fin: fecha || hoy, equipo: 1, personal: [], descripcion: "", buscarCliente: "", buscarPersonal: "" });
-  const editar = (ev) => { setVerEvento(null); setForm({ ...ev, personal: ev.personal || [], buscarCliente: "", buscarPersonal: "" }); };
+  const nuevo = (fecha) => { const area = vistaArea === "todas" ? "inspecciones" : vistaArea; setForm({ id: null, area, tipo: area === "proyectos" ? "Proyecto" : "IPM", od_id: "", od: "", cliente: "", fecha_inicio: fecha || hoy, fecha_fin: fecha || hoy, equipo: 1, personal: [], descripcion: "", buscarCliente: "", buscarPersonal: "" }); };
+  const editar = (ev) => { setVerEvento(null); setForm({ ...ev, area: areaDeEvento(ev), personal: ev.personal || [], buscarCliente: "", buscarPersonal: "" }); };
 
   const guardar = async () => {
     if (!form.cliente) { await confirmar("Elija el cliente / OD.", { confirmLabel: "Entendido", soloAviso: true }); return; }
     if (!form.fecha_inicio) { await confirmar("Elija la fecha.", { confirmLabel: "Entendido", soloAviso: true }); return; }
     const fin = form.fecha_fin && form.fecha_fin >= form.fecha_inicio ? form.fecha_fin : form.fecha_inicio;
     const fila = {
-      fecha_inicio: form.fecha_inicio, fecha_fin: fin, tipo: form.tipo, od_id: form.od_id || null, od: form.od || null,
+      fecha_inicio: form.fecha_inicio, fecha_fin: fin, area: form.area, tipo: form.tipo, od_id: form.od_id || null, od: form.od || null,
       cliente: form.cliente, descripcion: form.descripcion?.trim() || null, personal: form.personal, equipo: form.equipo,
     };
     setGuardando(true);
@@ -15212,12 +15215,14 @@ function AgendaVisitas() {
     await confirmar(`Agenda reiniciada: se borraron ${Array.isArray(data) ? data.length : 0} eventos.`, { confirmLabel: "Listo", soloAviso: true, variant: "info" });
   };
 
-  const renombrarEquipo = async (i) => {
-    if (!isAdmin) { setFiltroEquipo(filtroEquipo === i + 1 ? null : i + 1); return; }
-    const nombre = window.prompt(`Nombre para el color ${i + 1} (ej. "Equipo Andrés"):`, equipos[i]);
-    if (!nombre || !nombre.trim()) return;
-    setEquipos((prev) => prev.map((n, j) => (j === i ? nombre.trim() : n)));
-    await supabase.from("agenda_equipos").upsert({ numero: i + 1, nombre: nombre.trim() });
+  // Nombres de los 8 equipos (ventana propia, sirve también en el APK)
+  const [nombresForm, setNombresForm] = useState(null);
+  const guardarNombres = async () => {
+    const limpios = nombresForm.map((n, i) => (n || "").trim() || `Equipo ${i + 1}`);
+    const { error } = await supabase.from("agenda_equipos").upsert(limpios.map((nombre, i) => ({ numero: i + 1, nombre })));
+    if (error) { await confirmar(`No se pudieron guardar los nombres: ${error.message}`, { confirmLabel: "Entendido", soloAviso: true }); return; }
+    setEquipos(limpios);
+    setNombresForm(null);
   };
 
   // Clientes de la plataforma según el tipo elegido
@@ -15225,11 +15230,12 @@ function AgendaVisitas() {
     if (!form) return [];
     const q = (form.buscarCliente || "").trim().toLowerCase();
     return ordenes
-      .filter((o) => tipoDeOrden(o) === form.tipo)
+      // Correctivo junta los correctivos de Inspecciones y de Proyectos
+      .filter((o) => tipoDeOrden(o) === form.tipo && (form.tipo === "Correctivo" || (o.area === "proyectos" ? "proyectos" : "inspecciones") === form.area))
       .filter((o) => !q || `${o.od} ${o.cliente}`.toLowerCase().includes(q))
       .sort((a, b) => ((a.estado === "Activo" ? 0 : 1) - (b.estado === "Activo" ? 0 : 1)) || String(a.cliente).localeCompare(String(b.cliente)))
       .slice(0, 60);
-  }, [ordenes, form?.tipo, form?.buscarCliente]);
+  }, [ordenes, form?.tipo, form?.area, form?.buscarCliente]);
 
   const opcionesPersonal = useMemo(() => {
     if (!form) return [];
@@ -15266,6 +15272,13 @@ function AgendaVisitas() {
         </div>
       )}
 
+      <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+        {[...AGENDA_AREAS, { id: "todas", label: "Todas" }].map((a) => (
+          <Btn key={a.id} small variant={vistaArea === a.id ? "accent" : "ghost"} onClick={() => setVistaArea(a.id)}>
+            {a.id === "inspecciones" ? <ClipboardList size={13} /> : a.id === "proyectos" ? <HardHat size={13} /> : <CalendarDays size={13} />} {a.label}
+          </Btn>
+        ))}
+      </div>
       <Card style={{ padding: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "14px 16px", borderBottom: `1px solid ${T.line}`, flexWrap: "wrap" }}>
           <Btn small variant="ghost" onClick={() => cambiarMes(-1)}><ChevronLeft size={15} /></Btn>
@@ -15283,14 +15296,18 @@ function AgendaVisitas() {
               key={c}
               type="button"
               onClick={() => setFiltroEquipo(filtroEquipo === i + 1 ? null : i + 1)}
-              onDoubleClick={() => isAdmin && renombrarEquipo(i)}
-              title={isAdmin ? "Clic: ver solo este equipo · Doble clic: cambiar el nombre" : "Ver solo este equipo"}
+              title="Ver solo este equipo"
               style={{ display: "inline-flex", alignItems: "center", gap: 6, border: `1.5px solid ${filtroEquipo === i + 1 ? c : T.line}`, background: filtroEquipo === i + 1 ? c + "22" : "#fff", borderRadius: 999, padding: "4px 10px 4px 6px", fontSize: 12, fontWeight: 600, color: T.ink, cursor: "pointer", fontFamily: "inherit", opacity: filtroEquipo && filtroEquipo !== i + 1 ? 0.45 : 1 }}
             >
               <span style={{ width: 14, height: 14, borderRadius: 999, background: c, display: "inline-block" }} />{equipos[i]}
             </button>
           ))}
           {filtroEquipo && <button type="button" onClick={() => setFiltroEquipo(null)} style={{ ...chip(false), padding: "4px 10px", fontSize: 12 }}>Ver todos</button>}
+          {puedeEditar && (
+            <button type="button" onClick={() => setNombresForm([...equipos])} style={{ ...chip(false), padding: "4px 10px", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5 }}>
+              <Settings size={12} /> Nombres de equipos
+            </button>
+          )}
         </div>
 
         {errorTabla ? (
@@ -15348,6 +15365,7 @@ function AgendaVisitas() {
               <button type="button" onClick={() => setVerEvento(null)} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.gray }}><X size={18} /></button>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", gap: "8px 10px", fontSize: 13.5, marginTop: 16 }}>
+              <span style={{ color: T.gray }}>Agenda</span><span>{areaDeEvento(verEvento) === "proyectos" ? "Proyectos" : "Inspecciones"}</span>
               <span style={{ color: T.gray }}>Tipo</span><span>{verEvento.tipo}</span>
               <span style={{ color: T.gray }}>Equipo</span><span>{equipos[(verEvento.equipo || 1) - 1]}</span>
               <span style={{ color: T.gray }}>Personal</span><span>{(verEvento.personal || []).join(", ") || "—"}</span>
@@ -15364,6 +15382,30 @@ function AgendaVisitas() {
         </div>
       )}
 
+      {nombresForm && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(16,24,38,0.5)", zIndex: 1500, display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
+          <div style={{ background: "#fff", borderRadius: 16, width: 420, maxWidth: "100%", maxHeight: "calc(100vh - 24px)", overflowY: "auto", padding: 22, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}>
+              <div style={{ fontSize: 18, fontWeight: 800, color: T.ink, flex: 1 }}>Nombres de los equipos</div>
+              <button type="button" onClick={() => setNombresForm(null)} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.gray }}><X size={18} /></button>
+            </div>
+            <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 14 }}>Cada color es un equipo. Póngale el nombre que quiera (ej. "Equipo Andrés" o "Cuadrilla Norte").</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+              {AGENDA_COLORES.map((c, i) => (
+                <div key={c} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ width: 22, height: 22, borderRadius: 999, background: c, flexShrink: 0 }} />
+                  <input style={{ ...inputStyle, flex: 1, width: "100%" }} maxLength={40} value={nombresForm[i]} placeholder={`Equipo ${i + 1}`} onChange={(e) => setNombresForm(nombresForm.map((n, j) => (j === i ? e.target.value : n)))} />
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 18 }}>
+              <Btn variant="ghost" onClick={() => setNombresForm(null)}>Cancelar</Btn>
+              <Btn variant="accent" onClick={guardarNombres}>Guardar nombres</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+
       {form && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(16,24,38,0.5)", zIndex: 1500, display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
           <div style={{ background: "#fff", borderRadius: 16, width: 520, maxWidth: "100%", maxHeight: "calc(100vh - 24px)", overflowY: "auto", padding: 22, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
@@ -15372,9 +15414,16 @@ function AgendaVisitas() {
               <button type="button" onClick={() => setForm(null)} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.gray }}><X size={18} /></button>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <CampoAgenda label="Agenda">
+                <div style={{ display: "flex", gap: 6 }}>
+                  {AGENDA_AREAS.map((a) => (
+                    <button key={a.id} type="button" onClick={() => setForm({ ...form, area: a.id, tipo: a.id === "proyectos" ? "Proyecto" : "IPM", od_id: "", od: "", cliente: "" })} style={chip(form.area === a.id)}>{a.label}</button>
+                  ))}
+                </div>
+              </CampoAgenda>
               <CampoAgenda label="Tipo">
                 <div style={{ display: "flex", gap: 6 }}>
-                  {AGENDA_TIPOS.map((t) => (
+                  {tiposDeArea(form.area).map((t) => (
                     <button key={t.id} type="button" onClick={() => setForm({ ...form, tipo: t.id, od_id: "", od: "", cliente: "" })} style={chip(form.tipo === t.id)}>{t.label}</button>
                   ))}
                 </div>
@@ -15387,12 +15436,13 @@ function AgendaVisitas() {
                   </div>
                 ) : (
                   <div>
-                    <input style={inputStyle} placeholder={`Buscar OD o cliente (${form.tipo})...`} value={form.buscarCliente} onChange={(e) => setForm({ ...form, buscarCliente: e.target.value })} />
+                    <input style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} placeholder={form.tipo === "Correctivo" ? "Buscar OD o cliente (correctivos de Inspecciones y Proyectos)..." : `Buscar OD o cliente (${form.tipo})...`} value={form.buscarCliente} onChange={(e) => setForm({ ...form, buscarCliente: e.target.value })} />
                     <div style={{ border: `1px solid ${T.line}`, borderRadius: 9, marginTop: 6, maxHeight: 190, overflowY: "auto" }}>
                       {opcionesClientes.length === 0 && <div style={{ padding: 10, fontSize: 12.5, color: T.gray }}>No hay clientes de tipo {form.tipo} con ese texto.</div>}
                       {opcionesClientes.map((o) => (
                         <div key={o.id} onClick={() => setForm({ ...form, od_id: String(o.id), od: o.od, cliente: o.cliente, buscarCliente: "" })} style={{ padding: "8px 10px", fontSize: 13, cursor: "pointer", borderBottom: `1px solid ${T.line}55`, display: "flex", gap: 8 }}>
                           <b style={{ minWidth: 70 }}>{o.od}</b><span style={{ flex: 1 }}>{o.cliente}</span>
+                          {form.tipo === "Correctivo" && <span style={{ fontSize: 10.5, fontWeight: 700, color: o.area === "proyectos" ? T.green : T.steel, background: o.area === "proyectos" ? T.greenSoft : T.blueSoft, borderRadius: 999, padding: "1px 7px", alignSelf: "center" }}>{o.area === "proyectos" ? "Proyectos" : "Inspecciones"}</span>}
                           {o.estado && o.estado !== "Activo" && <span style={{ fontSize: 11, color: T.gray }}>{o.estado}</span>}
                         </div>
                       ))}
@@ -15403,12 +15453,12 @@ function AgendaVisitas() {
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                 <div style={{ flex: 1, minWidth: 140 }}>
                   <CampoAgenda label="Fecha">
-                    <input type="date" style={inputStyle} value={form.fecha_inicio} onChange={(e) => setForm({ ...form, fecha_inicio: e.target.value, fecha_fin: form.fecha_fin < e.target.value ? e.target.value : form.fecha_fin })} />
+                    <input type="date" style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} value={form.fecha_inicio} onChange={(e) => setForm({ ...form, fecha_inicio: e.target.value, fecha_fin: form.fecha_fin < e.target.value ? e.target.value : form.fecha_fin })} />
                   </CampoAgenda>
                 </div>
                 <div style={{ flex: 1, minWidth: 140 }}>
                   <CampoAgenda label="Hasta (si son varios días)">
-                    <input type="date" style={inputStyle} min={form.fecha_inicio} value={form.fecha_fin} onChange={(e) => setForm({ ...form, fecha_fin: e.target.value })} />
+                    <input type="date" style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} min={form.fecha_inicio} value={form.fecha_fin} onChange={(e) => setForm({ ...form, fecha_fin: e.target.value })} />
                   </CampoAgenda>
                 </div>
               </div>
@@ -15430,7 +15480,7 @@ function AgendaVisitas() {
                     ))}
                   </div>
                 )}
-                <input style={inputStyle} placeholder="Buscar en la planilla..." value={form.buscarPersonal} onChange={(e) => setForm({ ...form, buscarPersonal: e.target.value })} />
+                <input style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} placeholder="Buscar en la planilla..." value={form.buscarPersonal} onChange={(e) => setForm({ ...form, buscarPersonal: e.target.value })} />
                 <div style={{ border: `1px solid ${T.line}`, borderRadius: 9, marginTop: 6, maxHeight: 170, overflowY: "auto" }}>
                   {opcionesPersonal.length === 0 && <div style={{ padding: 10, fontSize: 12.5, color: T.gray }}>{empleados.length ? "Nadie con ese nombre." : "No hay personal activo en Planilla."}</div>}
                   {opcionesPersonal.map((e) => {
@@ -15465,7 +15515,6 @@ function AppInner() {
     try {
       const guardado = localStorage.getItem(CLAVE_SESION);
       const u = guardado ? JSON.parse(guardado) : null;
-      if (MODO_CLIENTE && u && !["cliente", "tecnico"].includes(u.categoria)) return null;
       return u;
     } catch {
       return null;
@@ -15508,7 +15557,8 @@ function AppInner() {
     // (incluyendo Gestión de Usuarios) queda reservado solo para la
     // categoría "admin". Los técnicos, además, no ven Proyectos ni Planilla.
     // El perfil "entrenamiento" solo ve el área de Entrenamiento — nada más.
-    if (user.categoria === "entrenamiento") return AREAS.filter((a) => a.id === "entrenamiento");
+    // En el APK el perfil Entrenamiento ve Entrenamiento y la Agenda; en la web solo Entrenamiento.
+    if (user.categoria === "entrenamiento") return [...AREAS.filter((a) => a.id === "entrenamiento"), ...AREAS.filter((a) => MODO_CLIENTE && a.id === "agenda")];
     // El perfil "cliente" solo ve Monitoreo (y dentro, solo su sitio asignado).
     if (user.categoria === "cliente") return AREAS.filter((a) => a.id === "monitoreo_notifier");
     // En el APK el técnico ve Monitoreo (todos los sitios), Agenda y Entrenamiento.

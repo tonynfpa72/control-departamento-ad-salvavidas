@@ -179,6 +179,15 @@ const sitiosDeTexto = (t) => String(t || "").split(SEP_SITIOS).map((x) => x.trim
 // Dentro del APK (WebView de Android) no hay ventanas nuevas ni impresión ni
 // descargas de archivos, así que ahí se ocultan los botones de PDF/CSV.
 const EN_APK = typeof navigator !== "undefined" && /SalvavidasAPK/.test(navigator.userAgent || "");
+// Vista celular: las cuadrículas de 2 columnas de cada módulo se apilan en
+// una sola columna en pantallas angostas, y SIEMPRE en el APK.
+if (typeof document !== "undefined" && !document.getElementById("estilos-responsivos")) {
+  const st = document.createElement("style");
+  st.id = "estilos-responsivos";
+  st.textContent = "@media (max-width: 819px) { .grid-layout { grid-template-columns: minmax(0, 1fr) !important; } } html.apk .grid-layout { grid-template-columns: minmax(0, 1fr) !important; } .grid-layout > * { min-width: 0; }";
+  document.head.appendChild(st);
+  if (EN_APK) document.documentElement.classList.add("apk");
+}
 
 // ACTUALIZACIÓN AUTOMÁTICA: el APK (y una pestaña que queda abierta días)
 // seguía usando la versión vieja de la app hasta cerrarla del todo. Cada
@@ -1858,7 +1867,7 @@ function HorasExtras({ area, color }) {
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16 }}>
+    <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <Card title="Disponible quincenal">
           <div style={{ fontSize: 30, fontWeight: 800, color }}>{saldo}h</div>
@@ -2400,7 +2409,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "2.4fr 0.7fr", gap: 16 }}>
+    <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "2.4fr 0.7fr", gap: 16 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <Card title={esCorrectivo ? "OD Correctivos" : "Clientes / OD"} action={
           <div style={{ display: "flex", gap: 8 }}>
@@ -2991,7 +3000,7 @@ function Calendario({ area, color, tipoLabel = ["Inspección", "Proyecto"] }) {
   const fechasAgenda = Object.keys(gruposAgenda).sort();
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16 }}>
+    <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <Card>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
@@ -3846,7 +3855,7 @@ function CursosEHS() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <ResumenEHSCard />
-      <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
+      <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
       <Card title="Solicitudes de curso" action={<Btn small variant="ghost" onClick={() => exportExcel(rowsMostrados.map(r => ({ Solicitante: r.solicitante, Personal: r.personal, Lugar: r.lugar, Tipo: r.tipo, Estado: r.estado, Fecha: r.fecha, Vencimiento: vencimientoCalculado(r.fecha) || "" })), "cursos_ehs.xlsx")}><Download size={13} /> Excel</Btn>}>
         <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
           <Btn small variant={subTab === "activos" ? "accent" : "ghost"} onClick={() => setSubTab("activos")}>Activos ({rowsActivos.length})</Btn>
@@ -4062,7 +4071,7 @@ function EquipoSeguridad() {
   const totalGeneralEntregado = resumenPersonas.reduce((s, [, total]) => s + total, 0);
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
+    <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <Card
           title="Equipo de Protección Personal (EPP)"
@@ -5068,7 +5077,7 @@ function ResumenEjecutivo() {
         </Card>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <ResumenCotizacionesCard />
         <ResumenEHSCard />
       </div>
@@ -5158,7 +5167,7 @@ function ResumenEjecutivo() {
         })()}
       </Card>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <Card title="OD activos e inactivos — Proyectos vs. Inspecciones">
           <ResponsiveContainer width="100%" height={240}>
             <BarChart data={odComparativo} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
@@ -5439,7 +5448,7 @@ function GestionUsuarios() {
       </div>
 
       {pestana === "personal" ? (
-        <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
+        <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
           <Card title="Personal de Salvavidas">
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
@@ -5490,7 +5499,7 @@ function GestionUsuarios() {
           </Card>
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
+        <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
           <Card title="Clientes con acceso al Monitoreo">
             {clientes.length === 0 ? (
               <div style={{ color: T.inkSoft, fontSize: 13 }}>Todavía no hay clientes. Créalos con el formulario de la derecha.</div>
@@ -6669,7 +6678,7 @@ function AperturaOD() {
   const rowsMostradas = subTab === "pendientes" ? rowsPendientes : rowsAbiertos;
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
+    <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 }}>
       <Card title="Solicitudes de apertura de OD">
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           <Btn small variant={subTab === "pendientes" ? "accent" : "ghost"} onClick={() => setSubTab("pendientes")}>Pendientes ({rowsPendientes.length})</Btn>
@@ -6878,7 +6887,7 @@ function FechasDeCorte({ isAdmin, confirmar }) {
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+    <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
       <Card title="Fechas de corte">
         {isAdmin && (
           <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
@@ -7002,7 +7011,7 @@ function ResumenGastosCard() {
             </LineChart>
           </ResponsiveContainer>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           <div>
             <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, marginBottom: 8 }}>Quién gasta más</div>
             <ResponsiveContainer width="100%" height={220}>
@@ -7343,7 +7352,7 @@ function MonitoreoNotifier() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
   const [vistaModoNotifier, setVistaModoNotifier] = useEstadoRecordado("monitoreo-modo", "auto"); // "auto" | "movil" | "pc" — igual que en Entrenamiento
-  const esMovilNotifier = vistaModoNotifier === "movil" ? true : vistaModoNotifier === "pc" ? false : anchoNotifier <= 820;
+  const esMovilNotifier = EN_APK ? true : vistaModoNotifier === "movil" ? true : vistaModoNotifier === "pc" ? false : anchoNotifier <= 820;
   const [seccionMovil, setSeccionMovil] = useEstadoRecordado("monitoreo-seccion-movil", "eventos"); // "resumen" | "eventos" | "equipos" | "tendencias"
   const [eventos, setEventos] = useState([]);
   const [dispositivos, setDispositivos] = useState([]);
@@ -8025,10 +8034,12 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               <VolumeX size={13} /> Silenciar
             </Btn>
           )}
+          {!EN_APK && (
           <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${IGNIS.border}` }}>
             <button onClick={() => setVistaModoNotifier(vistaModoNotifier === "movil" ? "auto" : "movil")} title="Ver como celular" style={{ background: vistaModoNotifier === "movil" ? IGNIS.panel2 : "transparent", color: vistaModoNotifier === "movil" ? IGNIS.text : IGNIS.dim, border: "none", padding: "7px 10px", fontSize: 13, cursor: "pointer" }}>📱</button>
             <button onClick={() => setVistaModoNotifier(vistaModoNotifier === "pc" ? "auto" : "pc")} title="Ver como PC" style={{ background: vistaModoNotifier === "pc" ? IGNIS.panel2 : "transparent", color: vistaModoNotifier === "pc" ? IGNIS.text : IGNIS.dim, border: "none", padding: "7px 10px", fontSize: 13, cursor: "pointer" }}>💻</button>
           </div>
+          )}
         </div>
       </div>
 
@@ -8590,7 +8601,7 @@ function GastosTarjeta() {
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
+    <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <ResumenGastosCard />
         <Card
@@ -9094,7 +9105,7 @@ function Vehiculos() {
       </div>
 
       {subTab === "flota" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
+        <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
           <Card title="Flota de vehículos">
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
               <thead>
@@ -9152,7 +9163,7 @@ function Vehiculos() {
       )}
 
       {(subTab === "registro" || subTab === "cerrados") && (
-        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
+        <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16 }}>
           <Card
             title={subTab === "cerrados" ? "Kilometrajes cerrados" : "Registro diario de kilometraje"}
             action={<Btn small variant="ghost" onClick={() => exportExcel(registrosMostrados.map(r => ({ Fecha: r.fecha, Placa: r.placa, Personal: r.personal_nombre, Kilometraje: r.kilometraje, Estado: r.estado })), "kilometraje.xlsx")}><Download size={13} /> Excel</Btn>}
@@ -15147,6 +15158,23 @@ function AgendaVisitas() {
   const [busqueda, setBusqueda] = useState("");
   const [filtroEquipo, setFiltroEquipo] = useState(null); // índice de color 0..15
   const [diaFiltro, setDiaFiltro] = useState(null); // "AAAA-MM-DD" = ver solo ese día
+  const [modoVista, setModoVista] = useEstadoRecordado("agenda-modo", "lista"); // "lista" (agenda) | "mes" (cuadrícula)
+  const [verBuscar, setVerBuscar] = useState(false);
+  // Alto disponible: la agenda usa todo el espacio de la pantalla hacia abajo
+  const cuerpoRef = React.useRef(null);
+  const [altoCuerpo, setAltoCuerpo] = useState(500);
+  useEffect(() => {
+    const medir = () => {
+      const el = cuerpoRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      setAltoCuerpo(Math.max(320, window.innerHeight - top - 8));
+    };
+    medir();
+    const t = setTimeout(medir, 300);
+    window.addEventListener("resize", medir);
+    return () => { clearTimeout(t); window.removeEventListener("resize", medir); };
+  });
   const tiraDiasRef = React.useRef(null);
   const [verColores, setVerColores] = useState(() => typeof window === "undefined" || window.innerWidth >= 820);
   // Agendas separadas: Inspecciones / Proyectos (o las dos juntas)
@@ -15191,6 +15219,39 @@ function AgendaVisitas() {
       if (eqs && eqs.length) setEquipos((prev) => prev.map((n, k) => { const g = eqs.find((e) => e.numero === k + 1)?.nombre; return g && g !== `Equipo ${k + 1}` ? g : n; }));
     })();
   }, []);
+
+  const pasaFiltros = (ev) => {
+    if (vistaArea !== "todas" && areaDeEvento(ev) !== vistaArea) return false;
+    if (filtroEquipo !== null && indiceColor(areaDeEvento(ev), ev.equipo) !== filtroEquipo) return false;
+    const q = busqueda.trim().toLowerCase();
+    if (q && ![ev.cliente, ev.od, ev.descripcion, (ev.personal || []).join(" "), ev.tipo].join(" ").toLowerCase().includes(q)) return false;
+    return true;
+  };
+  // Vista MES: semanas (domingo a sábado) con barras que cruzan los días
+  const semanas = useMemo(() => {
+    const primero = new Date(mes.a, mes.m, 1);
+    const inicio = new Date(mes.a, mes.m, 1 - primero.getDay());
+    const ultimo = new Date(mes.a, mes.m + 1, 0);
+    const fin = new Date(mes.a, mes.m + 1, 0 + (6 - ultimo.getDay()));
+    const lista = [];
+    for (let d = new Date(inicio); d <= fin; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7)) {
+      const dias7 = Array.from({ length: 7 }, (_, i) => fechaLocalISO(new Date(d.getFullYear(), d.getMonth(), d.getDate() + i)));
+      const ini = dias7[0], fn = dias7[6];
+      const evs = eventos.filter((ev) => pasaFiltros(ev) && ev.fecha_inicio <= fn && ev.fecha_fin >= ini)
+        .sort((a, b) => (a.fecha_inicio < b.fecha_inicio ? -1 : a.fecha_inicio > b.fecha_inicio ? 1 : diasEntre(b.fecha_inicio, b.fecha_fin) - diasEntre(a.fecha_inicio, a.fecha_fin)));
+      const carriles = [];
+      const barras = evs.map((ev) => {
+        const c0 = ev.fecha_inicio < ini ? 0 : dias7.indexOf(ev.fecha_inicio);
+        const c1 = ev.fecha_fin > fn ? 6 : dias7.indexOf(ev.fecha_fin);
+        let carril = carriles.findIndex((ocup) => ocup.slice(c0, c1 + 1).every((x) => !x));
+        if (carril < 0) { carril = carriles.length; carriles.push(Array(7).fill(false)); }
+        for (let c = c0; c <= c1; c++) carriles[carril][c] = true;
+        return { ev, c0, c1, carril, sigueAntes: ev.fecha_inicio < ini, sigueDespues: ev.fecha_fin > fn };
+      });
+      lista.push({ dias7, barras, nCarriles: carriles.length });
+    }
+    return lista;
+  }, [eventos, mes.a, mes.m, vistaArea, filtroEquipo, busqueda]);
 
   // Días del mes que tienen eventos (un evento de varios días aparece en cada día)
   const todosLosDias = useMemo(() => {
@@ -15237,9 +15298,9 @@ function AgendaVisitas() {
     if (cargando) return;
     irAFechaEnLista(hoy, false);
   }, [cargando, mes.a, mes.m]);
-  const [angosta, setAngosta] = useState(() => typeof window !== "undefined" && window.innerWidth < 820);
+  const [angosta, setAngosta] = useState(() => EN_APK || (typeof window !== "undefined" && window.innerWidth < 820));
   useEffect(() => {
-    const f = () => setAngosta(window.innerWidth < 820);
+    const f = () => setAngosta(EN_APK || window.innerWidth < 820);
     window.addEventListener("resize", f);
     return () => window.removeEventListener("resize", f);
   }, []);
@@ -15414,7 +15475,7 @@ function AgendaVisitas() {
         key={key}
         onClick={() => setVerEvento(ev)}
         title={ev.descripcion || ""}
-        style={{ background: color, color: textoSobreColor(color), borderRadius: 10, padding: "9px 14px", fontSize: 14.5, fontWeight: 500, cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,.08)" }}
+        style={{ background: color, color: textoSobreColor(color), borderRadius: 10, padding: angosta ? "7px 11px" : "9px 14px", fontSize: angosta ? 13.5 : 14.5, fontWeight: 500, cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,.08)" }}
       >
         <span style={{ overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", lineHeight: 1.3, wordBreak: "break-word" }}>
           {tituloEvento(ev)}{personal ? ` · ${personal}` : ""}{total > 1 ? ` (Día ${dia}/${total})` : ""}
@@ -15426,27 +15487,34 @@ function AgendaVisitas() {
   const chip = (activo) => ({ border: `1px solid ${activo ? T.accent : T.line}`, background: activo ? T.accentSoft : "#fff", color: activo ? T.accent : T.ink, borderRadius: 999, padding: "6px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" });
 
   return (
-    <div style={{ maxWidth: 920, margin: "0 auto" }}>
-      {((puedeEditar && !angosta) || isAdmin) && (
+    <div style={{ maxWidth: angosta || modoVista === "mes" ? "none" : 920, margin: angosta ? "-6px -4px 0" : "0 auto" }}>
+      {!angosta && ((puedeEditar) || isAdmin) && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end", marginBottom: 12 }}>
           {puedeEditar && !angosta && <Btn variant="accent" onClick={() => nuevo()}><Plus size={15} /> Nuevo evento</Btn>}
           {isAdmin && <Btn variant="danger" small onClick={reiniciarTodo}><Trash2 size={13} /> Reiniciar agenda</Btn>}
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: angosta ? 4 : 6, marginBottom: angosta ? 6 : 12, flexWrap: "wrap", alignItems: "center" }}>
         {[...AGENDA_AREAS, { id: "todas", label: "Todas" }].map((a) => (
-          <Btn key={a.id} small variant={vistaArea === a.id ? "accent" : "ghost"} onClick={() => { setVistaArea(a.id); setFiltroEquipo(null); }}>
-            {a.id === "inspecciones" ? <ClipboardList size={13} /> : a.id === "proyectos" ? <HardHat size={13} /> : <CalendarDays size={13} />} {a.label}
+          <Btn key={a.id} small variant={vistaArea === a.id ? "accent" : "ghost"} onClick={() => { setVistaArea(a.id); setFiltroEquipo(null); }} style={angosta ? { padding: "5px 8px", fontSize: 12 } : undefined}>
+            {a.id === "inspecciones" ? <ClipboardList size={13} /> : a.id === "proyectos" ? <HardHat size={13} /> : <CalendarDays size={13} />} {angosta && a.id === "inspecciones" ? "Insp." : angosta && a.id === "proyectos" ? "Proy." : a.label}
           </Btn>
         ))}
+        {/* Dos vistas: Agenda (lista por día) y Mes (cuadrícula) */}
+        <div style={{ display: "flex", marginLeft: "auto", border: `1px solid ${T.line}`, borderRadius: 9, overflow: "hidden" }}>
+          {[{ id: "lista", label: "Agenda" }, { id: "mes", label: "Mes" }].map((v) => (
+            <button key={v.id} type="button" onClick={() => { setModoVista(v.id); setDiaFiltro(null); }} style={{ border: "none", padding: angosta ? "5px 9px" : "6px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: modoVista === v.id ? T.steel : "#fff", color: modoVista === v.id ? "#fff" : T.steel }}>{v.label}</button>
+          ))}
+        </div>
       </div>
-      <Card style={{ padding: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "14px 16px", borderBottom: `1px solid ${T.line}`, flexWrap: "wrap" }}>
-          <Btn small variant="ghost" onClick={() => cambiarMes(-1)}><ChevronLeft size={15} /></Btn>
-          <div style={{ fontSize: 18, fontWeight: 800, color: T.ink, minWidth: 150, textAlign: "center" }}>{MESES_LARGO[mes.m]} {mes.a}</div>
-          <Btn small variant="ghost" onClick={() => cambiarMes(1)}><ChevronRight size={15} /></Btn>
-          <Btn small variant="ghost" onClick={irAHoy}>Hoy</Btn>
+      <Card style={{ padding: 0, ...(angosta ? { borderRadius: 10 } : {}) }}>
+        <div style={{ display: "flex", alignItems: "center", gap: angosta ? 5 : 8, padding: angosta ? "8px 8px" : "14px 16px", borderBottom: `1px solid ${T.line}`, flexWrap: "wrap" }}>
+          <Btn small variant="ghost" onClick={() => cambiarMes(-1)} style={angosta ? { padding: "5px 7px" } : undefined}><ChevronLeft size={15} /></Btn>
+          <div style={{ fontSize: angosta ? 15.5 : 18, fontWeight: 800, color: T.ink, minWidth: angosta ? 0 : 150, textAlign: "center", flex: angosta ? 1 : undefined }}>{angosta ? `${MESES_LARGO[mes.m].slice(0, 3)} ${mes.a}` : `${MESES_LARGO[mes.m]} ${mes.a}`}</div>
+          <Btn small variant="ghost" onClick={() => cambiarMes(1)} style={angosta ? { padding: "5px 7px" } : undefined}><ChevronRight size={15} /></Btn>
+          <Btn small variant="ghost" onClick={irAHoy} style={angosta ? { padding: "5px 8px" } : undefined}>Hoy</Btn>
+          {angosta && <Btn small variant={verBuscar || busqueda ? "accent" : "ghost"} onClick={() => setVerBuscar(!verBuscar)} style={{ padding: "5px 8px" }}><Search size={14} /></Btn>}
           {!EN_APK && <Btn small variant="ghost" onClick={() => setMenuPdf(true)}><Download size={13} /> PDF</Btn>}
           <div ref={menuColorRef} style={{ position: "relative" }}>
             <button
@@ -15455,7 +15523,7 @@ function AgendaVisitas() {
               style={{ display: "inline-flex", alignItems: "center", gap: 6, border: `1px solid ${filtroEquipo !== null ? AGENDA_COLORES[filtroEquipo] : T.line}`, background: filtroEquipo !== null ? AGENDA_COLORES[filtroEquipo] + "22" : "transparent", borderRadius: 9, padding: "6px 10px", fontSize: 12.5, fontWeight: 600, color: T.steel, cursor: "pointer", fontFamily: "inherit", maxWidth: 190 }}
             >
               <span style={{ width: 13, height: 13, borderRadius: 999, flexShrink: 0, background: filtroEquipo !== null ? AGENDA_COLORES[filtroEquipo] : "conic-gradient(#33B679, #F6BF26, #F4511E, #039BE5, #8E24AA, #33B679)" }} />
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{filtroEquipo !== null ? equipos[filtroEquipo] : "Todos los colores"}</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{filtroEquipo !== null ? equipos[filtroEquipo] : angosta ? "Colores" : "Todos los colores"}</span>
               <ChevronDown size={13} />
             </button>
             {menuColor && (
@@ -15478,15 +15546,28 @@ function AgendaVisitas() {
                     })}
                   </div>
                 ))}
+                {puedeEditar && (
+                  <button type="button" onClick={() => { setMenuColor(false); editarNombres(); }} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", border: "none", borderTop: `1px solid ${T.line}`, background: "transparent", padding: "9px 10px", marginTop: 4, fontSize: 12.5, fontWeight: 700, color: T.steel, cursor: "pointer", fontFamily: "inherit" }}>
+                    <Settings size={13} /> Nombres de colores
+                  </button>
+                )}
+                {angosta && isAdmin && (
+                  <button type="button" onClick={() => { setMenuColor(false); reiniciarTodo(); }} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", border: "none", background: "transparent", padding: "9px 10px", fontSize: 12.5, fontWeight: 700, color: T.red, cursor: "pointer", fontFamily: "inherit" }}>
+                    <Trash2 size={13} /> Reiniciar agenda
+                  </button>
+                )}
               </div>
             )}
           </div>
-          <div style={{ flex: 1, minWidth: 180, position: "relative" }}>
+          {(!angosta || verBuscar) && (
+          <div style={{ flex: 1, minWidth: angosta ? "100%" : 180, position: "relative" }}>
             <Search size={14} color={T.gray} style={{ position: "absolute", left: 10, top: 10 }} />
-            <input style={{ ...inputStyle, paddingLeft: 30, fontSize: 13 }} placeholder="Buscar cliente, OD, persona..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
+            <input autoFocus={angosta} style={{ ...inputStyle, paddingLeft: 30, fontSize: 13, width: "100%", boxSizing: "border-box" }} placeholder="Buscar cliente, OD, persona..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
           </div>
+          )}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: `1px solid ${T.line}` }}>
+        {modoVista === "lista" && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: angosta ? "6px 6px" : "8px 12px", borderBottom: `1px solid ${T.line}` }}>
           <div ref={tiraDiasRef} style={{ display: "flex", gap: 5, overflowX: "auto", flex: 1, paddingBottom: 3, WebkitOverflowScrolling: "touch" }}>
             {diasDelMes.map((f) => {
               const d = fechaDesdeISO(f);
@@ -15514,11 +15595,12 @@ function AgendaVisitas() {
           </div>
           {diaFiltro && <Btn small variant="ghost" onClick={() => setDiaFiltro(null)}>Todo el mes</Btn>}
         </div>
-        {/* En el celular los colores se pueden plegar para dejar más espacio a la agenda */}
-        <button type="button" onClick={() => setVerColores(!verColores)} style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", border: "none", borderBottom: verColores ? "none" : `1px solid ${T.line}`, background: "transparent", padding: "8px 16px", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700, color: T.inkSoft }}>
+        )}
+        {/* La leyenda de colores solo en pantallas anchas (en el celular está en el desplegable "Colores") */}
+        {!angosta && <button type="button" onClick={() => setVerColores(!verColores)} style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", border: "none", borderBottom: verColores ? "none" : `1px solid ${T.line}`, background: "transparent", padding: "8px 16px", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700, color: T.inkSoft }}>
           {verColores ? <ChevronUp size={14} /> : <ChevronDown size={14} />} Colores{filtroEquipo !== null ? ` · viendo: ${equipos[filtroEquipo]}` : ""}
-        </button>
-        {verColores && (
+        </button>}
+        {!angosta && verColores && (
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "0 16px 10px", borderBottom: `1px solid ${T.line}`, alignItems: "center" }}>
           {(vistaArea === "todas" ? AGENDA_AREAS : AGENDA_AREAS.filter((a) => a.id === vistaArea)).map((a) => (
             <div key={a.id} style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", width: vistaArea === "todas" ? "100%" : undefined }}>
@@ -15562,18 +15644,71 @@ function AgendaVisitas() {
           </div>
         ) : cargando ? (
           <div style={{ padding: 24, color: T.gray, fontSize: 13 }}>Cargando agenda...</div>
+        ) : modoVista === "mes" ? (
+          <div ref={cuerpoRef} style={{ height: altoCuerpo, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", borderBottom: `1px solid ${T.line}`, position: "sticky", top: 0, background: T.panel, zIndex: 2 }}>
+              {["DOM", "LUN", "MAR", "MIÉ", "JUE", "VIE", "SÁB"].map((d) => <div key={d} style={{ textAlign: "center", fontSize: angosta ? 9.5 : 11, fontWeight: 700, color: T.inkSoft, padding: "5px 0" }}>{d}</div>)}
+            </div>
+            {semanas.map((sem, si) => {
+              const maxCarriles = angosta ? 4 : 6;
+              const visibles = Math.min(sem.nCarriles, maxCarriles);
+              const altoBarra = angosta ? 15 : 19;
+              const ocultosPorDia = sem.dias7.map((_, c) => sem.barras.filter((b) => b.carril >= maxCarriles && b.c0 <= c && b.c1 >= c).length);
+              const hayOcultos = ocultosPorDia.some((n) => n > 0);
+              return (
+                <div key={si} style={{ position: "relative", flex: 1, minHeight: (angosta ? 22 : 26) + Math.max(visibles, 2) * (altoBarra + 2) + (hayOcultos ? 16 : 6), borderBottom: `1px solid ${T.line}` }}>
+                  {/* fondo: 7 celdas de días */}
+                  <div style={{ position: "absolute", inset: 0, display: "grid", gridTemplateColumns: "repeat(7, 1fr)" }}>
+                    {sem.dias7.map((f, c) => {
+                      const d = fechaDesdeISO(f);
+                      const fueraMes = d.getMonth() !== mes.m;
+                      const esHoy = f === hoy;
+                      return (
+                        <div key={f} onClick={() => { setDiaFiltro(f); setModoVista("lista"); }} title="Ver este día" style={{ borderLeft: c ? `1px solid ${T.line}` : "none", background: fueraMes ? "#f6f7f9" : "transparent", cursor: "pointer", textAlign: "center", paddingTop: 3 }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: angosta ? 19 : 22, height: angosta ? 19 : 22, borderRadius: 999, fontSize: angosta ? 11 : 12.5, fontWeight: 700, background: esHoy ? T.blue : "transparent", color: esHoy ? "#fff" : fueraMes ? T.gray : T.ink }}>{d.getDate()}</span>
+                          {ocultosPorDia[c] > 0 && <div style={{ position: "absolute", bottom: 2, width: `${100 / 7}%`, left: `${(100 / 7) * c}%`, fontSize: angosta ? 9.5 : 11, fontWeight: 700, color: T.inkSoft }}>+{ocultosPorDia[c]} más</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {/* barras de eventos */}
+                  {sem.barras.filter((b) => b.carril < maxCarriles).map((b) => {
+                    const k = indiceColor(areaDeEvento(b.ev), b.ev.equipo);
+                    const color = AGENDA_COLORES[k];
+                    const personal = (b.ev.personal || []).join(", ");
+                    return (
+                      <div
+                        key={b.ev.id + "-" + si}
+                        onClick={(e) => { e.stopPropagation(); setVerEvento(b.ev); }}
+                        title={`${tituloEvento(b.ev)}${personal ? " · " + personal : ""}`}
+                        style={{
+                          position: "absolute", top: (angosta ? 22 : 26) + b.carril * (altoBarra + 2), height: altoBarra,
+                          left: `calc(${(100 / 7) * b.c0}% + 2px)`, width: `calc(${(100 / 7) * (b.c1 - b.c0 + 1)}% - 4px)`,
+                          background: color, color: textoSobreColor(color), fontSize: angosta ? 9.5 : 11, fontWeight: 600, lineHeight: `${altoBarra}px`,
+                          padding: "0 4px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer", zIndex: 1,
+                          borderRadius: `${b.sigueAntes ? 0 : 4}px ${b.sigueDespues ? 0 : 4}px ${b.sigueDespues ? 0 : 4}px ${b.sigueAntes ? 0 : 4}px`,
+                        }}
+                      >
+                        {tituloEvento(b.ev)}{personal ? ` · ${personal}` : ""}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
         ) : (
-          <div ref={listaRef} style={{ position: "relative", maxHeight: angosta ? "calc(100vh - 230px)" : "calc(100vh - 290px)", minHeight: 300, overflowY: "auto", padding: "8px 12px 80px" }}>
+          <div ref={(el) => { listaRef.current = el; cuerpoRef.current = el; }} style={{ position: "relative", height: altoCuerpo, overflowY: "auto", padding: angosta ? "4px 6px 90px" : "8px 12px 80px" }}>
             {dias.length === 0 && <div style={{ padding: 24, color: T.gray, fontSize: 13.5, textAlign: "center" }}>No hay eventos en {MESES_LARGO[mes.m].toLowerCase()}{busqueda || filtroEquipo !== null ? " con ese filtro" : ""}.</div>}
             {dias.map(({ fecha, items }) => {
               const d = fechaDesdeISO(fecha);
               const esHoy = fecha === hoy;
               return (
-                <div key={fecha} data-fecha={fecha} style={{ display: "flex", gap: 12, padding: "10px 0", borderBottom: `1px solid ${T.line}55`, scrollMarginTop: 8 }}>
+                <div key={fecha} data-fecha={fecha} style={{ display: "flex", gap: angosta ? 8 : 12, padding: angosta ? "7px 0" : "10px 0", borderBottom: `1px solid ${T.line}55`, scrollMarginTop: 8 }}>
                   <div
                     onClick={() => puedeEditar && nuevo(fecha)}
                     title={puedeEditar ? "Agregar evento este día" : ""}
-                    style={{ width: 54, flexShrink: 0, textAlign: "center", cursor: puedeEditar ? "pointer" : "default" }}
+                    style={{ width: angosta ? 44 : 54, flexShrink: 0, textAlign: "center", cursor: puedeEditar ? "pointer" : "default" }}
                   >
                     <div style={{ fontSize: 13, color: esHoy ? T.blue : T.inkSoft, fontWeight: 600 }}>{AGENDA_DIAS[d.getDay()]}</div>
                     <div style={{ width: 42, height: 42, margin: "2px auto 0", borderRadius: 999, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 21, fontWeight: 600, background: esHoy ? T.steel : "transparent", color: esHoy ? "#fff" : T.ink }}>{d.getDate()}</div>
@@ -15849,10 +15984,11 @@ function AppInner() {
     setTab("equipos");
   };
   const { logo } = useContext(LogoContext);
-  const [esPantallaAngosta, setEsPantallaAngosta] = useState(() => typeof window !== "undefined" && window.innerWidth < 820);
+  // En el APK todo es vista celular, aunque el teléfono esté acostado o sea tableta.
+  const [esPantallaAngosta, setEsPantallaAngosta] = useState(() => EN_APK || (typeof window !== "undefined" && window.innerWidth < 820));
 
   useEffect(() => {
-    const revisar = () => setEsPantallaAngosta(window.innerWidth < 820);
+    const revisar = () => setEsPantallaAngosta(EN_APK || window.innerWidth < 820);
     window.addEventListener("resize", revisar);
     return () => window.removeEventListener("resize", revisar);
   }, []);
@@ -15975,11 +16111,12 @@ function AppInner() {
           <Menu size={18} />
         </button>
       )}
-      <div style={{ flex: 1, minWidth: 0, width: esPantallaAngosta ? "100%" : undefined, padding: tab === "monitoreo_notifier" ? 0 : "28px 32px", paddingTop: esPantallaAngosta && tab !== "monitoreo_notifier" ? 60 : undefined, overflowY: "auto" }}>
+      <div style={{ flex: 1, minWidth: 0, width: esPantallaAngosta ? "100%" : undefined, padding: tab === "monitoreo_notifier" ? 0 : esPantallaAngosta ? "14px 10px 16px" : "28px 32px", overflowY: "auto" }}>
         {tab !== "monitoreo_notifier" && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 22 }}>
-            {current && <current.icon size={20} color={current.color} />}
-            <h1 style={{ margin: 0, fontSize: 21, fontWeight: 800, letterSpacing: -0.4 }}>{current?.label}</h1>
+          // En el celular el título va a la par del botón de menú (sin dejar una franja vacía arriba)
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: esPantallaAngosta ? 10 : 22, minHeight: esPantallaAngosta ? 38 : undefined, paddingRight: esPantallaAngosta ? 50 : 0 }}>
+            {current && <current.icon size={esPantallaAngosta ? 18 : 20} color={current.color} />}
+            <h1 style={{ margin: 0, fontSize: esPantallaAngosta ? 18 : 21, fontWeight: 800, letterSpacing: -0.4 }}>{current?.label}</h1>
           </div>
         )}
 

@@ -15247,6 +15247,16 @@ function AgendaVisitas() {
   const cambiarMes = (delta) => setDiaFiltro(null) || setMes(({ a, m }) => { const d = new Date(a, m + delta, 1); return { a: d.getFullYear(), m: d.getMonth() }; });
   // ---- PDF de la agenda del mes: total o de un solo equipo (color) ----
   const [menuPdf, setMenuPdf] = useState(false);
+  // Filtro de color en ventana desplegable (sirve igual en el APK)
+  const [menuColor, setMenuColor] = useState(false);
+  const menuColorRef = React.useRef(null);
+  useEffect(() => {
+    if (!menuColor) return;
+    const fuera = (e) => { if (!menuColorRef.current?.contains(e.target)) setMenuColor(false); };
+    document.addEventListener("mousedown", fuera);
+    document.addEventListener("touchstart", fuera);
+    return () => { document.removeEventListener("mousedown", fuera); document.removeEventListener("touchstart", fuera); };
+  }, [menuColor]);
   const descargarPdfAgenda = (kColor) => {
     setMenuPdf(false);
     const ventana = window.open("", "_blank");
@@ -15438,6 +15448,39 @@ function AgendaVisitas() {
           <Btn small variant="ghost" onClick={() => cambiarMes(1)}><ChevronRight size={15} /></Btn>
           <Btn small variant="ghost" onClick={irAHoy}>Hoy</Btn>
           {!EN_APK && <Btn small variant="ghost" onClick={() => setMenuPdf(true)}><Download size={13} /> PDF</Btn>}
+          <div ref={menuColorRef} style={{ position: "relative" }}>
+            <button
+              type="button"
+              onClick={() => setMenuColor(!menuColor)}
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, border: `1px solid ${filtroEquipo !== null ? AGENDA_COLORES[filtroEquipo] : T.line}`, background: filtroEquipo !== null ? AGENDA_COLORES[filtroEquipo] + "22" : "transparent", borderRadius: 9, padding: "6px 10px", fontSize: 12.5, fontWeight: 600, color: T.steel, cursor: "pointer", fontFamily: "inherit", maxWidth: 190 }}
+            >
+              <span style={{ width: 13, height: 13, borderRadius: 999, flexShrink: 0, background: filtroEquipo !== null ? AGENDA_COLORES[filtroEquipo] : "conic-gradient(#33B679, #F6BF26, #F4511E, #039BE5, #8E24AA, #33B679)" }} />
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{filtroEquipo !== null ? equipos[filtroEquipo] : "Todos los colores"}</span>
+              <ChevronDown size={13} />
+            </button>
+            {menuColor && (
+              <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 60, background: "#fff", border: `1px solid ${T.line}`, borderRadius: 12, boxShadow: "0 12px 34px rgba(0,0,0,.18)", padding: 6, width: 230, maxHeight: 360, overflowY: "auto" }}>
+                <button type="button" onClick={() => { setFiltroEquipo(null); setMenuColor(false); }} style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", border: "none", background: filtroEquipo === null ? T.accentSoft : "transparent", borderRadius: 8, padding: "8px 10px", fontSize: 13, fontWeight: 700, color: T.ink, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                  <span style={{ width: 14, height: 14, borderRadius: 999, background: "conic-gradient(#33B679, #F6BF26, #F4511E, #039BE5, #8E24AA, #33B679)" }} /> Todos los colores
+                </button>
+                {(vistaArea === "todas" ? AGENDA_AREAS : AGENDA_AREAS.filter((a) => a.id === vistaArea)).map((a) => (
+                  <div key={a.id}>
+                    {vistaArea === "todas" && <div style={{ fontSize: 10.5, fontWeight: 800, color: T.gray, textTransform: "uppercase", letterSpacing: 0.4, padding: "8px 10px 3px" }}>{a.label}</div>}
+                    {OCHO.map((i) => {
+                      const k = indiceColor(a.id, i + 1);
+                      return (
+                        <button key={k} type="button" onClick={() => { setFiltroEquipo(k); setMenuColor(false); }} style={{ display: "flex", alignItems: "center", gap: 9, width: "100%", border: "none", background: filtroEquipo === k ? AGENDA_COLORES[k] + "22" : "transparent", borderRadius: 8, padding: "8px 10px", fontSize: 13, fontWeight: 600, color: T.ink, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                          <span style={{ width: 14, height: 14, borderRadius: 999, background: AGENDA_COLORES[k], flexShrink: 0 }} />
+                          <span style={{ flex: 1 }}>{equipos[k]}</span>
+                          {filtroEquipo === k && <Check size={14} color={T.accent} />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           <div style={{ flex: 1, minWidth: 180, position: "relative" }}>
             <Search size={14} color={T.gray} style={{ position: "absolute", left: 10, top: 10 }} />
             <input style={{ ...inputStyle, paddingLeft: 30, fontSize: 13 }} placeholder="Buscar cliente, OD, persona..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />

@@ -86,7 +86,7 @@ function ConfirmProvider({ children }) {
               {esDestructivo
                 ? <AlertCircle size={20} color={T.red} style={{ flexShrink: 0, marginTop: 1 }} />
                 : <CalendarDays size={20} color={T.steel} style={{ flexShrink: 0, marginTop: 1 }} />}
-              <div style={{ fontSize: 14, color: T.ink, lineHeight: 1.5 }}>{pending.mensaje}</div>
+              <div style={{ fontSize: 14, color: T.ink, lineHeight: 1.5, whiteSpace: "pre-line" }}>{pending.mensaje}</div>
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
               {!pending.soloAviso && <Btn variant="ghost" onClick={() => responder(false)}>Cancelar</Btn>}
@@ -8044,21 +8044,86 @@ function MonitoreoNotifier() {
   }, [mantLineas, eventosDelSitio, sitioSeleccionado]);
 
 
+  // Pide al IgnisMonitor del sitio que borre su propia memoria (bitácora,
+  // historial, mantenimiento y lo pendiente por subir). El equipo revisa
+  // este pedido cada ~30 s en su fila de dispositivos_panel y lo ejecuta.
+  const pedirBorradoEquipo = async (sitio) => {
+    const { error } = await supabase.from("dispositivos_panel")
+      .update({ comando: "borrar", comando_en: new Date().toISOString() }).eq("sitio", sitio);
+    if (!error) return "";
+    return /comando/i.test(error.message || "")
+      ? "Falta correr en Supabase el SQL borrar_desde_app.sql para poder borrar también la memoria del equipo."
+      : `No se pudo enviar la orden al equipo: ${error.message}`;
+  };
+
+  // Borra TODO lo de monitoreo del sitio: eventos (app y Supabase),
+  // historial y mantenimiento (Supabase Storage) y la memoria del equipo.
   const borrarEventosDelSitio = async () => {
     if (sitioSeleccionado === "Todos") return;
-    if (!(await confirmar(`¿Borrar TODOS los eventos, el historial y el informe de mantenimiento guardados del sitio "${sitioSeleccionado}"? Esto no se puede deshacer.`, { confirmLabel: "Sí, borrar", variant: "danger" }))) return;
+    const sitio = sitioSeleccionado;
+    if (!(await confirmar(`¿Borrar TODO el monitoreo de "${sitio}"?\n\n• Eventos del app y de Supabase\n• Historial y mantenimiento guardados en Supabase\n• La memoria del equipo IgnisMonitor (bitácora, historial y mantenimiento), si está conectado\n\nEl sitio sigue en la lista. Esto no se puede deshacer.`, { confirmLabel: "Sí, borrar todo", variant: "danger" }))) return;
     setBorrando(true);
-    const { todos } = await archivosDelSitio(sitioSeleccionado);
-    const [{ error }] = await Promise.all([
-      supabase.from("eventos_panel").delete().eq("sitio", sitioSeleccionado),
+    const { todos } = await archivosDelSitio(sitio);
+    const [{ error }, resArch, avisoEquipo] = await Promise.all([
+      supabase.from("eventos_panel").delete().eq("sitio", sitio),
       todos.length ? supabase.storage.from("historial_paneles").remove(todos) : Promise.resolve({}),
+      pedirBorradoEquipo(sitio),
     ]);
     ultimoBorradoRef.current = Date.now();
     setBorrando(false);
-    if (!error) setEventos((prev) => prev.filter((e) => e.sitio !== sitioSeleccionado));
-    else await confirmar(`No se pudieron borrar los eventos: ${error.message}`, { confirmLabel: "Entendido", soloAviso: true });
+    if (!error) setEventos((prev) => prev.filter((e) => e.sitio !== sitio));
     setHistorialHtml(""); setHistArchivos([]); setMantArchivos([]); setMantLineas([]);
     if (vista === "tendencias") setVista("eventos");
+    const problemas = [
+      error ? `Eventos: ${error.message}` : "",
+      resArch?.error ? `Historial/mantenimiento: ${resArch.error.message}` : "",
+      avisoEquipo,
+    ].filter(Boolean);
+    await confirmar(problemas.length
+      ? `Se borró lo que se pudo, pero hubo problemas:\n\n${problemas.join("\n")}`
+      : `Listo. Se borraron los eventos, el historial y el mantenimiento de "${sitio}". El equipo IgnisMonitor borrará su memoria en menos de 1 minuto (si está encendido y con internet).`,
+      { confirmLabel: "Entendido", soloAviso: true, variant: problemas.length ? "danger" : "info" });
+  };
+
+  // Elimina el SITIO completo de la lista: todo lo anterior + su ficha de
+  // equipo (dispositivos_panel). Si el equipo sigue encendido con ese nombre,
+  // vuelve a aparecer (vacío) cuando reporte, en menos de 1 minuto.
+  const eliminarSitio = async () => {
+    if (sitioSeleccionado === "Todos") return;
+    const sitio = sitioSeleccionado;
+    if (!(await confirmar(`¿ELIMINAR el sitio "${sitio}" de la lista?\n\nSe borran sus eventos, historial, mantenimiento y la ficha del equipo, y se le pide al IgnisMonitor que borre su memoria.\n\nÚselo para equipos que ya no están instalados o que cambiaron de nombre: si el equipo sigue encendido con ese nombre, volverá a aparecer vacío al reportarse.`, { confirmLabel: "Sí, eliminar sitio", variant: "danger" }))) return;
+    if (!(await confirmar(`Confirme otra vez: eliminar "${sitio}". No se puede deshacer.`, { confirmLabel: "Eliminar definitivamente", variant: "danger" }))) return;
+    setBorrando(true);
+    const { todos } = await archivosDelSitio(sitio);
+    const avisoEquipo = await pedirBorradoEquipo(sitio);
+    const [{ error: e1 }, resArch] = await Promise.all([
+      supabase.from("eventos_panel").delete().eq("sitio", sitio),
+      todos.length ? supabase.storage.from("historial_paneles").remove(todos) : Promise.resolve({}),
+    ]);
+    // Si el equipo está en línea, se espera (hasta 45 s) a que lea la orden y
+    // borre su memoria; si no, la ficha se borra de una vez.
+    const ficha = dispositivos.find((d) => d.sitio === sitio);
+    const enLinea = ficha?.actualizado_en && Date.now() - new Date(ficha.actualizado_en).getTime() < 3 * 60000;
+    let equipoCumplio = false;
+    if (enLinea && !avisoEquipo) {
+      for (let i = 0; i < 15 && !equipoCumplio; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const { data } = await supabase.from("dispositivos_panel").select("comando").eq("sitio", sitio);
+        equipoCumplio = Array.isArray(data) && data.length > 0 && !data[0].comando;
+      }
+    }
+    const { error: e2 } = await supabase.from("dispositivos_panel").delete().eq("sitio", sitio);
+    ultimoBorradoRef.current = Date.now();
+    setBorrando(false);
+    setEventos((prev) => prev.filter((e) => e.sitio !== sitio));
+    setDispositivos((prev) => prev.filter((d) => d.sitio !== sitio));
+    setHistorialHtml(""); setHistArchivos([]); setMantArchivos([]); setMantLineas([]);
+    setVista("eventos");
+    setSitioSeleccionado("Todos");
+    const problemas = [e1 ? `Eventos: ${e1.message}` : "", resArch?.error ? `Historial: ${resArch.error.message}` : "", e2 ? `Ficha del equipo: ${e2.message}` : ""].filter(Boolean);
+    const notaEquipo = !enLinea ? "\n\nEl equipo no estaba en línea: su memoria no se pudo borrar a distancia." : equipoCumplio ? "\n\nEl equipo IgnisMonitor ya borró su memoria." : avisoEquipo ? `\n\n${avisoEquipo}` : "\n\nEl equipo no confirmó a tiempo el borrado de su memoria.";
+    await confirmar(problemas.length ? `Hubo problemas al eliminar:\n\n${problemas.join("\n")}` : `Se eliminó el sitio "${sitio}".${notaEquipo}`,
+      { confirmLabel: "Entendido", soloAviso: true, variant: problemas.length ? "danger" : "info" });
   };
 
   // Cliente: borra SOLO los eventos en vivo de SU sitio. El historial y el
@@ -8259,8 +8324,13 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             </div>
           )}
           {canGestionar && sitioSeleccionado !== "Todos" && (
-            <Btn small variant="danger" onClick={borrarEventosDelSitio} disabled={borrando}>
-              <Trash2 size={13} /> Borrar este sitio
+            <Btn small variant="danger" onClick={borrarEventosDelSitio} disabled={borrando} title="Borra eventos, historial y mantenimiento en el app, Supabase y el equipo IgnisMonitor">
+              <Trash2 size={13} /> {borrando ? "Borrando..." : "Borrar monitoreo"}
+            </Btn>
+          )}
+          {esAdminMonitoreo && sitioSeleccionado !== "Todos" && (
+            <Btn small variant="danger" onClick={eliminarSitio} disabled={borrando} title="Quita el sitio de la lista (para equipos que ya no existen)">
+              <X size={13} /> {borrando ? "Eliminando..." : "Eliminar sitio"}
             </Btn>
           )}
           {esCliente && sitioSeleccionado !== "Todos" && (
@@ -15421,6 +15491,107 @@ function CampoAgenda({ label, children }) {
   );
 }
 
+
+// ---- Estadísticas del mes en la Agenda: quién trabajó más, OD I y OD M ----
+// OD: la letra después del año indica el tipo (A26I027 = Inspección,
+// A26M334 = Mantenimiento/correctivo, A26P010 = Proyecto).
+const letraOd = (od) => { const m = String(od || "").trim().toUpperCase().match(/^[A-Z]\d{2}([A-Z])\d/); return m ? m[1] : ""; };
+function BarrasAgenda({ titulo, ayuda, filas, unidad }) {
+  const max = Math.max(1, ...filas.map((f) => f.valor));
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${T.line}`, borderRadius: 12, padding: "14px 16px" }}>
+      <div style={{ fontSize: 14, fontWeight: 800, color: T.ink }}>{titulo}</div>
+      {ayuda && <div style={{ fontSize: 12, color: T.inkSoft, margin: "2px 0 10px" }}>{ayuda}</div>}
+      {filas.length === 0 ? <div style={{ fontSize: 13, color: T.gray, padding: "8px 0" }}>Sin datos este mes.</div> : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {filas.map((f, i) => (
+            <div key={f.nombre + i} title={f.detalle || ""} style={{ display: "grid", gridTemplateColumns: "minmax(90px, 34%) 1fr 54px", alignItems: "center", gap: 8 }}>
+              <div style={{ fontSize: 12.5, fontWeight: i === 0 ? 800 : 600, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 6 }}>
+                {i === 0 && <span title="Primer lugar">🏆</span>}{f.nombre}
+              </div>
+              <div style={{ background: T.graySoft, borderRadius: 6, height: 20, overflow: "hidden" }}>
+                <div style={{ width: `${Math.max(3, (f.valor / max) * 100)}%`, height: "100%", background: f.color || T.steel, borderRadius: 6, transition: "width .3s" }} />
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: T.ink, textAlign: "right", whiteSpace: "nowrap" }}>{f.valor}<span style={{ fontWeight: 500, color: T.inkSoft, fontSize: 11 }}> {unidad}</span></div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EstadisticasAgenda({ eventos, vistaArea, inicioMes, finMes, equipos, mesTexto, angosta }) {
+  const datos = useMemo(() => {
+    const porColor = {}, porPersona = {};
+    const sumar = (mapa, clave, base) => (mapa[clave] = mapa[clave] || { ...base, dias: new Set(), visitas: 0, I: new Set(), M: new Set(), P: new Set() });
+    eventos.forEach((ev) => {
+      const area = areaDeEvento(ev);
+      if (vistaArea !== "todas" && area !== vistaArea) return;
+      const k = indiceColor(area, ev.equipo);
+      const total = diasEntre(ev.fecha_inicio, ev.fecha_fin) + 1;
+      const diasMes = [];
+      for (let i = 0; i < total; i++) {
+        const f = fechaLocalISO(new Date(fechaDesdeISO(ev.fecha_inicio).getTime() + i * 86400000 + 3600000));
+        if (f >= inicioMes && f <= finMes) diasMes.push(f);
+      }
+      if (!diasMes.length) return;
+      const letra = letraOd(ev.od), od = String(ev.od || "").trim().toUpperCase();
+      const c = sumar(porColor, k, { nombre: equipos[k] || `Color ${k + 1}`, color: AGENDA_COLORES[k] });
+      diasMes.forEach((f) => c.dias.add(f)); c.visitas++;
+      if (letra && c[letra]) c[letra].add(od);
+      (ev.personal || []).map((x) => String(x).trim()).filter(Boolean).forEach((nombre) => {
+        const p = sumar(porPersona, nombre.toLowerCase(), { nombre, color: AGENDA_COLORES[k] });
+        diasMes.forEach((f) => p.dias.add(f)); p.visitas++;
+        if (letra && p[letra]) p[letra].add(od);
+      });
+    });
+    const lista = (mapa, campo, tope = 99) => Object.values(mapa)
+      .map((x) => ({ nombre: x.nombre, color: x.color, valor: campo === "dias" ? x.dias.size : x[campo].size, detalle: campo === "dias" ? `${x.visitas} visita(s)` : [...x[campo]].join(", ") }))
+      .filter((x) => x.valor > 0).sort((a, b) => b.valor - a.valor || a.nombre.localeCompare(b.nombre)).slice(0, tope);
+    return {
+      colorDias: lista(porColor, "dias"), colorI: lista(porColor, "I"), colorM: lista(porColor, "M"), colorP: lista(porColor, "P"),
+      perDias: lista(porPersona, "dias", 15), perI: lista(porPersona, "I", 15), perM: lista(porPersona, "M", 15),
+      totalI: new Set(Object.values(porColor).flatMap((x) => [...x.I])).size,
+      totalM: new Set(Object.values(porColor).flatMap((x) => [...x.M])).size,
+      totalP: new Set(Object.values(porColor).flatMap((x) => [...x.P])).size,
+    };
+  }, [eventos, vistaArea, inicioMes, finMes, equipos]);
+  const lider = (l, u) => (l[0] ? `${l[0].nombre} · ${l[0].valor} ${u}` : "—");
+  const tarjeta = (titulo, valor, sub, color) => (
+    <div style={{ background: "#fff", border: `1px solid ${T.line}`, borderLeft: `4px solid ${color}`, borderRadius: 12, padding: "12px 14px", minWidth: 0 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.5 }}>{titulo}</div>
+      <div style={{ fontSize: 15.5, fontWeight: 800, color: T.ink, marginTop: 3, lineHeight: 1.25, wordBreak: "break-word" }}>{valor}</div>
+      {sub && <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+  const dos = { display: "grid", gridTemplateColumns: angosta ? "1fr" : "1fr 1fr", gap: 12 };
+  return (
+    <div style={{ padding: angosta ? 10 : 16, display: "flex", flexDirection: "column", gap: 12, background: T.bg }}>
+      <div style={{ fontSize: 13, color: T.inkSoft }}>Estadísticas de <b>{mesTexto}</b>{vistaArea !== "todas" ? ` · ${vistaArea === "proyectos" ? "Proyectos" : "Inspecciones"}` : " · Inspecciones y Proyectos"}. Los días se cuentan una vez por equipo/persona aunque tengan varias visitas el mismo día; las OD se cuentan sin repetir.</div>
+      <div style={{ display: "grid", gridTemplateColumns: angosta ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10 }}>
+        {tarjeta("Equipo con más trabajo", lider(datos.colorDias, "días"), "días con visitas en el mes", datos.colorDias[0]?.color || T.steel)}
+        {tarjeta("Más OD I (inspección)", lider(datos.colorI, "OD"), `${datos.totalI} OD I en el mes`, datos.colorI[0]?.color || T.blue)}
+        {tarjeta("Más OD M (mantenimiento)", lider(datos.colorM, "OD"), `${datos.totalM} OD M en el mes`, datos.colorM[0]?.color || T.accent)}
+        {tarjeta("Persona con más días", lider(datos.perDias, "días"), "según el personal asignado", datos.perDias[0]?.color || T.green)}
+      </div>
+      <div style={dos}>
+        <BarrasAgenda titulo="Días trabajados por equipo" ayuda="Quién trabajó más en el mes" filas={datos.colorDias} unidad="días" />
+        <BarrasAgenda titulo="Días trabajados por persona" ayuda="Top 15 del personal asignado" filas={datos.perDias} unidad="días" />
+      </div>
+      <div style={dos}>
+        <BarrasAgenda titulo="OD I (inspecciones) por equipo" ayuda="OD que empiezan con …I (ej. A26I027)" filas={datos.colorI} unidad="OD" />
+        <BarrasAgenda titulo="OD M (mantenimiento / correctivos) por equipo" ayuda="OD que empiezan con …M (ej. A26M334)" filas={datos.colorM} unidad="OD" />
+      </div>
+      <div style={dos}>
+        <BarrasAgenda titulo="OD I por persona" filas={datos.perI} unidad="OD" />
+        <BarrasAgenda titulo="OD M por persona" filas={datos.perM} unidad="OD" />
+      </div>
+      {datos.totalP > 0 && <BarrasAgenda titulo="OD P (proyectos) por equipo" ayuda="OD que empiezan con …P (ej. A26P010)" filas={datos.colorP} unidad="OD" />}
+    </div>
+  );
+}
+
 function AgendaVisitas() {
   const currentUser = useContext(CurrentUserContext);
   const confirmar = useContext(ConfirmContext);
@@ -15753,7 +15924,7 @@ function AgendaVisitas() {
         key={key}
         onClick={() => setVerEvento(ev)}
         title={ev.descripcion || ""}
-        style={{ background: color, color: textoSobreColor(color), borderRadius: 10, padding: angosta ? "7px 11px" : "9px 14px", fontSize: angosta ? 13.5 : 14.5, fontWeight: 500, cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,.08)" }}
+        style={{ background: color, color: textoSobreColor(color), borderRadius: 10, padding: angosta ? "7px 11px" : "10px 16px", fontSize: angosta ? 13.5 : 15.5, fontWeight: 500, cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,.08)" }}
       >
         <span style={{ overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", lineHeight: 1.3, wordBreak: "break-word" }}>
           {tituloEvento(ev)}{personal ? ` · ${personal}` : ""}{total > 1 ? ` (Día ${dia}/${total})` : ""}
@@ -15765,7 +15936,7 @@ function AgendaVisitas() {
   const chip = (activo) => ({ border: `1px solid ${activo ? T.accent : T.line}`, background: activo ? T.accentSoft : "#fff", color: activo ? T.accent : T.ink, borderRadius: 999, padding: "6px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" });
 
   return (
-    <div style={{ maxWidth: angosta || modoVista === "mes" ? "none" : 920, margin: angosta ? "-6px -4px 0" : "0 auto" }}>
+    <div style={{ maxWidth: angosta || modoVista !== "lista" ? "none" : 1280, margin: angosta ? "-6px -4px 0" : "0 auto" }}>
       {!angosta && ((puedeEditar) || isAdmin) && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end", marginBottom: 12 }}>
           {puedeEditar && !angosta && <Btn variant="accent" onClick={() => nuevo()}><Plus size={15} /> Nuevo evento</Btn>}
@@ -15781,7 +15952,7 @@ function AgendaVisitas() {
         ))}
         {/* Dos vistas: Agenda (lista por día) y Mes (cuadrícula) */}
         <div style={{ display: "flex", marginLeft: "auto", border: `1px solid ${T.line}`, borderRadius: 9, overflow: "hidden" }}>
-          {[{ id: "lista", label: "Agenda" }, { id: "mes", label: "Mes" }].map((v) => (
+          {[{ id: "lista", label: "Agenda" }, { id: "mes", label: "Mes" }, { id: "estad", label: angosta ? "Estad." : "Estadísticas" }].map((v) => (
             <button key={v.id} type="button" onClick={() => { setModoVista(v.id); setDiaFiltro(null); }} style={{ border: "none", padding: angosta ? "5px 9px" : "6px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: modoVista === v.id ? T.steel : "#fff", color: modoVista === v.id ? "#fff" : T.steel }}>{v.label}</button>
           ))}
         </div>
@@ -15922,6 +16093,10 @@ function AgendaVisitas() {
           </div>
         ) : cargando ? (
           <div style={{ padding: 24, color: T.gray, fontSize: 13 }}>Cargando agenda...</div>
+        ) : modoVista === "estad" ? (
+          <div key="estad" ref={cuerpoRef} style={{ height: altoCuerpo, overflowY: "auto" }}>
+            <EstadisticasAgenda eventos={eventos} vistaArea={vistaArea} inicioMes={inicioMes} finMes={finMes} equipos={equipos} mesTexto={`${MESES_LARGO[mes.m]} ${mes.a}`} angosta={angosta} />
+          </div>
         ) : modoVista === "mes" ? (
           <div ref={cuerpoRef} style={{ height: altoCuerpo, overflowY: "auto", display: "flex", flexDirection: "column" }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", borderBottom: `1px solid ${T.line}`, position: "sticky", top: 0, background: T.panel, zIndex: 2 }}>

@@ -7446,6 +7446,156 @@ function generarHtmlTendenciasPanel(texto) {
   return h;
 }
 
+
+// ---- Firmas en los reportes (técnico y cliente) ----
+// Recuadro para firmar con el dedo (celular / APK) o con el mouse (PC).
+// Devuelve la firma como imagen PNG (dataURL) cada vez que se levanta el trazo.
+function PadFirma({ valor, onCambio, alto = 150 }) {
+  const ref = React.useRef(null);
+  const dibujando = React.useRef(false);
+  const hayTrazo = React.useRef(false);
+  const preparar = () => {
+    const c = ref.current; if (!c) return null;
+    const r = c.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    if (c.width !== Math.round(r.width * dpr) || c.height !== Math.round(r.height * dpr)) {
+      c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr);
+    }
+    const ctx = c.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineWidth = 2.4; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#0b1f4d";
+    return ctx;
+  };
+  // Pinta la firma recibida desde afuera (p. ej. la firma guardada) al abrir.
+  // Lo que el propio recuadro emite no se vuelve a pintar (ya está dibujado).
+  const emitida = React.useRef(null);
+  useEffect(() => {
+    if (valor === emitida.current) return;
+    const ctx = preparar(); if (!ctx) return;
+    const c = ref.current, r = c.getBoundingClientRect();
+    ctx.clearRect(0, 0, r.width, r.height);
+    hayTrazo.current = !!valor;
+    if (valor) { const img = new Image(); img.onload = () => ctx.drawImage(img, 0, 0, r.width, r.height); img.src = valor; }
+  }, [valor]);
+  const punto = (e) => { const r = ref.current.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  const bajar = (e) => {
+    e.preventDefault(); const ctx = preparar(); if (!ctx) return;
+    dibujando.current = true; ref.current.setPointerCapture?.(e.pointerId);
+    const [x, y] = punto(e); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 0.1, y + 0.1); ctx.stroke();
+  };
+  const mover = (e) => {
+    if (!dibujando.current) return; e.preventDefault();
+    const ctx = ref.current.getContext("2d"); const [x, y] = punto(e); ctx.lineTo(x, y); ctx.stroke();
+  };
+  const subir = () => {
+    if (!dibujando.current) return; dibujando.current = false; hayTrazo.current = true;
+    const v = ref.current.toDataURL("image/png"); emitida.current = v; onCambio(v);
+  };
+  const borrar = () => {
+    const c = ref.current; if (!c) return; const ctx = c.getContext("2d"); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, c.width, c.height);
+    hayTrazo.current = false; emitida.current = ""; onCambio("");
+  };
+  return (
+    <div>
+      <div style={{ position: "relative", border: `1.5px dashed ${T.line}`, borderRadius: 10, background: "#fbfcfe" }}>
+        <canvas
+          ref={ref}
+          onPointerDown={bajar} onPointerMove={mover} onPointerUp={subir} onPointerLeave={subir} onPointerCancel={subir}
+          style={{ width: "100%", height: alto, display: "block", touchAction: "none", cursor: "crosshair", borderRadius: 10 }}
+        />
+        {!valor && <div style={{ position: "absolute", left: 0, right: 0, bottom: 34, textAlign: "center", color: "#b4bccb", fontSize: 12.5, pointerEvents: "none" }}>Firme aquí con el dedo o el mouse</div>}
+        <div style={{ position: "absolute", left: 18, right: 18, bottom: 26, borderTop: "1px solid #cfd6e2", pointerEvents: "none" }} />
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+        <button type="button" onClick={borrar} style={{ border: "none", background: "transparent", color: T.blue, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Borrar firma</button>
+      </div>
+    </div>
+  );
+}
+
+const leerLocal = (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } };
+const guardarLocal = (k, v) => { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch { /* sin almacenamiento */ } };
+
+// Ventana que se abre antes de generar el reporte: nombres, notas y firmas.
+function ModalFirmasReporte({ titulo, usuario, onCerrar, onGenerar }) {
+  const esCliente = MODO_CLIENTE || usuario?.categoria === "cliente";
+  const claveFirma = `firma_guardada_${usuario?.email || usuario?.id || "anon"}`;
+  const claveNombre = `firma_nombre_${usuario?.email || usuario?.id || "anon"}`;
+  const [tecnico, setTecnico] = useState(() => (esCliente ? "" : leerLocal(claveNombre) || usuario?.name || ""));
+  const [cliente, setCliente] = useState(() => (esCliente ? leerLocal(claveNombre) || usuario?.name || "" : ""));
+  const [cargo, setCargo] = useState("");
+  const [notas, setNotas] = useState("");
+  const [firmaTec, setFirmaTec] = useState(() => (esCliente ? "" : leerLocal(claveFirma)));
+  const [firmaCli, setFirmaCli] = useState(() => (esCliente ? leerLocal(claveFirma) : ""));
+  const [recordar, setRecordar] = useState(() => !!leerLocal(claveFirma));
+  const generar = () => {
+    // "Recordar mi firma": la del usuario que tiene la sesión (técnico, o cliente si es un cliente)
+    const miFirma = esCliente ? firmaCli : firmaTec, miNombre = esCliente ? cliente : tecnico;
+    if (recordar) { guardarLocal(claveFirma, miFirma); guardarLocal(claveNombre, miNombre); } else { guardarLocal(claveFirma, ""); }
+    onGenerar({ tecnico: tecnico.trim(), cliente: cliente.trim(), cargo: cargo.trim(), notas: notas.trim(), firmaTec, firmaCli, fecha: new Date() });
+  };
+  const etiqueta = { fontSize: 12, fontWeight: 700, color: T.inkSoft, marginBottom: 4, display: "block" };
+  const caja = { width: "100%", boxSizing: "border-box", border: `1px solid ${T.line}`, borderRadius: 8, padding: "9px 10px", fontSize: 14, fontFamily: "inherit" };
+  return (
+    <div onClick={onCerrar} style={{ position: "fixed", inset: 0, background: "rgba(16,24,38,0.55)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 10 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", color: T.ink, borderRadius: 16, width: 620, maxWidth: "100%", maxHeight: "calc(100vh - 20px)", overflowY: "auto", padding: 18, boxShadow: "0 20px 60px rgba(0,0,0,.35)" }}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 2 }}>
+          <div style={{ fontSize: 18, fontWeight: 800, flex: 1 }}>Firmas del reporte</div>
+          <button type="button" onClick={onCerrar} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.gray }}><X size={18} /></button>
+        </div>
+        <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 14 }}>{titulo}. Todo es opcional: lo que deje vacío sale en blanco para firmar a mano.</div>
+
+        <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <div>
+            <label style={etiqueta}>Técnico Salvavidas</label>
+            <input style={caja} value={tecnico} onChange={(e) => setTecnico(e.target.value)} placeholder="Nombre del técnico" />
+            <div style={{ height: 8 }} />
+            <PadFirma valor={firmaTec} onCambio={setFirmaTec} />
+          </div>
+          <div>
+            <label style={etiqueta}>Cliente</label>
+            <input style={caja} value={cliente} onChange={(e) => setCliente(e.target.value)} placeholder="Nombre de quien recibe" />
+            <input style={{ ...caja, marginTop: 6 }} value={cargo} onChange={(e) => setCargo(e.target.value)} placeholder="Cargo (opcional)" />
+            <div style={{ height: 8 }} />
+            <PadFirma valor={firmaCli} onCambio={setFirmaCli} alto={120} />
+          </div>
+        </div>
+
+        <label style={{ ...etiqueta, marginTop: 6 }}>Notas del técnico (opcional)</label>
+        <textarea style={{ ...caja, minHeight: 70, resize: "vertical" }} value={notas} onChange={(e) => setNotas(e.target.value)} placeholder="Observaciones de la visita, trabajos realizados, pendientes…" />
+
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: T.inkSoft, margin: "12px 0 14px", cursor: "pointer" }}>
+          <input type="checkbox" checked={recordar} onChange={(e) => setRecordar(e.target.checked)} />
+          Recordar mi nombre y mi firma en este dispositivo
+        </label>
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+          <Btn variant="ghost" onClick={onCerrar}>Cancelar</Btn>
+          <Btn variant="accent" onClick={generar}><Download size={14} /> Generar reporte</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Bloque de cierre del reporte: notas + firmas del técnico y del cliente.
+function htmlFirmasReporte(f) {
+  const esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  f = f || {};
+  const d = f.fecha instanceof Date ? f.fecha : new Date();
+  const fecha = `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+  const img = (src) => src ? `<img src="${src}" alt="firma" style="height:64px;max-width:100%;object-fit:contain;display:block;margin:0 auto -4px">` : `<div style="height:64px"></div>`;
+  const col = (src, nombre, rol) => `<div style="flex:1;min-width:0;text-align:center">${img(src)}` +
+    `<div style="border-top:1px solid #8a8f99;padding-top:5px;font-size:12px;color:#1f2430;font-weight:700">${esc(nombre) || "&nbsp;"}</div>` +
+    `<div style="font-size:11px;color:#667">${rol}</div></div>`;
+  return `<div style="margin-top:26px;border:1px solid #ccc;border-radius:8px;padding:12px;min-height:70px;font-size:12px;page-break-inside:avoid;break-inside:avoid">` +
+    `<div style="color:#999">Notas del técnico:</div>` + (f.notas ? `<div style="color:#1f2430;white-space:pre-wrap;margin-top:4px">${esc(f.notas)}</div>` : "") + `</div>` +
+    `<div style="margin-top:28px;display:flex;gap:40px;page-break-inside:avoid;break-inside:avoid">` +
+    col(f.firmaTec, f.tecnico, "Técnico · Salvavidas de Centroamérica") +
+    col(f.firmaCli, f.cliente, "Cliente" + (f.cargo ? " · " + esc(f.cargo) : "")) +
+    `<div style="flex:0 0 130px;text-align:center"><div style="height:64px;display:flex;align-items:flex-end;justify-content:center;font-size:13px;font-weight:700;color:#1f2430;padding-bottom:6px">${fecha}</div>` +
+    `<div style="border-top:1px solid #8a8f99;padding-top:5px;font-size:11px;color:#667">Fecha de visita</div></div></div>`;
+}
+
 function MonitoreoNotifier() {
   const currentUser = useContext(CurrentUserContext);
   const confirmar = useContext(ConfirmContext);
@@ -7547,6 +7697,7 @@ function MonitoreoNotifier() {
     setPushEstado("inactivo");
   };
   const [generandoReporte, setGenerandoReporte] = useState(false);
+  const [firmasPara, setFirmasPara] = useState(null); // "reporte" | "tendencias": abre la ventana de firmas
   const refListaEventos = React.useRef(null);
   const [categoriaSeleccionada, setCategoriaSeleccionada] = useState(null); // tarjeta activa (filtro)
   const [errorCarga, setErrorCarga] = useState("");
@@ -7953,13 +8104,13 @@ function MonitoreoNotifier() {
   // Abre el análisis de Tendencias (igual al Reporte ejecutivo del equipo)
   // en una pestaña nueva, limpia, lista para imprimir o "Guardar como PDF"
   // desde el propio diálogo de impresión del navegador.
-  const imprimirTendencias = () => {
+  const imprimirTendencias = (firmas) => {
     const imp = abrirImpresion(`Tendencias - ${sitioSeleccionado}`);
     if (!imp) return;
     imp.escribir(
       `<!doctype html><html><head><meta charset="utf-8" /><title>Tendencias - ${sitioSeleccionado}</title>` +
       `<style>body{font-family:system-ui,-apple-system,sans-serif;margin:24px;color:#2a2620;}</style></head>` +
-      `<body>${historialHtml}<p style="margin-top:24px;color:#99a;font-size:10.5px">IgnisMonitor · Departamento A&amp;D Salvavidas · <i>by Anthony Campos Medina</i></p></body></html>`,
+      `<body>${historialHtml}${htmlFirmasReporte(firmas)}<p style="margin-top:24px;color:#99a;font-size:10.5px">IgnisMonitor · Departamento A&amp;D Salvavidas · <i>by Anthony Campos Medina</i></p></body></html>`,
       400 // tiempo para que el navegador termine de pintar antes de imprimir
     );
   };
@@ -7970,7 +8121,7 @@ function MonitoreoNotifier() {
   // mantenimiento de detectores, problemas, tendencias del historial con
   // histogramas, y la bitácora de eventos. Respeta el sitio elegido, la
   // tarjeta y la búsqueda activos (si es "Todos", arma una sección por sitio).
-  const imprimirReporteEventos = async () => {
+  const imprimirReporteEventos = async (firmas) => {
     const imp = abrirImpresion(`Reporte de monitoreo - ${sitioSeleccionado}`);
     if (!imp) return;
     imp.cargando('<p style="font-family:system-ui,sans-serif;padding:30px;color:#555">Generando reporte completo… (descargando historial y mantenimiento)</p>');
@@ -8022,7 +8173,7 @@ function MonitoreoNotifier() {
           ? `<table><thead><tr><th style="width:150px">Fecha</th><th style="width:110px">Categoría</th><th>Evento</th></tr></thead><tbody>` +
             evsFiltrados.map((e) => `<tr><td>${fecha(e.fecha_panel)}</td><td>${chipCat(e.categoria)}</td><td class="txt">${esc(e.texto)}</td></tr>`).join("") + `</tbody></table>`
           : `<p class="vacio">Sin eventos.</p>`);
-        h += `<div class="notas">Notas del técnico:</div><div class="firma"><div>Técnico · nombre y firma</div><div>Fecha de visita</div></div></section>`;
+        h += htmlFirmasReporte(firmas) + `</section>`;
         return h;
       }));
 
@@ -8316,7 +8467,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               {histActualizado && <span style={{ fontSize: 11, color: "#999" }}>actualizado {histActualizado.toLocaleTimeString("es-CR")}</span>}
             </div>
             {!cargandoHistorial && historialHtml && (
-              <Btn small variant="accent" onClick={imprimirTendencias}><Download size={13} /> Imprimir / Guardar PDF</Btn>
+              <Btn small variant="accent" onClick={() => setFirmasPara("tendencias")}><Download size={13} /> Imprimir / Guardar PDF</Btn>
             )}
           </div>
           {cargandoHistorial ? (
@@ -8362,7 +8513,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               </div>
 {(<>
               <button
-                onClick={imprimirReporteEventos}
+                onClick={() => setFirmasPara("reporte")}
                 disabled={generandoReporte}
                 title="Reporte completo: estadísticas, equipos, mantenimiento de detectores, problemas, tendencias con histogramas y bitácora"
                 style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: generandoReporte ? "wait" : "pointer", opacity: generandoReporte ? 0.7 : 1, background: IGNIS.alarma, color: "#fff", border: `1px solid ${IGNIS.alarma}` }}
@@ -8477,6 +8628,14 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         </div>
       )}
       {esMovilNotifier && <div style={{ height: 54 }} />}
+      {firmasPara && (
+        <ModalFirmasReporte
+          titulo={firmasPara === "tendencias" ? `Tendencias — ${sitioSeleccionado}` : `Reporte de monitoreo — ${sitioSeleccionado === "Todos" ? "Todos los sitios" : sitioSeleccionado}`}
+          usuario={currentUser}
+          onCerrar={() => setFirmasPara(null)}
+          onGenerar={(f) => { const tipo = firmasPara; setFirmasPara(null); if (tipo === "tendencias") imprimirTendencias(f); else imprimirReporteEventos(f); }}
+        />
+      )}
     </div>
   );
 }

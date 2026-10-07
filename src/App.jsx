@@ -7297,8 +7297,8 @@ function tendenciasPaso(max) {
   return Math.max(1, (r <= 1 ? 1 : r <= 2 ? 2 : r <= 5 ? 5 : 10) * p);
 }
 
-function tendenciasGrafico(etq, val, color) {
-  const W = 760, H = 150, ml = 34, mr = 8, mt = 8, mb = 22, iw = W - ml - mr, ih = H - mt - mb;
+function tendenciasGrafico(etq, val, color, { ancho = 760, tendencia = true, alto = 150 } = {}) {
+  const W = ancho, H = alto, ml = 34, mr = 8, mt = 14, mb = 22, iw = W - ml - mr, ih = H - mt - mb;
   const max = Math.max(1, ...val), st = tendenciasPaso(max), top = Math.ceil(max / st) * st;
   const n = val.length || 1, bd = iw / n, an = Math.max(1, Math.min(bd - 2, bd * 0.72, 34));
   const y = (v) => mt + ih - (v / top) * ih;
@@ -7307,14 +7307,15 @@ function tendenciasGrafico(etq, val, color) {
     o += `<line x1="${ml}" x2="${W - mr}" y1="${y(v)}" y2="${y(v)}" stroke="${v ? "#e6e6e6" : "#9aa0a6"}"/>` +
          `<text x="${ml - 5}" y="${y(v) + 3.5}" text-anchor="end" font-size="10" fill="#666">${v}</text>`;
   }
-  const cada = Math.max(1, Math.ceil(n / Math.floor(iw / 58)));
+  const anchoEtq = Math.max(18, Math.max(...etq.map((t) => String(t).length)) * 5.6 + 10); // espacio que ocupa cada etiqueta
+  const cada = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(iw / anchoEtq))));
   val.forEach((v, i) => {
     const cx = ml + bd * i + bd / 2, x0 = cx - an / 2, h = (ih * v) / top, yb = mt + ih, yt = yb - h, rr = Math.min(4, an / 2, h);
     if (v > 0) o += `<path fill="${color}" d="M${x0},${yb}V${yt + rr}Q${x0},${yt} ${x0 + rr},${yt}H${x0 + an - rr}Q${x0 + an},${yt} ${x0 + an},${yt + rr}V${yb}Z"><title>${tEsc(etq[i])}: ${v}</title></path>`;
-    if (v > 0 && n <= 16) o += `<text x="${cx}" y="${yt - 3}" text-anchor="middle" font-size="9.5" fill="#333">${v}</text>`;
+    if (v > 0 && n <= 24) o += `<text x="${cx}" y="${yt - 3}" text-anchor="middle" font-size="9.5" fill="#333">${v}</text>`;
     if (!(i % cada)) o += `<text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="10" fill="#666">${tEsc(etq[i])}</text>`;
   });
-  if (n >= 4) {
+  if (tendencia && n >= 4) {
     let sx = 0, sy = 0, sxy = 0, sxx = 0;
     val.forEach((v, i) => { sx += i; sy += v; sxy += i * v; sxx += i * i; });
     const pe = (n * sxy - sx * sy) / ((n * sxx - sx * sx) || 1), b0 = (sy - pe * sx) / n;
@@ -7443,9 +7444,26 @@ function generarHtmlTendenciasPanel(texto) {
   });
   h += "</table>";
 
-  if (claves.length) TENDENCIAS_ORDEN.forEach((c) => {
-    const v = serie(c), t = v.reduce((a, b) => a + b, 0);
-    h += `<div><div style="font-size:13px;font-weight:600;margin:14px 0 4px;color:#222"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${TENDENCIAS_CATS[c].c};margin-right:6px"></span>${TENDENCIAS_CATS[c].n} <span style="font-weight:400;color:#666">${nomAgr} · ${t} eventos · tendencia: ${tendenciasTendencia(v)}</span></div>${tendenciasGrafico(etq, v, TENDENCIAS_CATS[c].c)}</div>`;
+  const punto = (c) => `<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${TENDENCIAS_CATS[c].c};margin-right:6px"></span>`;
+  const DIAS_SEM = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+  // Por cada categoría (Alarmas, Averías, Supervisiones): gráfico en el
+  // tiempo + por hora del día + por día de la semana.
+  TENDENCIAS_ORDEN.forEach((c) => {
+    const delCat = ev.filter((e) => e.cat === c), conFecha = delCat.filter((e) => e.fecha);
+    h += `<div style="page-break-inside:avoid;break-inside:avoid;margin-top:16px;border-top:1px solid #e3e5ea;padding-top:8px">`;
+    h += `<div style="font-size:14px;font-weight:700;color:#222">${punto(c)}${TENDENCIAS_CATS[c].n} <span style="font-weight:400;color:#666;font-size:12.5px">· ${delCat.length} eventos${conFecha.length < delCat.length ? ` (${delCat.length - conFecha.length} sin fecha)` : ""}</span></div>`;
+    if (!delCat.length) { h += `<p style="margin:6px 0 0;color:#888;font-size:12.5px">Sin ${TENDENCIAS_CATS[c].n.toLowerCase()} en el historial.</p></div>`; return; }
+    if (!conFecha.length || !claves.length) { h += `<p style="margin:6px 0 0;color:#888;font-size:12.5px">Las líneas de ${TENDENCIAS_CATS[c].n.toLowerCase()} no traen fecha: no se pueden graficar en el tiempo.</p></div>`; return; }
+    const v = serie(c);
+    h += `<div style="font-size:12px;color:#666;margin:6px 0 2px">${nomAgr} · tendencia: ${tendenciasTendencia(v)}</div>${tendenciasGrafico(etq, v, TENDENCIAS_CATS[c].c)}`;
+    const hora = Array(24).fill(0), dia = Array(7).fill(0);
+    conFecha.forEach((e) => { hora[e.fecha.getHours()]++; dia[(e.fecha.getDay() + 6) % 7]++; });
+    h += `<div style="display:flex;gap:14px;margin-top:6px"><div style="flex:3;min-width:0"><div style="font-size:12px;color:#666;margin-bottom:2px">Por hora del día</div>${tendenciasGrafico(hora.map((_, i) => `${i}h`), hora, TENDENCIAS_CATS[c].c, { ancho: 460, alto: 130, tendencia: false })}</div>` +
+      `<div style="flex:2;min-width:0"><div style="font-size:12px;color:#666;margin-bottom:2px">Por día de la semana</div>${tendenciasGrafico(DIAS_SEM, dia, TENDENCIAS_CATS[c].c, { ancho: 300, alto: 130, tendencia: false })}</div></div>`;
+    const tops = grupos(c).slice(0, 5);
+    h += `<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px"><tr><th ${th}>${TENDENCIAS_CATS[c].s} más repetidas</th><th ${th}>Veces</th><th ${th}>Última</th></tr>` +
+      tops.map((x) => `<tr><td ${td} style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px">${tEsc(x.e.etiqueta + (x.e.dir ? " · " + x.e.dir : ""))}</td><td ${td}><b>${x.n}</b></td><td ${td}>${x.ult ? tFechaCorta(x.ult) : "—"}</td></tr>`).join("") + `</table>`;
+    h += `</div>`;
   });
 
   const top = grupos(null).slice(0, 10);

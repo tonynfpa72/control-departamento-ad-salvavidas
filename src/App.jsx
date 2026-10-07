@@ -7625,6 +7625,103 @@ function htmlFirmasReporte(f) {
     `<div style="border-top:1px solid #8a8f99;padding-top:5px;font-size:11px;color:#667">Fecha de visita</div></div></div>`;
 }
 
+
+// ---- Actualizar el firmware de los IgnisMonitor por internet (sin cable) ----
+// El admin sube el .bin a Supabase Storage (carpeta firmware_ignis) y deja la
+// orden "actualizar" a los equipos elegidos; cada equipo la lee en ~30 s,
+// descarga el archivo, se instala y se reinicia. El avance se ve aquí.
+function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
+  const [archivo, setArchivo] = useState(null);
+  const [aviso, setAviso] = useState("");
+  const [elegidos, setElegidos] = useState(() => new Set(sitioInicial && sitioInicial !== "Todos" ? [sitioInicial] : dispositivos.map((d) => d.sitio)));
+  const [enviando, setEnviando] = useState(false);
+  const [enviado, setEnviado] = useState(null); // { nombre, sitios, en }
+  const elegir = async (f) => {
+    setAviso(""); setArchivo(null);
+    if (!f) return;
+    if (!/\.bin$/i.test(f.name)) { setAviso("Elija el archivo .bin del firmware (no el .ino)."); return; }
+    if (f.size < 200000 || f.size > 1500000) { setAviso(`El archivo pesa ${Math.round(f.size / 1024)} KB: no parece un firmware del IgnisMonitor ESP32.`); return; }
+    const b = new Uint8Array(await f.slice(0, 1).arrayBuffer());
+    if (b[0] !== 0xe9) { setAviso("Ese archivo no es un firmware de ESP32 (use el .bin que le envió Claude o el de Exportar binario compilado)."); return; }
+    setArchivo(f);
+  };
+  const enviar = async () => {
+    if (!archivo || !elegidos.size) return;
+    setEnviando(true); setAviso("");
+    const d = new Date(), z = (n) => String(n).padStart(2, "0");
+    const nombre = `IgnisMonitor_${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}.bin`;
+    const { error: eSub } = await supabase.storage.from("firmware_ignis").upload(nombre, archivo, { contentType: "application/octet-stream", upsert: true });
+    if (eSub) {
+      setEnviando(false);
+      setAviso(/bucket|not found/i.test(eSub.message || "") ? "Falta correr en Supabase el SQL actualizar_sin_cable.sql (carpeta firmware_ignis)." : `No se pudo subir el archivo: ${eSub.message}`);
+      return;
+    }
+    const sitios = [...elegidos];
+    const ahora = new Date().toISOString();
+    const { error: eOrd } = await supabase.from("dispositivos_panel")
+      .update({ comando: "actualizar", comando_arg: nombre, comando_en: ahora, comando_resultado: "esperando que el equipo lea la orden" }).in("sitio", sitios);
+    setEnviando(false);
+    if (eOrd) { setAviso(/comando/i.test(eOrd.message || "") ? "Falta correr en Supabase el SQL actualizar_sin_cable.sql." : `No se pudo enviar la orden: ${eOrd.message}`); return; }
+    setEnviado({ nombre, sitios, en: Date.now() });
+  };
+  const caja = { background: "#fff", color: T.ink, borderRadius: 16, width: 620, maxWidth: "100%", maxHeight: "calc(100vh - 20px)", overflowY: "auto", padding: 18, boxShadow: "0 20px 60px rgba(0,0,0,.35)" };
+  return (
+    <div onClick={onCerrar} style={{ position: "fixed", inset: 0, background: "rgba(16,24,38,0.6)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 10 }}>
+      <div onClick={(e) => e.stopPropagation()} style={caja}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
+          <div style={{ fontSize: 18, fontWeight: 800, flex: 1 }}>Actualizar firmware sin cable</div>
+          <button type="button" onClick={onCerrar} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.gray }}><X size={18} /></button>
+        </div>
+        {!enviado ? (
+          <>
+            <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 12 }}>Suba el archivo <b>.bin</b> del IgnisMonitor ESP32. Cada equipo elegido lo descarga por internet en menos de 1 minuto, se instala solo y se reinicia (1–2 minutos sin monitoreo). Hágalo cuando el panel no esté imprimiendo.</div>
+            <input type="file" accept=".bin" onChange={(e) => elegir(e.target.files?.[0])} style={{ marginBottom: 8 }} />
+            {archivo && <div style={{ fontSize: 12.5, color: T.green, fontWeight: 700, marginBottom: 8 }}>✓ {archivo.name} · {Math.round(archivo.size / 1024)} KB</div>}
+            <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, margin: "8px 0 6px" }}>Equipos a actualizar</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 220, overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 8, padding: 8 }}>
+              {dispositivos.map((d) => {
+                const enLinea = (Date.now() - new Date(d.actualizado_en).getTime()) / 1000 < 200;
+                return (
+                  <label key={d.sitio} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+                    <input type="checkbox" checked={elegidos.has(d.sitio)} onChange={(e) => setElegidos((prev) => { const n = new Set(prev); if (e.target.checked) n.add(d.sitio); else n.delete(d.sitio); return n; })} />
+                    <span style={{ fontWeight: 600, flex: 1 }}>{d.sitio}</span>
+                    <span style={{ fontSize: 11.5, color: T.inkSoft }}>{d.version ? `V${d.version}` : "versión ?"}</span>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: enLinea ? T.green : T.red }}>{enLinea ? "en línea" : "sin conexión"}</span>
+                  </label>
+                );
+              })}
+            </div>
+            {aviso && <div style={{ marginTop: 10, fontSize: 13, color: T.red, fontWeight: 600 }}>{aviso}</div>}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+              <Btn variant="ghost" onClick={onCerrar}>Cancelar</Btn>
+              <Btn variant="accent" onClick={enviar} disabled={!archivo || !elegidos.size || enviando}>{enviando ? "Subiendo..." : `Subir e instalar en ${elegidos.size} equipo(s)`}</Btn>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 12 }}>Orden enviada con <b>{enviado.nombre}</b>. Deje esta ventana abierta para ver el avance (o ciérrela: los equipos se actualizan igual).</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {enviado.sitios.map((sitio) => {
+                const d = dispositivos.find((x) => x.sitio === sitio) || {};
+                const res = d.comando_resultado || "";
+                const color = /^error/i.test(res) ? T.red : /instalado/i.test(res) ? T.green : T.amber;
+                return (
+                  <div key={sitio} style={{ border: `1px solid ${T.line}`, borderLeft: `4px solid ${color}`, borderRadius: 8, padding: "8px 10px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><b style={{ fontSize: 13.5 }}>{sitio}</b><span style={{ fontSize: 12, color: T.inkSoft }}>{d.version ? `versión V${d.version}` : ""}</span></div>
+                    <div style={{ fontSize: 12.5, color, fontWeight: 600, marginTop: 2 }}>{res || (d.comando ? "esperando que el equipo lea la orden" : "—")}</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 10 }}>Cuando diga "instalado, reiniciando", en 1–2 minutos el equipo vuelve en línea con la versión nueva.</div>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}><Btn variant="accent" onClick={onCerrar}>Cerrar</Btn></div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function MonitoreoNotifier() {
   const currentUser = useContext(CurrentUserContext);
   const confirmar = useContext(ConfirmContext);
@@ -7726,6 +7823,7 @@ function MonitoreoNotifier() {
     setPushEstado("inactivo");
   };
   const [generandoReporte, setGenerandoReporte] = useState(false);
+  const [verActualizarFw, setVerActualizarFw] = useState(false);
   const [firmasPara, setFirmasPara] = useState(null); // "reporte" | "tendencias": abre la ventana de firmas
   const refListaEventos = React.useRef(null);
   const [categoriaSeleccionada, setCategoriaSeleccionada] = useState(null); // tarjeta activa (filtro)
@@ -8513,6 +8611,12 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
       <div style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 10, padding: 14 }}>
         <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: IGNIS.dim, fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
           <Wifi size={13} /> Equipos conectados{sitioSeleccionado === "Todos" ? ` — todos los sitios (${dispositivosFiltrados.length})` : ""}
+          {esAdminMonitoreo && dispositivosFiltrados.length > 0 && (
+            <button type="button" onClick={() => setVerActualizarFw(true)} title="Instalar un firmware nuevo en los IgnisMonitor por internet, sin cable"
+              style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 7, fontSize: 11.5, fontWeight: 700, cursor: "pointer", background: IGNIS.panel2, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, textTransform: "none", letterSpacing: 0 }}>
+              <Download size={12} style={{ transform: "rotate(180deg)" }} /> Actualizar firmware
+            </button>
+          )}
         </div>
         {dispositivosFiltrados.length === 0 ? (
           <div style={{ color: IGNIS.dim, fontSize: 13 }}>
@@ -8523,7 +8627,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ textAlign: "left", color: IGNIS.dim, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
-                  <th style={{ padding: "6px 8px" }}>Sitio</th><th>Estado</th><th>Red (SSID)</th><th>MAC</th><th>IP</th><th>Señal</th><th>Última actualización</th>
+                  <th style={{ padding: "6px 8px" }}>Sitio</th><th>Estado</th><th>Red (SSID)</th><th>MAC</th><th>IP</th><th>Señal</th><th>Versión</th><th>Última actualización</th>
                 </tr>
               </thead>
               <tbody>
@@ -8542,6 +8646,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       <td style={{ fontFamily: "monospace", fontSize: 12 }}>{d.mac || "—"}</td>
                       <td style={{ fontFamily: "monospace", fontSize: 12 }}>{d.ip || "—"}</td>
                       <td>{d.rssi != null ? `${d.rssi} dBm` : "—"}</td>
+                      <td style={{ fontSize: 12 }} title={d.comando_resultado || ""}>{d.version ? `V${d.version}` : "—"}{d.comando === "actualizar" ? <span style={{ color: IGNIS.problema, marginLeft: 6 }}>⟳ actualizando</span> : ""}</td>
                       <td style={{ fontSize: 12, color: IGNIS.dim }}>{new Date(d.actualizado_en).toLocaleString("es-CR", { dateStyle: "short", timeStyle: "medium" })}</td>
                     </tr>
                   );
@@ -8727,6 +8832,9 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         </div>
       )}
       {esMovilNotifier && <div style={{ height: 54 }} />}
+      {verActualizarFw && (
+        <ModalActualizarFirmware dispositivos={dispositivos} sitioInicial={sitioSeleccionado} onCerrar={() => setVerActualizarFw(false)} />
+      )}
       {firmasPara && (
         <ModalFirmasReporte
           titulo={firmasPara === "tendencias" ? `Tendencias — ${sitioSeleccionado}` : `Reporte de monitoreo — ${sitioSeleccionado === "Todos" ? "Todos los sitios" : sitioSeleccionado}`}

@@ -232,6 +232,34 @@ html, body { margin: 0 !important; padding: 0 !important; -webkit-print-color-ad
   return out;
 }
 
+// Aviso en pantalla mientras la APK arma el reporte y abre la impresión de
+// Android (allá no hay ventana nueva que muestre "Generando…").
+function avisoImpresionApk(fase, nombre) {
+  if (typeof document === "undefined") return;
+  let el = document.getElementById("aviso-impresion-apk");
+  if (!fase) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "aviso-impresion-apk";
+    el.style.cssText = "position:fixed;inset:0;z-index:5000;background:rgba(10,15,25,.72);display:flex;align-items:center;justify-content:center;padding:18px;font-family:system-ui,-apple-system,sans-serif";
+    el.addEventListener("click", () => { if (el.dataset.fase === "listo") el.remove(); });
+    document.body.appendChild(el);
+  }
+  el.dataset.fase = fase;
+  clearTimeout(el._t);
+  const caja = (titulo, cuerpo, girando) =>
+    `<div style="background:#fff;border-radius:16px;max-width:360px;width:100%;padding:22px 20px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.4)">` +
+    (girando ? `<div style="width:42px;height:42px;margin:0 auto 14px;border:4px solid #e3e7ee;border-top-color:#e86a2c;border-radius:50%;animation:giroAvisoApk 0.9s linear infinite"></div><style>@keyframes giroAvisoApk{to{transform:rotate(360deg)}}</style>` : `<div style="font-size:34px;margin-bottom:8px">🖨️</div>`) +
+    `<div style="font-size:17px;font-weight:800;color:#101826;margin-bottom:6px">${titulo}</div><div style="font-size:13.5px;color:#5b6572;line-height:1.5">${cuerpo}</div></div>`;
+  if (fase === "preparando") {
+    el.innerHTML = caja("Generando el reporte…", `${String(nombre || "").replace(/</g, "&lt;")}<br>Descargando historial y armando las gráficas. Espere unos segundos.`, true);
+  } else {
+    el.innerHTML = caja("Abriendo la impresión",
+      "En la pantalla que se abre:<br>1. Arriba, en <b>impresora</b>, elija <b>Guardar como PDF</b>.<br>2. Toque el botón redondo <b>PDF ⬇</b>.<br>3. Elija la carpeta (por ejemplo <b>Descargas</b>) y toque <b>Guardar</b>.<br><span style='color:#99a;font-size:12px'>Toque aquí para cerrar este aviso.</span>", false);
+    el._t = setTimeout(() => { if (el.isConnected) el.remove(); }, 12000);
+  }
+}
+
 // Devuelve un objeto para escribir el reporte, o null si no se pudo abrir
 // (ventana emergente bloqueada o APK sin el puente; ya se avisó).
 function abrirImpresion(titulo, { horizontal = false, membrete = true } = {}) {
@@ -239,10 +267,14 @@ function abrirImpresion(titulo, { horizontal = false, membrete = true } = {}) {
   const nombre = titulo || "Reporte Salvavidas";
   const preparar = (html) => (membrete ? aplicarMembrete(html, { horizontal }) : html);
   if (puente) {
+    avisoImpresionApk("preparando", nombre);
     return {
       cargando: () => {},
-      escribir: (html) => { try { puente.imprimir(quitarAutoImpresion(preparar(html)), nombre); } catch (e) { alert("No se pudo abrir la impresión: " + (e?.message || e)); } },
-      error: (msg) => alert(msg),
+      escribir: (html) => {
+        try { puente.imprimir(quitarAutoImpresion(preparar(html)), nombre); avisoImpresionApk("listo", nombre); }
+        catch (e) { avisoImpresionApk(null); alert("No se pudo abrir la impresión: " + (e?.message || e)); }
+      },
+      error: (msg) => { avisoImpresionApk(null); alert(msg); },
     };
   }
   if (EN_APK) { alert(AVISO_APK_VIEJA); return null; }

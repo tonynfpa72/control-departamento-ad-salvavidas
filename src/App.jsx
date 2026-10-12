@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useContext, createContext } from "react";
+import React, { useState, useMemo, useEffect, useContext, createContext, useRef, useCallback } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend, ReferenceLine, LineChart, Line, LabelList
@@ -278,16 +278,53 @@ function abrirImpresion(titulo, { horizontal = false, membrete = true } = {}) {
     };
   }
   if (EN_APK) { alert(AVISO_APK_VIEJA); return null; }
-  const ventana = window.open("", "_blank");
-  if (!ventana) { alert("El navegador bloqueó la ventana nueva. Permita las ventanas emergentes para poder imprimir."); return null; }
+  // La pestaña del reporte se abre SEPARADA del app ("noopener"): así, aunque
+  // el diálogo de impresión quede abierto, el app no se congela. El reporte
+  // le llega a esa pestaña por un BroadcastChannel cuando está listo.
+  const canal = `reporte-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const tituloSeguro = String(nombre).replace(/[<>&"]/g, "");
+  const cargador = `<!doctype html><html><head><meta charset="utf-8"><title>${tituloSeguro}</title></head>` +
+    `<body style="font-family:system-ui,sans-serif;padding:30px;color:#555"><p>Generando reporte… (descargando historial y armando las gráficas)</p>` +
+    `<script>(function(){var bc=new BroadcastChannel(${JSON.stringify(canal)});` +
+    `bc.onmessage=function(e){var d=e.data||{};` +
+    `if(d.tipo==="html"){bc.postMessage({tipo:"recibido"});document.open();document.write(d.html);document.close();` +
+    `if(d.imprimir){setTimeout(function(){window.print();},d.retraso||450);}}` +
+    `else if(d.tipo==="error"){document.body.innerHTML='<p style="font-family:sans-serif;padding:30px;color:#c62828"></p>';document.body.firstChild.textContent=d.msg;}};` +
+    `bc.postMessage({tipo:"listo"});})();<\/script></body></html>`;
+  let url = null;
+  try { url = URL.createObjectURL(new Blob([cargador], { type: "text/html" })); } catch { url = null; }
+  if (!url || typeof BroadcastChannel === "undefined") {
+    // Navegador viejo: la forma de antes
+    const ventana = window.open("", "_blank");
+    if (!ventana) { alert("El navegador bloqueó la ventana nueva. Permita las ventanas emergentes para poder imprimir."); return null; }
+    return {
+      cargando: (html) => { ventana.document.write(html); },
+      escribir: (html, retraso = 450) => {
+        html = preparar(html);
+        ventana.document.open(); ventana.document.write(html); ventana.document.close(); ventana.focus();
+        if (!/window\.print\(\)/.test(html)) setTimeout(() => ventana.print(), retraso);
+      },
+      error: (msg) => { ventana.document.body.innerHTML = `<p style="font-family:sans-serif;padding:30px;color:#c62828">${String(msg).replace(/</g, "&lt;")}</p>`; },
+    };
+  }
+  const bc = new BroadcastChannel(canal);
+  let lista = false, pendiente = null, entregado = false;
+  const enviar = (m) => { if (lista) bc.postMessage(m); else pendiente = m; };
+  bc.onmessage = (e) => {
+    const d = e.data || {};
+    if (d.tipo === "listo") { lista = true; if (pendiente) { bc.postMessage(pendiente); pendiente = null; } }
+    if (d.tipo === "recibido") { entregado = true; setTimeout(() => { try { bc.close(); } catch {} URL.revokeObjectURL(url); }, 2000); }
+  };
+  window.open(url, "_blank", "noopener");
+  // Si en 4 s la pestaña no respondió, el navegador la bloqueó
+  setTimeout(() => { if (!lista && !entregado) alert("El navegador bloqueó la ventana nueva. Permita las ventanas emergentes para este sitio y vuelva a intentarlo."); }, 4000);
   return {
-    cargando: (html) => { ventana.document.write(html); },
+    cargando: () => {},
     escribir: (html, retraso = 450) => {
       html = preparar(html);
-      ventana.document.open(); ventana.document.write(html); ventana.document.close(); ventana.focus();
-      if (!/window\.print\(\)/.test(html)) setTimeout(() => ventana.print(), retraso);
+      enviar({ tipo: "html", html, imprimir: !/window\.print\(\)/.test(html), retraso });
     },
-    error: (msg) => { ventana.document.body.innerHTML = `<p style="font-family:sans-serif;padding:30px;color:#c62828">${String(msg).replace(/</g, "&lt;")}</p>`; },
+    error: (msg) => enviar({ tipo: "error", msg: String(msg) }),
   };
 }
 // Imprime la pantalla actual (cotizaciones, pretareas, reporte ejecutivo).
@@ -6329,6 +6366,963 @@ function JuegoReto({ jugador, esAdmin, onGanarPuntos }) {
   return null;
 }
 
+// =====================================================================
+// EVALUACIÓN DE COMPETENCIAS (Administrativo) — para Recursos Humanos /
+// promoción de un técnico. Se imprime en el papel membretado con casillas
+// para marcar: conocimiento técnico (bancos del Entrenamiento), servicio al
+// cliente, habilidades administrativas, evaluación práctica observada,
+// rúbrica de competencias, ejercicios escritos, resumen ponderado, firmas
+// y una hoja aparte con la clave para el evaluador.
+// =====================================================================
+const EVAL_SERVICIO = [
+  { t: "Un cliente llama molesto porque la alarma sonó de madrugada y no había fuego. ¿Cuál es la mejor primera respuesta?", o: ["Escucharlo sin interrumpir, disculparse por la molestia, explicar cómo se revisará la causa y darle un tiempo de respuesta", "Explicarle que la culpa es del detector y que debe comprar uno nuevo", "Pedirle que llame a la oficina en horario hábil", "Reiniciar el panel por teléfono y dar el caso por cerrado"], c: 0 },
+  { t: "Al llegar a una visita programada, ¿qué debe hacer primero el técnico?", o: ["Empezar las pruebas para no perder tiempo", "Presentarse con el contacto del cliente, confirmar el alcance y avisar a la central de monitoreo antes de probar", "Esperar en el vehículo hasta que alguien lo llame", "Desconectar las salidas sin avisar para evitar molestias"], c: 1 },
+  { t: "Durante una inspección encuentra una deficiencia que no está incluida en la OD. ¿Qué corresponde hacer?", o: ["Repararla de una vez sin avisar", "Ignorarla porque no está en el alcance", "Documentarla con foto, informarla al cliente y a la oficina para que se cotice", "Cobrarla directamente al cliente en el sitio"], c: 2 },
+  { t: "El cliente pide dejar el sistema deshabilitado durante unas remodelaciones. ¿Cuál es la respuesta correcta?", o: ["Deshabilitarlo completo para evitar falsas alarmas", "Negarse sin dar explicaciones", "Deshabilitarlo y no dejar registro", "Explicar el riesgo, pedir la autorización por escrito, deshabilitar solo lo necesario, recomendar vigilancia contra incendio y notificar a monitoreo"], c: 3 },
+  { t: "Va a llegar tarde a una cita acordada con el cliente. ¿Qué debe hacer?", o: ["Avisar con anticipación al cliente y al coordinador, con una nueva hora estimada", "Llegar cuando pueda; el cliente entenderá", "Cancelar la visita sin avisar", "Pedirle a un compañero que llegue en su lugar sin informar"], c: 0 },
+  { t: "El cliente hace una pregunta técnica que usted no sabe responder con seguridad. ¿Qué es lo más profesional?", o: ["Inventar una respuesta para no quedar mal", "Decirle que eso no es su trabajo", "Indicarle que lo confirmará con el especialista y darle la respuesta en un plazo concreto", "Cambiar de tema"], c: 2 },
+  { t: "Al terminar la visita, ¿qué debe quedar hecho antes de retirarse?", o: ["Solo recoger las herramientas", "Dejar el sistema en condición normal, explicar los hallazgos al cliente y obtener su firma en la boleta", "Enviar un mensaje de WhatsApp diciendo que ya terminó", "Retirarse; el informe explicará todo"], c: 1 },
+  { t: "El cliente critica los precios de la empresa y menciona a la competencia. ¿Cómo debe actuar el técnico?", o: ["Darle la razón y criticar a la empresa", "Hablar mal de la competencia", "Ofrecerle un descuento personal", "Mantener el profesionalismo, no criticar a nadie y remitir el tema al área comercial"], c: 3 },
+  { t: "Un cliente le ofrece pagarle directamente por un trabajo extra en el sitio. ¿Qué hace?", o: ["Rechazarlo cortésmente, explicar que todo trabajo se gestiona por la empresa e informar al supervisor", "Aceptarlo si es poco dinero", "Aceptarlo y hacerlo fuera de horario", "Aceptarlo pero sin dar factura"], c: 0 },
+  { t: "El encargado del edificio no está y la prueba requiere activar las sirenas. ¿Qué debe hacer?", o: ["Hacer la prueba igual para cumplir el horario", "No iniciar pruebas audibles sin autorización del responsable y comunicarse con el coordinador", "Hacer la prueba con el volumen bajo", "Pedirle permiso a cualquier empleado del lugar"], c: 1 },
+  { t: "El cliente solicita una copia del reporte en el momento. ¿Cuál es la respuesta adecuada?", o: ["Darle la libreta de apuntes", "Decirle que no se entregan reportes", "Explicarle que recibirá el informe oficial por correo en el plazo acordado, y dejarle copia de la boleta firmada", "Tomarle foto a la pantalla del panel"], c: 2 },
+  { t: "Detecta que la bomba contra incendio está fuera de servicio. ¿Qué es lo correcto?", o: ["Anotarlo en el informe mensual", "Esperar a la próxima visita", "Repararla sin avisar", "Informar de inmediato al cliente y al supervisor por escrito y recomendar medidas compensatorias"], c: 3 },
+  { t: "¿Qué aspecto de la imagen personal es más importante frente al cliente?", o: ["Uniforme limpio, identificación visible y trato respetuoso", "Llegar con herramientas nuevas", "Hablar con términos muy técnicos", "Usar ropa casual para parecer cercano"], c: 0 },
+  { t: "El cliente se queja de que el área quedó sucia después de la visita. ¿Qué hace?", o: ["Decirle que limpiar no es su función", "Disculparse, limpiar el área y reforzar el orden en las siguientes visitas", "Culpar a otro técnico", "Ignorar la queja"], c: 1 },
+];
+
+const EVAL_ADMIN = [
+  { cat: "Coordinación", t: "Tiene dos clientes con urgencias al mismo tiempo y un solo equipo disponible. ¿Cómo prioriza?", o: ["Por el cliente que llamó primero", "Por el cliente más grande", "Por riesgo: primero el sistema fuera de servicio; informa a ambos clientes con tiempos estimados y escala al gerente si hace falta", "Atiende al que esté más cerca sin avisar al otro"], c: 2 },
+  { cat: "Coordinación", t: "Antes de una inspección anual, ¿qué debe verificar el coordinador?", o: ["Solo la dirección del cliente", "OD vigente, alcance, materiales y herramientas, personal asignado, permisos de acceso y cita confirmada con el cliente", "Que el vehículo tenga combustible", "Nada; el técnico lo resuelve en el sitio"], c: 1 },
+  { cat: "Coordinación", t: "El cliente cambia la fecha de la visita el mismo día. ¿Qué hace?", o: ["Reprogramar en la agenda, avisar al equipo asignado y registrar el motivo", "Enviar al equipo igual", "Esperar a que el cliente vuelva a llamar", "Cancelar la OD"], c: 0 },
+  { cat: "Coordinación", t: "¿Cuál es la mejor herramienta para controlar las visitas del mes del equipo?", o: ["La memoria del coordinador", "Mensajes sueltos de WhatsApp", "Una libreta personal", "Una agenda compartida y actualizada (app/calendario) con OD, cliente y personal"], c: 3 },
+  { cat: "Comunicación", t: "¿Cuál es la mejor forma de confirmar un acuerdo hecho por teléfono con el cliente?", o: ["Confiar en lo conversado", "Enviar un correo con el resumen de lo acordado, fechas y responsables", "Contárselo a un compañero", "Anotarlo en una servilleta"], c: 1 },
+  { cat: "Comunicación", t: "Debe informar al gerente de un problema grave en un proyecto. ¿Cómo lo comunica?", o: ["Esperar a que el gerente se entere", "Con datos concretos: qué pasó, causa, impacto, y una propuesta de solución", "Solo decir que hay un problema", "Culpar al cliente"], c: 1 },
+  { cat: "Informes", t: "¿Qué debe contener un buen informe técnico de inspección?", o: ["Solo la firma del técnico", "Fotos sin explicación", "Datos del sitio y la OD, alcance, hallazgos con evidencia, recomendaciones con prioridad y firmas", "Un resumen verbal"], c: 2 },
+  { cat: "Informes", t: "¿Cuándo debe entregarse el informe de una visita?", o: ["Cuando haya tiempo", "Dentro del plazo definido por la empresa (por ejemplo 48 horas) después de la visita", "Solo si el cliente lo pide", "Al final del año"], c: 1 },
+  { cat: "Informes", t: "En el informe aparece un hallazgo crítico (sistema sin batería de respaldo). ¿Cómo se presenta?", o: ["Al final, entre los demás detalles", "No se menciona para no alarmar", "Destacado al inicio, con su prioridad, riesgo y acción recomendada", "Solo en las fotos"], c: 2 },
+  { cat: "Correo electrónico", t: "¿Cuál es el asunto más adecuado para enviar un informe al cliente?", o: ["\"Informe\"", "\"Urgente!!!\"", "\"Hola\"", "\"Inspección anual – Hotel X – Hallazgos y recomendaciones (OD A26I027)\""], c: 3 },
+  { cat: "Correo electrónico", t: "Al enviar un informe por correo, ¿a quién se dirige?", o: ["Para: el responsable del cliente; CC: el coordinador o supervisor interno, según el protocolo", "A todos los contactos del cliente", "Solo al técnico que hizo la visita", "A nadie; se entrega impreso"], c: 0 },
+  { cat: "Correo electrónico", t: "Recibe un correo de queja de un cliente. ¿Cómo responde?", o: ["No responde para no comprometerse", "Responde en menos de 24 horas, con tono profesional: reconoce la situación, indica la acción y el plazo", "Responde con mayúsculas para que se entienda", "Reenvía la queja a todo el departamento"], c: 1 },
+  { cat: "Correo electrónico", t: "¿Cómo deben enviarse las fotos de evidencia de una visita?", o: ["Veinte fotos pesadas sin explicar", "Por WhatsApp personal", "Solo si el cliente las pide", "En un PDF o adjuntos con nombres claros, mencionándolas en el cuerpo del correo"], c: 3 },
+  { cat: "Manejo de personal", t: "Un técnico llega tarde repetidamente. ¿Qué hace el supervisor?", o: ["Regañarlo frente al equipo", "Ignorarlo para no generar conflicto", "Conversar en privado, escuchar la causa, acordar un compromiso, documentarlo y dar seguimiento", "Despedirlo de inmediato"], c: 2 },
+  { cat: "Manejo de personal", t: "¿Cuál es la forma correcta de delegar una tarea?", o: ["Asignarla según las capacidades, explicar el objetivo, el plazo y verificar el avance", "Darla al que esté libre sin explicar", "Hacerla uno mismo para que salga bien", "Delegarla y no volver a preguntar"], c: 0 },
+  { cat: "Manejo de personal", t: "Dos técnicos discuten en el sitio de trabajo. ¿Qué hace?", o: ["Dejar que lo resuelvan solos", "Darle la razón al más antiguo", "Separarlos, escucharlos en privado, buscar un acuerdo enfocado en el trabajo y escalar si persiste", "Retirar a ambos del proyecto"], c: 2 },
+  { cat: "Manejo de personal", t: "Ingresa un técnico nuevo al equipo. ¿Qué es lo más recomendable?", o: ["Enviarlo solo a campo para que aprenda", "Un plan de inducción con acompañamiento de un técnico experimentado y revisión de avances", "Darle los manuales y esperar", "Asignarle solo tareas de bodega"], c: 1 },
+  { cat: "Manejo de personal", t: "¿Cómo se debe reconocer un buen trabajo del equipo?", o: ["No hace falta; es su obligación", "Solo con dinero", "Solo en la evaluación anual", "De forma oportuna y específica, y en público cuando corresponde"], c: 3 },
+  { cat: "Seguridad", t: "Antes de un trabajo en altura, ¿qué es obligatorio?", o: ["Inspeccionar escalera o arnés, contar con el permiso de trabajo y usar el EPP", "Solo usar casco", "Pedirle a un compañero que sostenga la escalera", "Nada si el trabajo es rápido"], c: 0 },
+  { cat: "Gestión", t: "¿Cómo deben manejarse las horas extra del equipo?", o: ["Que cada técnico las reporte cuando quiera", "Pagarlas todas sin revisar", "Aprobarlas antes según la necesidad y el presupuesto, y registrarlas con justificación", "Evitar registrarlas"], c: 2 },
+  { cat: "Gestión", t: "¿Cuál es la mejor forma de controlar herramientas y equipos de medición?", o: ["Que cada técnico se lleve lo que necesite", "Un registro de salida y devolución con responsable, y calibración vigente", "Revisarlos una vez al año", "Guardarlos sin control en el vehículo"], c: 1 },
+  { cat: "Gestión", t: "¿Qué indicador mide mejor el desempeño de un equipo técnico?", o: ["La cantidad de llamadas recibidas", "Las horas en el vehículo", "La cantidad de correos enviados", "El porcentaje de visitas u OD completadas a tiempo y la reincidencia de fallas"], c: 3 },
+  { cat: "Ética", t: "Un cliente le ofrece un regalo a cambio de no reportar una deficiencia. ¿Qué hace?", o: ["Rechazarlo, reportar la deficiencia y comunicarlo al supervisor", "Aceptarlo si la deficiencia es menor", "Aceptarlo y reportarla igual", "Pedir algo de mayor valor"], c: 0 },
+  { cat: "Gestión", t: "Se cambia un equipo en garantía. ¿Qué debe quedar documentado?", o: ["Nada; es garantía", "Solo la factura del proveedor", "En la OD: equipo retirado e instalado, serie, fecha, responsable y motivo", "Un mensaje al cliente"], c: 2 },
+];
+
+const EVAL_PRACTICA = [
+  "Uso correcto del multímetro (continuidad, resistencia de fin de línea, voltaje de baterías)",
+  "Prueba funcional de detectores con la herramienta y el método adecuados",
+  "Prueba de estaciones manuales y verificación del evento en el panel",
+  "Medición de baterías y cálculo de autonomía; revisión de fecha de fabricación",
+  "Lectura e interpretación del historial y de los problemas del panel",
+  "Aviso a monitoreo/cliente y aislamiento de salidas antes de las pruebas",
+  "Diagnóstico de falla a tierra, circuito abierto o corto en lazo/NAC",
+  "Programación básica del panel (dispositivos, zonas, ecuaciones) según el puesto",
+  "Uso de EPP y trabajo seguro en alturas",
+  "Orden y limpieza; cierre de cajas, tapas y canalizaciones",
+  "Llenado correcto de la boleta/reporte de inspección (NFPA 72)",
+  "Comunicación con el cliente al llegar y al cerrar la visita",
+];
+
+const EVAL_RUBRICA = [
+  "Puntualidad y asistencia", "Responsabilidad y compromiso", "Trabajo en equipo", "Comunicación verbal",
+  "Comunicación escrita (correos e informes)", "Organización y planificación", "Criterio técnico y toma de decisiones",
+  "Liderazgo y manejo de personal", "Manejo de conflictos", "Atención y servicio al cliente",
+  "Seguridad ocupacional", "Aprendizaje y actualización técnica", "Iniciativa y proactividad",
+  "Uso de herramientas digitales (app, correo, Excel)",
+];
+
+const EVAL_PUESTOS = ["Técnico I", "Técnico II", "Técnico III / Senior", "Técnico líder", "Supervisor de campo", "Coordinador de proyectos", "Coordinador de inspecciones"];
+
+const evalMezclar = (arr) => { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+// Mezcla también las opciones (la clave se recalcula)
+const evalPrepararPregunta = (texto, opciones, correctas, extra = {}) => {
+  const idx = evalMezclar(opciones.map((_, i) => i));
+  return { ...extra, texto, opciones: idx.map((i) => opciones[i]), correctas: correctas.map((c) => idx.indexOf(c)) };
+};
+
+// Preguntas que NO deben salir en la evaluación (pedido de Anthony)
+const EVAL_EXCLUIR = [
+  /supervivencia de ruta|pathway survivability level ___ shall consist of pathways in buildings that are fully protected/i,
+  /cable calibre 14 que se puede pasar recto|maximum number of (no\.? )?14 ?awg/i,
+  /prueba de entrada de humo en un detector de humo tipo puntual|smoke entry test of a spot type smoke detector/i,
+];
+const evalExcluida = (...textos) => textos.some((t) => t && EVAL_EXCLUIR.some((r) => r.test(t)));
+
+function evalBancoTecnico(areas) {
+  const bancos = {
+    nfpa: () => PREGUNTAS_NFPA72.map((p) => ({ modulo: "NFPA 72", texto: p.texto, opciones: p.opciones, correctas: [p.correcta] })),
+    electronica: () => Object.values(NIVELES_ELECTRONICA).flat().map((p) => ({ modulo: "Electrónica", texto: p.texto, opciones: p.opciones, correctas: [p.correcta] })),
+    nicet: () => PREGUNTAS_NICET.map((p) => ({ modulo: "NICET", texto: p.es.texto, textoEn: p.en?.texto, opciones: p.es.opciones, correctas: p.multiple ? p.correctas : [p.correcta] })),
+    fas1: () => FAS_NIVEL1_QUIZZES.flatMap((q) => q.preguntas).map((p) => ({ modulo: "FAS Nivel I", texto: p.es.texto, textoEn: p.en?.texto, opciones: p.es.opciones, correctas: p.multiple ? p.correctas : [p.correcta] })),
+    notifier: () => PREGUNTAS_NOTIFIER.map((p) => ({ modulo: "Notifier", texto: p.texto, opciones: p.opciones, correctas: [p.correcta] })),
+  };
+  return areas.map((a) => (bancos[a] ? bancos[a]().filter((p) => Array.isArray(p.opciones) && p.opciones.length >= 2 && !evalExcluida(p.texto, p.textoEn)) : []));
+}
+
+// Reparte n preguntas entre las áreas elegidas, lo más parejo posible
+function evalElegirTecnicas(areas, n) {
+  const listas = evalBancoTecnico(areas).map(evalMezclar);
+  const out = []; let k = 0, vueltas = 0;
+  while (out.length < n && vueltas < 5000) {
+    const l = listas[k % listas.length]; if (l && l.length) out.push(l.shift());
+    k++; vueltas++;
+    if (listas.every((x) => !x.length)) break;
+  }
+  return out.map((p) => evalPrepararPregunta(p.texto, p.opciones, p.correctas, { modulo: p.modulo }));
+}
+
+const EVAL_F1 = "Redacte el correo para informar al cliente los resultados de una inspección: 2 detectores sucios, 1 batería vencida y la recomendación de cotizar el cambio. Incluya el asunto.";
+const EVAL_F2 = "Describa cómo organizaría la inspección anual de un edificio de 5 pisos con 2 técnicos: personal, herramientas, coordinación con el cliente y monitoreo, seguridad y tiempo estimado.";
+const EVAL_CRIT_F1 = ["Asunto claro con sitio y OD", "Saludo y tono profesional", "Hallazgos concretos", "Recomendación y siguiente paso", "Sin errores de ortografía", "Firma con datos de contacto"];
+const EVAL_CRIT_F2 = ["Asigna roles al personal", "Lista herramientas y equipo de medición", "Coordina con el cliente y monitoreo", "Considera la seguridad (EPP, alturas)", "Estima tiempos de forma realista", "Incluye entrega del informe"];
+const EVAL_OPC_D = [["2", "Cumple"], ["1", "Parcial"], ["0", "No cumple"], ["na", "N/A"]];
+const EVAL_DICTAMEN = [
+  ["promocion", "Recomendado para promoción", "nota final ≥ 85"],
+  ["desarrollo", "Recomendado con plan de desarrollo", "70 a 84"],
+  ["no", "No recomendado por ahora", "menos de 70"],
+];
+const EVAL_ESTADOS = {
+  pendiente: ["Pendiente", T.gray, T.graySoft],
+  en_curso: ["El técnico la está respondiendo", T.blue, T.blueSoft],
+  respondida: ["Falta el jefe inmediato", T.amber, T.amberSoft],
+  cerrada: ["Cerrada", T.green, T.greenSoft],
+};
+const EVAL_SIN_SQL = 'Falta correr en Supabase el SQL "evaluaciones_en_linea.sql" (SQL Editor → pegar → Run).';
+const evalMsgError = (error) => {
+  const m = String(error?.message || error || "");
+  if (/function .*eval_|Could not find the function|schema cache|404/i.test(m)) return EVAL_SIN_SQL;
+  return m || "Error desconocido.";
+};
+const evalFecha = (iso) => { if (!iso) return ""; const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString("es-CR", { dateStyle: "short", timeStyle: "short" }); };
+const evalMinutos = (a, b) => { if (!a || !b) return null; const m = Math.round((new Date(b) - new Date(a)) / 60000); return isNaN(m) ? null : m; };
+const evalJefeVacio = () => ({
+  practica: EVAL_PRACTICA.map(() => ({ v: "", obs: "" })),
+  rubrica: EVAL_RUBRICA.map(() => ({ v: "", obs: "" })),
+  criteriosF: Array(12).fill(false),
+  dictamen: "", capacitacion: "", reevaluar: "", fortalezas: "", mejoras: "",
+});
+const evalJefeCompleto = (j) => {
+  const base = evalJefeVacio(), x = j || {};
+  return {
+    ...base, ...x,
+    practica: base.practica.map((d, i) => ({ ...d, ...(x.practica?.[i] || {}) })),
+    rubrica: base.rubrica.map((d, i) => ({ ...d, ...(x.rubrica?.[i] || {}) })),
+    criteriosF: base.criteriosF.map((d, i) => !!x.criteriosF?.[i]),
+  };
+};
+// Igual que eval_calcular de Supabase, para ver la nota mientras el jefe llena
+function evalCalcularLocal(row, jefe) {
+  const pts = { ...(row?.puntajes || {}) };
+  const inc = row?.incluir || {};
+  const r1 = (n) => Math.round(n * 10) / 10;
+  if (inc.D) { const v = (jefe?.practica || []).filter((x) => ["0", "1", "2"].includes(String(x.v))); pts.D = v.length ? r1(v.reduce((a, x) => a + Number(x.v), 0) / (2 * v.length) * 100) : null; }
+  if (inc.E) { const v = (jefe?.rubrica || []).filter((x) => ["1", "2", "3", "4", "5"].includes(String(x.v))); pts.E = v.length ? r1(v.reduce((a, x) => a + Number(x.v), 0) / v.length / 5 * 100) : null; }
+  const cTot = Number(pts.C_total || 0), cPreg = pts.C_preg == null ? null : Number(pts.C_preg);
+  if (inc.F) {
+    pts.F = r1((jefe?.criteriosF || []).filter(Boolean).length / 12 * 100);
+    if (cTot > 0 && cPreg != null) pts.C = r1(cPreg * 0.7 + pts.F * 0.3); else if (cTot === 0) pts.C = pts.F;
+  } else if (cPreg != null) pts.C = cPreg;
+  let nota = 0, completa = ["respondida", "cerrada"].includes(row?.estado);
+  for (const p of ["A", "B", "C", "D", "E"]) {
+    const peso = Number(row?.pesos?.[p] || 0); if (!peso) continue;
+    const v = pts[p];
+    if (v == null) {
+      if ((["A", "B"].includes(p) && Number(pts[p + "_total"] || 0) > 0) || (p === "C" && (cTot > 0 || inc.F)) || (["D", "E"].includes(p) && inc[p])) completa = false;
+      continue;
+    }
+    nota += Number(v) * peso / 100;
+  }
+  return { puntajes: pts, nota: completa ? r1(nota) : null };
+}
+const evalDictamenSugerido = (nota) => (nota == null ? "" : nota >= 85 ? "promocion" : nota >= 70 ? "desarrollo" : "no");
+
+// Arma el "cfg" del documento a partir de una evaluación guardada
+function evalCfgDesdeFila(row, clave) {
+  const d = row.datos || {};
+  const conClave = (lista, parte) => (lista || []).map((p, i) => ({ ...p, correctas: clave?.[parte]?.[i] || [] }));
+  return {
+    codigo: row.codigo, nombre: row.tecnico_nombre, cedula: d.cedula, puestoActual: d.puestoActual, puestoAspira: d.puestoAspira,
+    area: d.area, antiguedad: d.antiguedad, jefe: row.jefe_nombre, fecha: d.fecha, tiempo: d.tiempo,
+    tecnicas: conClave(row.preguntas?.A, "A"), servicio: conClave(row.preguntas?.B, "B"), admin: conClave(row.preguntas?.C, "C"),
+    incluir: row.incluir || {}, incluirClave: false, pesos: row.pesos || {},
+  };
+}
+
+// Documento imprimible. Sin "res" sale en blanco con casillas; con "res"
+// sale calificado: respuestas del técnico, parte del jefe, notas y dictamen.
+function generarHtmlEvaluacion(cfg, res = null) {
+  const esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const L = "abcdefgh";
+  const codigo = cfg.codigo;
+  const cb = (on = false) => `<span class="cb${on ? " on" : ""}"></span>`;
+  const jefe = res ? evalJefeCompleto(res.jefe) : null;
+  const pts = res?.puntajes || {};
+  const fmt = (v) => (v == null || v === "" ? "" : Number(v).toLocaleString("es-CR", { maximumFractionDigits: 1 }));
+  const partes = [];
+  let num = 0;
+  const bloquePreguntas = (lista, parte) => lista.map((p, i) => {
+    num++; p.n = num;
+    const multiple = p.correctas.length > 1 || p.multiple;
+    const sel = res ? (res.respuestas?.[parte]?.[i] || []).map(Number) : [];
+    let marca = "";
+    if (res) {
+      const ok = sel.length > 0 && [...sel].sort().join(",") === [...p.correctas].sort().join(",");
+      marca = !sel.length ? ' <span class="res sin">Sin responder</span>' : ok ? ' <span class="res bien">✓ Correcta</span>' : ' <span class="res mal">✗ Incorrecta</span>';
+    }
+    return `<div class="preg"><div class="pt"><b>${num}.</b> ${p.cat ? `<span class="tag">${esc(p.cat)}</span> ` : p.modulo ? `<span class="tag">${esc(p.modulo)}</span> ` : ""}${esc(p.texto)}${multiple ? ' <i>(marque todas las correctas)</i>' : ""}${marca}</div>` +
+      `<div class="ops">${p.opciones.map((o, j) => {
+        const cls = res ? (p.correctas.includes(j) ? " ok" : sel.includes(j) ? " malop" : "") : "";
+        return `<div class="op${cls}">${cb(sel.includes(j))}<b>${L[j]})</b> ${esc(o)}</div>`;
+      }).join("")}</div></div>`;
+  }).join("");
+
+  // Encabezado con los datos del evaluado
+  const minutos = res ? evalMinutos(res.iniciado_en, res.enviado_en) : null;
+  const datos = `
+  <div class="titulo">EVALUACIÓN DE COMPETENCIAS TÉCNICAS Y ADMINISTRATIVAS</div>
+  <div class="subt">Departamento de Alarmas · Instrumento para Recursos Humanos — Promoción de personal · Código ${esc(codigo)}</div>
+  ${res && res.estado !== "cerrada" ? `<div class="borrador">BORRADOR — la evaluación todavía no está cerrada (${esc((EVAL_ESTADOS[res.estado] || [res.estado])[0])})</div>` : ""}
+  <table class="datos">
+    <tr><td class="k">Nombre del evaluado</td><td>${esc(cfg.nombre) || "&nbsp;"}</td><td class="k">Cédula</td><td>${esc(cfg.cedula) || "&nbsp;"}</td></tr>
+    <tr><td class="k">Puesto actual</td><td>${esc(cfg.puestoActual) || "&nbsp;"}</td><td class="k">Puesto al que aspira</td><td>${esc(cfg.puestoAspira) || "&nbsp;"}</td></tr>
+    <tr><td class="k">Área</td><td>${esc(cfg.area)}</td><td class="k">Antigüedad</td><td>${esc(cfg.antiguedad) || "&nbsp;"}</td></tr>
+    <tr><td class="k">Jefe inmediato</td><td>${esc(cfg.jefe) || "&nbsp;"}</td><td class="k">Fecha</td><td>${esc(cfg.fecha)}</td></tr>
+  </table>
+  ${res
+    ? `<div class="instr"><b>Evaluación respondida en línea en la app.</b> Iniciada: ${esc(evalFecha(res.iniciado_en)) || "—"} · Enviada: ${esc(evalFecha(res.enviado_en)) || "—"}${minutos != null ? ` · Tiempo utilizado: <b>${minutos} min</b> (sugerido ${esc(cfg.tiempo)} min)` : ""}${res.cerrado_en ? ` · Cerrada por el jefe inmediato: ${esc(evalFecha(res.cerrado_en))}` : ""} — Las partes A, B y C se calificaron automáticamente; en verde la respuesta correcta y en rojo la respuesta equivocada que marcó el técnico.</div>`
+    : `<div class="instr"><b>Instrucciones:</b> Lea cada pregunta y marque con una <b>X</b> la casilla de la respuesta correcta. Use bolígrafo; si se equivoca, encierre en un círculo la respuesta válida y firme al lado. Tiempo sugerido: <b>${esc(cfg.tiempo)} minutos</b>. Las partes D y E las completa el jefe inmediato con base en la observación del desempeño.</div>`}`;
+  partes.push(datos);
+
+  const seccion = (letra, titulo, desc, html, salto = true) =>
+    `<div class="sec${salto ? " salto" : ""}"><div class="sech"><span class="letra">${letra}</span><div><div class="sect">${titulo}</div>${desc ? `<div class="secd">${desc}</div>` : ""}</div></div>${html}</div>`;
+  const resParte = (k) => (res && pts[k + "_total"] ? ` · <b>${pts[k + "_ok"]} de ${pts[k + "_total"]} correctas (${fmt(k === "C" ? pts.C_preg : pts[k])})</b>` : "");
+
+  if (cfg.tecnicas.length) partes.push(seccion("A", "Conocimiento técnico", `${cfg.tecnicas.length} preguntas · ${[...new Set(cfg.tecnicas.map((p) => p.modulo))].join(", ")} · valor ${cfg.pesos.A}%${resParte("A")}`, bloquePreguntas(cfg.tecnicas, "A"), false));
+  if (cfg.servicio.length) partes.push(seccion("B", "Servicio al cliente", `${cfg.servicio.length} preguntas de situación · valor ${cfg.pesos.B}%${resParte("B")}`, bloquePreguntas(cfg.servicio, "B")));
+  if (cfg.admin.length) partes.push(seccion("C", "Habilidades administrativas", `Coordinación, comunicación, informes, correo electrónico, manejo de personal, seguridad y gestión · ${cfg.admin.length} preguntas · valor ${cfg.pesos.C}%${resParte("C")}`, bloquePreguntas(cfg.admin, "C")));
+
+  if (cfg.incluir.D) {
+    partes.push(seccion("D", "Evaluación práctica (la completa el jefe inmediato)", `Observación en sitio o en taller · Cumple = 2 · Parcial = 1 · No cumple = 0 · valor ${cfg.pesos.D}%${res && pts.D != null ? ` · <b>Puntaje ${fmt(pts.D)}</b>` : ""}`,
+      `<table class="tabla"><thead><tr><th style="width:26px">#</th><th>Competencia observada</th><th class="c">Cumple</th><th class="c">Parcial</th><th class="c">No cumple</th><th class="c">N/A</th><th style="width:22%">Observaciones</th></tr></thead><tbody>` +
+      EVAL_PRACTICA.map((x, i) => { const v = jefe ? String(jefe.practica[i].v) : null; return `<tr><td>${i + 1}</td><td>${esc(x)}</td>${["2", "1", "0", "na"].map((o) => `<td class="c">${cb(v === o)}</td>`).join("")}<td class="obsc">${jefe ? esc(jefe.practica[i].obs) : ""}</td></tr>`; }).join("") +
+      `</tbody></table><div class="nota">Puntaje D = (suma de puntos ÷ (2 × ítems evaluados)) × 100. Los ítems N/A no se cuentan.</div>`));
+  }
+  if (cfg.incluir.E) {
+    partes.push(seccion("E", "Rúbrica de competencias (la completa el jefe inmediato)", `1 = Deficiente · 2 = Necesita mejorar · 3 = Aceptable · 4 = Bueno · 5 = Excelente · valor ${cfg.pesos.E}%${res && pts.E != null ? ` · <b>Puntaje ${fmt(pts.E)}</b>` : ""}`,
+      `<table class="tabla"><thead><tr><th>Competencia</th>${[1, 2, 3, 4, 5].map((n) => `<th class="c">${n}</th>`).join("")}<th style="width:24%">Evidencia / comentario</th></tr></thead><tbody>` +
+      EVAL_RUBRICA.map((x, i) => { const v = jefe ? String(jefe.rubrica[i].v) : null; return `<tr><td>${esc(x)}</td>${[1, 2, 3, 4, 5].map((n) => `<td class="c">${cb(v === String(n))}</td>`).join("")}<td class="obsc">${jefe ? esc(jefe.rubrica[i].obs) : ""}</td></tr>`; }).join("") +
+      `</tbody></table><div class="nota">Puntaje E = (promedio de la rúbrica ÷ 5) × 100.</div>`));
+  }
+  if (cfg.incluir.F) {
+    const lineas = (n) => Array.from({ length: n }, () => '<div class="linea"></div>').join("");
+    const criterios = (lista, desde) => `<div class="crit">${lista.map((c, i) => `<div>${cb(!!jefe?.criteriosF?.[desde + i])} ${esc(c)}</div>`).join("")}</div>`;
+    const texto = (t) => (res ? `<div class="escrito">${esc(t) || '<span style="color:#999">(sin respuesta)</span>'}</div>` : lineas(11));
+    partes.push(seccion("F", "Ejercicios escritos", `Comunicación escrita y planificación · los criterios los marca el jefe inmediato · cuentan 30 % de la parte C${res && pts.F != null ? ` · <b>Puntaje ${fmt(pts.F)}</b>` : ""}`,
+      `<div class="ej"><b>F1. Correo al cliente.</b> ${EVAL_F1}</div>${texto(res?.escritos?.F1)}` +
+      `<div class="crit-t">Criterios (jefe inmediato):</div>${criterios(EVAL_CRIT_F1, 0)}` +
+      `<div class="ej" style="margin-top:14px"><b>F2. Plan de trabajo.</b> ${EVAL_F2}</div>${texto(res?.escritos?.F2)}` +
+      `<div class="crit-t">Criterios (jefe inmediato):</div>${criterios(EVAL_CRIT_F2, 6)}` +
+      `<div class="nota">Puntaje F = criterios marcados ÷ 12 × 100. Parte C = 70 % preguntas + 30 % ejercicios escritos (si no hay preguntas C, la parte C es el puntaje F).</div>`));
+  }
+
+  // Resumen y dictamen
+  const cConF = cfg.incluir.F;
+  const filas = [["A", "Conocimiento técnico", cfg.tecnicas.length ? cfg.pesos.A : 0], ["B", "Servicio al cliente", cfg.servicio.length ? cfg.pesos.B : 0],
+    ["C", `Habilidades administrativas${cConF ? " (incluye ejercicios escritos)" : ""}`, cfg.admin.length || cConF ? cfg.pesos.C : 0], ["D", "Evaluación práctica", cfg.incluir.D ? cfg.pesos.D : 0], ["E", "Rúbrica de competencias", cfg.incluir.E ? cfg.pesos.E : 0]].filter((f) => f[2] > 0);
+  const notaFinal = res ? res.nota : null;
+  const dict = jefe?.dictamen || "";
+  partes.push(seccion("✓", "Resumen de resultados y dictamen", "Puntaje de cada parte en escala de 0 a 100; ponderado = puntaje × peso ÷ 100",
+    `<table class="tabla"><thead><tr><th style="width:30px">Parte</th><th>Área</th><th class="c">Peso</th><th class="c">Puntaje (0–100)</th><th class="c">Ponderado</th></tr></thead><tbody>` +
+    filas.map((f) => { const v = res ? pts[f[0]] : null; return `<tr><td>${f[0]}</td><td>${f[1]}</td><td class="c">${f[2]}%</td><td class="c">${fmt(v)}</td><td class="c">${v == null ? "" : fmt(Math.round(v * f[2]) / 100)}</td></tr>`; }).join("") +
+    `<tr class="tot"><td></td><td><b>NOTA FINAL</b></td><td class="c"><b>${filas.reduce((a, f) => a + f[2], 0)}%</b></td><td></td><td class="c"><b style="font-size:13px">${fmt(notaFinal)}</b></td></tr></tbody></table>` +
+    `<div class="dict"><div class="dict-t">Dictamen del jefe inmediato</div>
+      <div>${cb(dict === "promocion")} <b>Recomendado para promoción</b> (nota final ≥ 85)</div>
+      <div>${cb(dict === "desarrollo")} <b>Recomendado con plan de desarrollo</b> (70 a 84) — capacitación en: ${jefe?.capacitacion ? `<u>${esc(jefe.capacitacion)}</u>` : "______________________________________"}</div>
+      <div>${cb(dict === "no")} <b>No recomendado por ahora</b> (menos de 70) — reevaluar en: ${jefe?.reevaluar ? `<u>${esc(jefe.reevaluar)}</u>` : "__________"} meses</div></div>` +
+    (jefe
+      ? `<div class="obs"><b>Fortalezas:</b><div class="escrito">${esc(jefe.fortalezas) || "—"}</div><b>Oportunidades de mejora:</b><div class="escrito">${esc(jefe.mejoras) || "—"}</div></div>`
+      : `<div class="obs"><b>Fortalezas:</b><div class="linea"></div><div class="linea"></div><b>Oportunidades de mejora:</b><div class="linea"></div><div class="linea"></div></div>`) +
+    `<div class="firmas">${[["Técnico evaluado", res ? cfg.nombre : ""], ["Jefe inmediato", res ? cfg.jefe : ""], ["Gerente de Alarmas", ""], ["Recursos Humanos", ""]].map(([r, n]) => `<div><div class="fn">${esc(n) || "&nbsp;"}</div><div class="fl"></div>${r}<br><span>Nombre, firma y fecha</span></div>`).join("")}</div>`));
+
+  partes.push(`<div class="pie">Departamento A&amp;D Salvavidas · Evaluación ${esc(codigo)} · <i>by Anthony Campos Medina</i></div>`);
+
+  // Clave para el jefe inmediato (hoja aparte) — solo en la versión en blanco
+  if (cfg.incluirClave && !res) {
+    const todas = [...cfg.tecnicas, ...cfg.servicio, ...cfg.admin];
+    const col = (lista, titulo) => lista.length ? `<div class="kb"><div class="kt">${titulo}</div>${lista.map((p) => `<span class="kk"><b>${p.n}.</b> ${p.correctas.map((c) => L[c]).join(", ")}</span>`).join("")}</div>` : "";
+    partes.push(`<div class="salto clave"><div class="titulo">CLAVE DE RESPUESTAS — USO EXCLUSIVO DEL JEFE INMEDIATO</div>
+      <div class="subt">Evaluación ${esc(codigo)} · ${esc(cfg.nombre)} · No entregar al evaluado</div>
+      ${col(cfg.tecnicas, "Parte A — Conocimiento técnico")}${col(cfg.servicio, "Parte B — Servicio al cliente")}${col(cfg.admin, "Parte C — Habilidades administrativas")}
+      <div class="nota" style="margin-top:12px"><b>Cómo calificar:</b> Partes A, B y C: puntaje = respuestas correctas ÷ total de la parte × 100 (en preguntas de varias respuestas, solo cuenta si marcó todas las correctas y ninguna incorrecta). Parte D y E: según la fórmula de cada tabla. Nota final = suma de los ponderados. Total de preguntas de selección: ${todas.length}.</div></div>`);
+  }
+
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Evaluación de competencias - ${esc(cfg.nombre || "técnico")}</title><style>
+  *{box-sizing:border-box} body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#1f2430;font-size:11.5px;margin:0}
+  .titulo{font-size:17px;font-weight:800;letter-spacing:.3px;text-align:center;margin-top:2px}
+  .subt{text-align:center;color:#667;font-size:11px;margin:3px 0 10px}
+  .borrador{text-align:center;color:#b45309;background:#fff4dc;border:1px solid #f0c36d;border-radius:5px;padding:4px;font-weight:800;font-size:11px;margin-bottom:8px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  table{border-collapse:collapse;width:100%}
+  .datos td{border:1px solid #c9ccd2;padding:5px 7px;font-size:11.5px} .datos td.k{background:#f2f4f7;font-weight:700;width:17%;color:#445}
+  .instr{margin:10px 0 6px;padding:8px 10px;background:#f7f8fa;border-left:3px solid #c62828;font-size:11px;line-height:1.45}
+  .sec{margin-top:12px} .salto{page-break-before:always;break-before:page}
+  .sech{display:flex;gap:10px;align-items:center;border-bottom:2px solid #1e2d45;padding-bottom:5px;margin-bottom:8px}
+  .letra{background:#c62828;color:#fff;font-weight:800;width:26px;height:26px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:14px;flex:0 0 26px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .sect{font-size:14px;font-weight:800;color:#1e2d45} .secd{font-size:10.5px;color:#667}
+  .preg{page-break-inside:avoid;break-inside:avoid;margin:0 0 8px} .pt{line-height:1.4}
+  .tag{display:inline-block;font-size:9px;font-weight:700;color:#445;background:#eef0f4;border-radius:3px;padding:0 4px;text-transform:uppercase;letter-spacing:.3px}
+  .res{display:inline-block;font-size:9.5px;font-weight:800;border-radius:3px;padding:0 5px;margin-left:4px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .res.bien{color:#1b6b45;background:#dff3e8} .res.mal{color:#b3261e;background:#fbe2e0} .res.sin{color:#8a6100;background:#fdf0cf}
+  .ops{display:grid;grid-template-columns:1fr 1fr;gap:2px 16px;margin:4px 0 0 16px} .op{display:flex;gap:5px;align-items:flex-start;line-height:1.35}
+  .op.ok{color:#1b6b45;font-weight:700} .op.malop{color:#b3261e;text-decoration:line-through}
+  .cb{display:inline-block;width:11px;height:11px;border:1.3px solid #333;border-radius:2px;flex:0 0 11px;margin-top:1px;vertical-align:-1px;position:relative}
+  .cb.on::after{content:"✕";position:absolute;left:0;top:-3px;width:100%;text-align:center;font-size:11px;font-weight:900;color:#111;line-height:14px}
+  .tabla th{background:#1e2d45;color:#fff;font-size:10px;text-transform:uppercase;letter-spacing:.3px;padding:5px;text-align:left;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .tabla td{border:1px solid #d5d8de;padding:5px;vertical-align:middle} .tabla .c{text-align:center;width:52px} .tabla tr{page-break-inside:avoid}
+  .tabla td.obsc{font-size:10px;color:#334}
+  .tabla tr.tot td{background:#f2f4f7;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .nota{font-size:10px;color:#667;margin-top:5px}
+  .ej{line-height:1.45;margin-bottom:4px} .linea{border-bottom:1px solid #b9bdc6;height:20px}
+  .escrito{border:1px solid #d5d8de;border-radius:5px;padding:7px 9px;margin:3px 0 6px;white-space:pre-wrap;line-height:1.45;font-size:11px;min-height:28px;page-break-inside:avoid}
+  .crit-t{font-size:10px;font-weight:700;color:#445;margin-top:6px} .crit{display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px 12px;font-size:10.5px;margin-top:3px}
+  .dict{margin-top:12px;border:1px solid #c9ccd2;border-radius:6px;padding:9px 11px;line-height:1.9} .dict-t{font-weight:800;color:#1e2d45}
+  .obs{margin-top:10px;line-height:1.6}
+  .firmas{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-top:52px;text-align:center;font-size:11px;font-weight:700;page-break-inside:avoid}
+  .firmas .fn{font-weight:400;font-size:10.5px;min-height:15px;color:#223}
+  .firmas .fl{border-top:1px solid #333;margin-bottom:4px} .firmas span{font-weight:400;color:#778;font-size:9.5px}
+  .pie{margin-top:16px;color:#99a;font-size:9.5px}
+  .clave .kb{margin-top:10px} .clave .kt{font-weight:800;color:#1e2d45;margin-bottom:4px} .kk{display:inline-block;min-width:62px;margin:2px 8px 2px 0;font-size:12px}
+  </style></head><body>${partes.join("")}</body></html>`;
+}
+
+// Genera preguntas (con su clave) según lo elegido en el formulario
+function evalGenerarPreguntas(f) {
+  const areasElegidas = Object.keys(f.areas).filter((k) => f.areas[k]);
+  return {
+    tecnicas: areasElegidas.length && f.nTec > 0 ? evalElegirTecnicas(areasElegidas, Number(f.nTec)) : [],
+    servicio: evalMezclar(EVAL_SERVICIO).slice(0, Number(f.nServ) || 0).map((p) => evalPrepararPregunta(p.t, p.o, [p.c])),
+    admin: (() => {
+      // reparte por categoría para que salgan todas las habilidades
+      const porCat = {}; evalMezclar(EVAL_ADMIN).forEach((p) => (porCat[p.cat] = porCat[p.cat] || []).push(p));
+      const cats = Object.keys(porCat), out = []; let i = 0;
+      while (out.length < (Number(f.nAdmin) || 0) && cats.some((c) => porCat[c].length)) { const c = cats[i++ % cats.length]; if (porCat[c].length) out.push(porCat[c].shift()); }
+      return out.map((p) => evalPrepararPregunta(p.t, p.o, [p.c], { cat: p.cat }));
+    })(),
+  };
+}
+const evalCodigo = () => { const d = new Date(), z = (n) => String(n).padStart(2, "0"); return `EV-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`; };
+
+// Descarga (admin) la evaluación con las respuestas del técnico
+async function evalDescargarConRespuestas(row, currentUser) {
+  const imp = abrirImpresion(`Evaluación ${row.tecnico_nombre || ""} ${row.codigo}`);
+  if (!imp) return;
+  imp.cargando && imp.cargando();
+  const { data: clave, error } = await supabase.rpc("eval_clave", { p_usuario: currentUser?.id, p_id: row.id });
+  if (error) { imp.error(evalMsgError(error)); return; }
+  const cfg = evalCfgDesdeFila(row, clave);
+  const calc = evalCalcularLocal(row, row.evaluacion_jefe);
+  const res = {
+    respuestas: row.respuestas || {}, escritos: row.escritos || {}, jefe: row.evaluacion_jefe || {}, estado: row.estado,
+    puntajes: { ...calc.puntajes, ...(row.puntajes || {}) }, nota: row.nota_final ?? calc.nota,
+    iniciado_en: row.iniciado_en, enviado_en: row.enviado_en, cerrado_en: row.cerrado_en,
+  };
+  imp.escribir(generarHtmlEvaluacion(cfg, res), 600);
+}
+
+const evalEstilos = {
+  etiqueta: { fontSize: 12, fontWeight: 700, color: T.inkSoft, marginBottom: 4, display: "block" },
+  caja: { width: "100%", boxSizing: "border-box", border: `1px solid ${T.line}`, borderRadius: 8, padding: "8px 10px", fontSize: 13.5, fontFamily: "inherit", background: "#fff" },
+};
+function EvalEstadoBadge({ estado }) {
+  const [txt, c, s] = EVAL_ESTADOS[estado] || [estado, T.gray, T.graySoft];
+  return <Badge color={c} soft={s}>{txt}</Badge>;
+}
+// Botones tipo "píldora" para elegir una opción (cómodo en el celular)
+function EvalPildoras({ opciones, valor, onChange, disabled }) {
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+      {opciones.map(([v, t]) => {
+        const on = String(valor) === String(v);
+        return (
+          <button key={v} type="button" disabled={disabled} onClick={() => onChange(on ? "" : v)} style={{
+            padding: "6px 11px", borderRadius: 999, fontSize: 12.5, fontWeight: 700, cursor: disabled ? "default" : "pointer", fontFamily: "inherit",
+            border: `1.5px solid ${on ? T.steel : T.line}`, background: on ? T.steel : "#fff", color: on ? "#fff" : T.ink, opacity: disabled && !on ? 0.6 : 1,
+          }}>{t}</button>
+        );
+      })}
+    </div>
+  );
+}
+// Pantalla completa encima de la app
+function EvalPantalla({ titulo, sub, onCerrar, children }) {
+  useEffect(() => { const o = document.body.style.overflow; document.body.style.overflow = "hidden"; return () => { document.body.style.overflow = o; }; }, []);
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 60, background: T.bg, overflowY: "auto" }}>
+      <div style={{ position: "sticky", top: 0, zIndex: 2, background: T.steel, color: "#fff", padding: "10px 16px", display: "flex", alignItems: "center", gap: 10 }}>
+        <Award size={18} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 800, fontSize: 14.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{titulo}</div>
+          {sub && <div style={{ fontSize: 11.5, opacity: 0.8 }}>{sub}</div>}
+        </div>
+        <button onClick={onCerrar} style={{ background: "rgba(255,255,255,.15)", border: "none", color: "#fff", borderRadius: 8, padding: "6px 10px", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, fontSize: 13, fontWeight: 700 }}><X size={15} /> Salir</button>
+      </div>
+      <div style={{ maxWidth: 900, margin: "0 auto", padding: "16px 14px 60px", display: "flex", flexDirection: "column", gap: 14 }}>{children}</div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// El TÉCNICO responde su evaluación en la app (se guarda sola y al
+// enviarla se califica en Supabase; después ya no puede cambiar nada).
+// ---------------------------------------------------------------------
+function EvalResponder({ row, onSalir }) {
+  const currentUser = useContext(CurrentUserContext);
+  const confirmar = useContext(ConfirmContext);
+  const preg = row.preguntas || {};
+  const vacio = (p) => (preg[p] || []).map((_, i) => (row.respuestas?.[p]?.[i]) || []);
+  const [resp, setResp] = useState({ A: vacio("A"), B: vacio("B"), C: vacio("C") });
+  const [escritos, setEscritos] = useState({ F1: row.escritos?.F1 || "", F2: row.escritos?.F2 || "" });
+  const [guardado, setGuardado] = useState("");
+  const [enviada, setEnviada] = useState(false);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [ahora, setAhora] = useState(Date.now());
+  const inicio = useRef(row.iniciado_en ? new Date(row.iniciado_en).getTime() : Date.now());
+  const sucio = useRef(false);
+  const ultimo = useRef({ resp, escritos });
+  ultimo.current = { resp, escritos };
+
+  useEffect(() => { const t = setInterval(() => setAhora(Date.now()), 30000); return () => clearInterval(t); }, []);
+  const guardar = async () => {
+    if (!sucio.current) return;
+    sucio.current = false;
+    setGuardado("Guardando…");
+    const { error: err } = await supabase.rpc("eval_responder", { p_usuario: currentUser?.id, p_id: row.id, p_respuestas: ultimo.current.resp, p_escritos: ultimo.current.escritos, p_enviar: false });
+    setGuardado(err ? "No se pudo guardar: " + evalMsgError(err) : "Avance guardado ✓");
+  };
+  useEffect(() => { if (!sucio.current) return; const t = setTimeout(guardar, 1500); return () => clearTimeout(t); }, [resp, escritos]);
+  useEffect(() => () => { guardar(); }, []);
+
+  const marcar = (p, i, j, multiple) => {
+    sucio.current = true;
+    setResp((r) => {
+      const lista = [...r[p]]; const actual = lista[i] || [];
+      lista[i] = multiple ? (actual.includes(j) ? actual.filter((x) => x !== j) : [...actual, j].sort()) : [j];
+      return { ...r, [p]: lista };
+    });
+  };
+  const total = ["A", "B", "C"].reduce((a, p) => a + (preg[p] || []).length, 0);
+  const contestadas = ["A", "B", "C"].reduce((a, p) => a + resp[p].filter((x) => x && x.length).length, 0);
+  const minutos = Math.max(0, Math.round((ahora - inicio.current) / 60000));
+  const tiempo = Number(row.datos?.tiempo) || 0;
+
+  const enviar = async () => {
+    const faltan = total - contestadas;
+    const faltanF = row.incluir?.F && (!escritos.F1.trim() || !escritos.F2.trim());
+    const aviso = (faltan > 0 ? `Le faltan ${faltan} pregunta(s) por contestar. ` : "") + (faltanF ? "Le falta completar un ejercicio escrito. " : "");
+    if (!(await confirmar(`${aviso}¿Enviar la evaluación? Una vez enviada ya no podrá cambiar ninguna respuesta.`, { confirmLabel: "Sí, enviar", variant: "accent" }))) return;
+    setBusy(true); setError("");
+    const { error: err } = await supabase.rpc("eval_responder", { p_usuario: currentUser?.id, p_id: row.id, p_respuestas: resp, p_escritos: escritos, p_enviar: true });
+    setBusy(false);
+    if (err) { setError(evalMsgError(err)); return; }
+    sucio.current = false;
+    setEnviada(true);
+  };
+
+  if (enviada) {
+    return (
+      <EvalPantalla titulo="Evaluación de competencias" onCerrar={() => onSalir(true)}>
+        <Card title="¡Evaluación enviada!">
+          <div style={{ fontSize: 14, lineHeight: 1.6, color: T.ink }}>
+            Sus respuestas quedaron guardadas y calificadas. Ahora su jefe inmediato ({row.jefe_nombre || "asignado"}) completará la evaluación práctica y la rúbrica.
+            El resultado final lo comunicará la jefatura.
+          </div>
+          <div style={{ marginTop: 14 }}><Btn variant="accent" onClick={() => onSalir(true)}>Volver a la app</Btn></div>
+        </Card>
+      </EvalPantalla>
+    );
+  }
+
+  let num = 0;
+  const L = "abcdefgh";
+  const parteUI = (p, titulo, desc) => !(preg[p] || []).length ? null : (
+    <Card title={`${p}. ${titulo}`}>
+      <div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: -4, marginBottom: 10 }}>{desc}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        {preg[p].map((q, i) => {
+          num++;
+          const sel = resp[p][i] || [];
+          return (
+            <div key={i} style={{ borderBottom: `1px solid ${T.line}`, paddingBottom: 12 }}>
+              <div style={{ fontSize: 14, lineHeight: 1.45, color: T.ink, marginBottom: 7 }}>
+                <b>{num}.</b> {(q.cat || q.modulo) && <span style={{ fontSize: 10, fontWeight: 800, color: T.inkSoft, background: T.graySoft, borderRadius: 4, padding: "1px 5px", marginRight: 4, textTransform: "uppercase" }}>{q.cat || q.modulo}</span>}
+                {q.texto}{q.multiple && <i style={{ color: T.accent }}> (marque todas las correctas)</i>}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {q.opciones.map((o, j) => {
+                  const on = sel.includes(j);
+                  return (
+                    <label key={j} style={{ display: "flex", gap: 9, alignItems: "flex-start", padding: "8px 10px", borderRadius: 9, cursor: "pointer", fontSize: 13.5, lineHeight: 1.4,
+                      border: `1.5px solid ${on ? T.steel : T.line}`, background: on ? T.blueSoft : "#fff" }}>
+                      <input type={q.multiple ? "checkbox" : "radio"} name={`${p}-${i}`} checked={on} onChange={() => marcar(p, i, j, q.multiple)} style={{ marginTop: 2 }} />
+                      <span><b>{L[j]})</b> {o}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+
+  return (
+    <EvalPantalla titulo={`Evaluación de competencias · ${row.codigo}`} sub={`${row.tecnico_nombre} · aspira a ${row.datos?.puestoAspira || "—"} · jefe inmediato: ${row.jefe_nombre || "—"}`} onCerrar={() => { guardar(); onSalir(false); }}>
+      <Card title="Instrucciones">
+        <div style={{ fontSize: 13.5, lineHeight: 1.55, color: T.ink }}>
+          Lea cada pregunta y toque la respuesta correcta. Sus respuestas se <b>guardan solas</b>: si sale de la pantalla puede volver y seguir donde quedó.
+          Cuando termine toque <b>Enviar evaluación</b>; después de enviarla ya no podrá cambiar nada. Tiempo sugerido: <b>{tiempo} minutos</b>.
+        </div>
+      </Card>
+      <div style={{ position: "sticky", top: 60, zIndex: 1, background: "#fff", border: `1px solid ${T.line}`, borderRadius: 10, padding: "8px 12px", display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", fontSize: 13, boxShadow: "0 2px 6px rgba(0,0,0,.06)" }}>
+        <span><b>{contestadas}</b> de {total} contestadas</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 4, color: tiempo && minutos > tiempo ? T.red : T.inkSoft }}><Clock size={14} /> {minutos} min{tiempo ? ` de ${tiempo}` : ""}</span>
+        <span style={{ flex: 1, textAlign: "right", fontSize: 12, color: /No se pudo/.test(guardado) ? T.red : T.green }}>{guardado}</span>
+      </div>
+      {parteUI("A", "Conocimiento técnico", "NFPA 72, electrónica, NICET, FAS y Notifier.")}
+      {parteUI("B", "Servicio al cliente", "Elija lo que haría en cada situación.")}
+      {parteUI("C", "Habilidades administrativas", "Coordinación, comunicación, informes, correo electrónico, manejo de personal, seguridad y gestión.")}
+      {row.incluir?.F && (
+        <Card title="F. Ejercicios escritos">
+          {[["F1", "F1. Correo al cliente", EVAL_F1], ["F2", "F2. Plan de trabajo", EVAL_F2]].map(([k, t, d]) => (
+            <div key={k} style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 3 }}>{t}</div>
+              <div style={{ fontSize: 13.5, color: T.ink, lineHeight: 1.45, marginBottom: 6 }}>{d}</div>
+              <textarea value={escritos[k]} onChange={(e) => { sucio.current = true; const v = e.target.value; setEscritos((x) => ({ ...x, [k]: v })); }} rows={9}
+                style={{ ...evalEstilos.caja, resize: "vertical", lineHeight: 1.45 }} placeholder="Escriba aquí…" />
+            </div>
+          ))}
+        </Card>
+      )}
+      {error && <div style={{ color: T.red, fontWeight: 700, fontSize: 13 }}>{error}</div>}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+        <Btn variant="ghost" onClick={() => { guardar(); onSalir(false); }}>Seguir después</Btn>
+        <Btn variant="accent" onClick={enviar} disabled={busy}><Check size={14} /> {busy ? "Enviando…" : "Enviar evaluación"}</Btn>
+      </div>
+    </EvalPantalla>
+  );
+}
+
+// ---------------------------------------------------------------------
+// El JEFE INMEDIATO (o un admin) completa práctica, rúbrica, ejercicios
+// escritos y dictamen, y cierra la evaluación (ya no se puede reabrir).
+// ---------------------------------------------------------------------
+function EvalJefe({ row, onSalir }) {
+  const currentUser = useContext(CurrentUserContext);
+  const confirmar = useContext(ConfirmContext);
+  const esAdmin = currentUser?.categoria === "admin";
+  const [j, setJ] = useState(() => evalJefeCompleto(row.evaluacion_jefe));
+  const [estado, setEstado] = useState(row.estado);
+  const [msg, setMsg] = useState(""); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
+  const cerrada = estado === "cerrada";
+  const lista = estado === "respondida";
+  const inc = row.incluir || {};
+  const calc = evalCalcularLocal({ ...row, estado }, j);
+  const pts = calc.puntajes;
+  const sugerido = evalDictamenSugerido(calc.nota);
+  const set = (k, v) => setJ((x) => ({ ...x, [k]: v }));
+  const setFila = (k, i, campo, v) => setJ((x) => ({ ...x, [k]: x[k].map((f, n) => (n === i ? { ...f, [campo]: v } : f)) }));
+
+  const faltanD = inc.D ? j.practica.filter((x) => !["0", "1", "2", "na"].includes(String(x.v))).length : 0;
+  const faltanE = inc.E ? j.rubrica.filter((x) => !["1", "2", "3", "4", "5"].includes(String(x.v))).length : 0;
+  const puedeCerrar = lista && !faltanD && !faltanE && !!j.dictamen;
+
+  const guardar = async (cerrar) => {
+    setError(""); setMsg("");
+    if (cerrar && !(await confirmar(`¿Cerrar la evaluación de ${row.tecnico_nombre}? Nota final: ${calc.nota ?? "—"}. Una vez cerrada NO se puede abrir ni modificar.`, { confirmLabel: "Sí, cerrar", variant: "accent" }))) return;
+    setBusy(true);
+    const { data, error: err } = await supabase.rpc("eval_jefe", { p_usuario: currentUser?.id, p_id: row.id, p_datos: j, p_cerrar: !!cerrar });
+    setBusy(false);
+    if (err) { setError(evalMsgError(err)); return; }
+    if (cerrar) { setEstado("cerrada"); setMsg(`Evaluación cerrada. Nota final ${data?.nota ?? calc.nota}.`); }
+    else setMsg("Avance guardado ✓");
+  };
+
+  const fmt = (v) => (v == null ? "—" : Number(v).toLocaleString("es-CR", { maximumFractionDigits: 1 }));
+  const caja = evalEstilos.caja;
+  const filaBox = { border: `1px solid ${T.line}`, borderRadius: 10, padding: "9px 11px", display: "flex", flexDirection: "column", gap: 7 };
+  return (
+    <EvalPantalla titulo={`Evaluación de ${row.tecnico_nombre} · ${row.codigo}`} sub={`Aspira a ${row.datos?.puestoAspira || "—"} · jefe inmediato: ${row.jefe_nombre || "—"}`} onCerrar={() => onSalir(true)}>
+      <Card title="Estado">
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 13.5 }}>
+          <EvalEstadoBadge estado={estado} />
+          {!lista && !cerrada && <span style={{ color: T.inkSoft }}>El técnico todavía no envía sus respuestas. Puede ir llenando la parte práctica y la rúbrica, pero solo podrá cerrar cuando él la envíe.</span>}
+          {cerrada && <span style={{ color: T.inkSoft, display: "flex", alignItems: "center", gap: 5 }}><Lock size={14} /> Cerrada: ya no se puede modificar.</span>}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(110px,1fr))", gap: 8, marginTop: 12 }}>
+          {[["A", "Técnico", pts.A_total ? `${pts.A_ok}/${pts.A_total}` : ""], ["B", "Servicio", pts.B_total ? `${pts.B_ok}/${pts.B_total}` : ""], ["C", "Administrativo", pts.C_total ? `${pts.C_ok}/${pts.C_total}` : ""], ["D", "Práctica", ""], ["E", "Rúbrica", ""]]
+            .filter(([k]) => Number(row.pesos?.[k] || 0) > 0 && (k === "D" ? inc.D : k === "E" ? inc.E : k === "C" ? (pts.C_total || inc.F) : Number(pts[k + "_total"] || 0) > 0 || !lista))
+            .map(([k, t, extra]) => (
+              <div key={k} style={{ background: T.graySoft, borderRadius: 10, padding: "8px 10px" }}>
+                <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700 }}>{k}. {t} · {row.pesos?.[k]}%</div>
+                <div style={{ fontSize: 19, fontWeight: 800 }}>{fmt(pts[k])}</div>
+                {extra && <div style={{ fontSize: 11, color: T.inkSoft }}>{extra} correctas</div>}
+              </div>
+            ))}
+          <div style={{ background: T.steel, color: "#fff", borderRadius: 10, padding: "8px 10px" }}>
+            <div style={{ fontSize: 11, opacity: 0.8, fontWeight: 700 }}>NOTA FINAL</div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>{fmt(calc.nota)}</div>
+          </div>
+        </div>
+      </Card>
+
+      {inc.D && (
+        <Card title="D. Evaluación práctica observada">
+          <div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: -4, marginBottom: 10 }}>Cumple = 2 · Parcial = 1 · No cumple = 0 · N/A no cuenta. {faltanD ? <b style={{ color: T.amber }}>Faltan {faltanD}.</b> : ""}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {EVAL_PRACTICA.map((t, i) => (
+              <div key={i} style={filaBox}>
+                <div style={{ fontSize: 13.5, fontWeight: 600 }}>{i + 1}. {t}</div>
+                <EvalPildoras opciones={EVAL_OPC_D} valor={j.practica[i].v} disabled={cerrada} onChange={(v) => setFila("practica", i, "v", v)} />
+                <input style={{ ...caja, padding: "6px 9px", fontSize: 12.5 }} disabled={cerrada} value={j.practica[i].obs} onChange={(e) => setFila("practica", i, "obs", e.target.value)} placeholder={cerrada ? "" : "Observaciones (opcional)"} />
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {inc.E && (
+        <Card title="E. Rúbrica de competencias">
+          <div style={{ fontSize: 12.5, color: T.inkSoft, marginTop: -4, marginBottom: 10 }}>1 = Deficiente · 2 = Necesita mejorar · 3 = Aceptable · 4 = Bueno · 5 = Excelente. {faltanE ? <b style={{ color: T.amber }}>Faltan {faltanE}.</b> : ""}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {EVAL_RUBRICA.map((t, i) => (
+              <div key={i} style={filaBox}>
+                <div style={{ fontSize: 13.5, fontWeight: 600 }}>{t}</div>
+                <EvalPildoras opciones={[1, 2, 3, 4, 5].map((n) => [String(n), String(n)])} valor={j.rubrica[i].v} disabled={cerrada} onChange={(v) => setFila("rubrica", i, "v", v)} />
+                <input style={{ ...caja, padding: "6px 9px", fontSize: 12.5 }} disabled={cerrada} value={j.rubrica[i].obs} onChange={(e) => setFila("rubrica", i, "obs", e.target.value)} placeholder={cerrada ? "" : "Evidencia / comentario (opcional)"} />
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {inc.F && (
+        <Card title="F. Ejercicios escritos del técnico">
+          {[["F1", "F1. Correo al cliente", EVAL_CRIT_F1, 0], ["F2", "F2. Plan de trabajo", EVAL_CRIT_F2, 6]].map(([k, t, crit, desde]) => (
+            <div key={k} style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 5 }}>{t}</div>
+              <div style={{ whiteSpace: "pre-wrap", fontSize: 13.5, lineHeight: 1.5, background: T.graySoft, borderRadius: 9, padding: "9px 11px", minHeight: 40, color: lista || cerrada ? T.ink : T.inkSoft }}>
+                {lista || cerrada ? (row.escritos?.[k] || "(sin respuesta)") : "Se verá cuando el técnico envíe la evaluación."}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 6, marginTop: 8 }}>
+                {crit.map((c, n) => (
+                  <label key={n} style={{ display: "flex", gap: 7, alignItems: "center", fontSize: 13, cursor: cerrada ? "default" : "pointer" }}>
+                    <input type="checkbox" disabled={cerrada} checked={j.criteriosF[desde + n]} onChange={(e) => setJ((x) => ({ ...x, criteriosF: x.criteriosF.map((b, m) => (m === desde + n ? e.target.checked : b)) }))} /> {c}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div style={{ fontSize: 12, color: T.inkSoft }}>Puntaje F = criterios marcados ÷ 12 × 100 → <b>{fmt(pts.F)}</b>. Cuenta 30 % de la parte C.</div>
+        </Card>
+      )}
+
+      <Card title="Dictamen del jefe inmediato">
+        {sugerido && !cerrada && <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 8 }}>Según la nota ({fmt(calc.nota)}) el dictamen sugerido es: <b>{EVAL_DICTAMEN.find((d) => d[0] === sugerido)?.[1]}</b>.</div>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {EVAL_DICTAMEN.map(([v, t, r]) => (
+            <label key={v} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13.5, cursor: cerrada ? "default" : "pointer" }}>
+              <input type="radio" name="dictamen" disabled={cerrada} checked={j.dictamen === v} onChange={() => set("dictamen", v)} /> <b>{t}</b> <span style={{ color: T.inkSoft }}>({r})</span>
+            </label>
+          ))}
+        </div>
+        <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10, marginTop: 10 }}>
+          <div><label style={evalEstilos.etiqueta}>Capacitación recomendada</label><input style={caja} disabled={cerrada} value={j.capacitacion} onChange={(e) => set("capacitacion", e.target.value)} placeholder={cerrada ? "" : "Ej. Programación NFS2-640, redacción de informes"} /></div>
+          <div><label style={evalEstilos.etiqueta}>Reevaluar en (meses)</label><input style={caja} disabled={cerrada} value={j.reevaluar} onChange={(e) => set("reevaluar", e.target.value)} placeholder={cerrada ? "" : "Ej. 6"} /></div>
+        </div>
+        <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+          <div><label style={evalEstilos.etiqueta}>Fortalezas</label><textarea rows={3} style={{ ...caja, resize: "vertical" }} disabled={cerrada} value={j.fortalezas} onChange={(e) => set("fortalezas", e.target.value)} /></div>
+          <div><label style={evalEstilos.etiqueta}>Oportunidades de mejora</label><textarea rows={3} style={{ ...caja, resize: "vertical" }} disabled={cerrada} value={j.mejoras} onChange={(e) => set("mejoras", e.target.value)} /></div>
+        </div>
+      </Card>
+
+      {error && <div style={{ color: T.red, fontWeight: 700, fontSize: 13 }}>{error}</div>}
+      {msg && <div style={{ color: T.green, fontWeight: 700, fontSize: 13 }}>{msg}</div>}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        {!cerrada && !puedeCerrar && <span style={{ fontSize: 12, color: T.inkSoft }}>{!lista ? "Para cerrar, el técnico debe enviar primero." : faltanD || faltanE ? "Para cerrar complete la práctica y la rúbrica." : "Para cerrar elija el dictamen."}</span>}
+        {esAdmin && <Btn variant="ghost" onClick={() => evalDescargarConRespuestas({ ...row, estado, evaluacion_jefe: j, puntajes: { ...(row.puntajes || {}), ...pts }, nota_final: calc.nota }, currentUser)}><Download size={14} /> PDF con respuestas</Btn>}
+        {!cerrada && <Btn variant="ghost" onClick={() => guardar(false)} disabled={busy}>Guardar avance</Btn>}
+        {!cerrada && <Btn variant="accent" onClick={() => guardar(true)} disabled={busy || !puedeCerrar}><Lock size={14} /> Cerrar evaluación</Btn>}
+        {cerrada && <Btn variant="accent" onClick={() => onSalir(true)}>Listo</Btn>}
+      </div>
+    </EvalPantalla>
+  );
+}
+
+// Aviso en la parte de arriba de la app para el técnico evaluado y para el
+// jefe inmediato (aparece solo cuando tienen una evaluación pendiente).
+function AvisoEvaluaciones() {
+  const currentUser = useContext(CurrentUserContext);
+  const [filas, setFilas] = useState([]);
+  const [abierta, setAbierta] = useState(null); // { row, modo }
+  const cargar = useCallback(async () => {
+    if (!currentUser?.id) return;
+    const { data, error } = await supabase.rpc("eval_listar", { p_usuario: currentUser.id });
+    if (!error && Array.isArray(data)) setFilas(data);
+  }, [currentUser?.id]);
+  useEffect(() => { cargar(); const t = setInterval(cargar, 5 * 60 * 1000); return () => clearInterval(t); }, [cargar]);
+  const comoTecnico = filas.filter((r) => r.tecnico_id === currentUser?.id && ["pendiente", "en_curso"].includes(r.estado));
+  const comoJefe = filas.filter((r) => r.jefe_id === currentUser?.id && r.tecnico_id !== currentUser?.id && r.estado !== "cerrada");
+  const salir = () => { setAbierta(null); cargar(); };
+  return (
+    <>
+      {(comoTecnico.length > 0 || comoJefe.length > 0) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+          {comoTecnico.map((r) => (
+            <div key={r.id} style={{ background: T.accentSoft, border: `1px solid ${T.accent}`, borderRadius: 12, padding: "10px 14px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <Award size={20} color={T.accent} />
+              <div style={{ flex: 1, minWidth: 200, fontSize: 13.5 }}>
+                <b>Tiene una evaluación de competencias asignada</b> ({r.datos?.puestoAspira ? `puesto: ${r.datos.puestoAspira}` : r.codigo}).
+                <span style={{ color: T.inkSoft }}> {r.estado === "en_curso" ? "Ya la empezó; puede seguir donde quedó." : `Tiempo sugerido ${r.datos?.tiempo || "—"} min.`}</span>
+              </div>
+              <Btn variant="accent" small onClick={() => setAbierta({ row: r, modo: "tecnico" })}>{r.estado === "en_curso" ? "Continuar" : "Comenzar"}</Btn>
+            </div>
+          ))}
+          {comoJefe.map((r) => (
+            <div key={r.id} style={{ background: "#fff", border: `1px solid ${T.line}`, borderRadius: 12, padding: "10px 14px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <Award size={20} color={T.steel} />
+              <div style={{ flex: 1, minWidth: 200, fontSize: 13.5 }}>
+                <b>Evaluación de {r.tecnico_nombre}</b> a su cargo como jefe inmediato. <EvalEstadoBadge estado={r.estado} />
+              </div>
+              <Btn variant={r.estado === "respondida" ? "accent" : "ghost"} small onClick={() => setAbierta({ row: r, modo: "jefe" })}>Completar</Btn>
+            </div>
+          ))}
+        </div>
+      )}
+      {abierta?.modo === "tecnico" && <EvalResponder row={abierta.row} onSalir={salir} />}
+      {abierta?.modo === "jefe" && <EvalJefe row={abierta.row} onSalir={salir} />}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Administrativo → Evaluación de competencias (admin): asignar, ver el
+// avance de cada técnico, completar/cerrar, descargar con respuestas.
+// ---------------------------------------------------------------------
+function EvaluacionCompetencias() {
+  const currentUser = useContext(CurrentUserContext);
+  const confirmar = useContext(ConfirmContext);
+  const { users } = useContext(UsersContext);
+  const [empleados, setEmpleados] = useState([]);
+  const hoy = new Date();
+  const [f, setF] = useState({
+    tecnicoId: "", nombre: "", jefeId: currentUser?.id || "", cedula: "", puestoActual: "", puestoAspira: "Técnico II", area: "Inspecciones",
+    antiguedad: "", fecha: hoy.toLocaleDateString("es-CR"),
+    nTec: 30, areas: { nfpa: true, electronica: true, nicet: true, fas1: true, notifier: true },
+    nServ: 10, nAdmin: 15, D: true, E: true, F: true, clave: true, tiempo: 90,
+    pesos: { A: 40, B: 15, C: 20, D: 15, E: 10 },
+  });
+  const [lista, setLista] = useState([]);
+  const [errLista, setErrLista] = useState("");
+  const [msg, setMsg] = useState(""); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
+  const [abierta, setAbierta] = useState(null);
+  const personal = (users || []).filter((u) => u.categoria !== "cliente");
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("empleados").select("*").eq("activo", true).order("nombre", { ascending: true });
+      if (data) setEmpleados(data);
+    })();
+  }, []);
+  const cargar = useCallback(async () => {
+    const { data, error: err } = await supabase.rpc("eval_listar", { p_usuario: currentUser?.id });
+    if (err) { setErrLista(evalMsgError(err)); return; }
+    setErrLista(""); setLista(Array.isArray(data) ? data : []);
+  }, [currentUser?.id]);
+  useEffect(() => { cargar(); }, [cargar]);
+
+  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const elegirTecnico = (id) => {
+    const u = personal.find((x) => String(x.id) === String(id));
+    let emp = null, mejor = 0;
+    if (u) empleados.forEach((e) => { const s = similitudNombres(e.nombre, u.name || ""); if (s > mejor) { mejor = s; emp = e; } });
+    if (mejor < 0.35) emp = null;
+    setF((p) => ({ ...p, tecnicoId: id, nombre: u?.name || "", puestoActual: emp?.puesto || p.puestoActual, cedula: emp?.cedula || p.cedula }));
+  };
+  const usaC = f.nAdmin > 0 || f.F;
+  const sumaPesos = Object.entries(f.pesos).reduce((a, [k, v]) => a + (((k === "A" && f.nTec > 0) || (k === "B" && f.nServ > 0) || (k === "C" && usaC) || (k === "D" && f.D) || (k === "E" && f.E)) ? Number(v) || 0 : 0), 0);
+  const jefeNombre = personal.find((u) => String(u.id) === String(f.jefeId))?.name || "";
+  const datosBase = () => ({ cedula: f.cedula.trim(), puestoActual: f.puestoActual.trim(), puestoAspira: f.puestoAspira.trim(), area: f.area, antiguedad: f.antiguedad.trim(), fecha: f.fecha.trim(), tiempo: Number(f.tiempo) || 0 });
+  const pesosUsados = () => ({ A: f.nTec > 0 ? f.pesos.A : 0, B: f.nServ > 0 ? f.pesos.B : 0, C: usaC ? f.pesos.C : 0, D: f.D ? f.pesos.D : 0, E: f.E ? f.pesos.E : 0 });
+
+  const imprimirEnBlanco = () => {
+    const q = evalGenerarPreguntas(f);
+    const cfg = { codigo: evalCodigo(), nombre: f.nombre.trim(), jefe: jefeNombre, ...datosBase(), ...q, incluir: { D: f.D, E: f.E, F: f.F }, incluirClave: f.clave, pesos: f.pesos };
+    const imp = abrirImpresion(`Evaluación de competencias - ${cfg.nombre || "técnico"}`);
+    if (!imp) return;
+    imp.escribir(generarHtmlEvaluacion(cfg), 600);
+  };
+  const asignar = async () => {
+    setMsg(""); setError("");
+    const tec = personal.find((u) => String(u.id) === String(f.tecnicoId));
+    if (!tec) { setError("Elija el técnico (debe tener usuario en la app para poder responder)."); return; }
+    if (!f.jefeId) { setError("Elija el jefe inmediato."); return; }
+    if (String(f.jefeId) === String(tec.id)) { setError("El jefe inmediato no puede ser el mismo técnico evaluado."); return; }
+    const abiertas = lista.filter((r) => r.tecnico_id === tec.id && r.estado !== "cerrada");
+    if (abiertas.length && !(await confirmar(`${tec.name} ya tiene ${abiertas.length} evaluación(es) sin cerrar. ¿Asignarle otra?`, { confirmLabel: "Sí, asignar", variant: "accent" }))) return;
+    const q = evalGenerarPreguntas(f);
+    const sinClave = (l) => l.map(({ correctas, n, ...p }) => ({ ...p, multiple: correctas.length > 1 }));
+    const evalData = {
+      codigo: evalCodigo(), tecnico_id: tec.id, tecnico_nombre: tec.name, jefe_id: f.jefeId, jefe_nombre: jefeNombre,
+      datos: datosBase(), pesos: pesosUsados(), incluir: { D: f.D, E: f.E, F: f.F },
+      preguntas: { A: sinClave(q.tecnicas), B: sinClave(q.servicio), C: sinClave(q.admin) },
+    };
+    const clave = { A: q.tecnicas.map((p) => p.correctas), B: q.servicio.map((p) => p.correctas), C: q.admin.map((p) => p.correctas) };
+    setBusy(true);
+    const { error: err } = await supabase.rpc("eval_crear", { p_usuario: currentUser?.id, p_eval: evalData, p_clave: clave });
+    setBusy(false);
+    if (err) { setError(evalMsgError(err)); return; }
+    setMsg(`Evaluación ${evalData.codigo} asignada a ${tec.name}. Le aparecerá al entrar a la app (web o APK). Jefe inmediato: ${jefeNombre}.`);
+    cargar();
+  };
+  const eliminar = async (r) => {
+    if (!(await confirmar(`¿Eliminar la evaluación ${r.codigo} de ${r.tecnico_nombre}? Se borran también sus respuestas. Esta acción no se puede deshacer.`))) return;
+    const { error: err } = await supabase.rpc("eval_eliminar", { p_usuario: currentUser?.id, p_id: r.id });
+    if (err) { alert(evalMsgError(err)); return; }
+    cargar();
+  };
+
+  const { etiqueta, caja } = evalEstilos;
+  const chk = (checked, onChange, texto) => (
+    <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, cursor: "pointer", color: T.ink }}>
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} /> {texto}
+    </label>
+  );
+  const AREAS_TEC = [["nfpa", "NFPA 72"], ["electronica", "Electrónica"], ["nicet", "NICET"], ["fas1", "FAS Nivel I"], ["notifier", "Notifier"]];
+  const fmt = (v) => (v == null ? "—" : Number(v).toLocaleString("es-CR", { maximumFractionDigits: 1 }));
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <Card title="Evaluación de competencias para promoción">
+        <div style={{ fontSize: 13, color: T.inkSoft, marginBottom: 14, lineHeight: 1.5 }}>
+          Asigne la evaluación a un técnico: él la responde en la app (web o APK) y se <b>califica sola</b>. Luego su <b>jefe inmediato</b> completa la evaluación práctica,
+          la rúbrica, los ejercicios escritos y el dictamen, y la <b>cierra</b> (cerrada ya no se puede abrir). Desde la lista de abajo puede descargar cada evaluación
+          con las respuestas del técnico para <b>Recursos Humanos</b>. También puede imprimirla en blanco para hacerla en papel.
+        </div>
+        <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+          <div><label style={etiqueta}>Técnico a evaluar</label>
+            <select style={caja} value={f.tecnicoId} onChange={(e) => elegirTecnico(e.target.value)}>
+              <option value="">— Elegir usuario —</option>
+              {personal.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+            <input style={{ ...caja, marginTop: 6 }} value={f.nombre} onChange={(e) => set("nombre", e.target.value)} placeholder="Nombre (para imprimir en blanco)" />
+          </div>
+          <div><label style={etiqueta}>Cédula</label><input style={caja} value={f.cedula} onChange={(e) => set("cedula", e.target.value)} placeholder="Opcional" />
+            <label style={{ ...etiqueta, marginTop: 8 }}>Antigüedad</label><input style={caja} value={f.antiguedad} onChange={(e) => set("antiguedad", e.target.value)} placeholder="Ej. 3 años" /></div>
+          <div><label style={etiqueta}>Área</label>
+            <select style={caja} value={f.area} onChange={(e) => set("area", e.target.value)}>{["Inspecciones", "Proyectos", "Inspecciones y Proyectos"].map((a) => <option key={a}>{a}</option>)}</select>
+            <label style={{ ...etiqueta, marginTop: 8 }}>Tiempo sugerido (min)</label><input type="number" min={15} style={caja} value={f.tiempo} onChange={(e) => set("tiempo", e.target.value)} /></div>
+          <div><label style={etiqueta}>Puesto actual</label><input style={caja} value={f.puestoActual} onChange={(e) => set("puestoActual", e.target.value)} placeholder="Ej. Técnico I" /></div>
+          <div><label style={etiqueta}>Puesto al que aspira</label>
+            <input style={caja} list="eval-puestos" value={f.puestoAspira} onChange={(e) => set("puestoAspira", e.target.value)} />
+            <datalist id="eval-puestos">{EVAL_PUESTOS.map((p) => <option key={p} value={p} />)}</datalist></div>
+          <div><label style={etiqueta}>Jefe inmediato · Fecha</label>
+            <div style={{ display: "flex", gap: 6 }}>
+              <select style={caja} value={f.jefeId} onChange={(e) => set("jefeId", e.target.value)}>
+                <option value="">— Elegir —</option>
+                {personal.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </select>
+              <input style={{ ...caja, width: 120 }} value={f.fecha} onChange={(e) => set("fecha", e.target.value)} /></div></div>
+        </div>
+      </Card>
+
+      <Card title="Contenido de la evaluación">
+        <div className="grid-layout" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div><label style={etiqueta}>A. Conocimiento técnico — preguntas</label>
+              <input type="number" min={0} max={80} style={{ ...caja, width: 110 }} value={f.nTec} onChange={(e) => set("nTec", e.target.value)} />
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 14px", marginTop: 6 }}>
+                {AREAS_TEC.map(([k, n]) => <span key={k}>{chk(f.areas[k], (v) => setF((p) => ({ ...p, areas: { ...p.areas, [k]: v } })), n)}</span>)}
+              </div></div>
+            <div><label style={etiqueta}>B. Servicio al cliente — preguntas (máx. {EVAL_SERVICIO.length})</label>
+              <input type="number" min={0} max={EVAL_SERVICIO.length} style={{ ...caja, width: 110 }} value={f.nServ} onChange={(e) => set("nServ", Math.min(EVAL_SERVICIO.length, Number(e.target.value) || 0))} /></div>
+            <div><label style={etiqueta}>C. Habilidades administrativas — preguntas (máx. {EVAL_ADMIN.length})</label>
+              <input type="number" min={0} max={EVAL_ADMIN.length} style={{ ...caja, width: 110 }} value={f.nAdmin} onChange={(e) => set("nAdmin", Math.min(EVAL_ADMIN.length, Number(e.target.value) || 0))} />
+              <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 4 }}>Coordinación, comunicación, informes, correo electrónico, manejo de personal, seguridad, gestión y ética.</div></div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {chk(f.D, (v) => set("D", v), "D. Evaluación práctica observada (12 competencias)")}
+            {chk(f.E, (v) => set("E", v), "E. Rúbrica de competencias 1 a 5 (14 aspectos)")}
+            {chk(f.F, (v) => set("F", v), "F. Ejercicios escritos: correo al cliente y plan de trabajo (30 % de la parte C)")}
+            {chk(f.clave, (v) => set("clave", v), "Clave de respuestas al imprimir en blanco (hoja aparte)")}
+            <div style={{ marginTop: 6 }}><label style={etiqueta}>Peso de cada parte (%)</label>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {["A", "B", "C", "D", "E"].map((k) => (
+                  <label key={k} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13, fontWeight: 700 }}>{k}
+                    <input type="number" min={0} max={100} style={{ ...caja, width: 62, padding: "6px 6px" }} value={f.pesos[k]} onChange={(e) => setF((p) => ({ ...p, pesos: { ...p.pesos, [k]: Number(e.target.value) || 0 } }))} />
+                  </label>
+                ))}
+              </div>
+              <div style={{ fontSize: 12, marginTop: 5, fontWeight: 700, color: sumaPesos === 100 ? T.green : T.red }}>Suma de las partes incluidas: {sumaPesos}%{sumaPesos !== 100 ? " — debe dar 100%" : " ✓"}</div>
+            </div>
+          </div>
+        </div>
+        {error && <div style={{ color: T.red, fontWeight: 700, fontSize: 13, marginTop: 12 }}>{error}</div>}
+        {msg && <div style={{ color: T.green, fontWeight: 700, fontSize: 13, marginTop: 12 }}>{msg}</div>}
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16, gap: 8, flexWrap: "wrap" }}>
+          <Btn variant="ghost" onClick={descargarExamen40}><Download size={14} /> Examen de práctica (.txt)</Btn>
+          <Btn variant="ghost" onClick={imprimirEnBlanco} disabled={sumaPesos !== 100 || (!f.nTec && !f.nServ && !f.nAdmin)}><FileText size={14} /> Imprimir en blanco (PDF)</Btn>
+          <Btn variant="accent" onClick={asignar} disabled={busy || sumaPesos !== 100 || (!f.nTec && !f.nServ && !f.nAdmin)}><Award size={14} /> {busy ? "Asignando…" : "Asignar al técnico en la app"}</Btn>
+        </div>
+      </Card>
+
+      <Card title="Evaluaciones asignadas" action={<Btn variant="ghost" small onClick={cargar}>Actualizar</Btn>}>
+        {errLista ? <div style={{ color: T.red, fontWeight: 700, fontSize: 13 }}>{errLista}</div>
+          : !lista.length ? <div style={{ color: T.inkSoft, fontSize: 13 }}>Todavía no hay evaluaciones asignadas.</div>
+          : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead><tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase" }}>
+                  {["Código", "Técnico", "Aspira a", "Jefe inmediato", "Estado", "Nota", "Asignada", ""].map((h) => <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${T.line}` }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {lista.map((r) => (
+                    <tr key={r.id} style={{ borderBottom: `1px solid ${T.line}` }}>
+                      <td style={{ padding: "7px 8px", fontFamily: "monospace", fontSize: 12, whiteSpace: "nowrap" }}>{r.codigo}</td>
+                      <td style={{ padding: "7px 8px", fontWeight: 700 }}>{r.tecnico_nombre}</td>
+                      <td style={{ padding: "7px 8px" }}>{r.datos?.puestoAspira || "—"}</td>
+                      <td style={{ padding: "7px 8px" }}>{r.jefe_nombre || "—"}</td>
+                      <td style={{ padding: "7px 8px" }}><EvalEstadoBadge estado={r.estado} /></td>
+                      <td style={{ padding: "7px 8px", fontWeight: 800 }}>{fmt(r.nota_final)}</td>
+                      <td style={{ padding: "7px 8px", fontSize: 12, color: T.inkSoft }}>{evalFecha(r.creado_en)}</td>
+                      <td style={{ padding: "7px 8px" }}>
+                        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                          <Btn small variant="ghost" onClick={() => setAbierta(r)}>{r.estado === "cerrada" ? "Ver" : "Completar"}</Btn>
+                          <Btn small variant="ghost" onClick={() => evalDescargarConRespuestas(r, currentUser)}><Download size={13} /> PDF con respuestas</Btn>
+                          {r.estado !== "cerrada" && <Btn small variant="ghost" onClick={() => eliminar(r)}><Trash2 size={13} /></Btn>}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+      </Card>
+      {abierta && <EvalJefe row={abierta} onSalir={() => { setAbierta(null); cargar(); }} />}
+    </div>
+  );
+}
+
 function Administrativo() {
   const [tab, setTab] = useEstadoRecordado("administrativo", "resumen");
   return (
@@ -6336,10 +7330,11 @@ function Administrativo() {
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <Btn variant={tab === "resumen" ? "accent" : "ghost"} small onClick={() => setTab("resumen")}>Resumen Ejecutivo</Btn>
         <Btn variant={tab === "usuarios" ? "accent" : "ghost"} small onClick={() => setTab("usuarios")}>Gestión de Usuarios</Btn>
-        <Btn variant="ghost" small onClick={descargarExamen40} style={{ marginLeft: "auto" }}><Download size={13} /> Descargar examen de 40 preguntas</Btn>
+        <Btn variant={tab === "evaluacion" ? "accent" : "ghost"} small onClick={() => setTab("evaluacion")}>Evaluación de competencias</Btn>
       </div>
       {tab === "resumen" && <ResumenEjecutivo />}
       {tab === "usuarios" && <GestionUsuarios />}
+      {tab === "evaluacion" && <EvaluacionCompetencias />}
     </div>
   );
 }
@@ -16776,6 +17771,7 @@ function AppInner() {
           </div>
         )}
 
+        {user.categoria !== "cliente" && <AvisoEvaluaciones />}
         {tab === "inspecciones" && <AreaOperativa area="inspecciones" color={T.steel} />}
         {tab === "proyectos" && <AreaOperativa area="proyectos" color={T.green} />}
         {tab === "cotizaciones" && <Cotizaciones />}

@@ -3616,6 +3616,1420 @@ function ResumenCotizacionesCard() {
   );
 }
 
+// =====================================================================
+// COTIZACIÓN EN PROCESO (Cotizaciones → pestaña solo admin y asistente)
+// Módulo Cotizador A&D de Anthony: mano de obra, viáticos, renta de equipos,
+// materiales, márgenes y descarga del machote Excel. Todo queda dentro de
+// esta función para no chocar con nombres del resto de la app.
+// La configuración (salarios, overhead, catálogos) vive en Supabase en la
+// tabla cotizador_config, que solo se lee/guarda con funciones que revisan
+// el usuario (ver cotizador_supabase.sql).
+// =====================================================================
+const COTZ_CSS = `.cotz{--bg:#F3F5F7;--surface:#FFFFFF;--surface2:#F7F8FA;--line:#E1E6EB;--fg:#101826;--muted:#5B6572;
+  --red:#E86A2C;--red-hover:#CF5A20;--red-text:#C9541C;--red-soft:#FFE4D3;
+  --slate:#1F3A5F;--slate-hover:#182F4D;--sky:#EDEFF2;--in-line:#E1E6EB;
+  --ok-bg:#DEF2E8;--ok-fg:#2E7D5B;--err-bg:#FBE4E4;--err-fg:#C13E3E;--warn-bg:#FBEBCB;--warn-fg:#8A5C00;
+  color:var(--fg);font-family:inherit;font-size:13.5px}
+.cotz, .cotz *{box-sizing:border-box}
+.cotz button,.cotz input,.cotz select{font:inherit}
+.cotz :focus-visible{outline:2px solid var(--red);outline-offset:2px}
+.cotz .wrap{padding-inline:0}
+.cotz .topinfo{background:var(--sky);border-radius:10px;font-size:12px;color:var(--muted);margin-bottom:10px}
+.cotz .topinfo .wrap{display:flex;flex-wrap:wrap;gap:4px 16px;justify-content:space-between;padding:7px 12px}
+.cotz .topinfo strong{color:var(--fg)}
+.cotz .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.cotz .brand{background:var(--slate);color:#fff;border-radius:12px}
+.cotz .brand .wrap{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;justify-content:space-between;padding:12px 16px}
+.cotz .btitle{font-weight:800;font-size:16px;letter-spacing:-.2px;line-height:1.2}
+.cotz .bsub{font-size:12px;color:rgba(255,255,255,.75)}
+.cotz .hbtns{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.cotz .btn{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:8px 14px;border-radius:9px;border:1px solid transparent;font-weight:600;font-size:13px;cursor:pointer;white-space:nowrap;transition:filter .15s}
+.cotz .btn:hover{filter:brightness(.94)}
+.cotz .btn svg{flex:none;width:16px;height:16px}
+.cotz .btn-ghost{background:rgba(255,255,255,.12);color:#fff;border-color:rgba(255,255,255,.35)}
+.cotz .btn-dark{background:var(--slate);color:#fff}
+.cotz .brand .btn-dark{background:#fff;color:var(--slate)}
+.cotz .btn-red{background:var(--red);color:#fff}
+.cotz .btn-line{background:transparent;color:var(--slate);border-color:var(--line)}
+.cotz .btn[disabled]{opacity:.5;cursor:not-allowed;filter:none}
+.cotz .gear{width:36px;padding:0;justify-content:center}
+.cotz .gear svg{width:19px;height:19px}
+.cotz .main{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;padding-block:14px 4px}
+.cotz .nav{flex:1 1 100%;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:6px;display:flex;flex-direction:row;flex-wrap:wrap;gap:4px}
+.cotz .nav .navbtn{flex:1 1 150px;width:auto}
+.cotz .navbtn{display:flex;align-items:center;gap:10px;width:100%;padding:9px 10px;border:0;border-radius:9px;background:transparent;color:var(--fg);cursor:pointer;text-align:left;min-height:46px}
+.cotz .navbtn:hover{background:var(--surface2)}
+.cotz .navbtn.on{background:var(--red);color:#fff}
+.cotz .badge{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--sky);color:var(--slate);font-weight:700;font-size:12px;flex:none}
+.cotz .navbtn.on .badge{background:#fff;color:var(--red)}
+.cotz .navname{font-weight:600;display:block;font-size:13px}
+.cotz .navsub{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.cotz .navbtn.on .navsub{color:rgba(255,255,255,.85)}
+.cotz .work{flex:999 1 520px;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.cotz .workhead{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px}
+.cotz h1,.cotz h2,.cotz h3{text-wrap:balance}
+.cotz .workhead h1{margin:0;font-size:16px;font-weight:800;letter-spacing:-.2px;color:var(--fg)}
+.cotz .hint{font-size:12.5px;color:var(--muted)}
+.cotz .workbody{padding:18px}
+.cotz .side{flex:1 1 270px;max-width:330px;min-width:250px;display:flex;flex-direction:column;gap:12px}
+.cotz .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.cotz .dark{background:var(--slate);color:#fff;border-radius:14px;padding:16px}
+.cotz .redcard{background:var(--red);color:#fff;border-radius:14px;padding:14px 16px}
+.cotz .kicker{font-size:11px;letter-spacing:.06em;text-transform:uppercase;font-weight:700}
+.cotz .bignum{font-weight:800;letter-spacing:-.5px;line-height:1.15;font-variant-numeric:tabular-nums}
+.cotz .ctitle{font-size:14px;font-weight:700;margin:0 0 6px;color:var(--fg)}
+.cotz .kv{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px;font-variant-numeric:tabular-nums}
+.cotz .kv:last-child{border-bottom:0}
+.cotz .kv span:first-child{color:var(--muted)}
+.cotz .dark .kv span:first-child{color:rgba(255,255,255,.75)}
+.cotz .kv > :last-child{white-space:nowrap}
+.cotz .tblbox{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
+.cotz table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+.cotz th{background:var(--surface2);color:var(--muted);font-weight:700;text-align:left;padding:8px 10px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap;border-bottom:1px solid var(--line)}
+.cotz td{padding:6px 10px;border-top:1px solid var(--line);vertical-align:middle;white-space:nowrap}
+.cotz tbody tr:first-child td{border-top:0}
+.cotz .r{text-align:right}
+.cotz .strong{font-weight:700}
+.cotz .num{width:76px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;font-size:13.5px;text-align:right;background:#fff;color:var(--fg);font-weight:600;min-height:34px;font-variant-numeric:tabular-nums;outline:none}
+.cotz .num:focus,.cotz .txt:focus,.cotz .sel:focus{border-color:var(--slate)}
+.cotz .num:disabled,.cotz .txt:disabled{background:var(--surface2);color:var(--muted)}
+.cotz .num.wide{width:130px}
+.cotz .num.full{width:100%}
+.cotz .dark .num{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.3);color:#fff}
+.cotz .txt{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13.5px;background:#fff;color:var(--fg);min-height:36px;outline:none}
+.cotz .txt.cell{min-height:34px;font-size:13px;min-width:200px}
+.cotz .txt.short{min-width:70px;width:90px}
+.cotz .sel{padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13.5px;background:#fff;color:var(--fg);min-height:36px;outline:none}
+.cotz .field{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:var(--muted)}
+.cotz .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px 18px}
+.cotz .grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+.cotz .sec{margin:22px 0 8px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700}
+.cotz .sec:first-child{margin-top:0}
+.cotz .tile{background:var(--slate);color:#fff;border-radius:12px;padding:12px 14px}
+.cotz .tile .bignum{font-size:28px}
+.cotz .tile .kicker{color:rgba(255,255,255,.75)}
+.cotz .tabs{display:inline-flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.cotz .tab{padding:6px 12px;border:1px solid var(--line);background:transparent;color:var(--slate);font-weight:600;font-size:12.5px;cursor:pointer;border-radius:9px;min-height:32px}
+.cotz .tab.on{background:var(--red);color:#fff;border-color:var(--red)}
+.cotz .rm{border:0;background:transparent;color:var(--muted);cursor:pointer;width:32px;height:32px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center}
+.cotz .rm svg{width:16px;height:16px}
+.cotz .rm:hover{background:var(--err-bg);color:var(--err-fg)}
+.cotz .note{font-size:12.5px;color:var(--muted);margin:10px 0 0;line-height:1.5}
+.cotz .banner{padding:10px 14px;border-radius:10px;font-size:13px;line-height:1.5;margin-bottom:14px}
+.cotz .b-info{background:var(--sky);color:var(--fg)}
+.cotz .b-ok{background:var(--ok-bg);color:var(--ok-fg)}
+.cotz .b-err{background:var(--err-bg);color:var(--err-fg)}
+.cotz .b-warn{background:var(--warn-bg);color:var(--warn-fg)}
+.cotz .foot{display:flex;justify-content:space-between;gap:10px;margin-top:22px;padding-top:14px;border-top:1px solid var(--line)}
+.cotz .total{margin-top:12px;text-align:right;font-size:14px}
+.cotz .total strong{color:var(--red-text);font-size:18px;font-variant-numeric:tabular-nums}
+.cotz .cmp{display:grid;grid-template-columns:120px repeat(5,minmax(112px,1fr));min-width:700px;border-radius:10px;overflow:hidden;border:1px solid var(--line)}
+.cotz .mc{padding:8px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:13px;font-variant-numeric:tabular-nums}
+.cotz .mc.lab{justify-content:flex-start;font-weight:700;background:var(--surface2);color:var(--muted);font-size:12px}
+.cotz .mc.on{background:var(--red-soft);color:var(--red-text);font-weight:700}
+.cotz .use{border:1px solid var(--line);background:#fff;color:var(--slate);border-radius:8px;padding:5px 12px;cursor:pointer;min-height:30px;font-weight:600;font-size:12.5px}
+.cotz .mc.on .use{background:var(--red);color:#fff;border-color:var(--red)}
+.cotz input[type=range]{accent-color:var(--red);width:100%}
+.cotz .hidefile{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
+.cotz .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.cotz .addrow{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-top:12px}
+.cotz .ovl{position:fixed;inset:0;z-index:60;background:var(--bg);overflow:auto;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+.cotz .ovl .wrap{max-width:1300px;margin:0 auto;padding-inline:16px}
+.cotz .ovlhead{background:var(--slate);color:#fff;position:sticky;top:0;z-index:2}
+.cotz .ovlhead .wrap{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding-block:10px}
+.cotz .ovlhead h2{margin:0;font-size:16px;font-weight:800;display:flex;align-items:center;gap:8px}
+.cotz .ovlhead h2 svg{width:19px;height:19px}
+.cotz .cfgmain{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;padding-block:16px 100px}
+.cotz .cfgnav{flex:1 1 210px;max-width:250px;min-width:200px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:8px;display:flex;flex-direction:column;gap:3px}
+.cotz .cfgnav .navbtn{min-height:40px}
+.cotz .cfgbody{flex:999 1 520px;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px}
+.cotz .cfgbody h3{margin:0 0 4px;font-size:16px;font-weight:800}
+.cotz .savebar{position:fixed;left:0;right:0;bottom:0;z-index:3;background:var(--surface);border-top:1px solid var(--line);box-shadow:0 -2px 8px rgba(0,0,0,.06);padding-bottom:env(safe-area-inset-bottom,0px)}
+.cotz .savebar .wrap{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding-block:10px}
+.cotz .drop{border:2px dashed var(--line);border-radius:12px;padding:16px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between;background:var(--surface2)}
+.cotz .check{display:flex;gap:10px;align-items:flex-start;font-size:13px;margin-top:12px;cursor:pointer}
+.cotz .check input{width:18px;height:18px;margin-top:1px;accent-color:var(--red)}
+.cotz .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:70;background:var(--slate);color:#fff;padding:10px 16px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.25);font-size:13px;max-width:calc(100% - 32px)}
+@media (max-width:640px){.cotz .side,.cotz .cfgnav{max-width:none}.cotz .nav .navbtn{flex:1 1 130px}}
+@media (prefers-reduced-motion:reduce){.cotz, .cotz *{transition:none!important;animation:none!important}}
+`;
+const CotizadorAD = (() => {
+// Valores del machote original (Machote_Horas-Días.xlsm). Se usan solo si la tabla de Supabase está vacía.
+const DEFAULT_CFG = {
+ "tc": 505,
+ "cs": 0.4147,
+ "fa": 0.125,
+ "au": 0,
+ "margin": 0.3,
+ "matMargin": 0.2,
+ "rend": {
+  "tub": 20,
+  "disp": 15,
+  "hDia": 10,
+  "dSem": 5
+ },
+ "roles": [
+  {
+   "id": "rmv771fpb165o",
+   "name": "Jefatura IPM",
+   "sal": 850000
+  },
+  {
+   "id": "rmv771fpb21ix",
+   "name": "Jefatura Proyectos",
+   "sal": 950000
+  },
+  {
+   "id": "rmv771fpb34on",
+   "name": "Operario Rafael Vindas",
+   "sal": 750000
+  },
+  {
+   "id": "rmv771fpb46x0",
+   "name": "Técnico Senior",
+   "sal": 690000
+  },
+  {
+   "id": "rmv771fpb53ou",
+   "name": "Operario Senior",
+   "sal": 560000
+  },
+  {
+   "id": "rmv771fpb673a",
+   "name": "Ayudante Senior",
+   "sal": 440000
+  },
+  {
+   "id": "rmv771fpb7gs",
+   "name": "Ayudante Junior",
+   "sal": 420000
+  },
+  {
+   "id": "rmv771fpb87lj",
+   "name": "Tecnico Junior",
+   "sal": 490000
+  },
+  {
+   "id": "rmv771fpb953y",
+   "name": "Ayudante Semi Junior",
+   "sal": 490000
+  },
+  {
+   "id": "rmv771fpbaj5",
+   "name": "Ayudante Senior (2)",
+   "sal": 420000
+  },
+  {
+   "id": "rmv771fpbb699",
+   "name": "Tecnico Semi Senior",
+   "sal": 570000
+  },
+  {
+   "id": "rmv771fpbc50l",
+   "name": "Supervisor",
+   "sal": 730000
+  },
+  {
+   "id": "rmv771fpbd5aw",
+   "name": "Salud Ocupacional",
+   "sal": 560000
+  }
+ ],
+ "cr": [
+  {
+   "id": "crmv771fpce4wc",
+   "n": "Hospedaje",
+   "um": "Nch",
+   "pu": 120,
+   "noW": true
+  },
+  {
+   "id": "crmv771fpcf3wt",
+   "n": "Alimentación",
+   "um": "Dia",
+   "pu": 25
+  },
+  {
+   "id": "crmv771fpcg1z5",
+   "n": "Carro",
+   "um": "km",
+   "pu": 1
+  },
+  {
+   "id": "crmv771fpch5h9",
+   "n": "Alquiler Auto",
+   "um": "Dia",
+   "pu": 70
+  },
+  {
+   "id": "crmv771fpci3c2",
+   "n": "Celular",
+   "um": "Gbl",
+   "pu": 10
+  },
+  {
+   "id": "crmv771fpcj1ne",
+   "n": "Combustible",
+   "um": "Gbl",
+   "pu": 30
+  },
+  {
+   "id": "crmv771fpck3ry",
+   "n": "Otros: Parqueo",
+   "um": "Gbl",
+   "pu": 1
+  },
+  {
+   "id": "crmv771fpcl1iv",
+   "n": "Extra",
+   "um": "Gbl",
+   "pu": 1
+  }
+ ],
+ "ca": [
+  {
+   "id": "camv771fpcm5g0",
+   "n": "Hospedaje",
+   "um": "Nch",
+   "pu": 0
+  },
+  {
+   "id": "camv771fpcn5j4",
+   "n": "Alimentación",
+   "um": "Dia",
+   "pu": 18
+  },
+  {
+   "id": "camv771fpco689",
+   "n": "Alquiler Auto",
+   "um": "Km",
+   "pu": 0
+  },
+  {
+   "id": "camv771fpcp7iv",
+   "n": "Avion",
+   "um": "Gbl",
+   "pu": 300
+  },
+  {
+   "id": "camv771fpcq34a",
+   "n": "Celular",
+   "um": "Gbl",
+   "pu": 30
+  }
+ ],
+ "renta": [
+  {
+   "id": "rentamv771fpcr1s7",
+   "n": "Boom",
+   "um": "Sem",
+   "pu": 1400
+  },
+  {
+   "id": "rentamv771fpcs10r",
+   "n": "Boom",
+   "um": "Gbl",
+   "pu": 500
+  },
+  {
+   "id": "rentamv771fpct477",
+   "n": "Transporte de Equipos",
+   "um": "Gbl",
+   "pu": 500
+  },
+  {
+   "id": "rentamv771fpcu7ks",
+   "n": "Transporte de Materiales",
+   "um": "Gbl",
+   "pu": 500
+  },
+  {
+   "id": "rentamv771fpcv1kj",
+   "n": "Cursos",
+   "um": "Gbl",
+   "pu": 300
+  },
+  {
+   "id": "rentamv771fpcw3wn",
+   "n": "Ambiente EHS Cajones",
+   "um": "Gbl",
+   "pu": 1000
+  },
+  {
+   "id": "rentamv771fpcx6ok",
+   "n": "Polizas",
+   "um": "Gbl",
+   "pu": 250
+  }
+ ],
+ "mats": [
+  {
+   "id": "mmv771fpcyq3",
+   "n": "Tubo EMT 3/4\" USA (3m)",
+   "um": "Pipe",
+   "list": 7
+  },
+  {
+   "id": "mmv771fpcz77p",
+   "n": "conector para biex",
+   "um": "Pipe",
+   "list": 0.75
+  },
+  {
+   "id": "mmv771fpc106dh",
+   "n": "Conector EMT presión 3/4\" USA",
+   "um": "Ea",
+   "list": 0.12069
+  },
+  {
+   "id": "mmv771fpc112v1",
+   "n": "Conector EMT presión 1/2\" USA",
+   "um": "Ea",
+   "list": 0.310345
+  },
+  {
+   "id": "mmv771fpc1235b",
+   "n": "Gaza EMT 3/4\" USA",
+   "um": "Ea",
+   "list": 0.06
+  },
+  {
+   "id": "mmv771fpc13gj",
+   "n": "Gaza EMT 1/2\" USA",
+   "um": "Ea",
+   "list": 0.027586
+  },
+  {
+   "id": "mmv771fpc1458h",
+   "n": "Unión EMT presión 3/4\" USA",
+   "um": "Ea",
+   "list": 0.55
+  },
+  {
+   "id": "mmv771fpc154zx",
+   "n": "Unión EMT presión 1/2\" USA",
+   "um": "Ea",
+   "list": 0.353448
+  },
+  {
+   "id": "mmv771fpc165jh",
+   "n": "Riel strut perfil alto 1-5/8 x 1-5/8 pulgadas x 3 m",
+   "um": "Ea",
+   "list": 11
+  },
+  {
+   "id": "mmv771fpc174so",
+   "n": "Caja octogonal",
+   "um": "Ea",
+   "list": 0.310345
+  },
+  {
+   "id": "mmv771fpc18xs",
+   "n": "Caja cuadrada, con tapa",
+   "um": "Ea",
+   "list": 1.78
+  },
+  {
+   "id": "mmv771fpc196af",
+   "n": "Caja rectangular",
+   "um": "Ea",
+   "list": 0.267241
+  },
+  {
+   "id": "mmv771fpc1a2cl",
+   "n": "Cinta",
+   "um": "Ea",
+   "list": 2400
+  },
+  {
+   "id": "mmv771fpc1b1fa",
+   "n": "Biex explosion proof",
+   "um": "ud",
+   "list": 560
+  },
+  {
+   "id": "mmv771fpc1c3r2",
+   "n": "tubo para vesda (4m)",
+   "um": "pipe",
+   "list": 13.6
+  },
+  {
+   "id": "mmv771fpc1d5qe",
+   "n": "Cable Shield #18 /2 (Carrucha de 1000')",
+   "um": "ml",
+   "list": 0.44
+  },
+  {
+   "id": "mmv771fpc1e4yi",
+   "n": "Cable Shield #18 /4 (Carrucha de 1000')",
+   "um": "ml",
+   "list": 0.632
+  },
+  {
+   "id": "mmv771fpc1f9q",
+   "n": "Cable Shield #16 /2 (Carrucha de 1000')",
+   "um": "ml",
+   "list": 0.504
+  },
+  {
+   "id": "mmv771fpc1g2c5",
+   "n": "Cable sin Shield #18 /2 (Carrucha de 1000')",
+   "um": "ml",
+   "list": 0.296
+  },
+  {
+   "id": "mmv771fpc1h3jk",
+   "n": "Biex (30)",
+   "um": "ml",
+   "list": 1.504
+  },
+  {
+   "id": "mmv771fpc1i63x",
+   "n": "Cable sin Shield #18 /2 (Carrucha de 305m)",
+   "um": "unidad",
+   "list": 128.54
+  },
+  {
+   "id": "mmv771fpc1j39z",
+   "n": "Cable sin Shield #16 /2 (Carrucha de 305m)",
+   "um": "unidad",
+   "list": 150
+  },
+  {
+   "id": "mmv771fpc1k61u",
+   "n": "Cable intemperie (carrucha cable)",
+   "um": "",
+   "list": 0.416
+  },
+  {
+   "id": "mmv771fpc1l2k8",
+   "n": "Cable subterraneo 4x18",
+   "um": "",
+   "list": 513
+  },
+  {
+   "id": "mmv771fpc1m6u0",
+   "n": "Coonduit PVC…. 1574 colones c/u",
+   "um": "",
+   "list": 0.13
+  }
+ ]
+};
+
+/* Lógica del Cotizador A&D: configuración, cálculo, lectura y escritura del machote Excel. */
+var CotLogic = (function () {
+  var LIM = { roles: 18, cr: 8, ca: 8, renta: 7, mats: 290 };
+  var seq = 0;
+  function uid(p) { seq += 1; return (p || 'x') + Date.now().toString(36) + seq.toString(36) + Math.floor(Math.random() * 1e4).toString(36); }
+  function n(v) { var x = parseFloat(v); return isNaN(x) ? 0 : x; }
+  function norm(t) { return String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim(); }
+  function r2(v, d) { var p = Math.pow(10, d == null ? 6 : d); return Math.round(v * p) / p; }
+
+  /* ---------- lectura del machote ---------- */
+  function parseMachote(XLSX, buf) {
+    var wb = XLSX.read(buf, { type: 'array', cellFormula: true, sheetStubs: true });
+    var sh = function (name) { var w = wb.Sheets[name]; if (!w) throw new Error('El archivo no tiene la hoja «' + name + '». Use el machote de cotización.'); return w; };
+    var simple = function (f) { if (!f || !/^[0-9.+\-*\/()% ]+$/.test(f)) return undefined; try { var r = Function('return (' + f.replace(/([0-9.]+)%/g, '($1/100)') + ')')(); return isFinite(r) ? r : undefined; } catch (e) { return undefined; } };
+    var val = function (w, a) { var c = w && w[a]; if (!c) return undefined; if (c.t !== 'z' && c.v != null && c.v !== '') return c.v; return simple(c.f); };
+    var num = function (w, a) { var v = val(w, a); return typeof v === 'number' ? v : (v != null && v !== '' && !isNaN(parseFloat(v)) ? parseFloat(v) : null); };
+    var txt = function (w, a) { var v = val(w, a); return v == null ? '' : String(v).trim(); };
+    var fdiv = function (w, a) { var c = w && w[a]; if (!c || !c.f) return null; var m = /[\/*]\s*\+?\s*([0-9.]+)/.exec(c.f.replace(/^[^\/*]*?C\d+/, '')); return m ? parseFloat(m[1]) : null; };
+    var S = sh('Salarios'), E = sh('Estimacion Horas'), M = wb.Sheets['Materiales'];
+    var cfg = { tc: num(S, 'K3'), cs: num(S, 'F4'), fa: num(S, 'G4'), au: num(S, 'H4') || 0,
+      margin: num(E, 'B1'), matMargin: null, rend: { tub: 20, disp: 15, hDia: 10, dSem: 5 },
+      roles: [], cr: [], ca: [], renta: [], mats: [] };
+    var q = { roles: {}, cr: {}, ca: {}, renta: {}, mats: {}, eq: {}, hasQty: false };
+    var roleBySalRow = {};
+    for (var r = 6; r <= 60; r++) {
+      var nm = txt(S, 'C' + r), sal = num(S, 'D' + r);
+      if (!nm || !sal) continue;
+      var dup = cfg.roles.filter(function (x) { return x.base === nm; }).length;
+      var role = { id: uid('r'), name: dup ? nm + ' (' + (dup + 1) + ')' : nm, base: nm, sal: sal };
+      cfg.roles.push(role); roleBySalRow[r] = role;
+    }
+    cfg.roles.forEach(function (x) { delete x.base; });
+    // horas por puesto: Estimacion E{r} = Salarios!K{fila}
+    for (var er = 3; er <= 40; er++) {
+      var ce = E['E' + er]; if (!ce || !ce.f) continue;
+      var mm = /Salarios!\$?K\$?(\d+)/i.exec(ce.f); if (!mm) continue;
+      var rl = roleBySalRow[parseInt(mm[1], 10)]; if (!rl) continue;
+      var p = num(E, 'H' + er), h = num(E, 'I' + er), w = num(E, 'J' + er);
+      if ((p || 0) * (h || 0) * (w || 0) > 0) { q.roles[rl.id] = { on: true, p: String(p), h: String(h), w: String(w) }; q.hasQty = true; }
+    }
+    var block = function (r1, r2, key, noWFirst) {
+      for (var k = r1; k <= r2; k++) {
+        var n2 = txt(E, 'L' + k); if (!n2 || /error|total/i.test(n2)) continue;
+        var item = { id: uid(key), n: n2, um: txt(E, 'N' + k), pu: num(E, 'O' + k) || 0 };
+        if (noWFirst && k === r1) item.noW = true;
+        cfg[key].push(item);
+        if (key === 'renta') { var qq = num(E, 'M' + k) || 0; if (qq) { q.renta[item.id] = { q: String(qq) }; q.hasQty = true; } }
+        else { var c = num(E, 'R' + k) || 0, d = num(E, 'S' + k) || 0, ww = num(E, 'T' + k); if (c && d) { q[key][item.id] = { c: String(c), d: String(d), w: String(ww == null ? 1 : ww) }; q.hasQty = true; } }
+      }
+    };
+    block(3, 10, 'cr', true); block(14, 21, 'ca', false); block(25, 31, 'renta', false);
+    q.eq = { tub: String(num(E, 'C26') || 0), disp: String(num(E, 'C27') || 0), extra: String(num(E, 'E25') == null ? 3 : num(E, 'E25')) };
+    var rt = fdiv(E, 'D26'), rd = fdiv(E, 'D27');
+    if (rt) cfg.rend.tub = rt; if (rd) cfg.rend.disp = rd;
+    var f28 = E.F28 && E.F28.f && /\*\s*([0-9.]+)/.exec(E.F28.f); if (f28) cfg.rend.hDia = parseFloat(f28[1]);
+    var e29 = E.E29 && E.E29.f && /\/\s*([0-9.]+)/.exec(E.E29.f); if (e29) cfg.rend.dSem = parseFloat(e29[1]);
+    if (M) {
+      cfg.matMargin = num(M, 'H2');
+      for (var r3 = 4; r3 <= 300; r3++) {
+        var d3 = txt(M, 'C' + r3); if (!d3) continue;
+        var f = M['F' + r3], list = num(M, 'I' + r3);
+        if (f && typeof f.v === 'number' && !f.f && f.t !== 'z') list = f.v * (1 - (cfg.matMargin || 0));
+        if (list == null) continue;
+        var mt = { id: uid('m'), n: d3, um: txt(M, 'D' + r3), list: r2(list, 6) };
+        cfg.mats.push(mt);
+        var mq = num(M, 'E' + r3); if (mq) { q.mats[mt.id] = { q: String(mq) }; q.hasQty = true; }
+      }
+    }
+    if (!cfg.tc || cfg.cs == null || cfg.fa == null) throw new Error('Faltan tipo de cambio (K3), cargas sociales (F4) o factor administrativo (G4) en la hoja Salarios.');
+    if (!cfg.roles.length) throw new Error('No se encontraron salarios en la hoja Salarios (columnas C y D).');
+    if (cfg.margin == null) cfg.margin = 0.3;
+    if (cfg.matMargin == null) cfg.matMargin = 0.2;
+    return { cfg: cfg, qty: q };
+  }
+
+  /* ---------- cálculo ---------- */
+  function rates(cfg) {
+    var TC = n(cfg.tc) || 1, CS = n(cfg.cs), FA = n(cfg.fa), AU = n(cfg.au);
+    return {
+      base: function (sal) { return n(sal) / 4.33 / 48 * (1 + CS); },
+      rate: function (sal) { return n(sal) / 4.33 / 48 * (1 + CS) * (1 + FA + AU) / TC; },
+      oh: function (sal) { return n(sal) / 4.33 / 48 * (1 + CS) * FA / TC; }
+    };
+  }
+  function lineQty(it, l) { if (!l) return 0; return it.noW ? n(l.c) * n(l.d) : n(l.c) * n(l.d) * n(l.w == null ? 1 : l.w); }
+  function puOf(it, l) { return l && l.pu != null && l.pu !== '' ? n(l.pu) : n(it.pu); }
+
+  function compute(cfg, q) {
+    var R = rates(cfg), out = { mo: 0, adm: 0, roles: [], cr: 0, ca: 0, renta: 0, matCost: 0, matVenta: 0 };
+    cfg.roles.forEach(function (r) {
+      var l = q.roles[r.id]; if (!l || !l.on) return;
+      var hrs = n(l.p) * n(l.h) * n(l.w), rate = R.rate(r.sal);
+      out.mo += hrs * rate; out.adm += hrs * R.oh(r.sal);
+      out.roles.push({ id: r.id, name: r.name, hrs: hrs, rate: rate, total: hrs * rate });
+    });
+    ['cr', 'ca'].forEach(function (k) { cfg[k].forEach(function (it) { out[k] += lineQty(it, q[k][it.id]) * puOf(it, q[k][it.id]); }); });
+    cfg.renta.forEach(function (it) { var l = q.renta[it.id]; out.renta += n(l && l.q) * puOf(it, l); });
+    var mm = Math.min(n(q.matMargin) / 100, 0.95);
+    cfg.mats.forEach(function (m) { var l = q.mats[m.id], qq = n(l && l.q); out.matCost += qq * m.list; out.matVenta += qq * m.list / (1 - mm); });
+    var ex = n(q.eq.extra), rd = cfg.rend;
+    out.dias = Math.ceil(n(q.eq.tub) / (n(rd.tub) || 1)) + ex + Math.ceil(n(q.eq.disp) / (n(rd.disp) || 1)) + ex;
+    out.horas = out.dias * n(rd.hDia); out.semanas = out.dias / (n(rd.dSem) || 1);
+    out.costo = out.mo + out.cr + out.ca + out.renta;
+    out.m = Math.min(n(q.margin) / 100, 0.95);
+    out.precio = out.costo / (1 - out.m);
+    out.ganancia = out.precio - out.costo;
+    out.oferta = out.precio + out.matVenta;
+    out.directo = out.costo - out.adm;
+    return out;
+  }
+
+  /* ---------- escritura del Excel ---------- */
+  function buildWorkbook(XLSX, cfg, q, info) {
+    var wb = XLSX.utils.book_new();
+    var mk = function () { return {}; };
+    var put = function (ws, a, v) { if (v === undefined || v === null || v === '') return; if (typeof v === 'object') { ws[a] = v; return; } ws[a] = typeof v === 'number' ? { t: 'n', v: v } : { t: 's', v: String(v) }; };
+    var F = function (f, z) { var o = { t: 'n', f: f }; if (z) o.z = z; return o; };
+    var N = function (v, z) { var o = { t: 'n', v: n(v) }; if (z) o.z = z; return o; };
+    var USD = '"USD "#,##0.00', CRC = '"₡"#,##0.00', PCT = '0.00%';
+    var info0 = info || {};
+
+    // Salarios
+    var S = mk();
+    put(S, 'C3', 'Desglose de Salarios y Cargas Sociales'); put(S, 'K2', 'Compra'); put(S, 'L2', 'Venta');
+    put(S, 'J3', 'USD / CR ¢'); put(S, 'K3', N(cfg.tc, CRC)); put(S, 'L3', F('K3+10', CRC));
+    put(S, 'E4', F('K7', CRC)); put(S, 'F4', N(cfg.cs, PCT)); put(S, 'G4', N(cfg.fa, PCT)); put(S, 'H4', N(cfg.au || 0, PCT)); put(S, 'I4', 'Precio en Colones');
+    ['Categoria', 'Salario Mensual', 'Salario Hora', 'Cargas Sociales', 'Factor Administrativo', 'Factor Aumento', 'Total Hora', 'Total Mensual', 'Total Hora', 'Total Mensual'].forEach(function (h, i) { put(S, String.fromCharCode(67 + i) + '5', h); });
+    var nR = Math.max(cfg.roles.length, 1);
+    cfg.roles.forEach(function (r, i) {
+      var row = 7 + i;
+      put(S, 'A' + row, i + 1); put(S, 'C' + row, r.name); put(S, 'D' + row, N(r.sal, CRC));
+      put(S, 'E' + row, F('D' + row + '/4.33/48', CRC)); put(S, 'F' + row, F('E' + row + '*$F$4', CRC));
+      put(S, 'G' + row, F('(F' + row + '+E' + row + ')*$G$4', CRC)); put(S, 'H' + row, F('(E' + row + '+F' + row + ')*$H$4', CRC));
+      put(S, 'I' + row, F('SUM(E' + row + ':H' + row + ')', CRC)); put(S, 'J' + row, F('I' + row + '*48*4.33', CRC));
+      put(S, 'K' + row, F('I' + row + '/$K$3', USD)); put(S, 'L' + row, F('J' + row + '/$K$3', USD));
+    });
+    put(S, 'D' + (8 + nR), 'Generado por Cotizador A&D · ' + new Date().toLocaleDateString('es-CR'));
+    S['!ref'] = 'A1:L' + (9 + nR);
+    S['!cols'] = [{ wch: 4 }, { wch: 2 }, { wch: 26 }, { wch: 16 }, { wch: 13 }, { wch: 13 }, { wch: 13 }, { wch: 13 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 13 }];
+
+    // Estimacion Horas
+    var E = mk(), mg = Math.min(n(q.margin) / 100, 0.95);
+    put(E, 'B1', N(mg, '0%')); put(E, 'C1', 'Margen de utilidad');
+    ['M.O. Construccion', 'Cantidad', 'U/M', 'P/U', 'Total'].forEach(function (h, i) { put(E, String.fromCharCode(66 + i) + '2', h); });
+    ['Personas', 'Horas', 'Semanas'].forEach(function (h, i) { put(E, String.fromCharCode(72 + i) + '2', h); });
+    for (var rr = 3; rr <= 21; rr++) { put(E, 'C' + rr, F('H' + rr + '*I' + rr + '*J' + rr)); put(E, 'F' + rr, F('E' + rr + '*C' + rr, USD)); }
+    cfg.roles.slice(0, LIM.roles).forEach(function (r, i) {
+      var row = 4 + i, l = q.roles[r.id] || {};
+      put(E, 'A' + row, i + 1); put(E, 'B' + row, r.name); put(E, 'D' + row, 'Hr');
+      put(E, 'E' + row, F('Salarios!K' + (7 + i), USD));
+      var on = l.on;
+      put(E, 'H' + row, N(on ? l.p : 0)); put(E, 'I' + row, N(on ? l.h : 0)); put(E, 'J' + row, N(on ? l.w : 1));
+    });
+    put(E, 'E22', 'TOTAL'); put(E, 'F22', F('SUM(F3:F21)', USD));
+    var viat = function (key, hdrRow, r1, maxRows, totRow, title) {
+      put(E, 'L' + hdrRow, title); ['Cantidad', 'U/M', 'P/U', 'Total'].forEach(function (h, i) { put(E, String.fromCharCode(77 + i) + hdrRow, h); });
+      ['Cantidad', 'Días/Unid.', 'Semanas'].forEach(function (h, i) { put(E, String.fromCharCode(82 + i) + hdrRow, h); });
+      cfg[key].slice(0, maxRows).forEach(function (it, i) {
+        var row = r1 + i, l = q[key][it.id] || {};
+        put(E, 'L' + row, it.n); put(E, 'N' + row, it.um); put(E, 'O' + row, N(puOf(it, l), USD));
+        put(E, 'M' + row, F(it.noW ? 'R' + row + '*S' + row : 'R' + row + '*S' + row + '*T' + row));
+        put(E, 'P' + row, F('O' + row + '*M' + row, USD));
+        put(E, 'R' + row, N(l.c || 0)); put(E, 'S' + row, N(l.d || 0)); put(E, 'T' + row, N(l.w == null ? 1 : l.w));
+      });
+      put(E, 'O' + totRow, 'TOTAL'); put(E, 'P' + totRow, F('SUM(P' + r1 + ':P' + (r1 + maxRows - 1) + ')', USD));
+    };
+    viat('cr', 2, 3, LIM.cr, 11, 'Viáticos C.R.');
+    viat('ca', 13, 14, LIM.ca, 22, 'Viáticos Centroamérica');
+    put(E, 'B24', 'Equipos'); put(E, 'D24', 'Días'); put(E, 'E24', 'Aumento días'); put(E, 'E25', N(q.eq.extra));
+    put(E, 'B26', 'Tubería Total'); put(E, 'C26', N(q.eq.tub)); put(E, 'D26', F('ROUNDUP(C26/' + n(cfg.rend.tub) + ',0)')); put(E, 'E26', F('D26+E25'));
+    put(E, 'B27', 'Dispositivos Totales'); put(E, 'C27', N(q.eq.disp)); put(E, 'D27', F('ROUNDUP(C27/' + n(cfg.rend.disp) + ',0)')); put(E, 'E27', F('D27+E25'));
+    put(E, 'D28', 'Total días'); put(E, 'E28', F('E26+E27')); put(E, 'F27', 'Horas'); put(E, 'F28', F('E28*' + n(cfg.rend.hDia)));
+    put(E, 'E29', F('E28/' + n(cfg.rend.dSem), '0.0')); put(E, 'F29', 'Semanas');
+    put(E, 'L24', 'Renta Equipos'); ['Cantidad', 'U/M', 'P/U', 'Total'].forEach(function (h, i) { put(E, String.fromCharCode(77 + i) + '24', h); });
+    cfg.renta.slice(0, LIM.renta).forEach(function (it, i) {
+      var row = 25 + i, l = q.renta[it.id] || {};
+      put(E, 'L' + row, it.n); put(E, 'M' + row, N(l.q || 0)); put(E, 'N' + row, it.um); put(E, 'O' + row, N(puOf(it, l), USD)); put(E, 'P' + row, F('O' + row + '*M' + row, USD));
+    });
+    put(E, 'O32', 'TOTAL'); put(E, 'P32', F('SUM(P25:P31)', USD));
+    E['!ref'] = 'A1:T32';
+    E['!cols'] = [{ wch: 4 }, { wch: 24 }, { wch: 9 }, { wch: 7 }, { wch: 12 }, { wch: 13 }, { wch: 2 }, { wch: 9 }, { wch: 8 }, { wch: 9 }, { wch: 2 }, { wch: 24 }, { wch: 10 }, { wch: 7 }, { wch: 11 }, { wch: 12 }, { wch: 2 }, { wch: 9 }, { wch: 10 }, { wch: 9 }];
+
+    // Materiales
+    var M = mk(), mm = Math.min(n(q.matMargin) / 100, 0.95);
+    put(M, 'H1', 'Margen de Ganancia'); put(M, 'H2', N(mm, '0%'));
+    ['Número de parte', 'Descripción', 'Unidad', 'Cantidad', 'Precio Unitario', 'Precio Total', 'Margen', 'Precio de lista'].forEach(function (h, i) { put(M, String.fromCharCode(66 + i) + '3', h); });
+    var mr = 4;
+    cfg.mats.slice(0, LIM.mats).forEach(function (m) {
+      var l = q.mats[m.id] || {};
+      put(M, 'C' + mr, m.n); put(M, 'D' + mr, m.um); put(M, 'E' + mr, N(l.q || 0));
+      put(M, 'F' + mr, F('I' + mr + '/(1-H' + mr + ')', USD)); put(M, 'G' + mr, F('F' + mr + '*E' + mr, USD));
+      put(M, 'H' + mr, F('$H$2', '0%')); put(M, 'I' + mr, N(m.list, USD)); mr++;
+    });
+    var mTot = mr;
+    put(M, 'F' + mTot, 'Total'); put(M, 'G' + mTot, F('SUM(G4:G' + (mTot - 1) + ')', USD));
+    M['!ref'] = 'A1:I' + mTot;
+    M['!cols'] = [{ wch: 2 }, { wch: 14 }, { wch: 46 }, { wch: 9 }, { wch: 10 }, { wch: 15 }, { wch: 14 }, { wch: 9 }, { wch: 14 }];
+
+    // Resumen General
+    var G = mk(), RS = "'Estimacion Horas'!";
+    put(G, 'B1', 'INFORMACIÓN DEL PROYECTO');
+    [['Proyecto', info0.proyecto], ['Area', info0.area], ['Cliente', info0.cliente], ['Fecha', info0.fecha]].forEach(function (p, i) { put(G, 'B' + (2 + i), p[0]); put(G, 'C' + (2 + i), p[1] || ''); });
+    put(G, 'B6', 'DETALLE DE COSTOS');
+    ['Item', 'Descripción', 'Cantidad', 'U/M', 'P/U', 'Total'].forEach(function (h, i) { put(G, String.fromCharCode(66 + i) + '7', h); put(G, String.fromCharCode(66 + i) + '19', h); });
+    var items = [['M.O. Construccion', RS + 'F22'], ['Viáticos C.R.', RS + 'P11'], ['Viáticos Centroamérica', RS + 'P22'], ['Renta Equipos', RS + 'P32']];
+    items.forEach(function (it, i) {
+      var a = 8 + i, b = 20 + i;
+      put(G, 'B' + a, i + 1); put(G, 'C' + a, it[0]); put(G, 'D' + a, 1); put(G, 'E' + a, 'Gbl'); put(G, 'F' + a, F(it[1], USD)); put(G, 'G' + a, F('D' + a + '*F' + a, USD));
+      put(G, 'B' + b, i + 1); put(G, 'C' + b, it[0]); put(G, 'D' + b, 1); put(G, 'E' + b, 'Gbl'); put(G, 'F' + b, F('F' + a + '/(1-' + RS + 'B1)', USD)); put(G, 'G' + b, F('D' + b + '*F' + b, USD));
+    });
+    put(G, 'B13', 'COSTO TOTAL'); put(G, 'G13', F('SUM(G8:G12)', USD));
+    put(G, 'B14', 'MARGEN DE UTILIDAD');
+    put(G, 'B15', 'Margen'); put(G, 'B16', 'Precio Venta'); put(G, 'B17', 'Ganancia');
+    (q.cmp || ['25', '27.5', '30', '32.5', '35']).slice(0, 5).forEach(function (raw, i) {
+      var c = String.fromCharCode(67 + i), v = Math.min(n(raw) / 100, 0.95);
+      put(G, c + '15', Math.abs(v - mg) < 1e-9 ? F(RS + 'B1', '0.00%') : N(v, '0.00%'));
+      put(G, c + '16', F('$G$13/(1-' + c + '15)', USD)); put(G, c + '17', F(c + '16-$G$13', USD));
+    });
+    put(G, 'B18', 'PRECIO DE VENTA POR ÍTEM (con margen)');
+    put(G, 'B26', 'PRECIO DE VENTA TOTAL'); put(G, 'G26', F('SUM(G20:G25)', USD));
+    put(G, 'B28', 'CÁLCULO DE OVERHEAD'); put(G, 'G28', 'Total');
+    put(G, 'B29', 'Overhead administrativo incluido en M.O. (Factor Adm. Salarios)'); put(G, 'F29', F('Salarios!G4', PCT));
+    put(G, 'G29', F('SUMPRODUCT(' + RS + 'C4:C21,Salarios!G7:G24)/Salarios!K3', USD));
+    put(G, 'B30', 'Costo directo sin overhead'); put(G, 'G30', F('G13-G29', USD));
+    put(G, 'B31', '% Overhead sobre costo directo'); put(G, 'G31', F('IF(G30=0,0,G29/G30)', PCT));
+    put(G, 'B32', '% Overhead sobre precio de venta'); put(G, 'G32', F('IF(G26=0,0,G29/G26)', PCT));
+    put(G, 'B34', 'Materiales (precio de venta)'); put(G, 'G34', F('Materiales!G' + mTot, USD));
+    put(G, 'B35', 'TOTAL OFERTA (servicios + materiales)'); put(G, 'G35', F('G26+G34', USD));
+    G['!ref'] = 'A1:G35';
+    G['!cols'] = [{ wch: 2 }, { wch: 14 }, { wch: 30 }, { wch: 13 }, { wch: 13 }, { wch: 14 }, { wch: 16 }];
+    G['!merges'] = [{ s: { r: 0, c: 1 }, e: { r: 0, c: 6 } }];
+
+    XLSX.utils.book_append_sheet(wb, G, 'Resumen General - INFORMACION');
+    XLSX.utils.book_append_sheet(wb, E, 'Estimacion Horas');
+    XLSX.utils.book_append_sheet(wb, S, 'Salarios');
+    XLSX.utils.book_append_sheet(wb, M, 'Materiales');
+    wb.Workbook = { CalcPr: { fullCalcOnLoad: true } };
+    return wb;
+  }
+
+  return { LIM: LIM, uid: uid, n: n, norm: norm, parseMachote: parseMachote, compute: compute, rates: rates, lineQty: lineQty, puOf: puOf, buildWorkbook: buildWorkbook };
+})();
+
+const L = CotLogic;
+const n = L.n, norm = L.norm;
+const QKEY = 'cotAD.quote.v1', CKEY = 'cotAD.cfgLocal.v1';
+const TABLE = 'cotizador_config';
+
+function lsGet(k) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* sin almacenamiento */ } }
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const usd = (v) => 'USD ' + (v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const crc = (v) => '₡' + (v || 0).toLocaleString('es-CR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const pct = (v) => (Math.round(v * 10000) / 100).toLocaleString('es-CR') + ' %';
+const s = (v, d = 4) => { const p = Math.pow(10, d); return String(Math.round(n(v) * p) / p); };
+const fmtDate = (iso) => { try { return new Date(iso).toLocaleString('es-CR', { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) { return iso; } };
+
+/* ---------- íconos ---------- */
+const sv = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true };
+const Icon = {
+  gear: <svg width="22" height="22" viewBox="0 0 24 24" {...sv}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>,
+  down: <svg width="18" height="18" viewBox="0 0 24 24" {...sv}><path d="M12 4v12M7 11l5 5 5-5M4 20h16" /></svg>,
+  up: <svg width="18" height="18" viewBox="0 0 24 24" {...sv}><path d="M12 16V4M7 9l5-5 5 5M4 20h16" /></svg>,
+  x: <svg width="18" height="18" viewBox="0 0 24 24" {...sv}><path d="M6 6l12 12M18 6L6 18" /></svg>,
+  plus: <svg width="18" height="18" viewBox="0 0 24 24" {...sv}><path d="M12 5v14M5 12h14" /></svg>,
+  file: <svg width="18" height="18" viewBox="0 0 24 24" {...sv}><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" /><path d="M14 3v6h6" /></svg>,
+};
+
+/* ---------- cotización ---------- */
+function blankQuote(cfg) {
+  return {
+    info: { proyecto: '', cliente: '', area: 'Proyectos', fecha: new Date().toISOString().slice(0, 10), contacto: '', presupuestista: '', numero: '' },
+    roles: {}, cr: {}, ca: {}, renta: {}, mats: {}, eq: { tub: '0', disp: '0', extra: '3' },
+    margin: s(n(cfg.margin) * 100, 2), matMargin: s(n(cfg.matMargin) * 100, 2), cmp: ['25', '27.5', '30', '32.5', '35'], example: false,
+  };
+}
+function exampleQuote(cfg) {
+  const q = blankQuote(cfg); q.example = true;
+  q.info = { ...q.info, proyecto: 'Ejemplo · Sistema de detección bodega', cliente: 'Cliente de ejemplo', numero: 'COT-EJEMPLO' };
+  const byName = (list, name, key = 'n') => list.find((x) => norm(x[key]) === norm(name));
+  [['Jefatura Proyectos', '1', '8', '2'], ['Técnico Senior', '2', '48', '2'], ['Ayudante Senior', '2', '48', '2'], ['Supervisor', '1', '16', '2']]
+    .forEach(([nm, p, h, w]) => { const r = byName(cfg.roles, nm, 'name'); if (r) q.roles[r.id] = { on: true, p, h, w }; });
+  [['Alimentación', '5', '5', '2'], ['Carro', '1', '120', '2'], ['Celular', '1', '1', '2'], ['Combustible', '1', '1', '2']]
+    .forEach(([nm, c, d, w]) => { const it = byName(cfg.cr, nm); if (it) q.cr[it.id] = { c, d, w }; });
+  [0, 2, 4, 6].forEach((i) => { if (cfg.renta[i]) q.renta[cfg.renta[i].id] = { q: '1' }; });
+  [['Tubo EMT 3/4" USA (3m)', '40'], ['Conector EMT presión 3/4" USA', '80'], ['Gaza EMT 3/4" USA', '120'], ['Unión EMT presión 3/4" USA', '80'], ['Caja octogonal', '30'], ['Caja cuadrada, con tapa', '10'], ['Caja rectangular', '15'], ['Cable sin Shield #16 /2 (Carrucha de 305m)', '2']]
+    .forEach(([nm, qq]) => { const m = byName(cfg.mats, nm); if (m) q.mats[m.id] = { q: qq }; });
+  q.eq = { tub: '120', disp: '45', extra: '3' };
+  return q;
+}
+// Reasigna las líneas de la cotización cuando cambian los ids de la configuración (por nombre)
+function remapQuote(oldCfg, newCfg, q) {
+  const out = clone(q);
+  const map = (key, nameKey) => {
+    const res = {}; const oldList = oldCfg[key] || [];
+    newCfg[key].forEach((it) => {
+      if (q[key][it.id]) { res[it.id] = q[key][it.id]; return; }
+      const old = oldList.find((o) => norm(o[nameKey]) === norm(it[nameKey]) && q[key][o.id]);
+      if (old) res[it.id] = q[key][old.id];
+    });
+    out[key] = res;
+  };
+  map('roles', 'name'); map('cr', 'n'); map('ca', 'n'); map('renta', 'n'); map('mats', 'n');
+  return out;
+}
+
+/* ---------- borrador de configuración (texto editable) ---------- */
+function toDraft(c) {
+  return {
+    tc: s(c.tc, 2), cs: s(n(c.cs) * 100), fa: s(n(c.fa) * 100), au: s(n(c.au) * 100), margin: s(n(c.margin) * 100, 3), matMargin: s(n(c.matMargin) * 100, 3),
+    tub: s(c.rend.tub), disp: s(c.rend.disp), hDia: s(c.rend.hDia), dSem: s(c.rend.dSem),
+    roles: c.roles.map((r) => ({ id: r.id, name: r.name, sal: s(r.sal, 2) })),
+    cr: c.cr.map((x) => ({ id: x.id, n: x.n, um: x.um, pu: s(x.pu), noW: !!x.noW })),
+    ca: c.ca.map((x) => ({ id: x.id, n: x.n, um: x.um, pu: s(x.pu) })),
+    renta: c.renta.map((x) => ({ id: x.id, n: x.n, um: x.um, pu: s(x.pu) })),
+    mats: c.mats.map((x) => ({ id: x.id, n: x.n, um: x.um, list: s(x.list, 6) })),
+  };
+}
+function fromDraft(d) {
+  const errs = [];
+  if (!(n(d.tc) > 0)) errs.push('El tipo de cambio debe ser mayor que 0.');
+  if (n(d.margin) >= 95 || n(d.matMargin) >= 95) errs.push('Los márgenes deben ser menores a 95 %.');
+  if (['tub', 'disp', 'hDia', 'dSem'].some((k) => !(n(d[k]) > 0))) errs.push('Los rendimientos deben ser mayores que 0.');
+  const named = (list, key) => list.filter((x) => String(x[key] || '').trim() !== '');
+  const c = {
+    tc: n(d.tc), cs: n(d.cs) / 100, fa: n(d.fa) / 100, au: n(d.au) / 100, margin: n(d.margin) / 100, matMargin: n(d.matMargin) / 100,
+    rend: { tub: n(d.tub), disp: n(d.disp), hDia: n(d.hDia), dSem: n(d.dSem) },
+    roles: named(d.roles, 'name').map((r) => ({ id: r.id, name: r.name.trim(), sal: n(r.sal) })),
+    cr: named(d.cr, 'n').map((x) => { const o = { id: x.id, n: x.n.trim(), um: x.um || '', pu: n(x.pu) }; if (x.noW) o.noW = true; return o; }),
+    ca: named(d.ca, 'n').map((x) => ({ id: x.id, n: x.n.trim(), um: x.um || '', pu: n(x.pu) })),
+    renta: named(d.renta, 'n').map((x) => ({ id: x.id, n: x.n.trim(), um: x.um || '', pu: n(x.pu) })),
+    mats: named(d.mats, 'n').map((x) => ({ id: x.id, n: x.n.trim(), um: x.um || '', list: n(x.list) })),
+  };
+  if (!c.roles.length) errs.push('Debe existir al menos un puesto con salario.');
+  return { cfg: c, errs };
+}
+
+function NumIn({ value, onChange, label, cls, step, min, disabled, id }) {
+  return (
+    <input className={'num' + (cls ? ' ' + cls : '')} type="number" inputMode="decimal" min={min == null ? 0 : min} step={step || 'any'}
+      value={value == null ? '' : value} disabled={disabled} aria-label={label} id={id} onChange={(e) => onChange(e.target.value)} />
+  );
+}
+
+/* ====================================================================== */
+function Cotizador({ supabase, isAdmin = false, usuarioId }) {
+  const initCfg = lsGet(CKEY) || { cfg: DEFAULT_CFG, updatedAt: null, source: 'Machote original (incluido en la app)' };
+  const [cfgDoc, setCfgDoc] = useState(initCfg);
+  const cfg = cfgDoc.cfg;
+  const [q, setQRaw] = useState(() => lsGet(QKEY) || exampleQuote(initCfg.cfg));
+  const [step, setStep] = useState(1);
+  const [viaTab, setViaTab] = useState('cr');
+  const [search, setSearch] = useState('');
+  const [showCfg, setShowCfg] = useState(false);
+  const [online, setOnline] = useState(null); // null = conectando
+  const [toast, setToast] = useState('');
+  const [confirmNew, setConfirmNew] = useState(false);
+  const cfgRef = useRef(cfg); cfgRef.current = cfg;
+  const toastT = useRef(null);
+
+  const setQ = (fn) => setQRaw((prev) => { const next = fn(clone(prev)); lsSet(QKEY, next); return next; });
+  const flash = (t) => { setToast(t); clearTimeout(toastT.current); toastT.current = setTimeout(() => setToast(''), 4200); };
+
+  const receiveCfg = (row) => {
+    if (!row || !row.data || !row.data.cfg) return;
+    const oldCfg = cfgRef.current;
+    const doc = { cfg: row.data.cfg, updatedAt: row.updated_at || row.data.updatedAt || null, source: row.data.source || '' };
+    setCfgDoc(doc); lsSet(CKEY, doc);
+    setQRaw((prev) => { const next = remapQuote(oldCfg, doc.cfg, prev); lsSet(QKEY, next); return next; });
+  };
+
+  // Configuración compartida en Supabase. Se lee por una función que revisa
+  // que el usuario sea admin o asistente (la tabla no se puede leer directo).
+  useEffect(() => {
+    if (!supabase) { setOnline(false); return undefined; }
+    let alive = true;
+    const cargar = () => supabase.rpc('cot_config_leer', { p_usuario: usuarioId }).then(({ data, error }) => {
+      if (!alive) return;
+      if (error) {
+        setOnline(false);
+        if (/cot_config_leer|schema cache|Could not find/i.test(error.message || '')) flash('Falta correr en Supabase el SQL "cotizador_supabase.sql". Mientras tanto se usan los valores guardados en este equipo.');
+        return;
+      }
+      setOnline(true);
+      if (data && data.data) receiveCfg(data);
+    });
+    cargar();
+    const t = setInterval(cargar, 120000);
+    return () => { alive = false; clearInterval(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supabase, usuarioId]);
+
+  const c = useMemo(() => L.compute(cfg, q), [cfg, q]);
+  const line = (key, id) => q[key][id] || {};
+  const setLine = (key, id, field, v) => setQ((x) => { x[key][id] = { ...(x[key][id] || {}), [field]: v }; return x; });
+
+  function downloadExcel() {
+    try {
+      const wb = L.buildWorkbook(XLSX, cfg, q, q.info);
+      const slug = (q.info.numero || q.info.proyecto || 'cotizacion').replace(/[^A-Za-z0-9\-_ ]+/g, '').trim().replace(/\s+/g, '_').slice(0, 60) || 'cotizacion';
+      const name = 'Machote_' + slug + '_' + new Date().toISOString().slice(0, 10) + '.xlsx';
+      XLSX.writeFile(wb, name);
+      flash('Excel descargado: ' + name);
+    } catch (err) { flash('No se pudo generar el Excel: ' + (err.message || err)); }
+  }
+
+  async function applyConfig(newCfg, source, alsoQty) {
+    const oldCfg = cfg;
+    const doc = { cfg: newCfg, updatedAt: new Date().toISOString(), source: source || 'Edición manual' };
+    let nextQ = remapQuote(oldCfg, newCfg, q);
+    if (alsoQty) {
+      nextQ = { ...nextQ, roles: alsoQty.roles, cr: alsoQty.cr, ca: alsoQty.ca, renta: alsoQty.renta, mats: alsoQty.mats, eq: alsoQty.eq,
+        margin: s(n(newCfg.margin) * 100, 3), matMargin: s(n(newCfg.matMargin) * 100, 3), example: false };
+    }
+    setQRaw(nextQ); lsSet(QKEY, nextQ);
+    setCfgDoc(doc); lsSet(CKEY, doc);
+    if (!supabase) return 'local';
+    const { error } = await supabase.rpc('cot_config_guardar', { p_usuario: usuarioId, p_data: doc });
+    return error ? (error.message || 'error') : 'ok';
+  }
+
+  const names = ['Proyecto', 'Mano de obra', 'Viáticos', 'Equipos y renta', 'Materiales', 'Resumen'];
+  const subs = ['Datos generales', usd(c.mo), usd(c.cr + c.ca), usd(c.renta), usd(c.matVenta), usd(c.oferta)];
+  const hints = ['Información general de la cotización', 'Agregue solo los puestos que participan', 'Complete solo los conceptos que apliquen', 'Tiempo estimado y equipos de apoyo', 'Catálogo con precio de lista y margen', 'Revise márgenes y descargue el Excel'];
+  const R = L.rates(cfg);
+  const activeRoles = cfg.roles.filter((r) => line('roles', r.id).on);
+  const freeRoles = cfg.roles.filter((r) => !line('roles', r.id).on);
+  const matList = cfg.mats.filter((m) => !search || norm(m.n).includes(norm(search)));
+  const m = c.m;
+  const isOn = (raw) => Math.abs(Math.min(n(raw) / 100, 0.95) - m) < 1e-9;
+  const statusTxt = online === null ? 'Conectando…' : online ? 'Configuración en línea' : 'Configuración local (sin conexión)';
+  const setInfo = (k) => (e) => { const v = e.target.value; setQ((x) => { x.info[k] = v; return x; }); };
+
+  let body;
+  if (step === 0) {
+    body = (
+      <div>
+        {q.example && <div className="banner b-warn">Está viendo una <strong>cotización de ejemplo</strong>. Use «Nueva cotización» para empezar en blanco.</div>}
+        <div className="grid2">
+          {[['numero', 'N.º de cotización'], ['proyecto', 'Proyecto'], ['cliente', 'Cliente'], ['contacto', 'Contacto'], ['presupuestista', 'Presupuestista']].map(([k, lab]) => (
+            <label className="field" key={k}>{lab}<input className="txt" id={'info-' + k} type="text" value={q.info[k] || ''} onChange={setInfo(k)} /></label>
+          ))}
+          <label className="field">Área<select className="sel" id="info-area" value={q.info.area} onChange={setInfo('area')}><option>Proyectos</option><option>Inspecciones</option></select></label>
+          <label className="field">Fecha<input className="txt" id="info-fecha" type="date" value={q.info.fecha} onChange={setInfo('fecha')} /></label>
+        </div>
+        <p className="note">Salarios, tipo de cambio, overhead y catálogos se administran en <strong>Configuración</strong> (botón del engranaje). Esta cotización se guarda en este equipo mientras trabaja.</p>
+      </div>
+    );
+  } else if (step === 1) {
+    body = (
+      <div>
+        <div className="tblbox"><table>
+          <thead><tr><th>Puesto</th><th className="r">Personas</th><th className="r">Horas / sem.</th><th className="r">Semanas</th><th className="r">Horas totales</th><th className="r">Tarifa USD/h</th><th className="r">Total</th><th><span className="sr">Quitar</span></th></tr></thead>
+          <tbody>
+            {activeRoles.length ? activeRoles.map((r) => {
+              const l = line('roles', r.id), hrs = n(l.p) * n(l.h) * n(l.w), rate = R.rate(r.sal);
+              return (
+                <tr key={r.id}>
+                  <td className="strong">{r.name}</td>
+                  <td className="r"><NumIn value={l.p} label={'Personas ' + r.name} onChange={(v) => setLine('roles', r.id, 'p', v)} /></td>
+                  <td className="r"><NumIn value={l.h} label={'Horas por semana ' + r.name} onChange={(v) => setLine('roles', r.id, 'h', v)} /></td>
+                  <td className="r"><NumIn value={l.w} label={'Semanas ' + r.name} onChange={(v) => setLine('roles', r.id, 'w', v)} /></td>
+                  <td className="r">{hrs.toLocaleString('es-CR')}</td><td className="r">{rate.toFixed(2)}</td><td className="r strong">{usd(hrs * rate)}</td>
+                  <td><button className="rm" type="button" aria-label={'Quitar ' + r.name} onClick={() => setLine('roles', r.id, 'on', false)}>{Icon.x}</button></td>
+                </tr>
+              );
+            }) : <tr><td colSpan={8} style={{ padding: 18, color: 'var(--muted)' }}>Todavía no hay puestos. Agregue el primero con la lista de abajo.</td></tr>}
+          </tbody>
+        </table></div>
+        <div className="addrow">
+          <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>Agregar puesto
+            <select className="sel" id="add-role" value="" onChange={(e) => { const id = e.target.value; if (!id) return; setQ((x) => { x.roles[id] = { p: '1', h: '40', w: '1', ...(x.roles[id] || {}), on: true }; return x; }); }}>
+              <option value="">Seleccione…</option>
+              {freeRoles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          </label>
+          <div style={{ fontSize: 14 }}>Total mano de obra: <strong style={{ color: 'var(--red-text)', fontSize: 17 }}>{usd(c.mo)}</strong></div>
+        </div>
+        <p className="note">Horas sugeridas por el metrado (Equipos y renta): <strong>{c.horas.toLocaleString('es-CR')} h</strong> en {c.semanas.toLocaleString('es-CR', { maximumFractionDigits: 1 })} semanas.</p>
+      </div>
+    );
+  } else if (step === 2) {
+    body = (
+      <div>
+        <div className="tabs" role="tablist" aria-label="Región">
+          <button type="button" role="tab" aria-selected={viaTab === 'cr'} className={'tab' + (viaTab === 'cr' ? ' on' : '')} onClick={() => setViaTab('cr')}>Costa Rica · {usd(c.cr)}</button>
+          <button type="button" role="tab" aria-selected={viaTab === 'ca'} className={'tab' + (viaTab === 'ca' ? ' on' : '')} onClick={() => setViaTab('ca')}>Centroamérica · {usd(c.ca)}</button>
+        </div>
+        <div className="tblbox"><table>
+          <thead><tr><th>Concepto</th><th>U/M</th><th className="r">Cantidad</th><th className="r">Días / unid.</th><th className="r">Semanas</th><th className="r">P/U (USD)</th><th className="r">Total</th></tr></thead>
+          <tbody>
+            {cfg[viaTab].map((it) => {
+              const l = line(viaTab, it.id), qty = L.lineQty(it, l), pu = L.puOf(it, l);
+              return (
+                <tr key={it.id}>
+                  <td className="strong">{it.n}</td><td>{it.um}</td>
+                  <td className="r"><NumIn value={l.c || ''} label={'Cantidad ' + it.n} onChange={(v) => setLine(viaTab, it.id, 'c', v)} /></td>
+                  <td className="r"><NumIn value={l.d || ''} label={'Días ' + it.n} onChange={(v) => setLine(viaTab, it.id, 'd', v)} /></td>
+                  <td className="r">{it.noW ? <span style={{ color: 'var(--muted)' }}>—</span> : <NumIn value={l.w == null ? '1' : l.w} label={'Semanas ' + it.n} onChange={(v) => setLine(viaTab, it.id, 'w', v)} />}</td>
+                  <td className="r"><NumIn value={l.pu != null && l.pu !== '' ? l.pu : s(it.pu, 2)} label={'Precio unitario ' + it.n} onChange={(v) => setLine(viaTab, it.id, 'pu', v)} /></td>
+                  <td className="r strong">{usd(qty * pu)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table></div>
+        <p className="note">El P/U viene de Configuración; si lo cambia aquí, solo afecta esta cotización.{viaTab === 'cr' && cfg.cr.some((x) => x.noW) ? ' Hospedaje = cantidad × noches, igual que en el machote.' : ''}</p>
+      </div>
+    );
+  } else if (step === 3) {
+    const setEq = (k) => (v) => setQ((x) => { x.eq[k] = v; return x; });
+    body = (
+      <div>
+        <h2 className="sec">Metrado para estimar tiempo</h2>
+        <div className="grid3">
+          <label className="field">Tubería total ({s(cfg.rend.tub)} por día)<NumIn cls="full" id="eq-tub" value={q.eq.tub} onChange={setEq('tub')} /></label>
+          <label className="field">Dispositivos totales ({s(cfg.rend.disp)} por día)<NumIn cls="full" id="eq-disp" value={q.eq.disp} onChange={setEq('disp')} /></label>
+          <label className="field">Aumento de días<NumIn cls="full" id="eq-extra" value={q.eq.extra} onChange={setEq('extra')} /></label>
+        </div>
+        <div className="grid3" style={{ marginTop: 14 }}>
+          <div className="tile"><div className="kicker">Total días</div><div className="bignum">{c.dias}</div></div>
+          <div className="tile"><div className="kicker">Horas ({s(cfg.rend.hDia)} h/día)</div><div className="bignum">{c.horas.toLocaleString('es-CR')}</div></div>
+          <div className="tile"><div className="kicker">Semanas ({s(cfg.rend.dSem)} días)</div><div className="bignum">{c.semanas.toLocaleString('es-CR', { maximumFractionDigits: 1 })}</div></div>
+        </div>
+        <h2 className="sec">Renta de equipos y otros</h2>
+        <div className="tblbox"><table>
+          <thead><tr><th>Concepto</th><th>U/M</th><th className="r">Cantidad</th><th className="r">P/U (USD)</th><th className="r">Total</th></tr></thead>
+          <tbody>
+            {cfg.renta.map((it) => {
+              const l = line('renta', it.id), pu = L.puOf(it, l);
+              return (
+                <tr key={it.id}>
+                  <td className="strong">{it.n}</td><td>{it.um}</td>
+                  <td className="r"><NumIn value={l.q || ''} label={'Cantidad ' + it.n} onChange={(v) => setLine('renta', it.id, 'q', v)} /></td>
+                  <td className="r"><NumIn value={l.pu != null && l.pu !== '' ? l.pu : s(it.pu, 2)} label={'Precio unitario ' + it.n} onChange={(v) => setLine('renta', it.id, 'pu', v)} /></td>
+                  <td className="r strong">{usd(n(l.q) * pu)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table></div>
+      </div>
+    );
+  } else if (step === 4) {
+    const mm = Math.min(n(q.matMargin) / 100, 0.95);
+    body = (
+      <div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'flex-end', marginBottom: 14 }}>
+          <label className="field" style={{ flex: '1 1 260px' }}>Buscar en catálogo<input className="txt" id="mat-search" type="search" placeholder="Ej. EMT, cable, caja…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ background: 'var(--surface)' }} /></label>
+          <label className="field">Margen materiales (%)<NumIn id="mat-margin" step="0.5" value={q.matMargin} onChange={(v) => setQ((x) => { x.matMargin = v; return x; })} /></label>
+        </div>
+        <div className="tblbox"><table>
+          <thead><tr><th>Descripción</th><th>U/M</th><th className="r">Cantidad</th><th className="r">Precio lista</th><th className="r">Precio venta</th><th className="r">Total</th></tr></thead>
+          <tbody>
+            {matList.length ? matList.map((mt) => {
+              const l = line('mats', mt.id), pv = mt.list / (1 - mm);
+              return (
+                <tr key={mt.id}>
+                  <td className="strong" style={{ whiteSpace: 'normal', minWidth: 220 }}>{mt.n}</td><td>{mt.um}</td>
+                  <td className="r"><NumIn value={l.q || ''} label={'Cantidad ' + mt.n} onChange={(v) => setLine('mats', mt.id, 'q', v)} /></td>
+                  <td className="r">{usd(mt.list)}</td><td className="r">{usd(pv)}</td><td className="r strong">{usd(n(l.q) * pv)}</td>
+                </tr>
+              );
+            }) : <tr><td colSpan={6} style={{ padding: 18, color: 'var(--muted)' }}>Ningún material coincide con «{search}».</td></tr>}
+          </tbody>
+        </table></div>
+        <div className="total">Total materiales (venta): <strong>{usd(c.matVenta)}</strong></div>
+      </div>
+    );
+  } else {
+    const rows = [['1', 'Mano de obra construcción', c.mo, c.mo / (1 - m)], ['2', 'Viáticos Costa Rica', c.cr, c.cr / (1 - m)], ['3', 'Viáticos Centroamérica', c.ca, c.ca / (1 - m)], ['4', 'Renta de equipos', c.renta, c.renta / (1 - m)], ['5', 'Materiales (margen propio)', c.matCost, c.matVenta]];
+    body = (
+      <div>
+        <div className="tblbox"><table>
+          <thead><tr><th>Ítem</th><th>Descripción</th><th className="r">Costo</th><th className="r">Precio venta</th></tr></thead>
+          <tbody>
+            {rows.map((z) => <tr key={z[0]}><td>{z[0]}</td><td className="strong">{z[1]}</td><td className="r">{usd(z[2])}</td><td className="r strong">{usd(z[3])}</td></tr>)}
+            <tr><td /><td className="strong">Total oferta</td><td className="r strong">{usd(c.costo + c.matCost)}</td><td className="r strong" style={{ color: 'var(--red-text)' }}>{usd(c.oferta)}</td></tr>
+          </tbody>
+        </table></div>
+        <h2 className="sec">Comparativo de márgenes (servicios)</h2>
+        <p className="note" style={{ margin: '0 0 10px' }}>Escriba cualquier margen en las casillas para comparar; «Usar» lo aplica a la cotización.</p>
+        <div style={{ overflowX: 'auto' }}><div className="cmp">
+          <div className="mc lab">Margen (%)</div>
+          {q.cmp.map((raw, i) => <div key={'a' + i} className={'mc' + (isOn(raw) ? ' on' : '')}><NumIn step="0.5" value={raw} label={'Margen de comparación ' + (i + 1)} onChange={(v) => setQ((x) => { x.cmp[i] = v; return x; })} /></div>)}
+          <div className="mc lab">Precio venta</div>
+          {q.cmp.map((raw, i) => { const mg = Math.min(n(raw) / 100, 0.95); return <div key={'b' + i} className={'mc' + (isOn(raw) ? ' on' : '')}>{usd(c.costo / (1 - mg))}</div>; })}
+          <div className="mc lab">Ganancia</div>
+          {q.cmp.map((raw, i) => { const mg = Math.min(n(raw) / 100, 0.95); return <div key={'c' + i} className={'mc' + (isOn(raw) ? ' on' : '')}>{usd(c.costo / (1 - mg) - c.costo)}</div>; })}
+          <div className="mc lab" />
+          {q.cmp.map((raw, i) => <div key={'d' + i} className={'mc' + (isOn(raw) ? ' on' : '')}><button type="button" className="use" onClick={() => setQ((x) => { x.margin = raw; return x; })}>{isOn(raw) ? 'En uso' : 'Usar'}</button></div>)}
+        </div></div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'flex-end', marginTop: 22 }}>
+          <button type="button" className="btn btn-red" onClick={downloadExcel}>{Icon.down} Descargar Excel de esta cotización</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="cotz">
+      <style>{COTZ_CSS}</style>
+      <div className="topinfo"><div className="wrap">
+        <span><span className="dot" style={{ background: online ? '#2E9B57' : '#C98A00' }} />{statusTxt}{cfgDoc.updatedAt ? ' · actualizada ' + fmtDate(cfgDoc.updatedAt) : ''}</span>
+        <span>Tipo de cambio <strong>{crc(n(cfg.tc))}</strong> · Cargas sociales <strong>{pct(n(cfg.cs))}</strong> · Overhead <strong>{pct(n(cfg.fa))}</strong></span>
+      </div></div>
+      <div className="brand"><div className="wrap">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
+          <div style={{ minWidth: 0 }}>
+            <div className="btitle">{q.info.numero ? 'COTIZACIÓN ' + q.info.numero : 'COTIZACIÓN'}</div>
+            <div className="bsub">{q.info.proyecto || 'Sin nombre de proyecto'}{q.info.cliente ? ' · ' + q.info.cliente : ''}</div>
+          </div>
+        </div>
+        <div className="hbtns">
+          {confirmNew ? (
+            <>
+              <span style={{ fontSize: 13 }}>¿Borrar la cotización actual?</span>
+              <button type="button" className="btn btn-dark" onClick={() => { const b = blankQuote(cfg); setQRaw(b); lsSet(QKEY, b); setConfirmNew(false); setStep(0); flash('Cotización nueva en blanco.'); }}>Sí, empezar de cero</button>
+              <button type="button" className="btn btn-ghost" onClick={() => setConfirmNew(false)}>Cancelar</button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="btn btn-ghost" onClick={() => setConfirmNew(true)}>{Icon.file} Nueva cotización</button>
+              <button type="button" className="btn btn-dark" onClick={downloadExcel}>{Icon.down} Descargar Excel</button>
+              <button type="button" className="btn btn-ghost gear" aria-label="Configuración" title="Configuración" onClick={() => setShowCfg(true)}>{Icon.gear}</button>
+            </>
+          )}
+        </div>
+      </div></div>
+
+      <div className="wrap main">
+        <nav className="nav" aria-label="Pasos de la cotización">
+          {names.map((nm, i) => (
+            <button type="button" key={nm} className={'navbtn' + (step === i ? ' on' : '')} aria-current={step === i ? 'step' : undefined} onClick={() => setStep(i)}>
+              <span className="badge">{i + 1}</span><span><span className="navname">{nm}</span><span className="navsub">{subs[i]}</span></span>
+            </button>
+          ))}
+        </nav>
+        <section className="work" aria-labelledby="cotz-step-title">
+          <div className="workhead"><h1 id="cotz-step-title">{names[step]}</h1><span className="hint">{hints[step]}</span></div>
+          <div className="workbody">
+            {body}
+            <div className="foot">
+              <button type="button" className="btn btn-line" disabled={step === 0} onClick={() => setStep(Math.max(0, step - 1))}>← Anterior</button>
+              {step < 5
+                ? <button type="button" className="btn btn-dark" onClick={() => setStep(step + 1)}>Siguiente →</button>
+                : <button type="button" className="btn btn-dark" onClick={downloadExcel}>{Icon.down} Descargar Excel</button>}
+            </div>
+          </div>
+        </section>
+        <aside className="side" aria-label="Resumen de la cotización">
+          <div className="dark">
+            <div className="kicker" style={{ color: 'rgba(255,255,255,.75)' }}>Precio de venta servicios</div>
+            <div className="bignum" style={{ fontSize: 28, marginTop: 2, whiteSpace: 'nowrap' }}>{usd(c.precio)}</div>
+            <div className="kv" style={{ border: 0, color: '#fff' }}><span>Ganancia</span><strong>{usd(c.ganancia)}</strong></div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 10 }}>
+              <label htmlFor="cotz-margin" style={{ fontSize: 13 }}>Margen de utilidad (%)</label>
+              <NumIn id="cotz-margin" step="0.5" value={q.margin} label="Margen de utilidad" onChange={(v) => setQ((x) => { x.margin = v; return x; })} />
+            </div>
+            <input type="range" min="10" max="50" step="0.5" value={n(q.margin)} aria-label="Margen de utilidad" style={{ marginTop: 10 }} onChange={(e) => { const v = e.target.value; setQ((x) => { x.margin = v; return x; }); }} />
+          </div>
+          <div className="card">
+            <h2 className="ctitle">Detalle de costos</h2>
+            <div className="kv"><span>Mano de obra</span><span>{usd(c.mo)}</span></div>
+            <div className="kv"><span>Viáticos C.R.</span><span>{usd(c.cr)}</span></div>
+            <div className="kv"><span>Viáticos C.A.</span><span>{usd(c.ca)}</span></div>
+            <div className="kv"><span>Renta de equipos</span><span>{usd(c.renta)}</span></div>
+            <div className="kv" style={{ fontWeight: 700, fontSize: 14 }}><span style={{ color: 'var(--fg)' }}>Costo total</span><span style={{ color: 'var(--red-text)' }}>{usd(c.costo)}</span></div>
+          </div>
+          <div className="card" style={{ borderTop: '4px solid var(--red)' }}>
+            <h2 className="ctitle">Overhead administrativo</h2>
+            <div className="kv"><span>Incluido en M.O. ({pct(n(cfg.fa))})</span><strong>{usd(c.adm)}</strong></div>
+            <div className="kv"><span>% sobre costo directo</span><strong>{pct(c.directo > 0 ? c.adm / c.directo : 0)}</strong></div>
+            <div className="kv"><span>% sobre precio de venta</span><strong>{pct(c.precio > 0 ? c.adm / c.precio : 0)}</strong></div>
+          </div>
+          <div className="redcard">
+            <div className="kicker" style={{ color: 'rgba(255,255,255,.85)' }}>Total oferta (servicios + materiales)</div>
+            <div className="bignum" style={{ fontSize: 26, marginTop: 2, whiteSpace: 'nowrap' }}>{usd(c.oferta)}</div>
+          </div>
+        </aside>
+      </div>
+
+      {showCfg && <Config cfg={cfg} cfgDoc={cfgDoc} online={online} canEdit={isAdmin} onClose={() => setShowCfg(false)} onApply={applyConfig} onDownload={downloadExcel} flash={flash} />}
+      {toast && <div className="toast" role="status">{toast}</div>}
+    </div>
+  );
+}
+
+/* ====================== Configuración (engranaje) ====================== */
+function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, flash }) {
+  const [d, setD] = useState(() => toDraft(cfg));
+  const [dirty, setDirty] = useState(false);
+  const [tab, setTab] = useState('general');
+  const [msg, setMsg] = useState(null);
+  const [withQty, setWithQty] = useState(false);
+  const [pendingQty, setPendingQty] = useState(null);
+  const [source, setSource] = useState('Edición manual');
+  const [saving, setSaving] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
+  const ro = !canEdit;
+  const R = L.rates(fromDraft(d).cfg);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape' && !dirty) onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dirty, onClose]);
+
+  const upd = (fn) => { setD((prev) => { const nx = clone(prev); fn(nx); return nx; }); setDirty(true); };
+  const setG = (k) => (v) => upd((x) => { x[k] = v; });
+  const setRow = (list, i, k) => (v) => upd((x) => { x[list][i][k] = v; });
+  const delRow = (list, i) => upd((x) => { x[list].splice(i, 1); });
+  const addRow = (list) => upd((x) => {
+    const id = L.uid(list === 'roles' ? 'r' : list.slice(0, 2));
+    x[list].push(list === 'roles' ? { id, name: '', sal: '0' } : list === 'mats' ? { id, n: '', um: 'Ea', list: '0' } : { id, n: '', um: 'Gbl', pu: '0' });
+  });
+
+  function onFile(e) {
+    const file = e.target.files && e.target.files[0]; const input = e.target;
+    if (!file) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        const res = L.parseMachote(XLSX, new Uint8Array(rd.result));
+        setD(toDraft(res.cfg)); setDirty(true); setPendingQty(res.qty); setSource('Excel: ' + file.name);
+        const over = res.cfg.roles.length > L.LIM.roles ? ' Atención: trae ' + res.cfg.roles.length + ' puestos y el formato del machote admite ' + L.LIM.roles + '.' : '';
+        setMsg({ ok: true, t: 'Se leyó «' + file.name + '»: ' + res.cfg.roles.length + ' puestos, ' + res.cfg.cr.length + ' viáticos C.R., ' + res.cfg.ca.length + ' viáticos C.A., ' + res.cfg.renta.length + ' rentas y ' + res.cfg.mats.length + ' materiales. Tipo de cambio ' + crc(res.cfg.tc) + ', cargas ' + pct(res.cfg.cs) + ', overhead ' + pct(res.cfg.fa) + '. Revise las pestañas y pulse «Guardar configuración».' + over });
+      } catch (err) { setMsg({ ok: false, t: 'No se pudo leer «' + file.name + '»: ' + (err && err.message ? err.message : err) }); }
+      input.value = '';
+    };
+    rd.onerror = () => setMsg({ ok: false, t: 'No se pudo abrir el archivo.' });
+    rd.readAsArrayBuffer(file);
+  }
+
+  async function save() {
+    const r = fromDraft(d);
+    if (r.errs.length) { setMsg({ ok: false, t: r.errs.join(' ') }); return; }
+    setSaving(true);
+    const res = await onApply(r.cfg, source, withQty && pendingQty ? pendingQty : null);
+    setSaving(false);
+    if (res === 'ok' || res === 'local') {
+      setDirty(false); setPendingQty(null); setMsg(null);
+      flash(res === 'ok' ? 'Configuración guardada en Supabase para todos los usuarios.' : 'Configuración aplicada en este navegador (sin conexión a Supabase).');
+      onClose();
+    } else {
+      setMsg({ ok: false, t: 'No se pudo guardar en Supabase (' + res + '). Los cambios se aplicaron solo en este navegador.' });
+    }
+  }
+
+  const tabs = [['general', 'General'], ['roles', 'Personal y salarios'], ['cr', 'Viáticos C.R.'], ['ca', 'Viáticos C.A.'], ['renta', 'Renta de equipos'], ['mats', 'Materiales'], ['excel', 'Importar / exportar Excel']];
+
+  const listTable = (key, title) => {
+    const rows = d[key], lim = L.LIM[key];
+    return (
+      <div>
+        <h3>{title}</h3>
+        <p className="note" style={{ marginTop: 0 }}>{rows.length} de {lim} filas (límite del formato del machote). Los cambios aplican a la cotización actual y a las nuevas.</p>
+        <div className="tblbox" style={{ marginTop: 12 }}><table>
+          <thead><tr><th>Concepto</th><th>U/M</th><th className="r">P/U (USD)</th>{key === 'cr' && <th>Sin semanas</th>}<th><span className="sr">Eliminar</span></th></tr></thead>
+          <tbody>
+            {rows.map((x, i) => (
+              <tr key={x.id}>
+                <td><input className="txt cell" type="text" value={x.n} disabled={ro} aria-label="Concepto" onChange={(e) => setRow(key, i, 'n')(e.target.value)} /></td>
+                <td><input className="txt cell short" type="text" value={x.um} disabled={ro} aria-label="Unidad" onChange={(e) => setRow(key, i, 'um')(e.target.value)} /></td>
+                <td className="r"><NumIn cls="wide" value={x.pu} disabled={ro} label={'P/U ' + x.n} onChange={setRow(key, i, 'pu')} /></td>
+                {key === 'cr' && <td><input type="checkbox" style={{ width: 20, height: 20, accentColor: '#E86A2C' }} checked={!!x.noW} disabled={ro} aria-label={'Cobrar sin semanas ' + x.n} onChange={(e) => setRow(key, i, 'noW')(e.target.checked)} /></td>}
+                <td><button type="button" className="rm" disabled={ro} aria-label={'Eliminar ' + (x.n || 'fila')} onClick={() => delRow(key, i)}>{Icon.x}</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table></div>
+        <div className="addrow"><button type="button" className="btn btn-line" disabled={ro || rows.length >= lim} onClick={() => addRow(key)}>{Icon.plus} Agregar fila</button></div>
+      </div>
+    );
+  };
+
+  let body;
+  if (tab === 'general') {
+    body = (
+      <div>
+        <h3>Parámetros generales</h3>
+        <p className="note" style={{ marginTop: 0 }}>Equivalen a la hoja Salarios (tipo de cambio, cargas, factor administrativo) y a los márgenes del machote.</p>
+        <h4 className="sec">Costos de personal</h4>
+        <div className="grid3">
+          <label className="field">Tipo de cambio (₡ por USD)<NumIn cls="full" id="g-tc" value={d.tc} disabled={ro} onChange={setG('tc')} /></label>
+          <label className="field">Cargas sociales (%)<NumIn cls="full" id="g-cs" value={d.cs} disabled={ro} onChange={setG('cs')} /></label>
+          <label className="field">Overhead · factor administrativo (%)<NumIn cls="full" id="g-fa" value={d.fa} disabled={ro} onChange={setG('fa')} /></label>
+          <label className="field">Factor de aumento (%)<NumIn cls="full" id="g-au" value={d.au} disabled={ro} onChange={setG('au')} /></label>
+        </div>
+        <h4 className="sec">Márgenes por defecto</h4>
+        <div className="grid3">
+          <label className="field">Margen de utilidad servicios (%)<NumIn cls="full" id="g-m" value={d.margin} disabled={ro} onChange={setG('margin')} /></label>
+          <label className="field">Margen de materiales (%)<NumIn cls="full" id="g-mm" value={d.matMargin} disabled={ro} onChange={setG('matMargin')} /></label>
+        </div>
+        <h4 className="sec">Rendimientos para estimar tiempo</h4>
+        <div className="grid3">
+          <label className="field">Tubería por día<NumIn cls="full" id="g-tub" value={d.tub} disabled={ro} onChange={setG('tub')} /></label>
+          <label className="field">Dispositivos por día<NumIn cls="full" id="g-disp" value={d.disp} disabled={ro} onChange={setG('disp')} /></label>
+          <label className="field">Horas por día<NumIn cls="full" id="g-hdia" value={d.hDia} disabled={ro} onChange={setG('hDia')} /></label>
+          <label className="field">Días por semana<NumIn cls="full" id="g-dsem" value={d.dSem} disabled={ro} onChange={setG('dSem')} /></label>
+        </div>
+      </div>
+    );
+  } else if (tab === 'roles') {
+    body = (
+      <div>
+        <h3>Personal y salarios</h3>
+        <p className="note" style={{ marginTop: 0 }}>Tarifa = salario ÷ 4,33 ÷ 48 × (1 + cargas) × (1 + overhead + aumento) ÷ tipo de cambio, igual que la hoja Salarios. {d.roles.length} de {L.LIM.roles} puestos.</p>
+        <div className="tblbox" style={{ marginTop: 12 }}><table>
+          <thead><tr><th>Puesto</th><th className="r">Salario mensual (₡)</th><th className="r">Tarifa USD/h</th><th className="r">Overhead USD/h</th><th><span className="sr">Eliminar</span></th></tr></thead>
+          <tbody>
+            {d.roles.map((r, i) => (
+              <tr key={r.id}>
+                <td><input className="txt cell" type="text" value={r.name} disabled={ro} aria-label="Nombre del puesto" onChange={(e) => setRow('roles', i, 'name')(e.target.value)} /></td>
+                <td className="r"><NumIn cls="wide" step="1000" value={r.sal} disabled={ro} label={'Salario mensual ' + r.name} onChange={setRow('roles', i, 'sal')} /></td>
+                <td className="r">{usd(R.rate(r.sal))}</td><td className="r">{usd(R.oh(r.sal))}</td>
+                <td><button type="button" className="rm" disabled={ro} aria-label={'Eliminar ' + (r.name || 'puesto')} onClick={() => delRow('roles', i)}>{Icon.x}</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table></div>
+        <div className="addrow"><button type="button" className="btn btn-line" disabled={ro || d.roles.length >= L.LIM.roles} onClick={() => addRow('roles')}>{Icon.plus} Agregar puesto</button></div>
+      </div>
+    );
+  } else if (tab === 'cr') body = listTable('cr', 'Viáticos Costa Rica');
+  else if (tab === 'ca') body = listTable('ca', 'Viáticos Centroamérica');
+  else if (tab === 'renta') body = listTable('renta', 'Renta de equipos y otros');
+  else if (tab === 'mats') {
+    body = (
+      <div>
+        <h3>Catálogo de materiales</h3>
+        <p className="note" style={{ marginTop: 0 }}>{d.mats.length} materiales. Precio de lista en USD; el precio de venta aplica el margen de materiales.</p>
+        <div className="tblbox" style={{ marginTop: 12 }}><table>
+          <thead><tr><th>Descripción</th><th>U/M</th><th className="r">Precio lista (USD)</th><th><span className="sr">Eliminar</span></th></tr></thead>
+          <tbody>
+            {d.mats.map((x, i) => (
+              <tr key={x.id}>
+                <td><input className="txt cell" style={{ minWidth: 300 }} type="text" value={x.n} disabled={ro} aria-label="Descripción" onChange={(e) => setRow('mats', i, 'n')(e.target.value)} /></td>
+                <td><input className="txt cell short" type="text" value={x.um} disabled={ro} aria-label="Unidad" onChange={(e) => setRow('mats', i, 'um')(e.target.value)} /></td>
+                <td className="r"><NumIn cls="wide" value={x.list} disabled={ro} label={'Precio lista ' + x.n} onChange={setRow('mats', i, 'list')} /></td>
+                <td><button type="button" className="rm" disabled={ro} aria-label={'Eliminar ' + (x.n || 'material')} onClick={() => delRow('mats', i)}>{Icon.x}</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table></div>
+        <div className="addrow"><button type="button" className="btn btn-line" disabled={ro || d.mats.length >= L.LIM.mats} onClick={() => addRow('mats')}>{Icon.plus} Agregar material</button></div>
+      </div>
+    );
+  } else {
+    body = (
+      <div>
+        <h3>Importar / exportar Excel</h3>
+        <h4 className="sec">Cargar un machote actualizado</h4>
+        <div className="drop">
+          <div style={{ flex: '1 1 300px', fontSize: 13, lineHeight: 1.5, color: 'var(--muted)' }}>Lee las hojas <strong style={{ color: 'var(--fg)' }}>Salarios</strong>, <strong style={{ color: 'var(--fg)' }}>Estimacion Horas</strong> y <strong style={{ color: 'var(--fg)' }}>Materiales</strong>: puestos y salarios, tipo de cambio, cargas sociales, overhead, factor de aumento, márgenes, rendimientos, precios de viáticos, renta y catálogo de materiales.</div>
+          <label className="btn btn-red" style={{ position: 'relative', opacity: ro ? 0.45 : 1 }}>{Icon.up} Cargar Excel (.xlsm / .xlsx)
+            <input className="hidefile" type="file" accept=".xlsm,.xlsx,.xls" disabled={ro} onChange={onFile} />
+          </label>
+        </div>
+        <label className="check"><input type="checkbox" checked={withQty} disabled={ro} onChange={(e) => setWithQty(e.target.checked)} />
+          <span>También cargar las <strong>cantidades</strong> del archivo en la cotización actual (personas, horas, semanas, viáticos, renta, metrado y materiales). Reemplaza lo que ya está digitado.</span>
+        </label>
+        <h4 className="sec">Descargar</h4>
+        <p className="note" style={{ marginTop: 0 }}>Genera un Excel en formato machote con la configuración y la cotización actuales: Resumen General (con overhead y total de oferta), Estimacion Horas, Salarios y Materiales, todo con fórmulas.{dirty ? ' Guarde primero los cambios para incluirlos.' : ''}</p>
+        <button type="button" className="btn btn-dark" onClick={onDownload}>{Icon.down} Descargar Excel actual</button>
+        <h4 className="sec">Restaurar</h4>
+        <p className="note" style={{ marginTop: 0 }}>Vuelve a los valores del machote original (octubre 2025). Se aplica al pulsar «Guardar configuración».</p>
+        <button type="button" className="btn btn-line" disabled={ro} onClick={() => { setD(toDraft(DEFAULT_CFG)); setDirty(true); setSource('Machote original'); setPendingQty(null); setMsg({ ok: true, t: 'Valores del machote original cargados. Pulse «Guardar configuración» para aplicarlos.' }); }}>Restaurar machote original</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="ovl" role="dialog" aria-modal="true" aria-labelledby="cotz-cfg-title">
+      <div className="ovlhead"><div className="wrap">
+        <h2 id="cotz-cfg-title">{Icon.gear} Configuración</h2>
+        <span style={{ fontSize: 12, color: 'rgba(255,255,255,.75)' }}>{online ? 'En línea' : 'Local'} · {cfgDoc.source || ''}{cfgDoc.updatedAt ? ' · ' + fmtDate(cfgDoc.updatedAt) : ''}</span>
+        <button type="button" className="btn btn-ghost" onClick={() => (dirty ? setConfirmClose(true) : onClose())}>{Icon.x} Cerrar</button>
+      </div></div>
+      <div className="wrap cfgmain">
+        <nav className="cfgnav" aria-label="Secciones de configuración">
+          {tabs.map(([k, lab]) => <button type="button" key={k} className={'navbtn' + (tab === k ? ' on' : '')} onClick={() => setTab(k)}><span className="navname">{lab}</span></button>)}
+        </nav>
+        <div className="cfgbody">
+          {ro && <div className="banner b-info">Modo consulta: solo los administradores pueden cambiar la configuración. Puede descargar el Excel actual.</div>}
+          {msg && <div className={'banner ' + (msg.ok ? 'b-ok' : 'b-err')} role="status">{msg.t}</div>}
+          {body}
+        </div>
+      </div>
+      <div className="savebar"><div className="wrap">
+        <span style={{ fontSize: 13, color: 'var(--muted)' }}>{confirmClose ? 'Hay cambios sin guardar. ¿Cerrar y descartarlos?' : dirty ? 'Cambios sin guardar' + (pendingQty && withQty ? ' · se cargarán también las cantidades' : '') : 'Sin cambios'}</span>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {confirmClose ? (
+            <>
+              <button type="button" className="btn btn-line" onClick={() => setConfirmClose(false)}>Seguir editando</button>
+              <button type="button" className="btn btn-dark" onClick={onClose}>Descartar y cerrar</button>
+            </>
+          ) : (
+            <>
+              <button type="button" className="btn btn-line" disabled={!dirty} onClick={() => { setD(toDraft(cfg)); setDirty(false); setPendingQty(null); setMsg(null); setSource('Edición manual'); }}>Descartar cambios</button>
+              <button type="button" className="btn btn-red" disabled={!dirty || ro || saving} onClick={save}>{saving ? 'Guardando…' : 'Guardar configuración'}</button>
+            </>
+          )}
+        </div>
+      </div></div>
+    </div>
+  );
+}
+
+return Cotizador;
+})();
+
+const COT_TAB_PROCESO = "__cotizacion_en_proceso";
+
 function Cotizaciones() {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
@@ -3625,6 +5039,9 @@ function Cotizaciones() {
   const [open, setOpen] = useState(false);
   const [printRow, setPrintRow] = useState(null);
   const [subTab, setSubTab] = useEstadoRecordado("cotizaciones", "Todas");
+  // "Cotización en proceso" (cotizador) solo para admin y asistente
+  const puedeCotizador = isAdmin || currentUser?.categoria === "asistente";
+  useEffect(() => { if (!puedeCotizador && subTab === COT_TAB_PROCESO) setSubTab("Todas"); }, [puedeCotizador, subTab]);
   const [avisoForm, setAvisoForm] = useState("");
   const [filtroSolicitante, setFiltroSolicitante] = useState("");
   const [filtroCliente, setFiltroCliente] = useState("");
@@ -3783,7 +5200,14 @@ function Cotizaciones() {
           {ESTADOS_COT.map((e) => (
             <Btn key={e} small variant={subTab === e ? "accent" : "ghost"} onClick={() => setSubTab(e)}>{e} ({rows.filter((r) => r.estado === e).length})</Btn>
           ))}
+          {puedeCotizador && (
+            <Btn small variant={subTab === COT_TAB_PROCESO ? "accent" : "ghost"} onClick={() => setSubTab(COT_TAB_PROCESO)} style={{ marginLeft: "auto" }}><FileText size={13} /> Cotización en proceso</Btn>
+          )}
         </div>
+
+        {subTab === COT_TAB_PROCESO && puedeCotizador ? (
+          <CotizadorAD supabase={supabase} isAdmin={isAdmin} usuarioId={currentUser?.id} />
+        ) : (<>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
           <input style={{ ...inputStyle, width: 150 }} value={filtroSolicitante} onChange={(e) => setFiltroSolicitante(e.target.value)} placeholder="Solicitante..." />
@@ -3872,6 +5296,7 @@ function Cotizaciones() {
             ))}
           </tbody>
         </table>
+        </>)}
       </Card>
     </div>
   );

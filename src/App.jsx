@@ -9,7 +9,8 @@ import {
   CalendarDays, FileText, HardHat, LayoutDashboard, Building2,
   ChevronLeft, ChevronRight, ChevronUp, ChevronDown, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck, Package, GraduationCap, Award,
   Star, Trophy, Zap, Target, Medal, Rocket, Crown, Sparkles, ShieldCheck, Gem, Repeat, Lock, Search,
-  AlertTriangle, Settings, Shield, HelpCircle, Trash2, Wrench, Wifi, TrendingUp, Volume2, VolumeX, Menu
+  AlertTriangle, Settings, Shield, HelpCircle, Trash2, Wrench, Wifi, TrendingUp, Volume2, VolumeX, Menu,
+  Calculator,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -3750,6 +3751,15 @@ const COTZ_CSS = `.cotz{--bg:#F3F5F7;--surface:#FFFFFF;--surface2:#F7F8FA;--line
 .cotz .check{display:flex;gap:10px;align-items:flex-start;font-size:13px;margin-top:12px;cursor:pointer}
 .cotz .check input{width:18px;height:18px;margin-top:1px;accent-color:var(--red)}
 .cotz .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:70;background:var(--slate);color:#fff;padding:10px 16px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.25);font-size:13px;max-width:calc(100% - 32px)}
+.cotz .nuevapanel{margin-top:10px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.cotz .np-t{font-weight:800;font-size:14px;margin-bottom:10px}
+.cotz .np-t span{font-weight:400;color:var(--muted);font-size:12.5px}
+.cotz .np-ops{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.cotz .np-op{border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.cotz .np-h{font-weight:700;font-size:13.5px}
+.cotz .np-d{font-size:12.5px;color:var(--muted);margin-bottom:4px}
+.cotz .solref{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px 16px;font-size:12.5px}
+.cotz .solref span{display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
 @media (max-width:640px){.cotz .side,.cotz .cfgnav{max-width:none}.cotz .nav .navbtn{flex:1 1 130px}}
 @media (prefers-reduced-motion:reduce){.cotz, .cotz *{transition:none!important;animation:none!important}}
 `;
@@ -4406,6 +4416,21 @@ function exampleQuote(cfg) {
   q.eq = { tub: '120', disp: '45', extra: '3' };
   return q;
 }
+// Cotización nueva con los datos de una solicitud de Cotizaciones
+function quoteDesdeSolicitud(cfg, r, presupuestista) {
+  const q = blankQuote(cfg);
+  q.info = { ...q.info,
+    numero: r.numCot || ('SOL-' + r.consecutivo),
+    proyecto: r.descripcion || r.cliente || '',
+    cliente: r.cliente || '',
+    contacto: [r.contacto, r.telefono, r.email].filter(Boolean).join(' · '),
+    area: /proyecto/i.test(r.tipo || '') ? 'Proyectos' : 'Inspecciones',
+    presupuestista: presupuestista || '',
+  };
+  q.solicitud = { id: r.id, consecutivo: r.consecutivo, solicitante: r.solicitante, provincia: r.provincia, dias: r.dias, personal: r.personal,
+    descripcion: r.descripcion, equipos: r.equipos, dispositivos: r.dispositivos, frecuencia: r.frecuencia, observaciones: r.observaciones, tipo: r.tipo, numCot: r.numCot };
+  return q;
+}
 // Reasigna las líneas de la cotización cuando cambian los ids de la configuración (por nombre)
 function remapQuote(oldCfg, newCfg, q) {
   const out = clone(q);
@@ -4461,7 +4486,7 @@ function NumIn({ value, onChange, label, cls, step, min, disabled, id }) {
 }
 
 /* ====================================================================== */
-function Cotizador({ supabase, isAdmin = false, usuarioId }) {
+function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solicitudes = [], onTomarSolicitud, onPasarMonto }) {
   const initCfg = lsGet(CKEY) || { cfg: DEFAULT_CFG, updatedAt: null, source: 'Machote original (incluido en la app)' };
   const [cfgDoc, setCfgDoc] = useState(initCfg);
   const cfg = cfgDoc.cfg;
@@ -4473,6 +4498,9 @@ function Cotizador({ supabase, isAdmin = false, usuarioId }) {
   const [online, setOnline] = useState(null); // null = conectando
   const [toast, setToast] = useState('');
   const [confirmNew, setConfirmNew] = useState(false);
+  const [solElegida, setSolElegida] = useState('');
+  const [pasarEnProceso, setPasarEnProceso] = useState(true);
+  const [confirmMonto, setConfirmMonto] = useState(false);
   const cfgRef = useRef(cfg); cfgRef.current = cfg;
   const toastT = useRef(null);
 
@@ -4553,7 +4581,18 @@ function Cotizador({ supabase, isAdmin = false, usuarioId }) {
   if (step === 0) {
     body = (
       <div>
-        {q.example && <div className="banner b-warn">Está viendo una <strong>cotización de ejemplo</strong>. Use «Nueva cotización» para empezar en blanco.</div>}
+        {q.example && <div className="banner b-warn">Está viendo una <strong>cotización de ejemplo</strong>. Use «Nueva cotización» para empezar en blanco o desde una solicitud.</div>}
+        {q.solicitud && (
+          <div className="banner b-info">
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Tomada de la solicitud #{q.solicitud.consecutivo}{q.solicitud.solicitante ? ' · solicitó ' + q.solicitud.solicitante : ''}</div>
+            <div className="solref">
+              {[['Provincia', q.solicitud.provincia], ['Días de implementación', q.solicitud.dias], ['Personal y puesto', q.solicitud.personal], ['Frecuencia', q.solicitud.frecuencia],
+                ['Equipos de elevación', q.solicitud.equipos], ['Lista de dispositivos', q.solicitud.dispositivos], ['Tipo de oferta', q.solicitud.tipo], ['Observaciones', q.solicitud.observaciones]]
+                .filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== '')
+                .map(([k, v]) => <div key={k}><span>{k}</span>{String(v)}</div>)}
+            </div>
+          </div>
+        )}
         <div className="grid2">
           {[['numero', 'N.º de cotización'], ['proyecto', 'Proyecto'], ['cliente', 'Cliente'], ['contacto', 'Contacto'], ['presupuestista', 'Presupuestista']].map(([k, lab]) => (
             <label className="field" key={k}>{lab}<input className="txt" id={'info-' + k} type="text" value={q.info[k] || ''} onChange={setInfo(k)} /></label>
@@ -4708,7 +4747,16 @@ function Cotizador({ supabase, isAdmin = false, usuarioId }) {
           <div className="mc lab" />
           {q.cmp.map((raw, i) => <div key={'d' + i} className={'mc' + (isOn(raw) ? ' on' : '')}><button type="button" className="use" onClick={() => setQ((x) => { x.margin = raw; return x; })}>{isOn(raw) ? 'En uso' : 'Usar'}</button></div>)}
         </div></div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'flex-end', marginTop: 22 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'flex-end', alignItems: 'center', marginTop: 22 }}>
+          {q.solicitud && onPasarMonto && (confirmMonto ? (
+            <>
+              <span style={{ fontSize: 13 }}>¿Poner {usd(c.oferta)} como monto de la solicitud #{q.solicitud.consecutivo}?</span>
+              <button type="button" className="btn btn-dark" onClick={() => { onPasarMonto(q.solicitud.id, Math.round(c.oferta * 100) / 100, /^SOL-/.test(q.info.numero || '') ? '' : (q.info.numero || '').trim()); setConfirmMonto(false); flash('Monto pasado a la solicitud #' + q.solicitud.consecutivo + '.'); }}>Sí, pasar</button>
+              <button type="button" className="btn btn-line" onClick={() => setConfirmMonto(false)}>Cancelar</button>
+            </>
+          ) : (
+            <button type="button" className="btn btn-line" disabled={!(c.oferta > 0)} onClick={() => setConfirmMonto(true)}>Pasar total a la solicitud #{q.solicitud.consecutivo}</button>
+          ))}
           <button type="button" className="btn btn-red" onClick={downloadExcel}>{Icon.down} Descargar Excel de esta cotización</button>
         </div>
       </div>
@@ -4726,25 +4774,46 @@ function Cotizador({ supabase, isAdmin = false, usuarioId }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
           <div style={{ minWidth: 0 }}>
             <div className="btitle">{q.info.numero ? 'COTIZACIÓN ' + q.info.numero : 'COTIZACIÓN'}</div>
-            <div className="bsub">{q.info.proyecto || 'Sin nombre de proyecto'}{q.info.cliente ? ' · ' + q.info.cliente : ''}</div>
+            <div className="bsub">{q.info.proyecto || 'Sin nombre de proyecto'}{q.info.cliente ? ' · ' + q.info.cliente : ''}{q.solicitud ? ' · solicitud #' + q.solicitud.consecutivo : ''}</div>
           </div>
         </div>
         <div className="hbtns">
-          {confirmNew ? (
-            <>
-              <span style={{ fontSize: 13 }}>¿Borrar la cotización actual?</span>
-              <button type="button" className="btn btn-dark" onClick={() => { const b = blankQuote(cfg); setQRaw(b); lsSet(QKEY, b); setConfirmNew(false); setStep(0); flash('Cotización nueva en blanco.'); }}>Sí, empezar de cero</button>
-              <button type="button" className="btn btn-ghost" onClick={() => setConfirmNew(false)}>Cancelar</button>
-            </>
-          ) : (
-            <>
-              <button type="button" className="btn btn-ghost" onClick={() => setConfirmNew(true)}>{Icon.file} Nueva cotización</button>
-              <button type="button" className="btn btn-dark" onClick={downloadExcel}>{Icon.down} Descargar Excel</button>
-              <button type="button" className="btn btn-ghost gear" aria-label="Configuración" title="Configuración" onClick={() => setShowCfg(true)}>{Icon.gear}</button>
-            </>
-          )}
+          <button type="button" className="btn btn-ghost" onClick={() => setConfirmNew(!confirmNew)}>{Icon.file} Nueva cotización</button>
+          <button type="button" className="btn btn-dark" onClick={downloadExcel}>{Icon.down} Descargar Excel</button>
+          <button type="button" className="btn btn-ghost gear" aria-label="Configuración" title="Configuración" onClick={() => setShowCfg(true)}>{Icon.gear}</button>
         </div>
       </div></div>
+      {confirmNew && (() => {
+        const pendientes = solicitudes.filter((r) => (r.estado || 'Solicitud') === 'Solicitud');
+        const empezar = (nueva, msg) => { setQRaw(nueva); lsSet(QKEY, nueva); setConfirmNew(false); setSolElegida(''); setStep(0); flash(msg); };
+        return (
+          <div className="nuevapanel">
+            <div className="np-t">Nueva cotización <span>— reemplaza la que está abierta</span></div>
+            <div className="np-ops">
+              <div className="np-op">
+                <div className="np-h">Desde cero</div>
+                <div className="np-d">Todos los datos en blanco.</div>
+                <button type="button" className="btn btn-dark" onClick={() => empezar(blankQuote(cfg), 'Cotización nueva en blanco.')}>{Icon.file} Empezar en blanco</button>
+              </div>
+              <div className="np-op">
+                <div className="np-h">Desde una solicitud</div>
+                <div className="np-d">Toma cliente, contacto, descripción y los datos de la solicitud ({pendientes.length} en estado «Solicitud»).</div>
+                <select className="sel" value={solElegida} onChange={(e) => setSolElegida(e.target.value)} style={{ width: '100%' }} aria-label="Solicitud">
+                  <option value="">{pendientes.length ? 'Elija la solicitud…' : 'No hay solicitudes pendientes'}</option>
+                  {pendientes.map((r) => <option key={r.id} value={r.id}>#{r.consecutivo} · {r.cliente}{r.descripcion ? ' — ' + String(r.descripcion).slice(0, 60) : ''}</option>)}
+                </select>
+                {onTomarSolicitud && <label className="check" style={{ marginTop: 8 }}><input type="checkbox" checked={pasarEnProceso} onChange={(e) => setPasarEnProceso(e.target.checked)} /><span>Pasar la solicitud a «En proceso»</span></label>}
+                <button type="button" className="btn btn-red" disabled={!solElegida} style={{ marginTop: 8 }} onClick={() => {
+                  const r = pendientes.find((x) => String(x.id) === String(solElegida)); if (!r) return;
+                  if (pasarEnProceso && onTomarSolicitud) onTomarSolicitud(r.id);
+                  empezar(quoteDesdeSolicitud(cfg, r, usuarioNombre), 'Cotización creada desde la solicitud #' + r.consecutivo + (pasarEnProceso && onTomarSolicitud ? ' (ahora está En proceso).' : '.'));
+                }}>Usar esta solicitud</button>
+              </div>
+            </div>
+            <div style={{ textAlign: 'right', marginTop: 10 }}><button type="button" className="btn btn-line" onClick={() => setConfirmNew(false)}>Cancelar</button></div>
+          </div>
+        );
+      })()}
 
       <div className="wrap main">
         <nav className="nav" aria-label="Pasos de la cotización">
@@ -5041,7 +5110,9 @@ function Cotizaciones() {
   const [subTab, setSubTab] = useEstadoRecordado("cotizaciones", "Todas");
   // "Cotización en proceso" (cotizador) solo para admin y asistente
   const puedeCotizador = isAdmin || currentUser?.categoria === "asistente";
-  useEffect(() => { if (!puedeCotizador && subTab === COT_TAB_PROCESO) setSubTab("Todas"); }, [puedeCotizador, subTab]);
+  const [vistaCot, setVistaCot] = useEstadoRecordado("cotizaciones-vista", "solicitudes");
+  useEffect(() => { if (subTab === COT_TAB_PROCESO) setSubTab("Todas"); }, [subTab]);
+  const verCotizador = puedeCotizador && vistaCot === "cotizador";
   const [avisoForm, setAvisoForm] = useState("");
   const [filtroSolicitante, setFiltroSolicitante] = useState("");
   const [filtroCliente, setFiltroCliente] = useState("");
@@ -5148,6 +5219,36 @@ function Cotizaciones() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {puedeCotizador && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 }}>
+          {[["solicitudes", "Solicitudes de cotización", `${rows.length} solicitudes · ${rows.filter((r) => r.estado === "Solicitud").length} pendientes`, FileText],
+            ["cotizador", "Cotización en proceso", "Mano de obra, viáticos, materiales, márgenes y Excel", Calculator]].map(([id, titulo, sub, Ico]) => {
+            const on = vistaCot === id;
+            return (
+              <button key={id} onClick={() => setVistaCot(id)} style={{
+                display: "flex", alignItems: "center", gap: 14, padding: "16px 20px", borderRadius: 14, cursor: "pointer", textAlign: "left", fontFamily: "inherit",
+                border: `2px solid ${on ? T.accent : T.line}`, background: on ? T.accent : T.panel, color: on ? "#fff" : T.ink,
+                boxShadow: on ? "0 4px 14px rgba(232,106,44,.28)" : "none", transition: "all .15s",
+              }}>
+                <span style={{ width: 46, height: 46, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                  background: on ? "rgba(255,255,255,.2)" : T.accentSoft, color: on ? "#fff" : T.accent }}><Ico size={24} /></span>
+                <span style={{ minWidth: 0 }}>
+                  <span style={{ display: "block", fontSize: 18, fontWeight: 800, letterSpacing: -0.3 }}>{titulo}</span>
+                  <span style={{ display: "block", fontSize: 12.5, opacity: on ? 0.9 : 0.7, marginTop: 2 }}>{sub}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {verCotizador ? (
+        <Card style={{ padding: 16 }}>
+          <CotizadorAD supabase={supabase} isAdmin={isAdmin} usuarioId={currentUser?.id} usuarioNombre={currentUser?.name}
+            solicitudes={rows}
+            onTomarSolicitud={(id) => setEstado(id, "En proceso")}
+            onPasarMonto={(id, monto, numCot) => { setMonto(id, monto); if (numCot) setNumCot(id, numCot); }} />
+        </Card>
+      ) : (<>
       <ResumenCotizacionesCard />
       <CotizacionPrintView r={printRow} onClose={() => setPrintRow(null)} />
       <Card
@@ -5200,14 +5301,8 @@ function Cotizaciones() {
           {ESTADOS_COT.map((e) => (
             <Btn key={e} small variant={subTab === e ? "accent" : "ghost"} onClick={() => setSubTab(e)}>{e} ({rows.filter((r) => r.estado === e).length})</Btn>
           ))}
-          {puedeCotizador && (
-            <Btn small variant={subTab === COT_TAB_PROCESO ? "accent" : "ghost"} onClick={() => setSubTab(COT_TAB_PROCESO)} style={{ marginLeft: "auto" }}><FileText size={13} /> Cotización en proceso</Btn>
-          )}
         </div>
 
-        {subTab === COT_TAB_PROCESO && puedeCotizador ? (
-          <CotizadorAD supabase={supabase} isAdmin={isAdmin} usuarioId={currentUser?.id} />
-        ) : (<>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
           <input style={{ ...inputStyle, width: 150 }} value={filtroSolicitante} onChange={(e) => setFiltroSolicitante(e.target.value)} placeholder="Solicitante..." />
@@ -5296,8 +5391,8 @@ function Cotizaciones() {
             ))}
           </tbody>
         </table>
-        </>)}
       </Card>
+      </>)}
     </div>
   );
 }

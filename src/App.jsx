@@ -3695,6 +3695,17 @@ const COTZ_CSS = `.cotz{--bg:#F3F5F7;--surface:#FFFFFF;--surface2:#F7F8FA;--line
 .cotz .num:focus,.cotz .txt:focus,.cotz .sel:focus{border-color:var(--slate)}
 .cotz .num:disabled,.cotz .txt:disabled{background:var(--surface2);color:var(--muted)}
 .cotz .num.wide{width:130px}
+.cotz .main.ancho .work{flex-basis:100%}
+.cotz .main.ancho .side{flex:1 1 100%;max-width:none;flex-direction:row;flex-wrap:wrap}
+.cotz .main.ancho .side > *{flex:1 1 240px}
+.cotz .num.verde{background:#E9F6EA;border-color:#A8D5AA}
+.cotz .num.auto::placeholder{color:#3F7A47;opacity:.75}
+.cotz .calc{font-weight:600;font-variant-numeric:tabular-nums;color:var(--fg)}
+.cotz .fx{display:block;font-size:11px;font-weight:400;color:var(--muted)}
+.cotz tr.apagada td{color:var(--muted)}
+.cotz tr.apagada td.strong{font-weight:600}
+.cotz tr.subt td{background:var(--surface2);font-weight:700}
+.cotz .verdetxt{background:#E9F6EA;border:1px solid #A8D5AA;border-radius:4px;padding:0 5px;font-weight:700;color:#2E6B35}
 .cotz .num.full{width:100%}
 .cotz .dark .num{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.3);color:#fff}
 .cotz .txt{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13.5px;background:#fff;color:var(--fg);min-height:36px;outline:none}
@@ -4235,7 +4246,8 @@ var CotLogic = (function () {
     ['cr', 'ca'].forEach(function (k) { cfg[k].forEach(function (it) { out[k] += lineQty(it, q[k][it.id]) * puOf(it, q[k][it.id]); }); });
     cfg.renta.forEach(function (it) { var l = q.renta[it.id]; out.renta += n(l && l.q) * puOf(it, l); });
     var mm = Math.min(n(q.matMargin) / 100, 0.95);
-    cfg.mats.forEach(function (m) { var l = q.mats[m.id], qq = n(l && l.q); out.matCost += qq * m.list; out.matVenta += qq * m.list / (1 - mm); });
+    // Materiales: machote de materiales (misma lógica que el Excel)
+    var mc2 = matCalc(cfg, q.mat2); out.matCost = mc2.costo; out.matVenta = mc2.venta; out.mat2 = mc2;
     var ex = n(q.eq.extra), rd = cfg.rend;
     out.dias = Math.ceil(n(q.eq.tub) / (n(rd.tub) || 1)) + ex + Math.ceil(n(q.eq.disp) / (n(rd.disp) || 1)) + ex;
     out.horas = out.dias * n(rd.hDia); out.semanas = out.dias / (n(rd.dSem) || 1);
@@ -4407,6 +4419,104 @@ const Icon = {
 
 /* ---------- cotización ---------- */
 // Quién realizó la venta
+/* ====== MATERIALES (machote «actual_de_materiales.xlsx») ======
+   Mismas filas, celdas y fórmulas que el Excel. Columna D = costo (se
+   administra en Configuración → Materiales), G = D + D×G3 (margen),
+   H = F × G. Las cantidades verdes del Excel son las que se digitan;
+   las demás se calculan solas. */
+const MAT2_ITEMS = {
+  5: { n: 'Tubo EMT 3/4', d: 10, u: 'Unidad (3m)', tipo: 'in' },
+  6: { n: 'Gaza EMT 3/4', d: 0.3, u: 'Unidad', f: 'F5 × 3' },
+  7: { n: 'Union EMT 3/4', d: 1.05, u: 'Unidad', f: 'F5 × 2' },
+  8: { n: 'Conectores EMT 3/4', d: 1, u: 'Unidad', f: 'F5 × 2' },
+  9: { n: 'Tape rojo 3M', d: 9, u: 'Unidad', tipo: 'auto', f: 'Tubos EMT ÷ 30' },
+  10: { n: 'Tape negro 3M', d: 7, u: 'Unidad', tipo: 'in' },
+  11: { n: 'Caja rectangular FS (EM)', d: 11, u: 'Unidad', f: 'fijo 0' },
+  12: { n: 'Bi-ex con forro 1/2', d: 49, u: 'Carrucha (30 m)', tipo: 'in' },
+  13: { n: 'Conector de Bi-ex con forro 1/2 (Curvo 90)', d: 2.2, u: 'Unidad', tipo: 'in' },
+  14: { n: 'Conector de Bi-ex con forro 1/2 (recto)', d: 2.2, u: 'Unidad', tipo: 'in' },
+  15: { n: 'Bi-ex metalico 1/2', d: 41, u: 'Carrucha (30 m)', f: 'carruchas según sensores' },
+  16: { n: 'Conector para Bi-ex metalico 1/2', d: 2.2, u: 'Unidad', f: '2 × sensores' },
+  17: { n: 'Caja octogonal', d: 2, u: 'Unidad', tipo: 'auto', f: 'Tubos ÷ 9 + sensores + bi-ex' },
+  18: { n: 'Caja cuadrada', d: 2, u: 'Unidad', tipo: 'auto', f: 'Tubos ÷ 9 + cajas del equipo' },
+  19: { n: 'Tapa cuadrada', d: 1, u: 'Unidad', f: 'octogonales + cuadradas' },
+  20: { n: 'Caja cuadrada', d: 3.45, u: 'Unidad', f: '= tapas' },
+  21: { n: 'Conduleta LB 3/4', d: 4.4, u: 'Unidad', tipo: 'in' },
+  23: { n: 'Tubo IMC 3/4', d: 30, u: 'Unidad (3m)', tipo: 'auto', f: 'metros intemperie ÷ 3' },
+  24: { n: 'Gaza IMT 3/4', d: 0.3, u: 'Unidad', f: 'F23 × 3' },
+  25: { n: 'Union IMT 3/4', d: 1.05, u: 'Unidad', f: 'F23 × 2' },
+  26: { n: 'Conectores IMT 3/4', d: 1, u: 'Unidad', f: 'F23 × 2' },
+  28: { n: 'Cable 2x18 (Incendio)', d: 259, u: 'Carrucha (305m)', tipo: 'in' },
+  29: { n: 'Cable 2x16 (Incendio)', d: 340, u: 'Carrucha (305m)', tipo: 'in', sug: 'J29' },
+  30: { n: 'Cable 2x16 (Incendio-Intemperie)', d: 413, u: 'Carrucha (305m)', tipo: 'in', sug: 'J30' },
+  31: { n: 'Cable 2x14 (Incendio-Intemperie)', d: 624, u: 'Carrucha (305m)', tipo: 'in' },
+  32: { n: 'Cable 4x18 (Incendio)', d: 381, u: 'Carrucha (305m)', tipo: 'in' },
+  33: { n: 'Cable 4x18 (Incendio Interperie)', d: 635, u: 'Carrucha (305m)', tipo: 'in' },
+  34: { n: 'Cable 4x16 (Incendio)', d: 0, u: 'Carrucha (305m)', tipo: 'in', sug: 'J34' },
+  35: { n: 'Cable 4x16 (Incendio-Intemperie)', d: 794, u: 'Carrucha (305m)', tipo: 'in', sug: 'J35' },
+  36: { n: 'Cable 2x16 armado', d: 1475.78, u: 'Carrucha (75m)', tipo: 'in' },
+  37: { n: 'Cable 2x18 armado', d: 243, u: 'Carrucha (75m)', tipo: 'in' },
+  38: { n: 'Conector cable armado', d: 1.5, u: 'Unidad', tipo: 'in' },
+  53: { n: 'Tubo 3/4', d: 25, u: 'Unidad (6m)', tipo: 'in' },
+  54: { n: 'Gaza  3/4', d: 0.3, u: 'Unidad', f: 'F53 × 3' },
+  55: { n: 'Union  3/4', d: 1.05, u: 'Unidad', f: 'F53 × 2' },
+  56: { n: 'Conectores 3/4', d: 1, u: 'Unidad', f: 'F53 × 2' },
+  57: { n: 'Pegamento para tubería PVC 1/4', d: 32, u: 'Unidad', tipo: 'in' },
+};
+const MAT2_SECCIONES = [
+  { id: 'int', t: 'TUBERIA GENERAL (INTERIORES)', fila: 4, rows: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21] },
+  { id: 'rig', t: 'TUBERIA RIGIDA (EXTERIORES)', fila: 22, rows: [23, 24, 25, 26] },
+  { id: 'cab', t: 'TIPOS DE CABLES', fila: 27, rows: [28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38] },
+  { id: 'ves', t: 'VESDA — TUBERIA BLAZEMASTER', fila: 52, rows: [53, 54, 55, 56, 57] },
+];
+const MAT2_FILAS = Object.keys(MAT2_ITEMS).map(Number);
+const MAT2_MARGEN_DEF = 0.25;
+const mat2Cfg = (cfg) => {
+  const m = (cfg && cfg.mat2) || {};
+  const costos = {};
+  MAT2_FILAS.forEach((r) => { const v = m.costos && m.costos[r]; costos[r] = v == null || v === '' || isNaN(Number(v)) ? MAT2_ITEMS[r].d : Number(v); });
+  return { margen: m.margen == null || m.margen === '' || isNaN(Number(m.margen)) ? MAT2_MARGEN_DEF : Number(m.margen), costos };
+};
+const mat2Blank = (cfg) => ({ margen: s(mat2Cfg(cfg).margen * 100, 3), F: {}, ov: {}, D43: '', D45: '', D46: '', M4: '', M5: '', M6: '', M7: '', A60: '' });
+const roundUp = (x) => { const v = Number(Number(x).toFixed(9)); return v > 0 ? Math.ceil(v) : (v < 0 ? Math.floor(v) : 0); };
+
+// Calcula toda la hoja igual que Excel
+function matCalc(cfg, m0) {
+  const cm = mat2Cfg(cfg), m = m0 || {};
+  const N = (v) => { const x = parseFloat(v); return isNaN(x) ? 0 : x; };
+  const g3 = m.margen == null || m.margen === '' ? cm.margen : N(m.margen) / 100;
+  const D = cm.costos;
+  const inp = (r) => N(m.F && m.F[r]);
+  const ov = (r) => (m.ov && m.ov[r] != null && m.ov[r] !== '' ? N(m.ov[r]) : null);
+  // Equipo (filas 43-46) y cableado total (L/M)
+  const D43 = N(m.D43), D45 = N(m.D45), D46 = N(m.D46);
+  const E43 = D43, F43 = D43, H43 = D43, D44 = D43 * 2, E44 = 0, F44 = D44 / 30, H44 = roundUp(F44), E45 = D45, G45 = D45, E46 = D46 * 2, H46 = D46;
+  const M4 = N(m.M4), M5 = N(m.M5), M6 = N(m.M6), M7 = N(m.M7);
+  const N4 = M4 + M5, N6 = M6 + M7, J5 = roundUp(N4 / 3), J23 = roundUp(N6 / 3), J29 = M4 / 305, J30 = M6 / 305, J34 = M5 / 305, J35 = M7 / 305;
+  const A60 = N(m.A60);
+  const F = {};
+  F[5] = inp(5); F[6] = F[5] * 3; F[7] = F[5] * 2; F[8] = F[5] * 2;
+  F[9] = ov(9) != null ? ov(9) : F[5] / 30;
+  F[10] = inp(10); F[11] = 0; F[12] = inp(12); F[13] = inp(13); F[14] = inp(14);
+  F[15] = H44; F[16] = 2 * D43;
+  F[17] = ov(17) != null ? ov(17) : F[5] / 9 + F43 + F44;
+  F[18] = ov(18) != null ? ov(18) : F[5] / 9 + E43 + E44 + E45 + E46;
+  F[19] = F[17] + F[18] * 1; F[20] = F[19] * 1; F[21] = inp(21);
+  F[23] = ov(23) != null ? ov(23) : J23; F[24] = F[23] * 3; F[25] = F[23] * 2; F[26] = F[23] * 2;
+  [28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38].forEach((r) => { F[r] = inp(r); });
+  F[53] = inp(53); F[54] = F[53] * 3; F[55] = F[53] * 2; F[56] = F[53] * 2; F[57] = inp(57);
+  const G = {}, H = {};
+  let costo = 0;
+  MAT2_FILAS.forEach((r) => { G[r] = D[r] + D[r] * g3; H[r] = F[r] * G[r]; costo += F[r] * D[r]; });
+  const suma = (rs) => rs.reduce((a, r) => a + H[r], 0);
+  const sub = {}; MAT2_SECCIONES.forEach((sc) => { sub[sc.id] = suma(sc.rows); });
+  const H58 = sub.ves;
+  const H39 = sub.int + sub.rig + sub.cab + H58 + A60;
+  return { g3, D, F, G, H, sub, H58, H39, A60, costo: costo + A60, venta: H39,
+    eq: { D43, E43, F43, H43, D44, F44, H44, D45, E45, G45, D46, E46, H46 },
+    cab: { M4, M5, M6, M7, N4, N6, J5, J23, J29, J30, J34, J35 } };
+}
+
 // Los vendedores se administran en Configuración → Vendedores (se guardan con la configuración)
 const ORIGEN_DEF = 'Departamento de Alarmas';
 const VENDEDORES_DEF = ['Eddie', 'Hernán'];
@@ -4422,7 +4532,7 @@ function blankQuote(cfg) {
   return {
     info: { proyecto: '', cliente: '', area: 'Proyectos', fecha: new Date().toLocaleDateString('en-CA'), contacto: '', presupuestista: '', numero: '', origen: ORIGEN_DEF },
     roles: {}, cr: {}, ca: {}, renta: {}, mats: {}, eq: { tub: '0', disp: '0', extra: '3' },
-    margin: s(n(cfg.margin) * 100, 2), matMargin: s(n(cfg.matMargin) * 100, 2), cmp: ['15', '20', '25', '30', '35'], example: false,
+    margin: s(n(cfg.margin) * 100, 2), matMargin: s(n(cfg.matMargin) * 100, 2), cmp: ['15', '20', '25', '30', '35'], example: false, mat2: mat2Blank(cfg),
   };
 }
 function exampleQuote(cfg) {
@@ -4437,6 +4547,7 @@ function exampleQuote(cfg) {
   [['Tubo EMT 3/4" USA (3m)', '40'], ['Conector EMT presión 3/4" USA', '80'], ['Gaza EMT 3/4" USA', '120'], ['Unión EMT presión 3/4" USA', '80'], ['Caja octogonal', '30'], ['Caja cuadrada, con tapa', '10'], ['Caja rectangular', '15'], ['Cable sin Shield #16 /2 (Carrucha de 305m)', '2']]
     .forEach(([nm, qq]) => { const m = byName(cfg.mats, nm); if (m) q.mats[m.id] = { q: qq }; });
   q.eq = { tub: '120', disp: '45', extra: '3' };
+  q.mat2 = { ...mat2Blank(cfg), F: { 5: '30' }, D43: '2', D45: '5', D46: '4' };
   return q;
 }
 // Cotización nueva con los datos de una solicitud de Cotizaciones
@@ -4481,6 +4592,7 @@ function toDraft(c) {
     renta: c.renta.map((x) => ({ id: x.id, n: x.n, um: x.um, pu: s(x.pu) })),
     mats: c.mats.map((x) => ({ id: x.id, n: x.n, um: x.um, list: s(x.list, 6) })),
     vendedores: vendedoresDe(c).map((v, i) => ({ id: 'v' + i + '_' + v, n: v })),
+    mat2: (() => { const cm = mat2Cfg(c); const costos = {}; MAT2_FILAS.forEach((r) => { costos[r] = s(cm.costos[r], 4); }); return { margen: s(cm.margen * 100, 3), costos }; })(),
   };
 }
 function fromDraft(d) {
@@ -4498,6 +4610,7 @@ function fromDraft(d) {
     renta: named(d.renta, 'n').map((x) => ({ id: x.id, n: x.n.trim(), um: x.um || '', pu: n(x.pu) })),
     mats: named(d.mats, 'n').map((x) => ({ id: x.id, n: x.n.trim(), um: x.um || '', list: n(x.list) })),
     vendedores: [...new Set(named(d.vendedores || [], 'n').map((x) => x.n.trim()).filter((v) => v.toLowerCase() !== ORIGEN_DEF.toLowerCase()))],
+    mat2: (() => { const dm = d.mat2 || {}; const costos = {}; MAT2_FILAS.forEach((r) => { const v = (dm.costos || {})[r]; costos[r] = v === '' || v == null ? MAT2_ITEMS[r].d : n(v); }); return { margen: dm.margen === '' || dm.margen == null ? MAT2_MARGEN_DEF : n(dm.margen) / 100, costos }; })(),
   };
   if (!c.roles.length) errs.push('Debe existir al menos un puesto con salario.');
   return { cfg: c, errs };
@@ -4611,7 +4724,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
 
   const names = ['Proyecto', 'Mano de obra', 'Viáticos', 'Equipos y renta', 'Materiales', 'Resumen'];
   const subs = ['Datos generales', usd(c.mo), usd(c.cr + c.ca), usd(c.renta), usd(c.matVenta), usd(c.oferta)];
-  const hints = ['Información general de la cotización', 'Agregue solo los puestos que participan', 'Complete solo los conceptos que apliquen', 'Tiempo estimado y equipos de apoyo', 'Catálogo con precio de lista y margen', 'Revise márgenes y descargue el Excel'];
+  const hints = ['Información general de la cotización', 'Agregue solo los puestos que participan', 'Complete solo los conceptos que apliquen', 'Tiempo estimado y equipos de apoyo', 'Tubería, cajas, cables y VESDA (machote de materiales)', 'Revise márgenes y descargue el Excel'];
   const R = L.rates(cfg);
   const activeRoles = cfg.roles.filter((r) => line('roles', r.id).on);
   const freeRoles = cfg.roles.filter((r) => !line('roles', r.id).on);
@@ -4758,29 +4871,86 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
       </div>
     );
   } else if (step === 4) {
-    const mm = Math.min(n(q.matMargin) / 100, 0.95);
-    body = (
-      <div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'flex-end', marginBottom: 14 }}>
-          <label className="field" style={{ flex: '1 1 260px' }}>Buscar en catálogo<input className="txt" id="mat-search" type="search" placeholder="Ej. EMT, cable, caja…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ background: 'var(--surface)' }} /></label>
-          <label className="field">Margen materiales (%)<NumIn id="mat-margin" step="0.5" value={q.matMargin} onChange={(v) => setQ((x) => { x.matMargin = v; return x; })} /></label>
-        </div>
+    const mt = c.mat2 || matCalc(cfg, q.mat2);
+    const m2 = q.mat2 || mat2Blank(cfg);
+    const setM = (k, v) => setQ((x) => { x.mat2 = x.mat2 || mat2Blank(cfg); x.mat2[k] = v; return x; });
+    const setMF = (grupo, r, v) => setQ((x) => { x.mat2 = x.mat2 || mat2Blank(cfg); x.mat2[grupo] = { ...(x.mat2[grupo] || {}), [r]: v }; return x; });
+    const fmtQ = (v) => (Math.round(n(v) * 100) / 100).toLocaleString('es-CR', { maximumFractionDigits: 2 });
+    const cantidad = (r) => {
+      const it = MAT2_ITEMS[r];
+      if (it.tipo === 'in') return <NumIn cls="verde" value={(m2.F || {})[r] ?? ''} label={'Cantidad ' + it.n} onChange={(v) => setMF('F', r, v)} />;
+      if (it.tipo === 'auto') {
+        const tiene = m2.ov && m2.ov[r] != null && m2.ov[r] !== '';
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <input className={'num verde' + (tiene ? '' : ' auto')} type="number" inputMode="decimal" step="any" min={0} aria-label={'Cantidad ' + it.n}
+              value={tiene ? m2.ov[r] : ''} placeholder={fmtQ(mt.F[r])} onChange={(e) => setMF('ov', r, e.target.value)} />
+            {tiene && <button type="button" className="rm" title="Volver al cálculo automático" aria-label="Volver al cálculo automático" onClick={() => setMF('ov', r, '')} style={{ width: 26, height: 26 }}>↺</button>}
+          </span>
+        );
+      }
+      return <span className="calc" title={it.f || ''}>{fmtQ(mt.F[r])}</span>;
+    };
+    const seccionTabla = (sc) => (
+      <div key={sc.id} style={{ marginTop: 18 }}>
+        <h2 className="sec">{sc.t}</h2>
         <div className="tblbox"><table>
-          <thead><tr><th>Descripción</th><th>U/M</th><th className="r">Cantidad</th><th className="r">Precio lista</th><th className="r">Precio venta</th><th className="r">Total</th></tr></thead>
+          <thead><tr><th>Material</th><th>Distribución</th><th className="r">Costo</th><th className="r">Precio (+{fmtQ(mt.g3 * 100)} %)</th><th className="r">Cantidad</th><th className="r">Precio total</th></tr></thead>
           <tbody>
-            {matList.length ? matList.map((mt) => {
-              const l = line('mats', mt.id), pv = mt.list / (1 - mm);
+            {sc.rows.map((r) => {
+              const it = MAT2_ITEMS[r], usa = mt.F[r] > 0;
               return (
-                <tr key={mt.id}>
-                  <td className="strong" style={{ whiteSpace: 'normal', minWidth: 220 }}>{mt.n}</td><td>{mt.um}</td>
-                  <td className="r"><NumIn value={l.q || ''} label={'Cantidad ' + mt.n} onChange={(v) => setLine('mats', mt.id, 'q', v)} /></td>
-                  <td className="r">{usd(mt.list)}</td><td className="r">{usd(pv)}</td><td className="r strong">{usd(n(l.q) * pv)}</td>
+                <tr key={r} className={usa ? '' : 'apagada'}>
+                  <td className="strong" style={{ whiteSpace: 'normal', minWidth: 210 }}>{it.n}{it.f && it.tipo !== 'in' ? <span className="fx">{it.tipo === 'auto' ? 'auto: ' : ''}{it.f}</span> : null}</td>
+                  <td>{it.u}</td>
+                  <td className="r">{usd(mt.D[r])}</td>
+                  <td className="r">{usd(mt.G[r])}</td>
+                  <td className="r">{cantidad(r)}</td>
+                  <td className="r strong">{usd(mt.H[r])}</td>
                 </tr>
               );
-            }) : <tr><td colSpan={6} style={{ padding: 18, color: 'var(--muted)' }}>Ningún material coincide con «{search}».</td></tr>}
+            })}
+            <tr className="subt"><td colSpan={5}>Subtotal {sc.t.toLowerCase()}</td><td className="r strong">{usd(mt.sub[sc.id])}</td></tr>
           </tbody>
         </table></div>
-        <div className="total">Total materiales (venta): <strong>{usd(c.matVenta)}</strong></div>
+      </div>
+    );
+    body = (
+      <div>
+        <div className="banner b-info" style={{ marginBottom: 14 }}>Mismo cálculo que el machote de materiales. Las casillas <span className="verdetxt">verdes</span> se digitan; el resto se calcula solo. Las verdes con número gris son automáticas: puede escribir otro valor y con ↺ vuelve al cálculo.</div>
+        <div className="grid3">
+          <label className="field">Margen de materiales (%)<NumIn cls="full verde" id="mat-margin" step="0.5" value={m2.margen} onChange={(v) => setM('margen', v)} /></label>
+          <label className="field">Transporte (costo con Full Protection)<NumIn cls="full" value={m2.A60} label="Transporte" onChange={(v) => setM('A60', v)} /></label>
+          <div className="tile"><div className="kicker">Total materiales</div><div className="bignum">{usd(mt.H39)}</div></div>
+        </div>
+
+        <h2 className="sec">Equipo del proyecto</h2>
+        <div className="tblbox"><table>
+          <thead><tr><th>Equipo</th><th className="r">Cantidad</th><th className="r">Caja cuadrada</th><th className="r">Caja octogonal</th><th className="r">Caja FS</th><th className="r">Tapas</th></tr></thead>
+          <tbody>
+            <tr><td className="strong">Sensores de humo o temperatura</td><td className="r"><NumIn cls="verde" value={m2.D43} label="Sensores" onChange={(v) => setM('D43', v)} /></td><td className="r">{fmtQ(mt.eq.E43)}</td><td className="r">{fmtQ(mt.eq.F43)}</td><td className="r">N/A</td><td className="r">{fmtQ(mt.eq.H43)}</td></tr>
+            <tr><td className="strong">Cantidad de Bi-Ex según sensores</td><td className="r">{fmtQ(mt.eq.D44)} m</td><td className="r">—</td><td className="r">{fmtQ(mt.eq.F44)}</td><td className="r">—</td><td className="r">{fmtQ(mt.eq.H44)} carr.</td></tr>
+            <tr><td className="strong">Estación manual</td><td className="r"><NumIn cls="verde" value={m2.D45} label="Estaciones manuales" onChange={(v) => setM('D45', v)} /></td><td className="r">{fmtQ(mt.eq.E45)}</td><td className="r">N/A</td><td className="r">{fmtQ(mt.eq.G45)}</td><td className="r">N/A</td></tr>
+            <tr><td className="strong">Luz bocina</td><td className="r"><NumIn cls="verde" value={m2.D46} label="Luces bocina" onChange={(v) => setM('D46', v)} /></td><td className="r">{fmtQ(mt.eq.E46)}</td><td className="r">N/A</td><td className="r">N/A</td><td className="r">{fmtQ(mt.eq.H46)}</td></tr>
+          </tbody>
+        </table></div>
+
+        <h2 className="sec">Cableado total (metros)</h2>
+        <div className="grid3">
+          {[['M4', '2x16'], ['M5', '4x16'], ['M6', '2x16 intemperie'], ['M7', '4x16 intemperie']].map(([k, t]) => (
+            <label key={k} className="field">{t}<NumIn cls="full" value={m2[k]} label={'Metros ' + t} onChange={(v) => setM(k, v)} /></label>
+          ))}
+        </div>
+        <p className="note">Interiores: {fmtQ(mt.cab.N4)} m → <strong>{mt.cab.J5}</strong> tubos EMT sugeridos · Intemperie: {fmtQ(mt.cab.N6)} m → <strong>{mt.cab.J23}</strong> tubos IMC (se usan solos en tubería rígida) · Carruchas sugeridas: 2x16 {fmtQ(mt.cab.J29)} · 4x16 {fmtQ(mt.cab.J34)} · 2x16 int. {fmtQ(mt.cab.J30)} · 4x16 int. {fmtQ(mt.cab.J35)}</p>
+
+        {MAT2_SECCIONES.map(seccionTabla)}
+
+        <div className="tblbox" style={{ marginTop: 18 }}><table><tbody>
+          <tr><td>Interiores + rígida + cables</td><td className="r">{usd(mt.sub.int + mt.sub.rig + mt.sub.cab)}</td></tr>
+          <tr><td>VESDA</td><td className="r">{usd(mt.H58)}</td></tr>
+          <tr><td>Transporte</td><td className="r">{usd(mt.A60)}</td></tr>
+          <tr className="subt"><td className="strong">SUMATORIA TOTAL DE MATERIALES</td><td className="r strong" style={{ color: 'var(--red-text)', fontSize: 15 }}>{usd(mt.H39)}</td></tr>
+        </tbody></table></div>
       </div>
     );
   } else {
@@ -4888,7 +5058,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
         );
       })()}
 
-      <div className="wrap main">
+      <div className={'wrap main' + (step === 4 ? ' ancho' : '')}>
         <nav className="nav" aria-label="Pasos de la cotización">
           {names.map((nm, i) => (
             <button type="button" key={nm} className={'navbtn' + (step === i ? ' on' : '')} aria-current={step === i ? 'step' : undefined} onClick={() => setStep(i)}>
@@ -4982,7 +5152,7 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
     rd.onload = () => {
       try {
         const res = L.parseMachote(XLSX, new Uint8Array(rd.result));
-        setD({ ...toDraft(res.cfg), vendedores: d.vendedores }); setDirty(true); setPendingQty(res.qty); setSource('Excel: ' + file.name);
+        setD({ ...toDraft(res.cfg), vendedores: d.vendedores, mat2: d.mat2 }); setDirty(true); setPendingQty(res.qty); setSource('Excel: ' + file.name);
         const over = res.cfg.roles.length > L.LIM.roles ? ' Atención: trae ' + res.cfg.roles.length + ' puestos y el formato del machote admite ' + L.LIM.roles + '.' : '';
         setMsg({ ok: true, t: 'Se leyó «' + file.name + '»: ' + res.cfg.roles.length + ' puestos, ' + res.cfg.cr.length + ' viáticos C.R., ' + res.cfg.ca.length + ' viáticos C.A., ' + res.cfg.renta.length + ' rentas y ' + res.cfg.mats.length + ' materiales. Tipo de cambio ' + crc(res.cfg.tc) + ', cargas ' + pct(res.cfg.cs) + ', overhead ' + pct(res.cfg.fa) + '. Revise las pestañas y pulse «Guardar configuración».' + over });
       } catch (err) { setMsg({ ok: false, t: 'No se pudo leer «' + file.name + '»: ' + (err && err.message ? err.message : err) }); }
@@ -5105,24 +5275,31 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
   else if (tab === 'ca') body = listTable('ca', 'Viáticos Centroamérica');
   else if (tab === 'renta') body = listTable('renta', 'Renta de equipos y otros');
   else if (tab === 'mats') {
+    const dm = d.mat2 || { margen: '25', costos: {} };
+    const setMC = (r, v) => upd((x) => { x.mat2 = x.mat2 || { margen: '25', costos: {} }; x.mat2.costos = { ...x.mat2.costos, [r]: v }; });
     body = (
       <div>
-        <h3>Catálogo de materiales</h3>
-        <p className="note" style={{ marginTop: 0 }}>{d.mats.length} materiales. Precio de lista en USD; el precio de venta aplica el margen de materiales.</p>
-        <div className="tblbox" style={{ marginTop: 12 }}><table>
-          <thead><tr><th>Descripción</th><th>U/M</th><th className="r">Precio lista (USD)</th><th><span className="sr">Eliminar</span></th></tr></thead>
-          <tbody>
-            {d.mats.map((x, i) => (
-              <tr key={x.id}>
-                <td><input className="txt cell" style={{ minWidth: 300 }} type="text" value={x.n} disabled={ro} aria-label="Descripción" onChange={(e) => setRow('mats', i, 'n')(e.target.value)} /></td>
-                <td><input className="txt cell short" type="text" value={x.um} disabled={ro} aria-label="Unidad" onChange={(e) => setRow('mats', i, 'um')(e.target.value)} /></td>
-                <td className="r"><NumIn cls="wide" value={x.list} disabled={ro} label={'Precio lista ' + x.n} onChange={setRow('mats', i, 'list')} /></td>
-                <td><button type="button" className="rm" disabled={ro} aria-label={'Eliminar ' + (x.n || 'material')} onClick={() => delRow('mats', i)}>{Icon.x}</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table></div>
-        <div className="addrow"><button type="button" className="btn btn-line" disabled={ro || d.mats.length >= L.LIM.mats} onClick={() => addRow('mats')}>{Icon.plus} Agregar material</button></div>
+        <h3>Materiales — costos</h3>
+        <p className="note" style={{ marginTop: 0 }}>Costos de la columna D del machote de materiales. El precio en la cotización = costo + costo × margen. Los cambios aplican a todas las cotizaciones nuevas y abiertas.</p>
+        <div className="grid3" style={{ maxWidth: 420, marginTop: 10 }}>
+          <label className="field">Margen de materiales por defecto (%)<NumIn cls="full" value={dm.margen} disabled={ro} onChange={(v) => upd((x) => { x.mat2 = x.mat2 || { margen: '25', costos: {} }; x.mat2.margen = v; })} /></label>
+        </div>
+        {MAT2_SECCIONES.map((sc) => (
+          <div key={sc.id}>
+            <h4 className="sec">{sc.t}</h4>
+            <div className="tblbox"><table>
+              <thead><tr><th>Material</th><th>Distribución</th><th className="r">Costo (USD)</th></tr></thead>
+              <tbody>
+                {sc.rows.map((r) => (
+                  <tr key={r}>
+                    <td className="strong" style={{ whiteSpace: 'normal' }}>{MAT2_ITEMS[r].n}</td><td>{MAT2_ITEMS[r].u}</td>
+                    <td className="r"><NumIn cls="wide" value={dm.costos[r] ?? ''} disabled={ro} label={'Costo ' + MAT2_ITEMS[r].n} onChange={(v) => setMC(r, v)} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table></div>
+          </div>
+        ))}
       </div>
     );
   } else {
@@ -5342,30 +5519,78 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
     }
     cell(E, 'O32', 'TOTAL', tot()); cell(E, 'P32', F('SUM(P25:P31)'), tot(USD));
 
-    // ===================== Materiales =====================
-    M.columns = [{ width: 2 }, { width: 14 }, { width: 50 }, { width: 10 }, { width: 10 }, { width: 15 }, { width: 15 }, { width: 10 }, { width: 15 }];
-    var mm = Math.min(n(q.matMargin) / 100, 0.95);
-    titulo(M, 'B1:F1', 'Materiales');
-    cell(M, 'H1', 'Margen', { font: { bold: true, color: { argb: C.muted } }, al: { horizontal: 'center' } });
-    cell(M, 'H2', mm, inp(PCT0));
-    ['N.º de parte', 'Descripción', 'Unidad', 'Cantidad', 'Precio unitario', 'Precio total', 'Margen', 'Precio de lista'].forEach(function (h, i) { cell(M, String.fromCharCode(66 + i) + '3', h, i === 1 ? hdrL : hdr); });
-    M.getRow(3).height = 22;
-    var mr = 4;
-    cfg.mats.slice(0, LIM.mats).forEach(function (m, i) {
-      var l = q.mats[m.id] || {}, z = i % 2 === 1, usa = n(l.q) > 0;
-      cell(M, 'B' + mr, null, dat(null, z));
-      cell(M, 'C' + mr, m.n, dat(null, z, { font: { bold: usa, color: { argb: usa ? C.ink : C.muted } }, al: { wrapText: true, vertical: 'middle' } }));
-      cell(M, 'D' + mr, m.um, dat(null, z, { al: { horizontal: 'center' } }));
-      cell(M, 'E' + mr, n(l.q || 0), inp('0.##'));
-      cell(M, 'F' + mr, F('I' + mr + '/(1-H' + mr + ')'), dat(USD, z));
-      cell(M, 'G' + mr, F('F' + mr + '*E' + mr), dat(USD0, z, { font: { bold: true } }));
-      cell(M, 'H' + mr, F('$H$2'), dat(PCT0, z, { al: { horizontal: 'center' } }));
-      cell(M, 'I' + mr, n(m.list), inp(USD));
-      mr++;
+    // ===================== Materiales (mismas celdas y fórmulas del machote) =====================
+    var mt = matCalc(cfg, q.mat2), m2 = q.mat2 || {};
+    var VERDE = 'FFE2F0D9';
+    var inpV = function (fmt) { return { font: { color: { argb: C.inFont }, bold: true }, fill: VERDE, fmt: fmt, border: box, al: { horizontal: 'right' } }; };
+    var hdrM = { font: { bold: true, color: { argb: C.white }, size: 10.5 }, fill: C.steel, al: { vertical: 'middle', horizontal: 'center', wrapText: true }, border: box };
+    M.columns = [{ width: 14 }, { width: 14 }, { width: 18 }, { width: 13 }, { width: 16 }, { width: 11 }, { width: 12 }, { width: 13 }, { width: 3 }, { width: 11 }, { width: 3 }, { width: 15 }, { width: 10 }, { width: 10 }];
+    titulo(M, 'A1:I1', 'MATERIALES');
+    var hdrFila = function (r, mg) {
+      M.mergeCells('A' + r + ':C' + r); cell(M, 'A' + r, 'MATERIAL', Object.assign({}, hdrM, { al: { vertical: 'middle', horizontal: 'left', indent: 1 } }));
+      cell(M, 'D' + r, 'COSTO', hdrM); cell(M, 'E' + r, 'DISTRIBUCION', hdrM); cell(M, 'F' + r, 'CANTIDAD', hdrM);
+      cell(M, 'G' + r, mg, inpV(PCT0));
+      M.mergeCells('H' + r + ':I' + r); cell(M, 'H' + r, 'PRECIO TOTAL', hdrM);
+      M.getRow(r).height = 22;
+    };
+    var secM = function (r, texto) { M.mergeCells('A' + r + ':I' + r); cell(M, 'A' + r, texto, { font: { bold: true, color: { argb: C.white } }, fill: C.accent, al: { indent: 1 } }); };
+    var FX = { 6: 'F5*3', 7: 'F5*2', 8: 'F5*2', 9: 'F5/30', 15: 'H44', 16: '2*D43', 17: 'F5/9+F43+F44', 18: 'F5/9+E43+E44+E45+E46', 19: 'F17+F18*1', 20: 'F19*1', 23: '+J23', 24: 'F23*3', 25: 'F23*2', 26: 'F23*2', 54: 'F53*3', 55: 'F53*2', 56: 'F53*2' };
+    var filaM = function (r, z) {
+      var it = MAT2_ITEMS[r], verde = it.tipo === 'in' || it.tipo === 'auto';
+      M.mergeCells('A' + r + ':C' + r);
+      cell(M, 'A' + r, it.n, dat(null, z, { font: { bold: mt.F[r] > 0, color: { argb: mt.F[r] > 0 ? C.ink : C.muted } } }));
+      cell(M, 'D' + r, mt.D[r], dat(USD, z));
+      cell(M, 'E' + r, it.u, dat(null, z, { al: { horizontal: 'center' } }));
+      var ovr = it.tipo === 'auto' && m2.ov && m2.ov[r] != null && m2.ov[r] !== '';
+      var fv = it.tipo === 'in' ? n((m2.F || {})[r]) : ovr ? n(m2.ov[r]) : r === 11 ? 0 : F(FX[r]);
+      cell(M, 'F' + r, fv, verde ? inpV('0.##') : dat('0.##', z, { al: { horizontal: 'right' } }));
+      cell(M, 'G' + r, F('D' + r + '+(D' + r + '*G$3)'), dat(USD, z));
+      M.mergeCells('H' + r + ':I' + r);
+      cell(M, 'H' + r, F('F' + r + '*G' + r), dat(USD0, z, { font: { bold: true } }));
+    };
+    hdrFila(3, mt.g3);
+    MAT2_SECCIONES.filter(function (sc) { return sc.id !== 'ves'; }).forEach(function (sc) {
+      secM(sc.fila, sc.t);
+      sc.rows.forEach(function (r, i) { filaM(r, i % 2 === 1); });
     });
-    var mTot = mr;
-    cell(M, 'F' + mTot, 'TOTAL', tot()); cell(M, 'G' + mTot, F('SUM(G4:G' + (mTot - 1) + ')'), tot(USD));
-    M.autoFilter = { from: 'B3', to: 'I' + (mTot - 1) };
+    cell(M, 'J4', 'Cantidades', hdrM);
+    cell(M, 'J5', F('ROUNDUP(+N4/3,0)'), dat('0')); cell(M, 'J23', F('ROUNDUP(+N6/3,0)'), dat('0'));
+    cell(M, 'J29', F('+M4/305'), dat('0.00')); cell(M, 'J30', F('+M6/305'), dat('0.00')); cell(M, 'J34', F('+M5/305'), dat('0.00')); cell(M, 'J35', F('+M7/305'), dat('0.00'));
+    M.mergeCells('L3:M3'); cell(M, 'L3', 'Cableado Total', hdrM);
+    [['L4', '2x16', 'M4'], ['L5', '4x16', 'M5'], ['L6', '2x16 intemp.', 'M6'], ['L7', '4x16 intemp.', 'M7']].forEach(function (x) {
+      cell(M, x[0], x[1], dat(null, false, { font: { bold: true } })); cell(M, x[2], n(m2[x[2]]), inpV('#,##0.##'));
+    });
+    M.mergeCells('N4:N5'); cell(M, 'N4', F('+M4+M5'), dat('#,##0.##', false, { font: { bold: true }, al: { vertical: 'middle', horizontal: 'center' } }));
+    M.mergeCells('N6:N7'); cell(M, 'N6', F('+M6+M7'), dat('#,##0.##', false, { font: { bold: true }, al: { vertical: 'middle', horizontal: 'center' } }));
+    M.mergeCells('L8:M8'); cell(M, 'L8', 'Tubería Vesda', hdrM);
+    cell(M, 'L9', 'CPVC', dat(null, false, { font: { bold: true } })); cell(M, 'M9', 0, dat('#,##0.##'));
+    M.mergeCells('A39:G39'); cell(M, 'A39', 'SUMATORIA TOTAL DE MATERIALES', tot());
+    M.mergeCells('H39:I39'); cell(M, 'H39', F('SUM(H28:I38,H23:I26,H5:I21)+H58+A60'), tot(USD));
+    M.getRow(39).height = 22;
+    // Equipo
+    M.mergeCells('A42:C42'); cell(M, 'A42', 'EQUIPO', Object.assign({}, hdrM, { al: { horizontal: 'left', indent: 1, vertical: 'middle' } }));
+    ['D42', 'CANTIDAD', 'E42', 'CAJA CUADRADA', 'F42', 'CAJA OCTOGONAL', 'G42', 'CAJA FS'].forEach(function (v, i, a) { if (i % 2 === 0) cell(M, v, a[i + 1], hdrM); });
+    M.mergeCells('H42:I42'); cell(M, 'H42', 'TAPAS', hdrM); M.getRow(42).height = 28;
+    var eqF = function (r, nombre, d, e, f, g, h, z) {
+      M.mergeCells('A' + r + ':C' + r); cell(M, 'A' + r, nombre, dat(null, z, { font: { bold: true } }));
+      cell(M, 'D' + r, d, typeof d === 'number' ? inpV('0') : dat('0.##', z, { al: { horizontal: 'center' } }));
+      [['E', e], ['F', f], ['G', g]].forEach(function (x) { cell(M, x[0] + r, x[1], dat('0.##', z, { al: { horizontal: 'center' } })); });
+      M.mergeCells('H' + r + ':I' + r); cell(M, 'H' + r, h, dat('0.##', z, { al: { horizontal: 'center' } }));
+    };
+    eqF(43, 'Sensores de humo o temperatura', n(m2.D43), F('D43'), F('D43'), 'N/A', F('D43'), false);
+    eqF(44, 'Cantidad de Bi-Ex según sensores', F('D43*2'), null, F('D44/30'), null, F('ROUNDUP(F44,0)'), true);
+    eqF(45, 'Estacion Manual', n(m2.D45), F('D45'), 'N/A', F('D45'), 'N/A', false);
+    eqF(46, 'Luz bocina', n(m2.D46), F('D46*2'), 'N/A', 'N/A', F('D46'), true);
+    eqF(47, 'Adicionales (Uniones de tuberia o demas)', null, 0, 0, null, 0, false);
+    // VESDA
+    M.mergeCells('A50:I50'); cell(M, 'A50', 'VESDA', { font: { bold: true, size: 13, color: { argb: C.white } }, fill: C.steel2, al: { indent: 1, vertical: 'middle' } }); M.getRow(50).height = 24;
+    hdrFila(51, mt.g3);
+    secM(52, 'TUBERIA BLAZEMASTER');
+    [53, 54, 55, 56, 57].forEach(function (r, i) { filaM(r, i % 2 === 1); });
+    M.mergeCells('A58:G58'); cell(M, 'A58', 'SUMATORIA TOTAL', tot());
+    M.mergeCells('H58:I58'); cell(M, 'H58', F('SUM(H53:I57)'), tot(USD));
+    cell(M, 'A60', n(m2.A60), inpV(USD)); cell(M, 'B60', 'Transporte', { font: { bold: true } }); cell(M, 'C60', '(Costo con Full Protection)', { font: { italic: true, color: { argb: C.muted } } });
+    cell(M, 'A62', 'Celdas verdes = datos que se digitan (igual que el machote de materiales). La G3 es el margen de materiales.', { font: { italic: true, size: 9, color: { argb: C.muted } } });
 
     // ===================== Resumen General =====================
     G.columns = [{ width: 2 }, { width: 18 }, { width: 34 }, { width: 15 }, { width: 15 }, { width: 16 }, { width: 18 }];
@@ -5423,7 +5648,7 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
     });
     seccion(G, 'B38:G38', 'TOTAL DE LA OFERTA');
     G.mergeCells('B39:F39'); cell(G, 'B39', 'Servicios (precio de venta)', dat(null, false)); cell(G, 'G39', F('G' + rVenta), dat(USD, false, { font: { bold: true } }));
-    G.mergeCells('B40:F40'); cell(G, 'B40', 'Materiales (precio de venta)', dat(null, true)); cell(G, 'G40', F('Materiales!G' + mTot), dat(USD, true, { font: { bold: true } }));
+    G.mergeCells('B40:F40'); cell(G, 'B40', 'Materiales (precio de venta)', dat(null, true)); cell(G, 'G40', F('Materiales!H39'), dat(USD, true, { font: { bold: true } }));
     G.mergeCells('B41:F41');
     cell(G, 'B41', 'TOTAL OFERTA (servicios + materiales)', { font: { bold: true, size: 14, color: { argb: C.white } }, fill: C.steel, border: box, al: { vertical: 'middle', indent: 1 } });
     cell(G, 'G41', F('G39+G40'), { font: { bold: true, size: 14, color: { argb: C.white } }, fill: C.steel, border: box, fmt: USD, al: { vertical: 'middle', horizontal: 'right' } });

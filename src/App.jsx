@@ -1744,6 +1744,7 @@ function cotRowFromDb(r) {
     observaciones: r.observaciones || "",
     monto: r.monto || 0,
     creado: r.created_at || r.creado_en || r.fecha || "",
+    fechaEnvio: r.fecha_envio || "",
   };
 }
 
@@ -4759,6 +4760,23 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
   }, [supabase, usuarioId]);
 
   const c = useMemo(() => L.compute(cfg, q), [cfg, q]);
+  // La cotización en proceso se reporta a Supabase (solo el resumen) para el Control de cotizaciones
+  const procT = useRef(null);
+  useEffect(() => {
+    if (!supabase || !usuarioId) return undefined;
+    clearTimeout(procT.current);
+    procT.current = setTimeout(() => {
+      const tiene = !q.example && (q.info.cliente || q.info.numero || q.info.proyecto || c.oferta > 0);
+      const ok = () => {}, fallo = () => {};
+      try {
+        if (tiene) supabase.rpc('cot_proc_guardar', { p_usuario: usuarioId, p_datos: { numero: q.info.numero || '', cliente: q.info.cliente || '', proyecto: q.info.proyecto || '', area: q.info.area || '', origen: q.info.origen || ORIGEN_DEF,
+          fecha_carga: q.info.inicio || '', total: Math.round(c.oferta * 100) / 100, solicitud_id: q.solicitud ? String(q.solicitud.id) : '', solicitud_consecutivo: q.solicitud ? String(q.solicitud.consecutivo) : '', hist_id: q.histId || '' } }).then(ok, fallo);
+        else supabase.rpc('cot_proc_borrar', { p_usuario: usuarioId }).then(ok, fallo);
+      } catch (e) { /* sin SQL todavía */ }
+    }, 2500);
+    return () => clearTimeout(procT.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, usuarioId]);
   const line = (key, id) => q[key][id] || {};
   const setLine = (key, id, field, v) => setQ((x) => { x[key][id] = { ...(x[key][id] || {}), [field]: v }; return x; });
 
@@ -5936,7 +5954,7 @@ function HistorialCot({ supabase, usuarioId, isAdmin, onModificar, onSolicitudEn
     const { error: err } = await supabase.rpc('cot_hist_fechas', { p_usuario: usuarioId, p_id: r.id, p_carga: carga || null, p_envio: envio || null });
     if (err) { flash(hErr(err)); return; }
     setLista((l) => l.map((x) => (x.id === r.id ? { ...x, fecha_carga: carga || x.fecha_carga, fecha_envio: envio || null } : x)));
-    if (envio && !fEnvio(r) && r.solicitud_id && onSolicitudEnviada) onSolicitudEnviada(r.solicitud_id);
+    if (envio && r.solicitud_id && onSolicitudEnviada) onSolicitudEnviada(r.solicitud_id, envio);
     flash(envio && !fEnvio(r) ? 'Cotización ' + (r.numero || '') + ' marcada como enviada.' : 'Fechas actualizadas.');
   };
   const quitar = async (r, volver) => {
@@ -6022,68 +6040,6 @@ function HistorialCot({ supabase, usuarioId, isAdmin, onModificar, onSolicitudEn
         </div>
       </div>
 
-      {!ocultas && (
-        <div className="card" style={{ marginTop: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-            <h2 className="ctitle" style={{ margin: 0 }}>Control de tiempos de envío</h2>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>Meta de envío (días)
-                <NumIn value={meta} step={1} min={1} label="Meta de envío en días" onChange={setMeta} /></label>
-              <button type="button" className="use" onClick={() => setVerPanel(!verPanel)}>{verPanel ? 'Ocultar gráficos' : 'Ver gráficos'}</button>
-            </div>
-          </div>
-          <div className="kpis">
-            {kpi('Cotizaciones', filtradas.length, 'en el filtro actual')}
-            {kpi('Enviadas', enviadas.length, filtradas.length ? Math.round((enviadas.length / filtradas.length) * 100) + ' % del total' : '')}
-            {kpi('Promedio carga → envío', prom == null ? '—' : (Math.round(prom * 10) / 10).toLocaleString('es-CR') + ' días', 'de las enviadas', prom != null && prom > meta ? '#C13E3E' : null)}
-            {kpi('Enviadas a tiempo', enviadas.length ? Math.round((aTiempo / enviadas.length) * 100) + ' %' : '—', aTiempo + ' de ' + enviadas.length + ' (≤ ' + meta + ' días)', enviadas.length && aTiempo / enviadas.length < 0.8 ? '#C13E3E' : '#2E7D5B')}
-            {kpi('Enviadas con atraso', tarde, 'más de ' + meta + ' días', tarde ? '#C13E3E' : null)}
-            {kpi('Pendientes de envío', pendientes.length, pendTarde + ' con más de ' + meta + ' días', pendTarde ? '#C13E3E' : null)}
-          </div>
-          {verPanel && (
-            <div className="charts">
-              {histChart(histEnv, '#2E7D5B', 'Días de carga a envío (enviadas)', 'Todavía no hay cotizaciones con fecha de envío.')}
-              {histChart(histPend, '#C98A12', 'Pendientes de envío: días que llevan esperando', 'No hay cotizaciones pendientes de envío.')}
-              <div className="chartbox">
-                <div className="chart-t">Cotizaciones por mes</div>
-                {porMes.length ? (
-                  <ResponsiveContainer width="100%" height={200}>
-                    <BarChart data={porMes} margin={{ top: 18, right: 6, left: -18, bottom: 0 }} barGap={2}>
-                      <CartesianGrid vertical={false} stroke="#EDEFF2" />
-                      <XAxis dataKey="mes" tick={ejeTick} axisLine={false} tickLine={false} />
-                      <YAxis allowDecimals={false} tick={ejeTick} axisLine={false} tickLine={false} />
-                      <Tooltip {...tip} />
-                      <Bar dataKey="cargadas" name="Cargadas" fill="#1F3A5F" radius={[4, 4, 0, 0]} maxBarSize={26} />
-                      <Bar dataKey="enviadas" name="Enviadas" fill="#E86A2C" radius={[4, 4, 0, 0]} maxBarSize={26} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : <div className="chart-vacio">Sin datos.</div>}
-                <div className="chart-ley"><span><i style={{ background: '#1F3A5F' }} />Cargadas (por mes de carga)</span><span><i style={{ background: '#E86A2C' }} />Enviadas (por mes de envío)</span></div>
-              </div>
-              <div className="chartbox">
-                <div className="chart-t">Promedio de días a envío por mes</div>
-                {porMes.some((x) => x.nDias) ? (
-                  <ResponsiveContainer width="100%" height={200}>
-                    <BarChart data={porMes} margin={{ top: 18, right: 6, left: -18, bottom: 0 }}>
-                      <CartesianGrid vertical={false} stroke="#EDEFF2" />
-                      <XAxis dataKey="mes" tick={ejeTick} axisLine={false} tickLine={false} />
-                      <YAxis allowDecimals={false} tick={ejeTick} axisLine={false} tickLine={false} />
-                      <Tooltip {...tip} formatter={(v) => [v + ' días', 'Promedio']} />
-                      <ReferenceLine y={meta} stroke="#C13E3E" strokeDasharray="4 3" label={{ value: 'Meta ' + meta + ' d', position: 'insideTopLeft', fontSize: 10, fill: '#C13E3E' }} />
-                      <Bar dataKey="prom" radius={[4, 4, 0, 0]} maxBarSize={30}>
-                        {porMes.map((d, i) => <Cell key={i} fill={d.prom > meta ? '#C13E3E' : '#2E7D5B'} />)}
-                        <LabelList dataKey="prom" position="top" style={{ fontSize: 11, fill: '#101826', fontWeight: 700 }} formatter={(v) => (v ? v : '')} />
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : <div className="chart-vacio">Todavía no hay envíos registrados.</div>}
-                <div className="chart-ley"><span><i style={{ background: '#2E7D5B' }} />Promedio dentro de la meta</span><span><i style={{ background: '#C13E3E' }} />Promedio fuera de la meta</span></div>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
       <div className="card" style={{ marginTop: 12, padding: 0, overflow: 'hidden' }}>
         {error ? <div className="banner b-err" style={{ margin: 14 }}>{error}</div>
           : !cargando && !filtradas.length ? <div style={{ padding: 18, color: 'var(--muted)', fontSize: 13 }}>{lista.length ? 'Ninguna cotización coincide con los filtros.' : ocultas ? 'No hay cotizaciones quitadas.' : 'Todavía no hay cotizaciones terminadas. En «Cotización en proceso», al final (Resumen) use «Terminar y pasar al historial».'}</div>
@@ -6128,6 +6084,273 @@ function HistorialCot({ supabase, usuarioId, isAdmin, onModificar, onSolicitudEn
     </div>
   );
 }
+/* ====================== Control de cotizaciones (Administrativo) ======================
+   Une las tres fuentes: solicitudes de Cotizaciones, cotizaciones en proceso
+   (lo que cada usuario tiene abierto en el cotizador) e Historial. */
+const ETAPAS = [
+  ['solicitud', 'Solicitud sin iniciar', '#C98A12'],
+  ['proceso', 'En proceso', '#1F3A5F'],
+  ['lista', 'Terminada, sin enviar', '#4CA6A8'],
+  ['enviada', 'Enviada', '#2E7D5B'],
+  ['cancelada', 'Cancelada', '#9AA3AE'],
+];
+const etapaInfo = (k) => ETAPAS.find((e) => e[0] === k) || ETAPAS[0];
+const fechaLocal = (iso) => { if (!iso) return ''; if (/^\d{4}-\d{2}-\d{2}$/.test(String(iso))) return String(iso); const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString('en-CA'); };
+
+function unificarCotizaciones(sols, hist, proc) {
+  const items = [];
+  const hPorSol = {}, pPorSol = {};
+  hist.forEach((h) => { if (h.solicitud_id) hPorSol[String(h.solicitud_id)] = h; });
+  proc.forEach((p) => { if (p.solicitud_id) pPorSol[String(p.solicitud_id)] = p; });
+  sols.forEach((s) => {
+    const h = hPorSol[String(s.id)], p = pPorSol[String(s.id)];
+    const carga = (h && fechaLocal(h.fecha_carga)) || fechaLocal(s.creado) || (p && fechaLocal(p.fecha_carga)) || '';
+    const envio = fechaLocal(s.fechaEnvio) || (h && fechaLocal(h.fecha_envio)) || '';
+    let etapa;
+    if (s.actividad === 'Cancelado') etapa = 'cancelada';
+    else if (envio || s.estado === 'Enviado' || s.estado === 'Comparado') etapa = 'enviada';
+    else if (s.estado === 'Realizado' || h) etapa = 'lista';
+    else if (s.estado === 'En proceso' || p) etapa = 'proceso';
+    else etapa = 'solicitud';
+    items.push({ key: 's' + s.id, numero: s.numCot || (h && h.numero) || '#' + s.consecutivo, consecutivo: s.consecutivo, cliente: s.cliente || (h && h.cliente) || '',
+      proyecto: s.descripcion || (h && h.proyecto) || '', area: s.tipo || (h && h.area) || '', origen: (h && h.origen) || (p && p.origen) || ORIGEN_DEF,
+      responsable: (p && p.usuario_nombre) || (h && h.presupuestista) || s.solicitante || '', monto: n(s.monto) || n(h && h.total_oferta) || n(p && p.total),
+      carga, envio, etapa, sinFechaEnvio: etapa === 'enviada' && !envio });
+  });
+  const solIds = new Set(sols.map((x) => String(x.id)));
+  hist.filter((h) => !h.solicitud_id || !solIds.has(String(h.solicitud_id))).forEach((h) => {
+    const envio = fechaLocal(h.fecha_envio);
+    items.push({ key: 'h' + h.id, numero: h.numero || '—', cliente: h.cliente || '', proyecto: h.proyecto || '', area: h.area || '', origen: h.origen || ORIGEN_DEF,
+      responsable: h.presupuestista || h.creado_por_nombre || '', monto: n(h.total_oferta), carga: fechaLocal(h.fecha_carga) || fechaLocal(h.creado_en), envio, etapa: envio ? 'enviada' : 'lista' });
+  });
+  proc.filter((p) => (!p.solicitud_id || !solIds.has(String(p.solicitud_id))) && !p.hist_id).forEach((p) => {
+    items.push({ key: 'p' + p.usuario_id, numero: p.numero || '(sin número)', cliente: p.cliente || '', proyecto: p.proyecto || '', area: p.area || '', origen: p.origen || ORIGEN_DEF,
+      responsable: p.usuario_nombre || '', monto: n(p.total), carga: fechaLocal(p.fecha_carga) || fechaLocal(p.actualizado_en), envio: '', etapa: 'proceso' });
+  });
+  return items;
+}
+
+function ControlCotizaciones({ supabase, usuarioId }) {
+  const [sols, setSols] = useState([]); const [hist, setHist] = useState([]); const [proc, setProc] = useState([]);
+  const [cargando, setCargando] = useState(true); const [avisos, setAvisos] = useState([]);
+  const [meta, setMetaRaw] = useState(() => { const v = Number(lsGet('cotAD.metaEnvio')); return v > 0 ? v : 7; });
+  const setMeta = (v) => { const x = Math.max(1, Math.round(Number(v) || 7)); setMetaRaw(x); lsSet('cotAD.metaEnvio', x); };
+  const [f, setF] = useState({ origen: '', area: '', etapa: '', desde: '', hasta: '' });
+  const cargar = async () => {
+    setCargando(true);
+    const av = [];
+    const [r1, r2, r3] = await Promise.all([
+      supabase.from('cotizaciones').select('*'),
+      supabase.rpc('cot_hist_listar', { p_usuario: usuarioId, p_ocultas: false }),
+      supabase.rpc('cot_proc_listar', { p_usuario: usuarioId }),
+    ]);
+    if (r1.error) av.push('No se pudieron leer las solicitudes: ' + r1.error.message);
+    if (r2.error) av.push('No se pudo leer el historial (corra el SQL del historial).');
+    if (r3.error) av.push('Para ver las cotizaciones en proceso, corra en Supabase el SQL «SQL_control_cotizaciones.sql».');
+    setSols(Array.isArray(r1.data) ? r1.data.map(cotRowFromDb) : []);
+    setHist(Array.isArray(r2.data) ? r2.data : []);
+    setProc(Array.isArray(r3.data) ? r3.data : []);
+    setAvisos(av); setCargando(false);
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { cargar(); }, [usuarioId]);
+
+  const todos = unificarCotizaciones(sols, hist, proc);
+  const ORIGENES = origenesDe(null, todos.map((x) => x.origen));
+  const items = todos.filter((x) => {
+    if (f.origen === '__vend' ? x.origen === ORIGEN_DEF : (f.origen && x.origen !== f.origen)) return false;
+    if (f.area && !String(x.area).includes(f.area)) return false;
+    if (f.etapa === 'pendientes' ? (x.etapa === 'enviada' || x.etapa === 'cancelada') : (f.etapa && x.etapa !== f.etapa)) return false;
+    if (f.desde && x.carga && x.carga < f.desde) return false;
+    if (f.hasta && x.carga && x.carga > f.hasta) return false;
+    return true;
+  });
+  const hoy = hoyISO();
+  const diasDe = (x) => (x.envio ? diasEntre(x.carga, x.envio) : diasEntre(x.carga, hoy));
+  const activos = items.filter((x) => x.etapa !== 'cancelada');
+  const enviadas = activos.filter((x) => x.etapa === 'enviada' && x.envio && x.carga);
+  const pend = activos.filter((x) => x.etapa !== 'enviada');
+  const dEnv = enviadas.map(diasDe).filter((d) => d != null);
+  const prom = dEnv.length ? dEnv.reduce((a, d) => a + d, 0) / dEnv.length : null;
+  const aTiempo = dEnv.filter((d) => d <= meta).length;
+  const pendTarde = pend.filter((x) => (diasDe(x) ?? 0) > meta);
+  const set = (k) => (e) => { const v = e.target.value; setF((x) => ({ ...x, [k]: v })); };
+
+  const CORTO = { solicitud: 'Sin iniciar', proceso: 'En proceso', lista: 'Sin enviar', enviada: 'Enviada', cancelada: 'Cancelada' };
+  const porEtapa = ETAPAS.map(([k, t, col]) => ({ t: CORTO[k], largo: t, n: items.filter((x) => x.etapa === k).length, col, monto: items.filter((x) => x.etapa === k).reduce((a, x) => a + x.monto, 0) }));
+  const tramosEnv = TRAMOS.map(([a, b, t]) => ({ t, n: dEnv.filter((d) => d >= a && d <= b).length, fuera: a > meta }));
+  const tramosPend = TRAMOS.map(([a, b, t]) => {
+    const en = pend.filter((x) => { const d = diasDe(x); return d != null && d >= a && d <= b; });
+    return { t, solicitud: en.filter((x) => x.etapa === 'solicitud').length, proceso: en.filter((x) => x.etapa === 'proceso').length, lista: en.filter((x) => x.etapa === 'lista').length };
+  });
+  const porMes = (() => {
+    const m = {};
+    const k0 = (k) => (m[k] = m[k] || { k, cargadas: 0, enviadas: 0, sum: 0, nd: 0 });
+    activos.forEach((x) => {
+      if (x.carga) k0(x.carga.slice(0, 7)).cargadas++;
+      if (x.envio) { const o = k0(x.envio.slice(0, 7)); o.enviadas++; const d = diasDe(x); if (d != null) { o.sum += d; o.nd++; } }
+    });
+    return Object.values(m).sort((a, b) => (a.k < b.k ? -1 : 1)).slice(-12).map((x) => ({ ...x, mes: MESES[Number(x.k.slice(5, 7)) - 1] + ' ' + x.k.slice(2, 4), prom: x.nd ? Math.round((x.sum / x.nd) * 10) / 10 : 0 }));
+  })();
+  const atrasadas = [...pendTarde].sort((a, b) => (diasDe(b) ?? 0) - (diasDe(a) ?? 0));
+
+  const ejeTick = { fontSize: 11, fill: '#5B6572' };
+  const tip = { contentStyle: { borderRadius: 8, border: '1px solid #E1E6EB', fontSize: 12 }, cursor: { fill: 'rgba(31,58,95,.06)' } };
+  const kpi = (t, v, sub, color) => (<div className="kpi"><div className="kpi-t">{t}</div><div className="kpi-v" style={color ? { color } : null}>{v}</div>{sub && <div className="kpi-s">{sub}</div>}</div>);
+  const ley = (arr) => <div className="chart-ley">{arr.map(([t, c]) => <span key={t}><i style={{ background: c }} />{t}</span>)}</div>;
+
+  return (
+    <div className="cotz">
+      <style>{COTZ_CSS}</style>
+      <div className="brand"><div className="wrap">
+        <div style={{ minWidth: 0 }}>
+          <div className="btitle">CONTROL DE COTIZACIONES</div>
+          <div className="bsub">Solicitudes, cotizaciones en proceso e historial · fecha de carga → fecha de envío</div>
+        </div>
+        <div className="hbtns">
+          <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8, color: '#fff' }}>Meta de envío (días)
+            <NumIn value={meta} step={1} min={1} label="Meta de envío en días" onChange={setMeta} /></label>
+          <button type="button" className="btn btn-ghost" onClick={cargar}>{cargando ? 'Cargando…' : 'Actualizar'}</button>
+        </div>
+      </div></div>
+      {avisos.map((a) => <div key={a} className="banner b-warn" style={{ marginTop: 10, marginBottom: 0 }}>{a}</div>)}
+
+      <div className="card" style={{ marginTop: 12 }}>
+        <div className="grid3" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))' }}>
+          <label className="field">Origen<select className="sel" value={f.origen} onChange={set('origen')}><option value="">Todos</option><option value="__vend">Por vendedores</option>{ORIGENES.map((o) => <option key={o} value={o}>{origenTxt(o)}</option>)}</select></label>
+          <label className="field">Área<select className="sel" value={f.area} onChange={set('area')}><option value="">Todas</option><option>Proyectos</option><option>Inspecciones</option></select></label>
+          <label className="field">Etapa<select className="sel" value={f.etapa} onChange={set('etapa')}><option value="">Todas</option><option value="pendientes">Pendientes de envío (todas)</option>{ETAPAS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}</select></label>
+          <label className="field">Cargadas desde<input className="txt" type="date" value={f.desde} onChange={set('desde')} /></label>
+          <label className="field">Cargadas hasta<input className="txt" type="date" value={f.hasta} onChange={set('hasta')} /></label>
+        </div>
+        <div className="kpis">
+          {kpi('Cotizaciones', items.length, activos.length + ' activas · ' + (items.length - activos.length) + ' canceladas')}
+          {kpi('Pendientes de envío', pend.length, porEtapa[0].n + ' sin iniciar · ' + porEtapa[1].n + ' en proceso · ' + porEtapa[2].n + ' terminadas')}
+          {kpi('Con más de ' + meta + ' días sin enviar', pendTarde.length, 'desde su fecha de carga', pendTarde.length ? '#C13E3E' : '#2E7D5B')}
+          {kpi('Enviadas', enviadas.length, 'con fecha de envío')}
+          {kpi('Promedio carga → envío', prom == null ? '—' : (Math.round(prom * 10) / 10).toLocaleString('es-CR') + ' días', 'de las enviadas', prom != null && prom > meta ? '#C13E3E' : null)}
+          {kpi('Enviadas a tiempo', dEnv.length ? Math.round((aTiempo / dEnv.length) * 100) + ' %' : '—', aTiempo + ' de ' + dEnv.length + ' (≤ ' + meta + ' días)', dEnv.length && aTiempo / dEnv.length < 0.8 ? '#C13E3E' : '#2E7D5B')}
+        </div>
+        <div className="charts">
+          <div className="chartbox">
+            <div className="chart-t">Cotizaciones por etapa</div>
+            <ResponsiveContainer width="100%" height={210}>
+              <BarChart data={porEtapa} margin={{ top: 18, right: 6, left: -18, bottom: 0 }}>
+                <CartesianGrid vertical={false} stroke="#EDEFF2" />
+                <XAxis dataKey="t" tick={{ ...ejeTick, fontSize: 10 }} axisLine={false} tickLine={false} interval={0} />
+                <YAxis allowDecimals={false} tick={ejeTick} axisLine={false} tickLine={false} />
+                <Tooltip {...tip} labelFormatter={(l, pl) => (pl && pl[0] ? pl[0].payload.largo : l)} formatter={(v, nm, it) => [v + ' cotizaciones · ' + usd(it.payload.monto), '']} />
+                <Bar dataKey="n" radius={[4, 4, 0, 0]} maxBarSize={48}>
+                  {porEtapa.map((d, i) => <Cell key={i} fill={d.col} />)}
+                  <LabelList dataKey="n" position="top" style={{ fontSize: 11, fill: '#101826', fontWeight: 700 }} formatter={(v) => (v ? v : '')} />
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="chartbox">
+            <div className="chart-t">Pendientes de envío: días desde la carga, por etapa</div>
+            {pend.length ? (
+              <ResponsiveContainer width="100%" height={210}>
+                <BarChart data={tramosPend} margin={{ top: 18, right: 6, left: -18, bottom: 0 }}>
+                  <CartesianGrid vertical={false} stroke="#EDEFF2" />
+                  <XAxis dataKey="t" tick={ejeTick} axisLine={false} tickLine={false} interval={0} />
+                  <YAxis allowDecimals={false} tick={ejeTick} axisLine={false} tickLine={false} />
+                  <Tooltip {...tip} labelFormatter={(l) => l + ' días'} />
+                  <ReferenceLine x={TRAMOS.find(([a, b]) => meta >= a && meta <= b)?.[2]} stroke="#C13E3E" strokeDasharray="4 3" label={{ value: 'Meta', position: 'insideTopRight', fontSize: 10, fill: '#C13E3E' }} />
+                  <Bar dataKey="solicitud" name="Solicitud sin iniciar" stackId="p" fill="#C98A12" maxBarSize={44} />
+                  <Bar dataKey="proceso" name="En proceso" stackId="p" fill="#1F3A5F" maxBarSize={44} />
+                  <Bar dataKey="lista" name="Terminada, sin enviar" stackId="p" fill="#4CA6A8" radius={[4, 4, 0, 0]} maxBarSize={44} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : <div className="chart-vacio">No hay cotizaciones pendientes de envío.</div>}
+            {ley([['Eje: días', 'transparent'], ['Sin iniciar', '#C98A12'], ['En proceso', '#1F3A5F'], ['Terminada, sin enviar', '#4CA6A8']])}
+          </div>
+          <div className="chartbox">
+            <div className="chart-t">Días de carga a envío (enviadas)</div>
+            {dEnv.length ? (
+              <ResponsiveContainer width="100%" height={210}>
+                <BarChart data={tramosEnv} margin={{ top: 18, right: 6, left: -18, bottom: 0 }}>
+                  <CartesianGrid vertical={false} stroke="#EDEFF2" />
+                  <XAxis dataKey="t" tick={ejeTick} axisLine={false} tickLine={false} interval={0} />
+                  <YAxis allowDecimals={false} tick={ejeTick} axisLine={false} tickLine={false} />
+                  <Tooltip {...tip} labelFormatter={(l) => l + ' días'} formatter={(v) => [v + ' cotizaciones', '']} />
+                  <Bar dataKey="n" radius={[4, 4, 0, 0]} maxBarSize={44}>
+                    {tramosEnv.map((d, i) => <Cell key={i} fill={d.fuera ? '#C13E3E' : '#2E7D5B'} />)}
+                    <LabelList dataKey="n" position="top" style={{ fontSize: 11, fill: '#101826', fontWeight: 700 }} formatter={(v) => (v ? v : '')} />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            ) : <div className="chart-vacio">Todavía no hay cotizaciones con fecha de envío.</div>}
+            {ley([['Eje: días', 'transparent'], ['Dentro de la meta (≤ ' + meta + ' días)', '#2E7D5B'], ['Fuera de la meta', '#C13E3E']])}
+          </div>
+          <div className="chartbox">
+            <div className="chart-t">Cotizaciones por mes</div>
+            {porMes.length ? (
+              <ResponsiveContainer width="100%" height={210}>
+                <BarChart data={porMes} margin={{ top: 18, right: 6, left: -18, bottom: 0 }} barGap={2}>
+                  <CartesianGrid vertical={false} stroke="#EDEFF2" />
+                  <XAxis dataKey="mes" tick={ejeTick} axisLine={false} tickLine={false} />
+                  <YAxis allowDecimals={false} tick={ejeTick} axisLine={false} tickLine={false} />
+                  <Tooltip {...tip} />
+                  <Bar dataKey="cargadas" name="Cargadas" fill="#1F3A5F" radius={[4, 4, 0, 0]} maxBarSize={24} />
+                  <Bar dataKey="enviadas" name="Enviadas" fill="#E86A2C" radius={[4, 4, 0, 0]} maxBarSize={24} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : <div className="chart-vacio">Sin datos.</div>}
+            {ley([['Cargadas (mes de carga)', '#1F3A5F'], ['Enviadas (mes de envío)', '#E86A2C']])}
+          </div>
+          <div className="chartbox">
+            <div className="chart-t">Promedio de días a envío por mes</div>
+            {porMes.some((x) => x.nd) ? (
+              <ResponsiveContainer width="100%" height={210}>
+                <BarChart data={porMes} margin={{ top: 18, right: 6, left: -18, bottom: 0 }}>
+                  <CartesianGrid vertical={false} stroke="#EDEFF2" />
+                  <XAxis dataKey="mes" tick={ejeTick} axisLine={false} tickLine={false} />
+                  <YAxis allowDecimals={false} tick={ejeTick} axisLine={false} tickLine={false} />
+                  <Tooltip {...tip} formatter={(v) => [v + ' días', 'Promedio']} />
+                  <ReferenceLine y={meta} stroke="#C13E3E" strokeDasharray="4 3" label={{ value: 'Meta ' + meta + ' d', position: 'insideTopLeft', fontSize: 10, fill: '#C13E3E' }} />
+                  <Bar dataKey="prom" radius={[4, 4, 0, 0]} maxBarSize={30}>
+                    {porMes.map((d, i) => <Cell key={i} fill={d.prom > meta ? '#C13E3E' : '#2E7D5B'} />)}
+                    <LabelList dataKey="prom" position="top" style={{ fontSize: 11, fill: '#101826', fontWeight: 700 }} formatter={(v) => (v ? v : '')} />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            ) : <div className="chart-vacio">Todavía no hay envíos registrados.</div>}
+            {ley([['Dentro de la meta', '#2E7D5B'], ['Fuera de la meta', '#C13E3E']])}
+          </div>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 12, padding: 0, overflow: 'hidden' }}>
+        <div style={{ padding: '12px 16px 0' }}><h2 className="ctitle">Pendientes con más de {meta} días sin enviar ({atrasadas.length})</h2></div>
+        {atrasadas.length ? (
+          <div style={{ overflowX: 'auto' }}><table>
+            <thead><tr><th>N.º</th><th>Cliente / proyecto</th><th>Etapa</th><th>Responsable</th><th>Origen</th><th>Cargada</th><th className="r">Días</th><th className="r">Monto</th></tr></thead>
+            <tbody>
+              {atrasadas.map((x) => {
+                const [, et, col] = etapaInfo(x.etapa);
+                return (
+                  <tr key={x.key}>
+                    <td className="strong">{x.numero}{x.consecutivo ? <span className="fx">Solicitud #{x.consecutivo}</span> : null}</td>
+                    <td style={{ whiteSpace: 'normal', minWidth: 200 }}><span className="strong">{x.cliente || '—'}</span><span className="fx">{x.proyecto}{x.area ? ' · ' + x.area : ''}</span></td>
+                    <td><span className="chip" style={{ background: col + '22', color: col }}>{et}</span></td>
+                    <td>{x.responsable}</td>
+                    <td>{x.origen === ORIGEN_DEF ? 'Directo' : x.origen}</td>
+                    <td>{fechaCorta(x.carga)}</td>
+                    <td className="r strong" style={{ color: '#C13E3E' }}>{diasDe(x)}</td>
+                    <td className="r">{x.monto ? usd(x.monto) : '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table></div>
+        ) : <div style={{ padding: '4px 16px 16px', color: 'var(--muted)', fontSize: 13 }}>Ninguna. Todas las pendientes están dentro de la meta.</div>}
+      </div>
+    </div>
+  );
+}
+Cotizador.Control = ControlCotizaciones;
+
 Cotizador.Historial = HistorialCot;
 
 return Cotizador;
@@ -6150,6 +6373,7 @@ function Cotizaciones() {
   useEffect(() => { if (subTab === COT_TAB_PROCESO) setSubTab("Todas"); }, [subTab]);
   const verCotizador = puedeCotizador && vistaCot === "cotizador";
   const verHistorialCot = puedeCotizador && vistaCot === "historial";
+  const verEstadoCot = puedeCotizador && vistaCot === "estado";
   const [avisoForm, setAvisoForm] = useState("");
   const [filtroSolicitante, setFiltroSolicitante] = useState("");
   const [filtroCliente, setFiltroCliente] = useState("");
@@ -6199,9 +6423,13 @@ function Cotizaciones() {
     const { data, error } = await supabase.from("cotizaciones").insert(payload).select().single();
     if (!error && data) setRows((prev) => [cotRowFromDb(data), ...prev]);
   };
-  const setEstado = (id, estado) => {
-    setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado } : r));
+  const setEstado = (id, estado, fechaEnvio) => {
+    const fila = rows.find((r) => r.id === id);
+    // Al pasar a «Enviado» se registra la fecha de envío (para el control de tiempos)
+    const fe = estado === "Enviado" && !(fila && fila.fechaEnvio) ? (fechaEnvio || new Date().toLocaleDateString("en-CA")) : (fechaEnvio || null);
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado, ...(fe ? { fechaEnvio: fe } : {}) } : r));
     supabase.from("cotizaciones").update({ estado }).eq("id", id).then();
+    if (fe) supabase.from("cotizaciones").update({ fecha_envio: fe }).eq("id", id).then();
   };
   const setActividad = (id, actividad) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, actividad } : r));
@@ -6257,10 +6485,11 @@ function Cotizaciones() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {puedeCotizador && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12 }}>
           {[["solicitudes", "Solicitudes de cotización", `${rows.length} solicitudes · ${rows.filter((r) => r.estado === "Solicitud").length} pendientes`, FileText],
             ["cotizador", "Cotización en proceso", "Mano de obra, viáticos, materiales, márgenes y Excel", Calculator],
-            ["historial", "Historial de cotizaciones", "Ofertas terminadas: buscar y descargar el Excel", Clock]].map(([id, titulo, sub, Ico]) => {
+            ["historial", "Historial de cotizaciones", "Ofertas terminadas: buscar y descargar el Excel", Clock],
+            ["estado", "Estado de cotizaciones", "Etapas, fechas de carga y envío, atrasos", TrendingUp]].map(([id, titulo, sub, Ico]) => {
             const on = vistaCot === id;
             return (
               <button key={id} onClick={() => setVistaCot(id)} style={{
@@ -6308,11 +6537,15 @@ function Cotizaciones() {
             }}
             onTerminada={() => setVistaCot("historial")} />
         </Card>
+      ) : verEstadoCot ? (
+        <Card style={{ padding: 16 }}>
+          <CotizadorAD.Control supabase={supabase} usuarioId={currentUser?.id} />
+        </Card>
       ) : verHistorialCot ? (
         <Card style={{ padding: 16 }}>
           <CotizadorAD.Historial supabase={supabase} usuarioId={currentUser?.id} isAdmin={isAdmin}
             onModificar={() => setVistaCot("cotizador")}
-            onSolicitudEnviada={(id) => { const r = rows.find((x) => String(x.id) === String(id)); if (r && r.estado !== "Enviado" && r.estado !== "Comparado") setEstado(r.id, "Enviado"); }} />
+            onSolicitudEnviada={(id, fecha) => { const r = rows.find((x) => String(x.id) === String(id)); if (r) setEstado(r.id, r.estado === "Comparado" ? "Comparado" : "Enviado", fecha); }} />
         </Card>
       ) : (<>
       <ResumenCotizacionesCard />
@@ -9928,6 +10161,11 @@ function EvaluacionCompetencias() {
   );
 }
 
+function ControlCotizacionesAdmin() {
+  const currentUser = useContext(CurrentUserContext);
+  return <Card style={{ padding: 16 }}><CotizadorAD.Control supabase={supabase} usuarioId={currentUser?.id} /></Card>;
+}
+
 function Administrativo() {
   const [tab, setTab] = useEstadoRecordado("administrativo", "resumen");
   return (
@@ -9936,10 +10174,12 @@ function Administrativo() {
         <Btn variant={tab === "resumen" ? "accent" : "ghost"} small onClick={() => setTab("resumen")}>Resumen Ejecutivo</Btn>
         <Btn variant={tab === "usuarios" ? "accent" : "ghost"} small onClick={() => setTab("usuarios")}>Gestión de Usuarios</Btn>
         <Btn variant={tab === "evaluacion" ? "accent" : "ghost"} small onClick={() => setTab("evaluacion")}>Evaluación de competencias</Btn>
+        <Btn variant={tab === "controlcot" ? "accent" : "ghost"} small onClick={() => setTab("controlcot")}>Control de cotizaciones</Btn>
       </div>
       {tab === "resumen" && <ResumenEjecutivo />}
       {tab === "usuarios" && <GestionUsuarios />}
       {tab === "evaluacion" && <EvaluacionCompetencias />}
+      {tab === "controlcot" && <ControlCotizacionesAdmin />}
     </div>
   );
 }

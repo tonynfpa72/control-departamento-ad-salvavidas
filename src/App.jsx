@@ -3751,6 +3751,7 @@ const COTZ_CSS = `.cotz{--bg:#F3F5F7;--surface:#FFFFFF;--surface2:#F7F8FA;--line
 .cotz .check{display:flex;gap:10px;align-items:flex-start;font-size:13px;margin-top:12px;cursor:pointer}
 .cotz .check input{width:18px;height:18px;margin-top:1px;accent-color:var(--red)}
 .cotz .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:70;background:var(--slate);color:#fff;padding:10px 16px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.25);font-size:13px;max-width:calc(100% - 32px)}
+.cotz .finbox{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:16px;padding:14px 16px;border-radius:12px;background:var(--red-soft);border:1px solid #F5C4A8}
 .cotz .nuevapanel{margin-top:10px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
 .cotz .np-t{font-weight:800;font-size:14px;margin-bottom:10px}
 .cotz .np-t span{font-weight:400;color:var(--muted);font-size:12.5px}
@@ -4397,7 +4398,7 @@ const Icon = {
 /* ---------- cotización ---------- */
 function blankQuote(cfg) {
   return {
-    info: { proyecto: '', cliente: '', area: 'Proyectos', fecha: new Date().toISOString().slice(0, 10), contacto: '', presupuestista: '', numero: '' },
+    info: { proyecto: '', cliente: '', area: 'Proyectos', fecha: new Date().toLocaleDateString('en-CA'), contacto: '', presupuestista: '', numero: '' },
     roles: {}, cr: {}, ca: {}, renta: {}, mats: {}, eq: { tub: '0', disp: '0', extra: '3' },
     margin: s(n(cfg.margin) * 100, 2), matMargin: s(n(cfg.matMargin) * 100, 2), cmp: ['25', '27.5', '30', '32.5', '35'], example: false,
   };
@@ -4486,7 +4487,7 @@ function NumIn({ value, onChange, label, cls, step, min, disabled, id }) {
 }
 
 /* ====================================================================== */
-function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solicitudes = [], onTomarSolicitud, onPasarMonto }) {
+function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solicitudes = [], onTomarSolicitud, onPasarMonto, onTerminada, onSolicitudRealizada }) {
   const initCfg = lsGet(CKEY) || { cfg: DEFAULT_CFG, updatedAt: null, source: 'Machote original (incluido en la app)' };
   const [cfgDoc, setCfgDoc] = useState(initCfg);
   const cfg = cfgDoc.cfg;
@@ -4501,6 +4502,8 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
   const [solElegida, setSolElegida] = useState('');
   const [pasarEnProceso, setPasarEnProceso] = useState(true);
   const [confirmMonto, setConfirmMonto] = useState(false);
+  const [confirmFin, setConfirmFin] = useState(false);
+  const [guardando, setGuardando] = useState(false);
   const cfgRef = useRef(cfg); cfgRef.current = cfg;
   const toastT = useRef(null);
 
@@ -4540,29 +4543,26 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
   const line = (key, id) => q[key][id] || {};
   const setLine = (key, id, field, v) => setQ((x) => { x[key][id] = { ...(x[key][id] || {}), [field]: v }; return x; });
 
-  // Excel con diseño (colores, títulos, tablas). Si algo falla, se descarga
-  // la versión sencilla de siempre para no quedarse sin archivo.
-  async function downloadExcel() {
-    const slug = (q.info.numero || q.info.proyecto || 'cotizacion').replace(/[^A-Za-z0-9\-_ ]+/g, '').trim().replace(/\s+/g, '_').slice(0, 60) || 'cotizacion';
-    const name = 'Machote_' + slug + '_' + new Date().toISOString().slice(0, 10) + '.xlsx';
-    try {
-      flash('Generando Excel…');
-      const { Workbook } = await import('exceljs');
-      const wb = buildExcelBonito(Workbook, L, cfg, q, q.info);
-      const buf = await wb.xlsx.writeBuffer();
-      const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = name;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
-      flash('Excel descargado: ' + name);
-    } catch (err) {
-      try {
-        const wb = L.buildWorkbook(XLSX, cfg, q, q.info);
-        XLSX.writeFile(wb, name);
-        flash('Excel descargado (formato sencillo): ' + name);
-      } catch (err2) { flash('No se pudo generar el Excel: ' + (err2.message || err2)); }
-    }
+  const downloadExcel = () => descargarExcelCotz(cfg, q, flash);
+  async function terminar() {
+    if (!supabase) return;
+    setGuardando(true);
+    const r2 = (v) => Math.round(n(v) * 100) / 100;
+    const reg = {
+      numero: q.info.numero || '', proyecto: q.info.proyecto || '', cliente: q.info.cliente || '', area: q.info.area || '',
+      presupuestista: q.info.presupuestista || usuarioNombre || '', fecha: q.info.fecha || '',
+      solicitud_id: q.solicitud ? String(q.solicitud.id) : '', solicitud_consecutivo: q.solicitud ? String(q.solicitud.consecutivo) : '',
+      costo: r2(c.costo + c.matCost), precio_servicios: r2(c.precio), materiales: r2(c.matVenta), total_oferta: r2(c.oferta), margen: n(q.margin),
+      datos: { cfg: clone(cfg), q: clone(q) },
+    };
+    const { error } = await supabase.rpc('cot_hist_guardar', { p_usuario: usuarioId, p_id: null, p_reg: reg });
+    setGuardando(false);
+    if (error) { flash(/cot_hist_|cot_puede|schema cache|Could not find/i.test(error.message || '') ? 'Falta correr en Supabase el SQL "cotizador_historial.sql".' : 'No se pudo guardar: ' + (error.message || error)); return; }
+    if (q.solicitud && onSolicitudRealizada) onSolicitudRealizada(q.solicitud.id);
+    const b = blankQuote(cfg); setQRaw(b); lsSet(QKEY, b);
+    setConfirmFin(false); setStep(0);
+    flash('Cotización ' + (reg.numero || '') + ' guardada en el historial' + (q.solicitud ? ' y la solicitud #' + q.solicitud.consecutivo + ' quedó «Realizado».' : '.'));
+    if (onTerminada) setTimeout(() => onTerminada(), 700);
   }
 
   async function applyConfig(newCfg, source, alsoQty) {
@@ -4772,7 +4772,21 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
           ) : (
             <button type="button" className="btn btn-line" disabled={!(c.oferta > 0)} onClick={() => setConfirmMonto(true)}>Pasar total a la solicitud #{q.solicitud.consecutivo}</button>
           ))}
-          <button type="button" className="btn btn-red" onClick={downloadExcel}>{Icon.down} Descargar Excel de esta cotización</button>
+          <button type="button" className="btn btn-line" onClick={downloadExcel}>{Icon.down} Descargar Excel de esta cotización</button>
+        </div>
+        <div className="finbox">
+          {confirmFin ? (
+            <>
+              <div style={{ flex: '1 1 280px', fontSize: 13.5 }}><strong>¿Terminar la cotización {q.info.numero || ''}?</strong> Se guarda en el Historial con un total de <strong>{usd(c.oferta)}</strong> y se quita de «en proceso» (queda en blanco para la siguiente).{q.solicitud ? <> La solicitud <strong>#{q.solicitud.consecutivo}</strong> pasa a «Realizado».</> : null}</div>
+              <button type="button" className="btn btn-line" onClick={() => setConfirmFin(false)}>Cancelar</button>
+              <button type="button" className="btn btn-red" disabled={guardando} onClick={terminar}>{guardando ? 'Guardando…' : 'Sí, terminar'}</button>
+            </>
+          ) : (
+            <>
+              <div style={{ flex: '1 1 280px', fontSize: 13.5, color: 'var(--muted)' }}>¿Ya está lista la oferta? Pásela al <strong style={{ color: 'var(--fg)' }}>Historial de cotizaciones</strong>; desde ahí se busca y se descarga el Excel cuando quiera.</div>
+              <button type="button" className="btn btn-red" disabled={!(c.oferta > 0) || q.example} title={q.example ? 'La cotización de ejemplo no se guarda' : ''} onClick={() => setConfirmFin(true)}>{Icon.file} Terminar y pasar al historial</button>
+            </>
+          )}
         </div>
       </div>
     );
@@ -5355,6 +5369,154 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
     return wb;
   }
 
+// Descarga el Excel con diseño de una cotización (la abierta o una del historial)
+async function descargarExcelCotz(cfg, q, flash) {
+  const slug = ((q.info && (q.info.numero || q.info.proyecto)) || 'cotizacion').replace(/[^A-Za-z0-9\-_ ]+/g, '').trim().replace(/\s+/g, '_').slice(0, 60) || 'cotizacion';
+  const name = 'Machote_' + slug + '_' + ((q.info && q.info.fecha) || new Date().toISOString().slice(0, 10)) + '.xlsx';
+  try {
+    flash && flash('Generando Excel…');
+    const { Workbook } = await import('exceljs');
+    const wb = buildExcelBonito(Workbook, L, cfg, q, q.info || {});
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    flash && flash('Excel descargado: ' + name);
+  } catch (err) {
+    try {
+      const wb = L.buildWorkbook(XLSX, cfg, q, q.info || {});
+      XLSX.writeFile(wb, name);
+      flash && flash('Excel descargado (formato sencillo): ' + name);
+    } catch (err2) { flash && flash('No se pudo generar el Excel: ' + (err2.message || err2)); }
+  }
+}
+
+/* ====================== Historial de cotizaciones ====================== */
+const H_SIN_SQL = 'Falta correr en Supabase el SQL "cotizador_historial.sql" (SQL Editor → pegar → Run).';
+const hErr = (e) => { const m = String((e && e.message) || e || ''); return /cot_hist_|cot_puede|schema cache|Could not find/i.test(m) ? H_SIN_SQL : (m || 'Error desconocido.'); };
+const fechaCorta = (iso) => { if (!iso) return ''; const d = new Date(String(iso).length === 10 ? iso + 'T12:00:00' : iso); return isNaN(d) ? String(iso) : d.toLocaleDateString('es-CR'); };
+
+function HistorialCot({ supabase, usuarioId, isAdmin }) {
+  const confirmar = useContext(ConfirmContext);
+  const [lista, setLista] = useState([]);
+  const [ocultas, setOcultas] = useState(false);
+  const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState('');
+  const [toast, setToast] = useState('');
+  const [f, setF] = useState({ texto: '', area: '', desde: '', hasta: '' });
+  const toastT = useRef(null);
+  const flash = (t) => { setToast(t); clearTimeout(toastT.current); toastT.current = setTimeout(() => setToast(''), 4200); };
+
+  const cargar = async () => {
+    setCargando(true);
+    const { data, error: err } = await supabase.rpc('cot_hist_listar', { p_usuario: usuarioId, p_ocultas: ocultas });
+    setCargando(false);
+    if (err) { setError(hErr(err)); return; }
+    setError(''); setLista(Array.isArray(data) ? data : []);
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { cargar(); }, [ocultas, usuarioId]);
+
+  const filtradas = lista.filter((r) => {
+    const t = norm(f.texto);
+    if (t && ![r.numero, r.proyecto, r.cliente, r.presupuestista, r.creado_por_nombre, r.solicitud_consecutivo].some((v) => norm(v).includes(t))) return false;
+    if (f.area && r.area !== f.area) return false;
+    const fe = String(r.fecha || r.creado_en || '').slice(0, 10);
+    if (f.desde && fe < f.desde) return false;
+    if (f.hasta && fe > f.hasta) return false;
+    return true;
+  });
+  const sumaTotal = filtradas.reduce((a, r) => a + n(r.total_oferta), 0);
+
+  const excel = async (r) => {
+    const { data, error: err } = await supabase.rpc('cot_hist_obtener', { p_usuario: usuarioId, p_id: r.id });
+    if (err || !data || !data.cfg || !data.q) { flash(err ? hErr(err) : 'Esta cotización no tiene datos para el Excel.'); return; }
+    await descargarExcelCotz(data.cfg, data.q, flash);
+  };
+  const quitar = async (r, volver) => {
+    if (!volver && !(await confirmar('¿Quitar la cotización ' + (r.numero || '') + ' (' + (r.cliente || r.proyecto || '') + ') del historial? Deja de verse en la lista, pero queda guardada en Supabase y se puede restaurar desde «Ver quitadas».', { confirmLabel: 'Sí, quitar', variant: 'accent' }))) return;
+    const { error: err } = await supabase.rpc('cot_hist_ocultar', { p_usuario: usuarioId, p_id: r.id, p_ocultar: !volver });
+    if (err) { flash(hErr(err)); return; }
+    setLista((l) => l.filter((x) => x.id !== r.id));
+    flash(volver ? 'Cotización restaurada al historial.' : 'Cotización quitada de la lista (sigue guardada en Supabase).');
+  };
+  const borrarTodo = async () => {
+    if (!(await confirmar('ATENCIÓN: se van a BORRAR DEFINITIVAMENTE de Supabase TODAS las cotizaciones del historial, incluidas las quitadas de la lista. Esto no se puede deshacer. ¿Desea continuar?', { confirmLabel: 'Sí, continuar' }))) return;
+    if (!(await confirmar('Última confirmación: ¿borrar todo el historial de cotizaciones para siempre?', { confirmLabel: 'Borrar todo' }))) return;
+    const { data, error: err } = await supabase.rpc('cot_hist_borrar_todo', { p_usuario: usuarioId });
+    if (err) { flash(hErr(err)); return; }
+    setLista([]); flash('Historial borrado: ' + (data || 0) + ' cotizaciones eliminadas de Supabase.');
+  };
+  const set = (k) => (e) => { const v = e.target.value; setF((x) => ({ ...x, [k]: v })); };
+
+  return (
+    <div className="cotz">
+      <style>{COTZ_CSS}</style>
+      <div className="brand"><div className="wrap">
+        <div style={{ minWidth: 0 }}>
+          <div className="btitle">{ocultas ? 'COTIZACIONES QUITADAS DE LA LISTA' : 'HISTORIAL DE COTIZACIONES'}</div>
+          <div className="bsub">{ocultas ? 'Siguen guardadas en Supabase; puede restaurarlas.' : 'Cotizaciones terminadas en «Cotización en proceso».'}</div>
+        </div>
+        <div className="hbtns">
+          <button type="button" className="btn btn-ghost" onClick={() => setOcultas(!ocultas)}>{ocultas ? '← Volver al historial' : 'Ver quitadas'}</button>
+          {isAdmin && <button type="button" className="btn btn-ghost" onClick={borrarTodo} style={{ borderColor: '#F3B3A0' }}>{Icon.x} Borrar todo</button>}
+        </div>
+      </div></div>
+
+      <div className="card" style={{ marginTop: 12 }}>
+        <div className="grid3" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
+          <label className="field" style={{ gridColumn: 'span 2' }}>Buscar<input className="txt" type="search" placeholder="N.º, proyecto, cliente, presupuestista…" value={f.texto} onChange={set('texto')} /></label>
+          <label className="field">Área<select className="sel" value={f.area} onChange={set('area')}><option value="">Todas</option><option>Proyectos</option><option>Inspecciones</option></select></label>
+          <label className="field">Desde<input className="txt" type="date" value={f.desde} onChange={set('desde')} /></label>
+          <label className="field">Hasta<input className="txt" type="date" value={f.hasta} onChange={set('hasta')} /></label>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginTop: 10, fontSize: 13, color: 'var(--muted)' }}>
+          <span>{cargando ? 'Cargando…' : filtradas.length + ' de ' + lista.length + ' cotizaciones'}{(f.texto || f.area || f.desde || f.hasta) ? <button type="button" className="use" style={{ marginLeft: 8 }} onClick={() => setF({ texto: '', area: '', desde: '', hasta: '' })}>Limpiar filtros</button> : null}</span>
+          <span>Total ofertado: <strong style={{ color: 'var(--red-text)' }}>{usd(sumaTotal)}</strong></span>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 12, padding: 0, overflow: 'hidden' }}>
+        {error ? <div className="banner b-err" style={{ margin: 14 }}>{error}</div>
+          : !cargando && !filtradas.length ? <div style={{ padding: 18, color: 'var(--muted)', fontSize: 13 }}>{lista.length ? 'Ninguna cotización coincide con los filtros.' : ocultas ? 'No hay cotizaciones quitadas.' : 'Todavía no hay cotizaciones terminadas. En «Cotización en proceso», al final (Resumen) use «Terminar y pasar al historial».'}</div>
+          : (
+            <div style={{ overflowX: 'auto' }}><table>
+              <thead><tr><th>Fecha</th><th>N.º</th><th>Proyecto</th><th>Cliente</th><th>Área</th><th>Presupuestista</th><th className="r">Servicios</th><th className="r">Materiales</th><th className="r">Total oferta</th><th>Solicitud</th><th><span className="sr">Acciones</span></th></tr></thead>
+              <tbody>
+                {filtradas.map((r) => (
+                  <tr key={r.id}>
+                    <td>{fechaCorta(r.fecha || r.creado_en)}</td>
+                    <td className="strong">{r.numero || '—'}</td>
+                    <td style={{ whiteSpace: 'normal', minWidth: 180 }}>{r.proyecto || '—'}</td>
+                    <td style={{ whiteSpace: 'normal', minWidth: 140 }}>{r.cliente || '—'}</td>
+                    <td>{r.area || ''}</td>
+                    <td>{r.presupuestista || r.creado_por_nombre || ''}</td>
+                    <td className="r">{usd(n(r.precio_servicios))}</td>
+                    <td className="r">{usd(n(r.materiales))}</td>
+                    <td className="r strong" style={{ color: 'var(--red-text)' }}>{usd(n(r.total_oferta))}</td>
+                    <td>{r.solicitud_consecutivo ? '#' + r.solicitud_consecutivo : ''}</td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                        <button type="button" className="btn btn-line" style={{ minHeight: 30, padding: '4px 10px' }} onClick={() => excel(r)}>{Icon.down} Excel</button>
+                        {ocultas
+                          ? <button type="button" className="btn btn-line" style={{ minHeight: 30, padding: '4px 10px' }} onClick={() => quitar(r, true)}>Restaurar</button>
+                          : <button type="button" className="rm" title="Quitar de la lista (queda en Supabase)" aria-label={'Quitar ' + (r.numero || '')} onClick={() => quitar(r, false)}>{Icon.x}</button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table></div>
+          )}
+      </div>
+      {toast && <div className="toast" role="status">{toast}</div>}
+    </div>
+  );
+}
+Cotizador.Historial = HistorialCot;
+
 return Cotizador;
 })();
 
@@ -5374,6 +5536,7 @@ function Cotizaciones() {
   const [vistaCot, setVistaCot] = useEstadoRecordado("cotizaciones-vista", "solicitudes");
   useEffect(() => { if (subTab === COT_TAB_PROCESO) setSubTab("Todas"); }, [subTab]);
   const verCotizador = puedeCotizador && vistaCot === "cotizador";
+  const verHistorialCot = puedeCotizador && vistaCot === "historial";
   const [avisoForm, setAvisoForm] = useState("");
   const [filtroSolicitante, setFiltroSolicitante] = useState("");
   const [filtroCliente, setFiltroCliente] = useState("");
@@ -5453,8 +5616,8 @@ function Cotizaciones() {
     supabase.from("cotizaciones").delete().eq("id", id).then();
   };
 
-  const ESTADOS_COT = ["Solicitud", "En proceso", "Enviado", "Comparado"];
-  const estadoColor = { Solicitud: [T.amber, T.amberSoft], "En proceso": [T.steel, T.steelSoft], Enviado: [T.blue, T.blueSoft], Comparado: [T.green, T.greenSoft] };
+  const ESTADOS_COT = ["Solicitud", "En proceso", "Realizado", "Enviado", "Comparado"];
+  const estadoColor = { Solicitud: [T.amber, T.amberSoft], "En proceso": [T.steel, T.steelSoft], Realizado: [T.turquoise, T.turquoiseSoft], Enviado: [T.blue, T.blueSoft], Comparado: [T.green, T.greenSoft] };
   const actividadColor = { Seguimiento: [T.blue, T.blueSoft], Cancelado: [T.red, T.redSoft], "Con OC": [T.green, T.greenSoft] };
   const TIPO_OFERTA_OPCIONES = ["Inspecciones", "Proyectos", "Inspecciones y Proyectos"];
 
@@ -5481,9 +5644,10 @@ function Cotizaciones() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {puedeCotizador && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 12 }}>
           {[["solicitudes", "Solicitudes de cotización", `${rows.length} solicitudes · ${rows.filter((r) => r.estado === "Solicitud").length} pendientes`, FileText],
-            ["cotizador", "Cotización en proceso", "Mano de obra, viáticos, materiales, márgenes y Excel", Calculator]].map(([id, titulo, sub, Ico]) => {
+            ["cotizador", "Cotización en proceso", "Mano de obra, viáticos, materiales, márgenes y Excel", Calculator],
+            ["historial", "Historial de cotizaciones", "Ofertas terminadas: buscar y descargar el Excel", Clock]].map(([id, titulo, sub, Ico]) => {
             const on = vistaCot === id;
             return (
               <button key={id} onClick={() => setVistaCot(id)} style={{
@@ -5507,7 +5671,13 @@ function Cotizaciones() {
           <CotizadorAD supabase={supabase} isAdmin={isAdmin} usuarioId={currentUser?.id} usuarioNombre={currentUser?.name}
             solicitudes={rows}
             onTomarSolicitud={(id) => setEstado(id, "En proceso")}
-            onPasarMonto={(id, monto, numCot) => { setMonto(id, monto); if (numCot) setNumCot(id, numCot); }} />
+            onPasarMonto={(id, monto, numCot) => { setMonto(id, monto); if (numCot) setNumCot(id, numCot); }}
+            onSolicitudRealizada={(id) => setEstado(id, "Realizado")}
+            onTerminada={() => setVistaCot("historial")} />
+        </Card>
+      ) : verHistorialCot ? (
+        <Card style={{ padding: 16 }}>
+          <CotizadorAD.Historial supabase={supabase} usuarioId={currentUser?.id} isAdmin={isAdmin} />
         </Card>
       ) : (<>
       <ResumenCotizacionesCard />

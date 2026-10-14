@@ -4540,14 +4540,29 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
   const line = (key, id) => q[key][id] || {};
   const setLine = (key, id, field, v) => setQ((x) => { x[key][id] = { ...(x[key][id] || {}), [field]: v }; return x; });
 
-  function downloadExcel() {
+  // Excel con diseño (colores, títulos, tablas). Si algo falla, se descarga
+  // la versión sencilla de siempre para no quedarse sin archivo.
+  async function downloadExcel() {
+    const slug = (q.info.numero || q.info.proyecto || 'cotizacion').replace(/[^A-Za-z0-9\-_ ]+/g, '').trim().replace(/\s+/g, '_').slice(0, 60) || 'cotizacion';
+    const name = 'Machote_' + slug + '_' + new Date().toISOString().slice(0, 10) + '.xlsx';
     try {
-      const wb = L.buildWorkbook(XLSX, cfg, q, q.info);
-      const slug = (q.info.numero || q.info.proyecto || 'cotizacion').replace(/[^A-Za-z0-9\-_ ]+/g, '').trim().replace(/\s+/g, '_').slice(0, 60) || 'cotizacion';
-      const name = 'Machote_' + slug + '_' + new Date().toISOString().slice(0, 10) + '.xlsx';
-      XLSX.writeFile(wb, name);
+      flash('Generando Excel…');
+      const { Workbook } = await import('exceljs');
+      const wb = buildExcelBonito(Workbook, L, cfg, q, q.info);
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = name;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
       flash('Excel descargado: ' + name);
-    } catch (err) { flash('No se pudo generar el Excel: ' + (err.message || err)); }
+    } catch (err) {
+      try {
+        const wb = L.buildWorkbook(XLSX, cfg, q, q.info);
+        XLSX.writeFile(wb, name);
+        flash('Excel descargado (formato sencillo): ' + name);
+      } catch (err2) { flash('No se pudo generar el Excel: ' + (err2.message || err2)); }
+    }
   }
 
   async function applyConfig(newCfg, source, alsoQty) {
@@ -5093,6 +5108,252 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
     </div>
   );
 }
+
+  /* ---------- Excel con diseño (ExcelJS): mismas celdas que el machote, con colores ---------- */
+  function buildExcelBonito(Workbook, L, cfg, q, info) {
+    var n = L.n, LIM = L.LIM;
+    var wb = new Workbook();
+    wb.creator = 'Departamento A&D Salvavidas';
+    wb.calcProperties = { fullCalcOnLoad: true };
+    var C = { steel: 'FF1F3A5F', steel2: 'FF2E5482', accent: 'FFE86A2C', accentSoft: 'FFFFE4D3', light: 'FFF3F5F7', zebra: 'FFF8FAFC',
+      line: 'FFD5DAE0', ink: 'FF101826', muted: 'FF5B6572', white: 'FFFFFFFF', inFill: 'FFFFF8E1', inFont: 'FF1D4ED8', green: 'FF2E7D5B', greenSoft: 'FFDEF2E8' };
+    var USD0 = '"USD "#,##0.00;-"USD "#,##0.00;"–"', USD = '"USD "#,##0.00', CRC = '"₡"#,##0.00', PCT = '0.00%', PCT0 = '0%';
+    var FONT = 'Calibri';
+    var info0 = info || {};
+    var thin = { style: 'thin', color: { argb: C.line } };
+    var box = { top: thin, left: thin, bottom: thin, right: thin };
+    var fill = function (argb) { return { type: 'pattern', pattern: 'solid', fgColor: { argb: argb } }; };
+    var cell = function (ws, a, v, st) {
+      var c = ws.getCell(a);
+      if (v !== undefined && v !== null && v !== '') c.value = (typeof v === 'object' && !(v instanceof Date)) ? v : v;
+      c.font = { name: FONT, size: 11, color: { argb: C.ink } };
+      if (st) {
+        if (st.font) c.font = Object.assign({ name: FONT, size: 11, color: { argb: C.ink } }, st.font);
+        if (st.fill) c.fill = fill(st.fill);
+        if (st.fmt) c.numFmt = st.fmt;
+        if (st.al) c.alignment = st.al;
+        if (st.border) c.border = st.border;
+      }
+      return c;
+    };
+    var F = function (f) { return { formula: f }; };
+    var hdr = { font: { bold: true, color: { argb: C.white }, size: 10.5 }, fill: C.steel, al: { vertical: 'middle', horizontal: 'center', wrapText: true }, border: box };
+    var hdrL = Object.assign({}, hdr, { al: { vertical: 'middle', horizontal: 'left' } });
+    var inp = function (fmt) { return { font: { color: { argb: C.inFont }, bold: true }, fill: C.inFill, fmt: fmt, border: box, al: { horizontal: 'right' } }; };
+    var dat = function (fmt, zebra, extra) { return Object.assign({ fmt: fmt, border: box, fill: zebra ? C.zebra : undefined }, extra || {}); };
+    var tot = function (fmt) { return { font: { bold: true, color: { argb: C.white } }, fill: C.accent, fmt: fmt, border: box, al: { horizontal: fmt ? 'right' : 'left' } }; };
+    var titulo = function (ws, rango, texto, sub) {
+      ws.mergeCells(rango);
+      var a = rango.split(':')[0];
+      cell(ws, a, texto, { font: { bold: true, size: 16, color: { argb: C.white } }, fill: C.steel, al: { vertical: 'middle', horizontal: 'left', indent: 1 } });
+      ws.getRow(ws.getCell(a).row).height = 30;
+      if (sub) {
+        var r2 = rango.replace(/\d+/g, function (d) { return String(Number(d) + 1); });
+        ws.mergeCells(r2);
+        cell(ws, r2.split(':')[0], sub, { font: { italic: true, size: 10, color: { argb: C.muted } }, al: { horizontal: 'left', indent: 1 } });
+      }
+    };
+    var seccion = function (ws, rango, texto) {
+      ws.mergeCells(rango);
+      cell(ws, rango.split(':')[0], texto, { font: { bold: true, size: 12, color: { argb: C.white } }, fill: C.accent, al: { vertical: 'middle', horizontal: 'left', indent: 1 } });
+      ws.getRow(ws.getCell(rango.split(':')[0]).row).height = 22;
+    };
+    var hoy = new Date().toLocaleDateString('es-CR');
+    var G = wb.addWorksheet('Resumen General - INFORMACION', { views: [{ showGridLines: false }], properties: { tabColor: { argb: C.steel } } });
+    var E = wb.addWorksheet('Estimacion Horas', { views: [{ state: 'frozen', ySplit: 2, showGridLines: false }], properties: { tabColor: { argb: C.accent } } });
+    var S = wb.addWorksheet('Salarios', { views: [{ state: 'frozen', ySplit: 6, showGridLines: false }], properties: { tabColor: { argb: C.steel2 } } });
+    var M = wb.addWorksheet('Materiales', { views: [{ state: 'frozen', ySplit: 3, showGridLines: false }], properties: { tabColor: { argb: C.green } } });
+
+    // ===================== Salarios =====================
+    S.columns = [{ width: 5 }, { width: 2 }, { width: 28 }, { width: 17 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 13 }, { width: 14 }, { width: 17 }, { width: 13 }, { width: 14 }];
+    titulo(S, 'C1:L1', 'Desglose de Salarios y Cargas Sociales');
+    cell(S, 'J3', 'USD / CR ₡', { font: { bold: true, color: { argb: C.muted } }, al: { horizontal: 'right' } });
+    cell(S, 'K2', 'Compra', { font: { bold: true, color: { argb: C.muted } }, al: { horizontal: 'center' } });
+    cell(S, 'L2', 'Venta', { font: { bold: true, color: { argb: C.muted } }, al: { horizontal: 'center' } });
+    cell(S, 'K3', n(cfg.tc), inp(CRC)); cell(S, 'L3', F('K3+10'), dat(CRC));
+    cell(S, 'F3', 'Cargas', { font: { bold: true, color: { argb: C.muted }, size: 9 }, al: { horizontal: 'center' } });
+    cell(S, 'G3', 'Factor Adm.', { font: { bold: true, color: { argb: C.muted }, size: 9 }, al: { horizontal: 'center' } });
+    cell(S, 'H3', 'Aumento', { font: { bold: true, color: { argb: C.muted }, size: 9 }, al: { horizontal: 'center' } });
+    cell(S, 'F4', n(cfg.cs), inp(PCT)); cell(S, 'G4', n(cfg.fa), inp(PCT)); cell(S, 'H4', n(cfg.au || 0), inp(PCT));
+    cell(S, 'I4', 'Precio en Colones', { font: { italic: true, color: { argb: C.muted }, size: 9 } });
+    ['Categoría', 'Salario Mensual', 'Salario Hora', 'Cargas Sociales', 'Factor Administrativo', 'Factor Aumento', 'Total Hora ₡', 'Total Mensual ₡', 'Total Hora USD', 'Total Mensual USD']
+      .forEach(function (h, i) { cell(S, String.fromCharCode(67 + i) + '5', h, i === 0 ? hdrL : hdr); });
+    S.getRow(5).height = 32;
+    var nR = Math.max(cfg.roles.length, 1);
+    cfg.roles.forEach(function (r, i) {
+      var row = 7 + i, z = i % 2 === 1;
+      cell(S, 'A' + row, i + 1, { font: { color: { argb: C.muted }, size: 9 }, al: { horizontal: 'center' } });
+      cell(S, 'C' + row, r.name, dat(null, z, { font: { bold: true } }));
+      cell(S, 'D' + row, n(r.sal), inp(CRC));
+      cell(S, 'E' + row, F('D' + row + '/4.33/48'), dat(CRC, z));
+      cell(S, 'F' + row, F('E' + row + '*$F$4'), dat(CRC, z));
+      cell(S, 'G' + row, F('(F' + row + '+E' + row + ')*$G$4'), dat(CRC, z));
+      cell(S, 'H' + row, F('(E' + row + '+F' + row + ')*$H$4'), dat(CRC, z));
+      cell(S, 'I' + row, F('SUM(E' + row + ':H' + row + ')'), dat(CRC, z, { font: { bold: true } }));
+      cell(S, 'J' + row, F('I' + row + '*48*4.33'), dat(CRC, z));
+      cell(S, 'K' + row, F('I' + row + '/$K$3'), dat(USD, z, { font: { bold: true, color: { argb: C.steel } } }));
+      cell(S, 'L' + row, F('J' + row + '/$K$3'), dat(USD, z));
+    });
+    cell(S, 'C' + (8 + nR), 'Celdas amarillas con número azul = datos que se pueden cambiar. Generado por el Cotizador A&D · ' + hoy, { font: { italic: true, size: 9, color: { argb: C.muted } } });
+
+    // ===================== Estimacion Horas =====================
+    E.columns = [{ width: 4 }, { width: 26 }, { width: 12 }, { width: 10 }, { width: 13 }, { width: 15 }, { width: 2 }, { width: 10 }, { width: 9 }, { width: 10 }, { width: 3 },
+      { width: 26 }, { width: 10 }, { width: 7 }, { width: 12 }, { width: 14 }, { width: 2 }, { width: 10 }, { width: 11 }, { width: 10 }];
+    var mg = Math.min(n(q.margin) / 100, 0.95);
+    cell(E, 'B1', mg, inp(PCT0)); cell(E, 'C1', 'Margen de utilidad (servicios)', { font: { bold: true, color: { argb: C.muted } } });
+    ['M.O. Construcción', 'Cantidad (h)', 'U/M', 'P/U', 'Total'].forEach(function (h, i) { cell(E, String.fromCharCode(66 + i) + '2', h, i === 0 ? hdrL : hdr); });
+    ['Personas', 'Horas', 'Semanas'].forEach(function (h, i) { cell(E, String.fromCharCode(72 + i) + '2', h, hdr); });
+    E.getRow(2).height = 22;
+    for (var rr = 3; rr <= 21; rr++) {
+      var z1 = rr % 2 === 0;
+      cell(E, 'B' + rr, null, dat(null, z1)); cell(E, 'D' + rr, null, dat(null, z1, { al: { horizontal: 'center' } })); cell(E, 'E' + rr, null, dat(USD, z1));
+      cell(E, 'C' + rr, F('H' + rr + '*I' + rr + '*J' + rr), dat('#,##0;-#,##0;"–"', z1, { al: { horizontal: 'center' } }));
+      cell(E, 'F' + rr, F('E' + rr + '*C' + rr), dat(USD0, z1, { font: { bold: true } }));
+      cell(E, 'H' + rr, null, dat(null, z1)); cell(E, 'I' + rr, null, dat(null, z1)); cell(E, 'J' + rr, null, dat(null, z1));
+    }
+    cfg.roles.slice(0, LIM.roles).forEach(function (r, i) {
+      var row = 4 + i, l = q.roles[r.id] || {}, on = l.on, z = row % 2 === 0;
+      cell(E, 'A' + row, i + 1, { font: { color: { argb: C.muted }, size: 9 }, al: { horizontal: 'center' } });
+      cell(E, 'B' + row, r.name, dat(null, z, { font: { bold: !!on, color: { argb: on ? C.ink : C.muted } } }));
+      cell(E, 'D' + row, 'Hr', dat(null, z, { al: { horizontal: 'center' } }));
+      cell(E, 'E' + row, F('Salarios!K' + (7 + i)), dat(USD, z));
+      cell(E, 'H' + row, n(on ? l.p : 0), inp('0.##'));
+      cell(E, 'I' + row, n(on ? l.h : 0), inp('0.##'));
+      cell(E, 'J' + row, n(on ? l.w : 1), inp('0.##'));
+    });
+    cell(E, 'E22', 'TOTAL', tot()); cell(E, 'F22', F('SUM(F3:F21)'), tot(USD));
+    var viat = function (key, hdrRow, r1, maxRows, totRow, title) {
+      cell(E, 'L' + hdrRow, title, hdrL);
+      ['Cantidad', 'U/M', 'P/U', 'Total'].forEach(function (h, i) { cell(E, String.fromCharCode(77 + i) + hdrRow, h, hdr); });
+      ['Cantidad', 'Días/Unid.', 'Semanas'].forEach(function (h, i) { cell(E, String.fromCharCode(82 + i) + hdrRow, h, hdr); });
+      for (var k = 0; k < maxRows; k++) {
+        var row = r1 + k, z = k % 2 === 1, it = cfg[key][k];
+        ['L', 'M', 'N', 'O', 'P', 'R', 'S', 'T'].forEach(function (col) { cell(E, col + row, null, dat(null, z)); });
+        if (!it) continue;
+        var l = q[key][it.id] || {};
+        cell(E, 'L' + row, it.n, dat(null, z, { font: { bold: true } }));
+        cell(E, 'N' + row, it.um, dat(null, z, { al: { horizontal: 'center' } }));
+        cell(E, 'O' + row, L.puOf(it, l), inp(USD));
+        cell(E, 'M' + row, F(it.noW ? 'R' + row + '*S' + row : 'R' + row + '*S' + row + '*T' + row), dat('#,##0.##', z));
+        cell(E, 'P' + row, F('O' + row + '*M' + row), dat(USD0, z, { font: { bold: true } }));
+        cell(E, 'R' + row, n(l.c || 0), inp('0.##'));
+        cell(E, 'S' + row, n(l.d || 0), inp('0.##'));
+        cell(E, 'T' + row, it.noW ? null : n(l.w == null ? 1 : l.w), it.noW ? dat(null, z) : inp('0.##'));
+      }
+      cell(E, 'O' + totRow, 'TOTAL', tot()); cell(E, 'P' + totRow, F('SUM(P' + r1 + ':P' + (r1 + maxRows - 1) + ')'), tot(USD));
+    };
+    viat('cr', 2, 3, LIM.cr, 11, 'Viáticos C.R.');
+    viat('ca', 13, 14, LIM.ca, 22, 'Viáticos Centroamérica');
+    cell(E, 'B24', 'Equipos (metrado)', hdrL); cell(E, 'C24', 'Cantidad', hdr); cell(E, 'D24', 'Días', hdr); cell(E, 'E24', 'Aumento días', hdr); cell(E, 'F24', '', hdr);
+    cell(E, 'E25', n(q.eq.extra), inp('0'));
+    cell(E, 'B26', 'Tubería total', dat(null, false, { font: { bold: true } })); cell(E, 'C26', n(q.eq.tub), inp('#,##0'));
+    cell(E, 'D26', F('ROUNDUP(C26/' + n(cfg.rend.tub) + ',0)'), dat('0')); cell(E, 'E26', F('D26+E25'), dat('0'));
+    cell(E, 'B27', 'Dispositivos totales', dat(null, true, { font: { bold: true } })); cell(E, 'C27', n(q.eq.disp), inp('#,##0'));
+    cell(E, 'D27', F('ROUNDUP(C27/' + n(cfg.rend.disp) + ',0)'), dat('0', true)); cell(E, 'E27', F('D27+E25'), dat('0', true));
+    cell(E, 'F27', 'Horas', { font: { bold: true, color: { argb: C.muted } }, al: { horizontal: 'center' } });
+    cell(E, 'D28', 'Total días', tot()); cell(E, 'E28', F('E26+E27'), tot('0')); cell(E, 'F28', F('E28*' + n(cfg.rend.hDia)), tot('#,##0'));
+    cell(E, 'E29', F('E28/' + n(cfg.rend.dSem)), dat('0.0')); cell(E, 'F29', 'Semanas', { font: { bold: true, color: { argb: C.muted } } });
+    cell(E, 'L24', 'Renta de equipos y otros', hdrL); ['Cantidad', 'U/M', 'P/U', 'Total'].forEach(function (h, i) { cell(E, String.fromCharCode(77 + i) + '24', h, hdr); });
+    for (var k2 = 0; k2 < LIM.renta; k2++) {
+      var row2 = 25 + k2, z2 = k2 % 2 === 1, it2 = cfg.renta[k2];
+      ['L', 'M', 'N', 'O', 'P'].forEach(function (col) { cell(E, col + row2, null, dat(null, z2)); });
+      if (!it2) continue;
+      var l2 = q.renta[it2.id] || {};
+      cell(E, 'L' + row2, it2.n, dat(null, z2, { font: { bold: true } })); cell(E, 'M' + row2, n(l2.q || 0), inp('0.##'));
+      cell(E, 'N' + row2, it2.um, dat(null, z2, { al: { horizontal: 'center' } })); cell(E, 'O' + row2, L.puOf(it2, l2), inp(USD));
+      cell(E, 'P' + row2, F('O' + row2 + '*M' + row2), dat(USD0, z2, { font: { bold: true } }));
+    }
+    cell(E, 'O32', 'TOTAL', tot()); cell(E, 'P32', F('SUM(P25:P31)'), tot(USD));
+
+    // ===================== Materiales =====================
+    M.columns = [{ width: 2 }, { width: 14 }, { width: 50 }, { width: 10 }, { width: 10 }, { width: 15 }, { width: 15 }, { width: 10 }, { width: 15 }];
+    var mm = Math.min(n(q.matMargin) / 100, 0.95);
+    titulo(M, 'B1:F1', 'Materiales');
+    cell(M, 'H1', 'Margen', { font: { bold: true, color: { argb: C.muted } }, al: { horizontal: 'center' } });
+    cell(M, 'H2', mm, inp(PCT0));
+    ['N.º de parte', 'Descripción', 'Unidad', 'Cantidad', 'Precio unitario', 'Precio total', 'Margen', 'Precio de lista'].forEach(function (h, i) { cell(M, String.fromCharCode(66 + i) + '3', h, i === 1 ? hdrL : hdr); });
+    M.getRow(3).height = 22;
+    var mr = 4;
+    cfg.mats.slice(0, LIM.mats).forEach(function (m, i) {
+      var l = q.mats[m.id] || {}, z = i % 2 === 1, usa = n(l.q) > 0;
+      cell(M, 'B' + mr, null, dat(null, z));
+      cell(M, 'C' + mr, m.n, dat(null, z, { font: { bold: usa, color: { argb: usa ? C.ink : C.muted } }, al: { wrapText: true, vertical: 'middle' } }));
+      cell(M, 'D' + mr, m.um, dat(null, z, { al: { horizontal: 'center' } }));
+      cell(M, 'E' + mr, n(l.q || 0), inp('0.##'));
+      cell(M, 'F' + mr, F('I' + mr + '/(1-H' + mr + ')'), dat(USD, z));
+      cell(M, 'G' + mr, F('F' + mr + '*E' + mr), dat(USD0, z, { font: { bold: true } }));
+      cell(M, 'H' + mr, F('$H$2'), dat(PCT0, z, { al: { horizontal: 'center' } }));
+      cell(M, 'I' + mr, n(m.list), inp(USD));
+      mr++;
+    });
+    var mTot = mr;
+    cell(M, 'F' + mTot, 'TOTAL', tot()); cell(M, 'G' + mTot, F('SUM(G4:G' + (mTot - 1) + ')'), tot(USD));
+    M.autoFilter = { from: 'B3', to: 'I' + (mTot - 1) };
+
+    // ===================== Resumen General =====================
+    G.columns = [{ width: 2 }, { width: 18 }, { width: 34 }, { width: 15 }, { width: 15 }, { width: 16 }, { width: 18 }];
+    var RS = "'Estimacion Horas'!";
+    titulo(G, 'B1:G1', info0.numero ? 'COTIZACIÓN ' + info0.numero : 'COTIZACIÓN', 'Departamento A&D Salvavidas · Sistemas contra incendio · ' + hoy);
+    seccion(G, 'B4:G4', 'INFORMACIÓN DEL PROYECTO');
+    var dato = function (r, colL, colV, colV2, lab, val) {
+      cell(G, colL + r, lab, { font: { bold: true, color: { argb: C.muted } }, fill: C.light, border: box });
+      G.mergeCells(colV + r + ':' + colV2 + r);
+      cell(G, colV + r, val || '', { border: box, font: { bold: true } });
+    };
+    dato(5, 'B', 'C', 'D', 'Proyecto', info0.proyecto); dato(5, 'E', 'F', 'G', 'N.º cotización', info0.numero);
+    dato(6, 'B', 'C', 'D', 'Cliente', info0.cliente); dato(6, 'E', 'F', 'G', 'Fecha', info0.fecha);
+    dato(7, 'B', 'C', 'D', 'Contacto', info0.contacto); dato(7, 'E', 'F', 'G', 'Área', info0.area);
+    dato(8, 'B', 'C', 'D', 'Presupuestista', info0.presupuestista); dato(8, 'E', 'F', 'G', 'Margen servicios', '');
+    G.getCell('F8').value = F(RS + 'B1'); G.getCell('F8').numFmt = '0.00%'; G.getCell('F8').alignment = { horizontal: 'left' };
+    var tablaItems = function (r0, titulo2, conMargen) {
+      seccion(G, 'B' + r0 + ':G' + r0, titulo2);
+      ['Ítem', 'Descripción', 'Cantidad', 'U/M', 'P/U', 'Total'].forEach(function (h, i) { cell(G, String.fromCharCode(66 + i) + (r0 + 1), h, i === 1 ? hdrL : hdr); });
+      var items = [['Mano de obra construcción', RS + 'F22'], ['Viáticos Costa Rica', RS + 'P11'], ['Viáticos Centroamérica', RS + 'P22'], ['Renta de equipos', RS + 'P32']];
+      items.forEach(function (it, i) {
+        var a = r0 + 2 + i, z = i % 2 === 1;
+        cell(G, 'B' + a, i + 1, dat(null, z, { al: { horizontal: 'center' } })); cell(G, 'C' + a, it[0], dat(null, z, { font: { bold: true } }));
+        cell(G, 'D' + a, 1, dat('0', z, { al: { horizontal: 'center' } })); cell(G, 'E' + a, 'Gbl', dat(null, z, { al: { horizontal: 'center' } }));
+        cell(G, 'F' + a, F(conMargen ? it[1] + '/(1-' + RS + 'B1)' : it[1]), dat(USD, z));
+        cell(G, 'G' + a, F('D' + a + '*F' + a), dat(USD, z, { font: { bold: true } }));
+      });
+      return r0 + 6;
+    };
+    var rCosto = tablaItems(10, 'DETALLE DE COSTOS', false); // filas 12-15, total en 16
+    G.mergeCells('B' + rCosto + ':F' + rCosto); cell(G, 'B' + rCosto, 'COSTO TOTAL', tot()); cell(G, 'G' + rCosto, F('SUM(G12:G15)'), tot(USD));
+    seccion(G, 'B18:G18', 'MARGEN DE UTILIDAD — comparativo');
+    cell(G, 'B19', 'Margen', hdrL); cell(G, 'B20', 'Precio de venta', dat(null, false, { font: { bold: true } })); cell(G, 'B21', 'Ganancia', dat(null, true, { font: { bold: true } }));
+    (q.cmp || ['25', '27.5', '30', '32.5', '35']).slice(0, 5).forEach(function (raw, i) {
+      var c = String.fromCharCode(67 + i), v = Math.min(n(raw) / 100, 0.95), uso = Math.abs(v - mg) < 1e-9;
+      var stUso = uso ? { fill: C.accentSoft, font: { bold: true, color: { argb: 'FFC9541C' } } } : {};
+      cell(G, c + '19', uso ? F(RS + 'B1') : v, Object.assign({}, hdr, { fmt: '0.00%' }, uso ? { fill: C.accent } : {}));
+      cell(G, c + '20', F('$G$' + rCosto + '/(1-' + c + '19)'), Object.assign(dat(USD, false), stUso));
+      cell(G, c + '21', F(c + '20-$G$' + rCosto), Object.assign(dat(USD, true), stUso));
+    });
+    cell(G, 'C22', 'La columna naranja es el margen usado en la cotización.', { font: { italic: true, size: 9, color: { argb: C.muted } } });
+    var rVenta = tablaItems(24, 'PRECIO DE VENTA POR ÍTEM (con margen)', true); // 26-29, total 30
+    G.mergeCells('B' + rVenta + ':F' + rVenta); cell(G, 'B' + rVenta, 'PRECIO DE VENTA SERVICIOS', tot()); cell(G, 'G' + rVenta, F('SUM(G26:G29)'), tot(USD));
+    seccion(G, 'B32:G32', 'OVERHEAD ADMINISTRATIVO');
+    var ov = [['Overhead incluido en M.O. (factor administrativo de Salarios)', F('Salarios!G4'), PCT, F('SUMPRODUCT(' + RS + 'C4:C21,Salarios!G7:G24)/Salarios!K3'), USD],
+      ['Costo directo sin overhead', null, null, F('G' + rCosto + '-G33'), USD],
+      ['% overhead sobre costo directo', null, null, F('IF(G34=0,0,G33/G34)'), PCT],
+      ['% overhead sobre precio de venta', null, null, F('IF(G' + rVenta + '=0,0,G33/G' + rVenta + ')'), PCT]];
+    ov.forEach(function (o, i) {
+      var r = 33 + i, z = i % 2 === 1;
+      G.mergeCells('B' + r + ':E' + r); cell(G, 'B' + r, o[0], dat(null, z));
+      cell(G, 'F' + r, o[1], dat(o[2], z, { al: { horizontal: 'center' } })); cell(G, 'G' + r, o[3], dat(o[4], z, { font: { bold: true } }));
+    });
+    seccion(G, 'B38:G38', 'TOTAL DE LA OFERTA');
+    G.mergeCells('B39:F39'); cell(G, 'B39', 'Servicios (precio de venta)', dat(null, false)); cell(G, 'G39', F('G' + rVenta), dat(USD, false, { font: { bold: true } }));
+    G.mergeCells('B40:F40'); cell(G, 'B40', 'Materiales (precio de venta)', dat(null, true)); cell(G, 'G40', F('Materiales!G' + mTot), dat(USD, true, { font: { bold: true } }));
+    G.mergeCells('B41:F41');
+    cell(G, 'B41', 'TOTAL OFERTA (servicios + materiales)', { font: { bold: true, size: 14, color: { argb: C.white } }, fill: C.steel, border: box, al: { vertical: 'middle', indent: 1 } });
+    cell(G, 'G41', F('G39+G40'), { font: { bold: true, size: 14, color: { argb: C.white } }, fill: C.steel, border: box, fmt: USD, al: { vertical: 'middle', horizontal: 'right' } });
+    G.getRow(41).height = 28;
+    cell(G, 'B43', 'Generado por el Cotizador A&D · by Anthony Campos Medina', { font: { italic: true, size: 9, color: { argb: C.muted } } });
+
+    [G, E, S, M].forEach(function (ws) { ws.pageSetup = { orientation: ws === G ? 'portrait' : 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 1, margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } }; });
+    return wb;
+  }
 
 return Cotizador;
 })();

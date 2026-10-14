@@ -1743,6 +1743,7 @@ function cotRowFromDb(r) {
     frecuencia: r.frecuencia || "",
     observaciones: r.observaciones || "",
     monto: r.monto || 0,
+    creado: r.created_at || r.creado_en || r.fecha || "",
   };
 }
 
@@ -3702,6 +3703,19 @@ const COTZ_CSS = `.cotz{--bg:#F3F5F7;--surface:#FFFFFF;--surface2:#F7F8FA;--line
 .cotz .desg-h{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;font-size:13.5px;font-weight:800;color:var(--slate);margin:0 0 6px;padding:7px 10px;background:var(--sky);border-radius:8px}
 .cotz .desg-h span:last-child{font-weight:500;color:var(--muted);font-size:12.5px}
 .cotz .desg-h strong{color:var(--red-text)}
+.cotz .editbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-top:10px;padding:10px 14px;border-radius:12px;background:var(--warn-bg);color:var(--warn-fg);font-size:13px;border:1px solid #F0C36D}
+.cotz .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:12px}
+.cotz .kpi{border:1px solid var(--line);border-radius:10px;padding:9px 12px;background:#fff}
+.cotz .kpi-t{font-size:11.5px;font-weight:700;color:var(--muted)}
+.cotz .kpi-v{font-size:20px;font-weight:800;color:var(--fg);font-variant-numeric:tabular-nums;line-height:1.2}
+.cotz .kpi-s{font-size:11px;color:var(--muted)}
+.cotz .charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-top:12px}
+.cotz .chartbox{border:1px solid var(--line);border-radius:12px;padding:10px 12px 8px;background:#fff}
+.cotz .chart-t{font-size:13px;font-weight:700;margin-bottom:4px}
+.cotz .chart-vacio{height:200px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12.5px}
+.cotz .chart-ley{display:flex;flex-wrap:wrap;gap:12px;font-size:11.5px;color:var(--muted);margin-top:4px}
+.cotz .chart-ley i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.cotz .txt.fecha{min-height:30px;padding:4px 6px;font-size:12.5px;width:132px}
 .cotz .num.verde{background:#E9F6EA;border-color:#A8D5AA}
 .cotz .num.auto::placeholder{color:#3F7A47;opacity:.75}
 .cotz .calc{font-weight:600;font-variant-numeric:tabular-nums;color:var(--fg)}
@@ -4572,7 +4586,7 @@ const origenesDe = (c, extra) => {
 };
 function blankQuote(cfg) {
   return {
-    info: { proyecto: '', cliente: '', area: 'Proyectos', fecha: new Date().toLocaleDateString('en-CA'), contacto: '', presupuestista: '', numero: '', origen: ORIGEN_DEF },
+    info: { proyecto: '', cliente: '', area: 'Proyectos', fecha: new Date().toLocaleDateString('en-CA'), contacto: '', presupuestista: '', numero: '', origen: ORIGEN_DEF, inicio: new Date().toLocaleDateString('en-CA') },
     roles: {}, cr: {}, ca: {}, renta: {}, mats: {}, eq: { tub: '', disp: '', extra: '' },
     margin: s(n(cfg.margin) * 100, 2), matMargin: s(n(cfg.matMargin) * 100, 2), cmp: ['15', '20', '25', '30', '35'], example: false, mat2: mat2Blank(cfg),
   };
@@ -4600,6 +4614,7 @@ function quoteDesdeSolicitud(cfg, r, presupuestista) {
     proyecto: r.descripcion || r.cliente || '',
     cliente: r.cliente || '',
     contacto: [r.contacto, r.telefono, r.email].filter(Boolean).join(' · '),
+    inicio: (() => { const d = r.creado ? new Date(r.creado) : null; return d && !isNaN(d) ? d.toLocaleDateString('en-CA') : new Date().toLocaleDateString('en-CA'); })(),
     area: /proyecto/i.test(r.tipo || '') ? 'Proyectos' : 'Inspecciones',
     presupuestista: presupuestista || '',
   };
@@ -4666,7 +4681,7 @@ function NumIn({ value, onChange, label, cls, step, min, disabled, id }) {
 }
 
 /* ====================================================================== */
-function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solicitudes = [], onTomarSolicitud, onPasarMonto, onTerminada, onSolicitudRealizada }) {
+function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solicitudes = [], onTomarSolicitud, onPasarMonto, onTerminada, onSolicitudRealizada, onCrearSolicitud }) {
   const initCfg = lsGet(CKEY) || { cfg: DEFAULT_CFG, updatedAt: null, source: 'Machote original (incluido en la app)' };
   const [cfgDoc, setCfgDoc] = useState(initCfg);
   const cfg = cfgDoc.cfg;
@@ -4675,6 +4690,21 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
   const qk = QKEY + '.' + (usuarioId || 'sin-usuario');
   const [q, setQRaw] = useState(() => {
     try { localStorage.removeItem(QKEY); } catch (e) { /* llave vieja compartida */ }
+    // ¿Viene del Historial para modificarla?
+    const ab = lsGet(ABRIR_KEY + (usuarioId || 'sin-usuario'));
+    if (ab && ab.q) {
+      try { localStorage.removeItem(ABRIR_KEY + (usuarioId || 'sin-usuario')); } catch (e) { /* nada */ }
+      const base = blankQuote(initCfg.cfg);
+      let q2 = { ...base, ...clone(ab.q), info: { ...base.info, ...((ab.q && ab.q.info) || {}) } };
+      ['roles', 'cr', 'ca', 'renta', 'mats'].forEach((k) => { if (!q2[k] || typeof q2[k] !== 'object') q2[k] = {}; });
+      if (!q2.eq) q2.eq = base.eq; if (!Array.isArray(q2.cmp)) q2.cmp = base.cmp;
+      try { if (ab.cfg && ab.cfg.roles) q2 = remapQuote(ab.cfg, initCfg.cfg, q2); } catch (e) { /* usa la copia tal cual */ }
+      q2.example = false; q2.histId = ab.id; q2.histNumero = ab.numero || q2.info.numero || '';
+      q2.info = { ...q2.info, inicio: ab.fecha_carga || q2.info.inicio || '' };
+      q2.mat2 = q2.mat2 || mat2Blank(initCfg.cfg);
+      lsSet(qk, q2);
+      return q2;
+    }
     const g = lsGet(qk);
     if (!g || g.example) return blankQuote(initCfg.cfg);
     // Cotizaciones guardadas con el comparativo viejo pasan a 15, 20, 25, 30 y 35 %
@@ -4737,20 +4767,36 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
     if (!supabase) return;
     setGuardando(true);
     const r2 = (v) => Math.round(n(v) * 100) / 100;
+    const editando = !!q.histId;
+    const numeroReal = /^SOL-/.test(q.info.numero || '') ? '' : (q.info.numero || '').trim();
+    // Toda cotización queda ligada a una solicitud de Cotizaciones (para conversión y pipeline).
+    // Si se hizo desde cero, se crea la solicitud automáticamente.
+    let sol = q.solicitud ? { ...q.solicitud } : null;
+    if (!sol && onCrearSolicitud) {
+      const ns = await onCrearSolicitud({ cliente: q.info.cliente, contacto: q.info.contacto, proyecto: q.info.proyecto, area: q.info.area,
+        numero: numeroReal, presupuestista: usuarioNombre || q.info.presupuestista, monto: r2(c.oferta) });
+      if (ns) sol = { id: ns.id, consecutivo: ns.consecutivo, creadaAuto: true };
+    }
+    const qGuardar = clone(q); if (sol) qGuardar.solicitud = sol;
+    delete qGuardar.histId; delete qGuardar.histNumero;
     const reg = {
       numero: q.info.numero || '', proyecto: q.info.proyecto || '', cliente: q.info.cliente || '', area: q.info.area || '',
       presupuestista: usuarioNombre || q.info.presupuestista || '', fecha: q.info.fecha || '', origen: q.info.origen || ORIGEN_DEF,
-      solicitud_id: q.solicitud ? String(q.solicitud.id) : '', solicitud_consecutivo: q.solicitud ? String(q.solicitud.consecutivo) : '',
+      fecha_carga: q.info.inicio || '',
+      solicitud_id: sol ? String(sol.id) : '', solicitud_consecutivo: sol ? String(sol.consecutivo) : '',
       costo: r2(c.costo + c.matCost), precio_servicios: r2(c.precio), materiales: r2(c.matVenta), total_oferta: r2(c.oferta), margen: n(q.margin),
-      datos: { cfg: clone(cfg), q: clone(q) },
+      datos: { cfg: clone(cfg), q: qGuardar },
     };
-    const { error } = await supabase.rpc('cot_hist_guardar', { p_usuario: usuarioId, p_id: null, p_reg: reg });
+    const { error } = await supabase.rpc('cot_hist_guardar', { p_usuario: usuarioId, p_id: q.histId || null, p_reg: reg });
     setGuardando(false);
     if (error) { flash(/cot_hist_|cot_puede|schema cache|Could not find/i.test(error.message || '') ? 'Falta correr en Supabase el SQL "cotizador_historial.sql".' : 'No se pudo guardar: ' + (error.message || error)); return; }
-    if (q.solicitud && onSolicitudRealizada) onSolicitudRealizada(q.solicitud.id);
+    // El total de la oferta pasa al MONTO de la solicitud (cuenta en conversión y pipeline)
+    if (sol && onPasarMonto) onPasarMonto(sol.id, r2(c.oferta), numeroReal);
+    if (q.solicitud && onSolicitudRealizada && !editando) onSolicitudRealizada(q.solicitud.id);
     const b = blankQuote(cfg); setQRaw(b); lsSet(qk, b);
     setConfirmFin(false); setStep(0);
-    flash('Cotización ' + (reg.numero || '') + ' guardada en el historial' + (q.solicitud ? ' y la solicitud #' + q.solicitud.consecutivo + ' quedó «Realizado».' : '.'));
+    const txtSol = sol ? (sol.creadaAuto ? ' Se creó la solicitud #' + sol.consecutivo + ' con el monto.' : ' El monto de la solicitud #' + sol.consecutivo + ' quedó en ' + usd(c.oferta) + '.') : '';
+    flash((editando ? 'Cambios guardados en la cotización ' + (reg.numero || '') + ' del historial.' : 'Cotización ' + (reg.numero || '') + ' guardada en el historial.') + txtSol);
     if (onTerminada) setTimeout(() => onTerminada(), 700);
   }
 
@@ -4817,7 +4863,8 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
           ))}
           <label className="field">Presupuestista<input className="txt" id="info-presupuestista" type="text" value={q.info.presupuestista || usuarioNombre || ''} readOnly disabled title="Se llena con el usuario que inició sesión" /></label>
           <label className="field">Área<select className="sel" id="info-area" value={q.info.area} onChange={setInfo('area')}><option>Proyectos</option><option>Inspecciones</option></select></label>
-          <label className="field">Fecha<input className="txt" id="info-fecha" type="date" value={q.info.fecha} onChange={setInfo('fecha')} /></label>
+          <label className="field">Fecha de la cotización<input className="txt" id="info-fecha" type="date" value={q.info.fecha} onChange={setInfo('fecha')} /></label>
+          <label className="field">Fecha de carga (cuando se recibió)<input className="txt" id="info-inicio" type="date" value={q.info.inicio || ''} max={new Date().toLocaleDateString('en-CA')} onChange={setInfo('inicio')} /></label>
         </div>
         <p className="note">Salarios, tipo de cambio, overhead y catálogos se administran en <strong>Configuración</strong> (botón del engranaje). El presupuestista es automáticamente el usuario que inició sesión. Esta cotización se guarda en este equipo mientras trabaja.</p>
       </div>
@@ -5048,28 +5095,19 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
           {q.cmp.map((raw, i) => <div key={'d' + i} className={'mc' + (isOn(raw) ? ' on' : '')}><button type="button" className="use" onClick={() => setQ((x) => { x.margin = raw; return x; })}>{isOn(raw) ? 'En uso' : 'Usar'}</button></div>)}
         </div></div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'flex-end', alignItems: 'center', marginTop: 22 }}>
-          {q.solicitud && onPasarMonto && (confirmMonto ? (
-            <>
-              <span style={{ fontSize: 13 }}>¿Poner {usd(c.oferta)} como monto de la solicitud #{q.solicitud.consecutivo}?</span>
-              <button type="button" className="btn btn-dark" onClick={() => { onPasarMonto(q.solicitud.id, Math.round(c.oferta * 100) / 100, /^SOL-/.test(q.info.numero || '') ? '' : (q.info.numero || '').trim()); setConfirmMonto(false); flash('Monto pasado a la solicitud #' + q.solicitud.consecutivo + '.'); }}>Sí, pasar</button>
-              <button type="button" className="btn btn-line" onClick={() => setConfirmMonto(false)}>Cancelar</button>
-            </>
-          ) : (
-            <button type="button" className="btn btn-line" disabled={!(c.oferta > 0)} onClick={() => setConfirmMonto(true)}>Pasar total a la solicitud #{q.solicitud.consecutivo}</button>
-          ))}
           <button type="button" className="btn btn-line" onClick={downloadExcel}>{Icon.down} Descargar Excel de esta cotización</button>
         </div>
         <div className="finbox">
           {confirmFin ? (
             <>
-              <div style={{ flex: '1 1 280px', fontSize: 13.5 }}><strong>¿Terminar la cotización {q.info.numero || ''}?</strong> Se guarda en el Historial con un total de <strong>{usd(c.oferta)}</strong> y se quita de «en proceso» (queda en blanco para la siguiente).{q.solicitud ? <> La solicitud <strong>#{q.solicitud.consecutivo}</strong> pasa a «Realizado».</> : null}</div>
+              <div style={{ flex: '1 1 280px', fontSize: 13.5 }}>{q.histId ? <><strong>¿Guardar los cambios en la cotización {q.histNumero || q.info.numero || ''} del historial?</strong> Se actualiza el mismo registro con un total de <strong>{usd(c.oferta)}</strong> (las fechas de envío se conservan), también el monto de su solicitud, y «en proceso» queda en blanco.</> : <><strong>¿Terminar la cotización {q.info.numero || ''}?</strong> Se guarda en el Historial con un total de <strong>{usd(c.oferta)}</strong> y se quita de «en proceso» (queda en blanco para la siguiente).{q.solicitud ? <> La solicitud <strong>#{q.solicitud.consecutivo}</strong> pasa a «Realizado» y su monto queda en {usd(c.oferta)}.</> : <> Se crea su solicitud en Cotizaciones con ese monto (cuenta en conversión y pipeline).</>}</>}</div>
               <button type="button" className="btn btn-line" onClick={() => setConfirmFin(false)}>Cancelar</button>
               <button type="button" className="btn btn-red" disabled={guardando} onClick={terminar}>{guardando ? 'Guardando…' : 'Sí, terminar'}</button>
             </>
           ) : (
             <>
               <div style={{ flex: '1 1 280px', fontSize: 13.5, color: 'var(--muted)' }}>¿Ya está lista la oferta? Pásela al <strong style={{ color: 'var(--fg)' }}>Historial de cotizaciones</strong>; desde ahí se busca y se descarga el Excel cuando quiera.</div>
-              <button type="button" className="btn btn-red" disabled={!(c.oferta > 0) || q.example} title={q.example ? 'La cotización de ejemplo no se guarda' : ''} onClick={() => setConfirmFin(true)}>{Icon.file} Terminar y pasar al historial</button>
+              <button type="button" className="btn btn-red" disabled={!(c.oferta > 0) || q.example} title={q.example ? 'La cotización de ejemplo no se guarda' : ''} onClick={() => setConfirmFin(true)}>{Icon.file} {q.histId ? 'Guardar cambios en el historial' : 'Terminar y pasar al historial'}</button>
             </>
           )}
         </div>
@@ -5132,6 +5170,12 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
         );
       })()}
 
+      {q.histId && (
+        <div className="editbar">
+          <span><strong>Modificando la cotización {q.histNumero || q.info.numero || ''} del historial.</strong> Al final (Resumen) use «Guardar cambios en el historial» para actualizar el mismo registro.</span>
+          <button type="button" className="btn btn-line" onClick={() => { const b = blankQuote(cfg); setQRaw(b); lsSet(qk, b); setStep(0); flash('Edición cancelada; el registro del historial quedó igual.'); }}>Cancelar edición</button>
+        </div>
+      )}
       <div className={'wrap main' + (step === 4 ? ' ancho' : '')}>
         <nav className="nav" aria-label="Pasos de la cotización">
           {names.map((nm, i) => (
@@ -5787,7 +5831,29 @@ const H_SIN_SQL = 'Falta correr en Supabase el SQL "cotizador_historial.sql" (SQ
 const hErr = (e) => { const m = String((e && e.message) || e || ''); return /cot_hist_|cot_puede|schema cache|Could not find/i.test(m) ? H_SIN_SQL : (m || 'Error desconocido.'); };
 const fechaCorta = (iso) => { if (!iso) return ''; const d = new Date(String(iso).length === 10 ? iso + 'T12:00:00' : iso); return isNaN(d) ? String(iso) : d.toLocaleDateString('es-CR'); };
 
-function HistorialCot({ supabase, usuarioId, isAdmin }) {
+// ---- Control de tiempos (fecha de carga → fecha de envío) ----
+const ABRIR_KEY = 'cotAD.abrir.';
+const hoyISO = () => new Date().toLocaleDateString('en-CA');
+const diasEntre = (a, b) => {
+  if (!a || !b) return null;
+  const p = (x) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(x)); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) : NaN; };
+  const d = Math.round((p(b) - p(a)) / 86400000);
+  return isNaN(d) ? null : d;
+};
+const fCarga = (r) => String(r.fecha_carga || r.creado_en || '').slice(0, 10);
+const fEnvio = (r) => (r.fecha_envio ? String(r.fecha_envio).slice(0, 10) : '');
+// Días que tardó en enviarse (o, si no se ha enviado, días que lleva esperando)
+const diasCot = (r) => (fEnvio(r) ? diasEntre(fCarga(r), fEnvio(r)) : diasEntre(fCarga(r), hoyISO()));
+const estadoEnvio = (r, meta) => {
+  const d = diasCot(r) ?? 0;
+  if (fEnvio(r)) return d <= meta ? 'atiempo' : 'tarde';
+  return d <= meta ? 'pendiente' : 'pendtarde';
+};
+const ENVIO_TXT = { atiempo: ['A tiempo', '#2E7D5B', '#DEF2E8'], tarde: ['Enviada con atraso', '#C13E3E', '#FBE4E4'], pendiente: ['Pendiente de envío', '#8A5C00', '#FBEBCB'], pendtarde: ['Pendiente atrasada', '#C13E3E', '#FBE4E4'] };
+const TRAMOS = [[0, 1, '0–1'], [2, 3, '2–3'], [4, 7, '4–7'], [8, 14, '8–14'], [15, 30, '15–30'], [31, 99999, '+30']];
+const MESES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Set', 'Oct', 'Nov', 'Dic'];
+
+function HistorialCot({ supabase, usuarioId, isAdmin, onModificar, onSolicitudEnviada }) {
   const [cfgVend, setCfgVend] = useState(() => { const g = lsGet(CKEY); return g && g.cfg ? g.cfg : null; });
   useEffect(() => {
     supabase.rpc('cot_config_leer', { p_usuario: usuarioId }).then(({ data }) => { if (data && data.data && data.data.cfg) setCfgVend(data.data.cfg); });
@@ -5798,7 +5864,10 @@ function HistorialCot({ supabase, usuarioId, isAdmin }) {
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
-  const [f, setF] = useState({ texto: '', area: '', origen: '', desde: '', hasta: '' });
+  const [f, setF] = useState({ texto: '', area: '', origen: '', envio: '', desde: '', hasta: '' });
+  const [meta, setMetaRaw] = useState(() => { const v = Number(lsGet('cotAD.metaEnvio')); return v > 0 ? v : 7; });
+  const [verPanel, setVerPanel] = useState(true);
+  const setMeta = (v) => { const x = Math.max(1, Math.round(Number(v) || 7)); setMetaRaw(x); lsSet('cotAD.metaEnvio', x); };
   const toastT = useRef(null);
   const flash = (t) => { setToast(t); clearTimeout(toastT.current); toastT.current = setTimeout(() => setToast(''), 4200); };
 
@@ -5817,7 +5886,12 @@ function HistorialCot({ supabase, usuarioId, isAdmin }) {
     if (t && ![r.numero, r.proyecto, r.cliente, r.presupuestista, r.creado_por_nombre, r.solicitud_consecutivo, r.origen].some((v) => norm(v).includes(t))) return false;
     if (f.area && r.area !== f.area) return false;
     if (f.origen === '__vend' ? (r.origen || ORIGEN_DEF) === ORIGEN_DEF : (f.origen && (r.origen || ORIGEN_DEF) !== f.origen)) return false;
-    const fe = String(r.fecha || r.creado_en || '').slice(0, 10);
+    const est = estadoEnvio(r, meta);
+    if (f.envio === 'enviadas' && !fEnvio(r)) return false;
+    if (f.envio === 'pendientes' && fEnvio(r)) return false;
+    if (f.envio === 'atrasadas' && !(est === 'tarde' || est === 'pendtarde')) return false;
+    if (f.envio === 'atiempo' && est !== 'atiempo') return false;
+    const fe = fCarga(r);
     if (f.desde && fe < f.desde) return false;
     if (f.hasta && fe > f.hasta) return false;
     return true;
@@ -5826,10 +5900,44 @@ function HistorialCot({ supabase, usuarioId, isAdmin }) {
   const ORIGENES = origenesDe(cfgVend, lista.map((r) => r.origen));
   const vendTxt = ORIGENES.filter((o) => o !== ORIGEN_DEF);
 
+  // ---- indicadores y gráficos (sobre lo filtrado) ----
+  const enviadas = filtradas.filter((r) => fEnvio(r));
+  const pendientes = filtradas.filter((r) => !fEnvio(r));
+  const diasEnv = enviadas.map(diasCot).filter((d) => d != null);
+  const prom = diasEnv.length ? diasEnv.reduce((a, d) => a + d, 0) / diasEnv.length : null;
+  const aTiempo = enviadas.filter((r) => estadoEnvio(r, meta) === 'atiempo').length;
+  const tarde = enviadas.length - aTiempo;
+  const pendTarde = pendientes.filter((r) => estadoEnvio(r, meta) === 'pendtarde').length;
+  const tramos = (rows) => TRAMOS.map(([a, b, t]) => ({ t, n: rows.filter((r) => { const d = diasCot(r); return d != null && d >= a && d <= b; }).length, fuera: a > meta }));
+  const histEnv = tramos(enviadas), histPend = tramos(pendientes);
+  const porMes = (() => {
+    const m = {};
+    const add = (k, campo) => { if (!k) return; m[k] = m[k] || { k, cargadas: 0, enviadas: 0, sumDias: 0, nDias: 0 }; m[k][campo]++; };
+    filtradas.forEach((r) => { add(fCarga(r).slice(0, 7), 'cargadas'); if (fEnvio(r)) { add(fEnvio(r).slice(0, 7), 'enviadas'); const k = fEnvio(r).slice(0, 7), d = diasCot(r); if (d != null) { m[k].sumDias += d; m[k].nDias++; } } });
+    return Object.values(m).sort((a, b) => (a.k < b.k ? -1 : 1)).slice(-12).map((x) => ({ ...x, mes: MESES[Number(x.k.slice(5, 7)) - 1] + ' ' + x.k.slice(2, 4), prom: x.nDias ? Math.round((x.sumDias / x.nDias) * 10) / 10 : 0 }));
+  })();
+
   const excel = async (r) => {
     const { data, error: err } = await supabase.rpc('cot_hist_obtener', { p_usuario: usuarioId, p_id: r.id });
     if (err || !data || !data.cfg || !data.q) { flash(err ? hErr(err) : 'Esta cotización no tiene datos para el Excel.'); return; }
     await descargarExcelCotz(data.cfg, data.q, flash);
+  };
+  const modificar = async (r) => {
+    const actual = lsGet(QKEY + '.' + (usuarioId || 'sin-usuario'));
+    const tieneAlgo = actual && !actual.example && (actual.info && (actual.info.cliente || actual.info.proyecto || actual.info.numero));
+    if (tieneAlgo && !(await confirmar('Usted tiene una cotización en proceso (' + (actual.info.numero || actual.info.cliente || 'sin nombre') + '). Si modifica la ' + (r.numero || '') + ', la que está en proceso se reemplaza. ¿Continuar?', { confirmLabel: 'Sí, modificar', variant: 'accent' }))) return;
+    const { data, error: err } = await supabase.rpc('cot_hist_obtener', { p_usuario: usuarioId, p_id: r.id });
+    if (err || !data || !data.q) { flash(err ? hErr(err) : 'Esta cotización no tiene datos para modificarla.'); return; }
+    lsSet(ABRIR_KEY + (usuarioId || 'sin-usuario'), { id: r.id, cfg: data.cfg, q: data.q, numero: r.numero, fecha_carga: fCarga(r) });
+    if (onModificar) onModificar();
+  };
+  const guardarFechas = async (r, carga, envio) => {
+    if (carga && envio && envio < carga) { flash('La fecha de envío no puede ser anterior a la de carga.'); return; }
+    const { error: err } = await supabase.rpc('cot_hist_fechas', { p_usuario: usuarioId, p_id: r.id, p_carga: carga || null, p_envio: envio || null });
+    if (err) { flash(hErr(err)); return; }
+    setLista((l) => l.map((x) => (x.id === r.id ? { ...x, fecha_carga: carga || x.fecha_carga, fecha_envio: envio || null } : x)));
+    if (envio && !fEnvio(r) && r.solicitud_id && onSolicitudEnviada) onSolicitudEnviada(r.solicitud_id);
+    flash(envio && !fEnvio(r) ? 'Cotización ' + (r.numero || '') + ' marcada como enviada.' : 'Fechas actualizadas.');
   };
   const quitar = async (r, volver) => {
     if (!volver && !(await confirmar('¿Quitar la cotización ' + (r.numero || '') + ' (' + (r.cliente || r.proyecto || '') + ') del historial? Deja de verse en la lista, pero queda guardada en Supabase y se puede restaurar desde «Ver quitadas».', { confirmLabel: 'Sí, quitar', variant: 'accent' }))) return;
@@ -5846,6 +5954,32 @@ function HistorialCot({ supabase, usuarioId, isAdmin }) {
     setLista([]); flash('Historial borrado: ' + (data || 0) + ' cotizaciones eliminadas de Supabase.');
   };
   const set = (k) => (e) => { const v = e.target.value; setF((x) => ({ ...x, [k]: v })); };
+  const hayFiltro = f.texto || f.area || f.origen || f.envio || f.desde || f.hasta;
+  const kpi = (t, v, sub, color) => (
+    <div className="kpi"><div className="kpi-t">{t}</div><div className="kpi-v" style={color ? { color } : null}>{v}</div>{sub && <div className="kpi-s">{sub}</div>}</div>
+  );
+  const ejeTick = { fontSize: 11, fill: '#5B6572' };
+  const tip = { contentStyle: { borderRadius: 8, border: '1px solid #E1E6EB', fontSize: 12 }, cursor: { fill: 'rgba(31,58,95,.06)' } };
+  const histChart = (data, colorOk, titulo, vacio) => (
+    <div className="chartbox">
+      <div className="chart-t">{titulo}</div>
+      {data.some((d) => d.n) ? (
+        <ResponsiveContainer width="100%" height={200}>
+          <BarChart data={data} margin={{ top: 18, right: 6, left: -18, bottom: 0 }}>
+            <CartesianGrid vertical={false} stroke="#EDEFF2" />
+            <XAxis dataKey="t" tick={ejeTick} axisLine={false} tickLine={false} interval={0} />
+            <YAxis allowDecimals={false} tick={ejeTick} axisLine={false} tickLine={false} />
+            <Tooltip {...tip} labelFormatter={(l) => l + ' días'} formatter={(v) => [v + ' cotizaciones', '']} />
+            <Bar dataKey="n" radius={[4, 4, 0, 0]} maxBarSize={44}>
+              {data.map((d, i) => <Cell key={i} fill={d.fuera ? '#C13E3E' : colorOk} />)}
+              <LabelList dataKey="n" position="top" style={{ fontSize: 11, fill: '#101826', fontWeight: 700 }} formatter={(v) => (v ? v : '')} />
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      ) : <div className="chart-vacio">{vacio}</div>}
+      <div className="chart-ley"><span>Eje: días</span><span><i style={{ background: colorOk }} />Dentro de la meta (≤ {meta} días)</span><span><i style={{ background: '#C13E3E' }} />Fuera de la meta</span></div>
+    </div>
+  );
 
   return (
     <div className="cotz">
@@ -5862,15 +5996,16 @@ function HistorialCot({ supabase, usuarioId, isAdmin }) {
       </div></div>
 
       <div className="card" style={{ marginTop: 12 }}>
-        <div className="grid3" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
+        <div className="grid3" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))' }}>
           <label className="field" style={{ gridColumn: 'span 2' }}>Buscar<input className="txt" type="search" placeholder="N.º, proyecto, cliente, presupuestista…" value={f.texto} onChange={set('texto')} /></label>
           <label className="field">Área<select className="sel" value={f.area} onChange={set('area')}><option value="">Todas</option><option>Proyectos</option><option>Inspecciones</option></select></label>
           <label className="field">Origen<select className="sel" value={f.origen} onChange={set('origen')}><option value="">Todos</option><option value="__vend">Por vendedores{vendTxt.length ? ' (' + vendTxt.join(', ') + ')' : ''}</option>{ORIGENES.map((o) => <option key={o} value={o}>{origenTxt(o)}</option>)}</select></label>
-          <label className="field">Desde<input className="txt" type="date" value={f.desde} onChange={set('desde')} /></label>
-          <label className="field">Hasta<input className="txt" type="date" value={f.hasta} onChange={set('hasta')} /></label>
+          <label className="field">Envío<select className="sel" value={f.envio} onChange={set('envio')}><option value="">Todas</option><option value="enviadas">Enviadas</option><option value="pendientes">Pendientes de envío</option><option value="atiempo">Enviadas a tiempo</option><option value="atrasadas">Atrasadas (más de {meta} días)</option></select></label>
+          <label className="field">Cargada desde<input className="txt" type="date" value={f.desde} onChange={set('desde')} /></label>
+          <label className="field">Cargada hasta<input className="txt" type="date" value={f.hasta} onChange={set('hasta')} /></label>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginTop: 10, fontSize: 13, color: 'var(--muted)' }}>
-          <span>{cargando ? 'Cargando…' : filtradas.length + ' de ' + lista.length + ' cotizaciones'}{(f.texto || f.area || f.origen || f.desde || f.hasta) ? <button type="button" className="use" style={{ marginLeft: 8 }} onClick={() => setF({ texto: '', area: '', origen: '', desde: '', hasta: '' })}>Limpiar filtros</button> : null}</span>
+          <span>{cargando ? 'Cargando…' : filtradas.length + ' de ' + lista.length + ' cotizaciones'}{hayFiltro ? <button type="button" className="use" style={{ marginLeft: 8 }} onClick={() => setF({ texto: '', area: '', origen: '', envio: '', desde: '', hasta: '' })}>Limpiar filtros</button> : null}</span>
           <span>Total ofertado: <strong style={{ color: 'var(--red-text)' }}>{usd(sumaTotal)}</strong></span>
         </div>
         <div className="origenes">
@@ -5887,36 +6022,104 @@ function HistorialCot({ supabase, usuarioId, isAdmin }) {
         </div>
       </div>
 
+      {!ocultas && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+            <h2 className="ctitle" style={{ margin: 0 }}>Control de tiempos de envío</h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>Meta de envío (días)
+                <NumIn value={meta} step={1} min={1} label="Meta de envío en días" onChange={setMeta} /></label>
+              <button type="button" className="use" onClick={() => setVerPanel(!verPanel)}>{verPanel ? 'Ocultar gráficos' : 'Ver gráficos'}</button>
+            </div>
+          </div>
+          <div className="kpis">
+            {kpi('Cotizaciones', filtradas.length, 'en el filtro actual')}
+            {kpi('Enviadas', enviadas.length, filtradas.length ? Math.round((enviadas.length / filtradas.length) * 100) + ' % del total' : '')}
+            {kpi('Promedio carga → envío', prom == null ? '—' : (Math.round(prom * 10) / 10).toLocaleString('es-CR') + ' días', 'de las enviadas', prom != null && prom > meta ? '#C13E3E' : null)}
+            {kpi('Enviadas a tiempo', enviadas.length ? Math.round((aTiempo / enviadas.length) * 100) + ' %' : '—', aTiempo + ' de ' + enviadas.length + ' (≤ ' + meta + ' días)', enviadas.length && aTiempo / enviadas.length < 0.8 ? '#C13E3E' : '#2E7D5B')}
+            {kpi('Enviadas con atraso', tarde, 'más de ' + meta + ' días', tarde ? '#C13E3E' : null)}
+            {kpi('Pendientes de envío', pendientes.length, pendTarde + ' con más de ' + meta + ' días', pendTarde ? '#C13E3E' : null)}
+          </div>
+          {verPanel && (
+            <div className="charts">
+              {histChart(histEnv, '#2E7D5B', 'Días de carga a envío (enviadas)', 'Todavía no hay cotizaciones con fecha de envío.')}
+              {histChart(histPend, '#C98A12', 'Pendientes de envío: días que llevan esperando', 'No hay cotizaciones pendientes de envío.')}
+              <div className="chartbox">
+                <div className="chart-t">Cotizaciones por mes</div>
+                {porMes.length ? (
+                  <ResponsiveContainer width="100%" height={200}>
+                    <BarChart data={porMes} margin={{ top: 18, right: 6, left: -18, bottom: 0 }} barGap={2}>
+                      <CartesianGrid vertical={false} stroke="#EDEFF2" />
+                      <XAxis dataKey="mes" tick={ejeTick} axisLine={false} tickLine={false} />
+                      <YAxis allowDecimals={false} tick={ejeTick} axisLine={false} tickLine={false} />
+                      <Tooltip {...tip} />
+                      <Bar dataKey="cargadas" name="Cargadas" fill="#1F3A5F" radius={[4, 4, 0, 0]} maxBarSize={26} />
+                      <Bar dataKey="enviadas" name="Enviadas" fill="#E86A2C" radius={[4, 4, 0, 0]} maxBarSize={26} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : <div className="chart-vacio">Sin datos.</div>}
+                <div className="chart-ley"><span><i style={{ background: '#1F3A5F' }} />Cargadas (por mes de carga)</span><span><i style={{ background: '#E86A2C' }} />Enviadas (por mes de envío)</span></div>
+              </div>
+              <div className="chartbox">
+                <div className="chart-t">Promedio de días a envío por mes</div>
+                {porMes.some((x) => x.nDias) ? (
+                  <ResponsiveContainer width="100%" height={200}>
+                    <BarChart data={porMes} margin={{ top: 18, right: 6, left: -18, bottom: 0 }}>
+                      <CartesianGrid vertical={false} stroke="#EDEFF2" />
+                      <XAxis dataKey="mes" tick={ejeTick} axisLine={false} tickLine={false} />
+                      <YAxis allowDecimals={false} tick={ejeTick} axisLine={false} tickLine={false} />
+                      <Tooltip {...tip} formatter={(v) => [v + ' días', 'Promedio']} />
+                      <ReferenceLine y={meta} stroke="#C13E3E" strokeDasharray="4 3" label={{ value: 'Meta ' + meta + ' d', position: 'insideTopLeft', fontSize: 10, fill: '#C13E3E' }} />
+                      <Bar dataKey="prom" radius={[4, 4, 0, 0]} maxBarSize={30}>
+                        {porMes.map((d, i) => <Cell key={i} fill={d.prom > meta ? '#C13E3E' : '#2E7D5B'} />)}
+                        <LabelList dataKey="prom" position="top" style={{ fontSize: 11, fill: '#101826', fontWeight: 700 }} formatter={(v) => (v ? v : '')} />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : <div className="chart-vacio">Todavía no hay envíos registrados.</div>}
+                <div className="chart-ley"><span><i style={{ background: '#2E7D5B' }} />Promedio dentro de la meta</span><span><i style={{ background: '#C13E3E' }} />Promedio fuera de la meta</span></div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="card" style={{ marginTop: 12, padding: 0, overflow: 'hidden' }}>
         {error ? <div className="banner b-err" style={{ margin: 14 }}>{error}</div>
           : !cargando && !filtradas.length ? <div style={{ padding: 18, color: 'var(--muted)', fontSize: 13 }}>{lista.length ? 'Ninguna cotización coincide con los filtros.' : ocultas ? 'No hay cotizaciones quitadas.' : 'Todavía no hay cotizaciones terminadas. En «Cotización en proceso», al final (Resumen) use «Terminar y pasar al historial».'}</div>
           : (
             <div style={{ overflowX: 'auto' }}><table>
-              <thead><tr><th>Fecha</th><th>N.º</th><th>Proyecto</th><th>Cliente</th><th>Área</th><th>Presupuestista</th><th>Origen</th><th className="r">Servicios</th><th className="r">Materiales</th><th className="r">Total oferta</th><th>Solicitud</th><th><span className="sr">Acciones</span></th></tr></thead>
+              <thead><tr><th>N.º</th><th>Proyecto / cliente</th><th>Origen</th><th>Cargada</th><th>Enviada</th><th className="r">Días</th><th>Envío</th><th className="r">Total oferta</th><th>Presupuestista</th><th><span className="sr">Acciones</span></th></tr></thead>
               <tbody>
-                {filtradas.map((r) => (
-                  <tr key={r.id}>
-                    <td>{fechaCorta(r.fecha || r.creado_en)}</td>
-                    <td className="strong">{r.numero || '—'}</td>
-                    <td style={{ whiteSpace: 'normal', minWidth: 180 }}>{r.proyecto || '—'}</td>
-                    <td style={{ whiteSpace: 'normal', minWidth: 140 }}>{r.cliente || '—'}</td>
-                    <td>{r.area || ''}</td>
-                    <td>{r.presupuestista || r.creado_por_nombre || ''}</td>
-                    <td><span className={'chip' + ((r.origen || ORIGEN_DEF) === ORIGEN_DEF ? '' : ' vend')}>{(r.origen || ORIGEN_DEF) === ORIGEN_DEF ? 'Directo' : r.origen}</span></td>
-                    <td className="r">{usd(n(r.precio_servicios))}</td>
-                    <td className="r">{usd(n(r.materiales))}</td>
-                    <td className="r strong" style={{ color: 'var(--red-text)' }}>{usd(n(r.total_oferta))}</td>
-                    <td>{r.solicitud_consecutivo ? '#' + r.solicitud_consecutivo : ''}</td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                        <button type="button" className="btn btn-line" style={{ minHeight: 30, padding: '4px 10px' }} onClick={() => excel(r)}>{Icon.down} Excel</button>
-                        {ocultas
-                          ? <button type="button" className="btn btn-line" style={{ minHeight: 30, padding: '4px 10px' }} onClick={() => quitar(r, true)}>Restaurar</button>
-                          : <button type="button" className="rm" title="Quitar de la lista (queda en Supabase)" aria-label={'Quitar ' + (r.numero || '')} onClick={() => quitar(r, false)}>{Icon.x}</button>}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {filtradas.map((r) => {
+                  const est = estadoEnvio(r, meta), [et, ec, es] = ENVIO_TXT[est], d = diasCot(r);
+                  return (
+                    <tr key={r.id}>
+                      <td className="strong">{r.numero || '—'}{r.solicitud_consecutivo ? <span className="fx">Solicitud #{r.solicitud_consecutivo}</span> : null}</td>
+                      <td style={{ whiteSpace: 'normal', minWidth: 190 }}><span className="strong">{r.cliente || '—'}</span><span className="fx">{r.proyecto || ''}{r.area ? ' · ' + r.area : ''}</span></td>
+                      <td><span className={'chip' + ((r.origen || ORIGEN_DEF) === ORIGEN_DEF ? '' : ' vend')}>{(r.origen || ORIGEN_DEF) === ORIGEN_DEF ? 'Directo' : r.origen}</span></td>
+                      <td><input className="txt fecha" type="date" value={fCarga(r)} max={fEnvio(r) || undefined} aria-label="Fecha de carga" disabled={ocultas} onChange={(e) => e.target.value && guardarFechas(r, e.target.value, fEnvio(r))} /></td>
+                      <td>
+                        {fEnvio(r) || ocultas
+                          ? <input className="txt fecha" type="date" value={fEnvio(r)} min={fCarga(r)} aria-label="Fecha de envío" disabled={ocultas} onChange={(e) => guardarFechas(r, fCarga(r), e.target.value)} />
+                          : <button type="button" className="use" onClick={() => guardarFechas(r, fCarga(r), hoyISO())}>Marcar enviada hoy</button>}
+                      </td>
+                      <td className="r strong" style={{ color: est === 'tarde' || est === 'pendtarde' ? '#C13E3E' : undefined }}>{d == null ? '—' : d}</td>
+                      <td><span className="chip" style={{ background: es, color: ec }}>{et}</span></td>
+                      <td className="r strong" style={{ color: 'var(--red-text)' }}>{usd(n(r.total_oferta))}</td>
+                      <td>{r.presupuestista || r.creado_por_nombre || ''}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                          {!ocultas && <button type="button" className="btn btn-line" style={{ minHeight: 30, padding: '4px 10px' }} onClick={() => modificar(r)}>Modificar</button>}
+                          <button type="button" className="btn btn-line" style={{ minHeight: 30, padding: '4px 10px' }} onClick={() => excel(r)}>{Icon.down} Excel</button>
+                          {ocultas
+                            ? <button type="button" className="btn btn-line" style={{ minHeight: 30, padding: '4px 10px' }} onClick={() => quitar(r, true)}>Restaurar</button>
+                            : <button type="button" className="rm" title="Quitar de la lista (queda en Supabase)" aria-label={'Quitar ' + (r.numero || '')} onClick={() => quitar(r, false)}>{Icon.x}</button>}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table></div>
           )}
@@ -6093,11 +6296,23 @@ function Cotizaciones() {
             }}
             onPasarMonto={(id, monto, numCot) => { setMonto(id, monto); if (numCot) setNumCot(id, numCot); }}
             onSolicitudRealizada={(id) => setEstado(id, "Realizado")}
+            onCrearSolicitud={async (d) => {
+              const numero = rows.reduce((mx, r) => Math.max(mx, Number(r.consecutivo) || 0), 0) + 1;
+              const payload = { numero, solicitante: d.presupuestista || "", cliente: d.cliente || "Sin cliente", contacto: d.contacto || "", email: "", telefono: "", provincia: "",
+                dias: null, personal: "", descripcion: d.proyecto || "", equipos: "", dispositivos: "", num_cot: d.numero || "", estado: "Realizado", actividad: "Seguimiento",
+                tipo: d.area === "Inspecciones" ? "Inspecciones" : "Proyectos", frecuencia: "", observaciones: "Creada desde el Cotizador", monto: Number(d.monto) || 0 };
+              const { data, error } = await supabase.from("cotizaciones").insert(payload).select().single();
+              if (error || !data) return null;
+              const fila = cotRowFromDb(data); setRows((prev) => [fila, ...prev]);
+              return { id: fila.id, consecutivo: fila.consecutivo };
+            }}
             onTerminada={() => setVistaCot("historial")} />
         </Card>
       ) : verHistorialCot ? (
         <Card style={{ padding: 16 }}>
-          <CotizadorAD.Historial supabase={supabase} usuarioId={currentUser?.id} isAdmin={isAdmin} />
+          <CotizadorAD.Historial supabase={supabase} usuarioId={currentUser?.id} isAdmin={isAdmin}
+            onModificar={() => setVistaCot("cotizador")}
+            onSolicitudEnviada={(id) => { const r = rows.find((x) => String(x.id) === String(id)); if (r && r.estado !== "Enviado" && r.estado !== "Comparado") setEstado(r.id, "Enviado"); }} />
         </Card>
       ) : (<>
       <ResumenCotizacionesCard />

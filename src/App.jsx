@@ -3698,6 +3698,10 @@ const COTZ_CSS = `.cotz{--bg:#F3F5F7;--surface:#FFFFFF;--surface2:#F7F8FA;--line
 .cotz .main.ancho .work{flex-basis:100%}
 .cotz .main.ancho .side{flex:1 1 100%;max-width:none;flex-direction:row;flex-wrap:wrap}
 .cotz .main.ancho .side > *{flex:1 1 240px}
+.cotz .desg{margin-bottom:14px}
+.cotz .desg-h{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;font-size:13.5px;font-weight:800;color:var(--slate);margin:0 0 6px;padding:7px 10px;background:var(--sky);border-radius:8px}
+.cotz .desg-h span:last-child{font-weight:500;color:var(--muted);font-size:12.5px}
+.cotz .desg-h strong{color:var(--red-text)}
 .cotz .num.verde{background:#E9F6EA;border-color:#A8D5AA}
 .cotz .num.auto::placeholder{color:#3F7A47;opacity:.75}
 .cotz .calc{font-weight:600;font-variant-numeric:tabular-nums;color:var(--fg)}
@@ -4430,7 +4434,7 @@ const MAT2_ITEMS = {
   7: { n: 'Union EMT 3/4', d: 1.05, u: 'Unidad', f: 'F5 × 2' },
   8: { n: 'Conectores EMT 3/4', d: 1, u: 'Unidad', f: 'F5 × 2' },
   9: { n: 'Tape rojo 3M', d: 9, u: 'Unidad', tipo: 'auto', f: 'Tubos EMT ÷ 30' },
-  10: { n: 'Tape negro 3M', d: 7, u: 'Unidad', tipo: 'in' },
+  10: { n: 'Tape negro 3M', d: 7, u: 'Unidad', tipo: 'in', entero: true },
   11: { n: 'Caja rectangular FS (EM)', d: 11, u: 'Unidad', f: 'fijo 0' },
   12: { n: 'Bi-ex con forro 1/2', d: 49, u: 'Carrucha (30 m)', tipo: 'in' },
   13: { n: 'Conector de Bi-ex con forro 1/2 (Curvo 90)', d: 2.2, u: 'Unidad', tipo: 'in' },
@@ -4494,17 +4498,19 @@ function matCalc(cfg, m0) {
   const M4 = N(m.M4), M5 = N(m.M5), M6 = N(m.M6), M7 = N(m.M7);
   const N4 = M4 + M5, N6 = M6 + M7, J5 = roundUp(N4 / 3), J23 = roundUp(N6 / 3), J29 = M4 / 305, J30 = M6 / 305, J34 = M5 / 305, J35 = M7 / 305;
   const A60 = N(m.A60);
+  // Todas las cantidades van cerradas: se redondean hacia arriba (enteros)
+  const U = roundUp;
   const F = {};
-  F[5] = inp(5); F[6] = F[5] * 3; F[7] = F[5] * 2; F[8] = F[5] * 2;
-  F[9] = ov(9) != null ? ov(9) : F[5] / 30;
-  F[10] = inp(10); F[11] = 0; F[12] = inp(12); F[13] = inp(13); F[14] = inp(14);
-  F[15] = H44; F[16] = 2 * D43;
-  F[17] = ov(17) != null ? ov(17) : F[5] / 9 + F43 + F44;
-  F[18] = ov(18) != null ? ov(18) : F[5] / 9 + E43 + E44 + E45 + E46;
-  F[19] = F[17] + F[18] * 1; F[20] = F[19] * 1; F[21] = inp(21);
-  F[23] = ov(23) != null ? ov(23) : J23; F[24] = F[23] * 3; F[25] = F[23] * 2; F[26] = F[23] * 2;
-  [28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38].forEach((r) => { F[r] = inp(r); });
-  F[53] = inp(53); F[54] = F[53] * 3; F[55] = F[53] * 2; F[56] = F[53] * 2; F[57] = inp(57);
+  F[5] = U(inp(5)); F[6] = U(F[5] * 3); F[7] = U(F[5] * 2); F[8] = U(F[5] * 2);
+  F[9] = U(ov(9) != null ? ov(9) : F[5] / 30);
+  F[10] = U(inp(10)); F[11] = 0; F[12] = U(inp(12)); F[13] = U(inp(13)); F[14] = U(inp(14));
+  F[15] = U(H44); F[16] = U(2 * D43);
+  F[17] = U(ov(17) != null ? ov(17) : F[5] / 9 + F43 + F44);
+  F[18] = U(ov(18) != null ? ov(18) : F[5] / 9 + E43 + E44 + E45 + E46);
+  F[19] = U(F[17] + F[18] * 1); F[20] = U(F[19] * 1); F[21] = U(inp(21));
+  F[23] = U(ov(23) != null ? ov(23) : J23); F[24] = U(F[23] * 3); F[25] = U(F[23] * 2); F[26] = U(F[23] * 2);
+  [28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38].forEach((r) => { F[r] = U(inp(r)); });
+  F[53] = U(inp(53)); F[54] = U(F[53] * 3); F[55] = U(F[53] * 2); F[56] = U(F[53] * 2); F[57] = U(inp(57));
   const G = {}, H = {};
   let costo = 0;
   MAT2_FILAS.forEach((r) => { G[r] = D[r] + D[r] * g3; H[r] = F[r] * G[r]; costo += F[r] * D[r]; });
@@ -4515,6 +4521,42 @@ function matCalc(cfg, m0) {
   return { g3, D, F, G, H, sub, H58, H39, A60, costo: costo + A60, venta: H39,
     eq: { D43, E43, F43, H43, D44, F44, H44, D45, E45, G45, D46, E46, H46 },
     cab: { M4, M5, M6, M7, N4, N6, J5, J23, J29, J30, J34, J35 } };
+}
+
+// Desglose de cada rubro (para el Resumen de la app y del Excel)
+function desgloseRubros(cfg, q, c) {
+  const m = c.m, R = L.rates(cfg), fq = (v) => (Math.round(n(v) * 100) / 100).toLocaleString('es-CR', { maximumFractionDigits: 2 });
+  const grupos = [];
+  const mo = cfg.roles.filter((r) => (q.roles[r.id] || {}).on).map((r) => {
+    const l = q.roles[r.id], hrs = n(l.p) * n(l.h) * n(l.w), rate = R.rate(r.sal), costo = hrs * rate;
+    return { d: r.name, det: fq(l.p) + ' pers. × ' + fq(l.h) + ' h/sem × ' + fq(l.w) + ' sem.', cant: hrs, um: 'h', pu: rate, costo, venta: costo / (1 - m) };
+  });
+  grupos.push({ id: 'mo', t: 'Mano de obra', rows: mo });
+  [['cr', 'Viáticos Costa Rica'], ['ca', 'Viáticos Centroamérica']].forEach(([k, t]) => {
+    const rows = cfg[k].map((it) => {
+      const l = q[k][it.id] || {}, qty = L.lineQty(it, l), pu = L.puOf(it, l), costo = qty * pu;
+      if (!(costo > 0 || qty > 0)) return null;
+      const det = fq(l.c) + ' × ' + fq(l.d) + (it.noW ? '' : ' × ' + fq(l.w == null ? 1 : l.w) + ' sem.');
+      return { d: it.n, det, cant: qty, um: it.um, pu, costo, venta: costo / (1 - m) };
+    }).filter(Boolean);
+    grupos.push({ id: k, t, rows });
+  });
+  grupos.push({ id: 'renta', t: 'Renta de equipos y otros', rows: cfg.renta.map((it) => {
+    const l = q.renta[it.id] || {}, qty = n(l.q), pu = L.puOf(it, l), costo = qty * pu;
+    return qty > 0 ? { d: it.n, det: '', cant: qty, um: it.um, pu, costo, venta: costo / (1 - m) } : null;
+  }).filter(Boolean) });
+  const mt = c.mat2;
+  const mats = [];
+  if (mt) {
+    MAT2_SECCIONES.forEach((sc) => {
+      const rs = sc.rows.filter((r) => mt.F[r] > 0).map((r) => ({ d: MAT2_ITEMS[r].n, det: ({ int: 'Interiores', rig: 'Exteriores (rígida)', cab: 'Cables', ves: 'VESDA' })[sc.id], cant: mt.F[r], um: MAT2_ITEMS[r].u, pu: mt.D[r], costo: mt.F[r] * mt.D[r], venta: mt.H[r] }));
+      mats.push(...rs);
+    });
+    if (mt.A60 > 0) mats.push({ d: 'Transporte', det: 'Costo con Full Protection', cant: 1, um: 'Gbl', pu: mt.A60, costo: mt.A60, venta: mt.A60 });
+  }
+  grupos.push({ id: 'mat', t: 'Materiales', rows: mats, nota: mt ? 'Precio de venta = costo + ' + fq(mt.g3 * 100) + ' % (margen de materiales)' : '' });
+  grupos.forEach((g) => { g.costo = g.rows.reduce((a, r) => a + r.costo, 0); g.venta = g.rows.reduce((a, r) => a + r.venta, 0); });
+  return grupos;
 }
 
 // Los vendedores se administran en Configuración → Vendedores (se guardan con la configuración)
@@ -4531,7 +4573,7 @@ const origenesDe = (c, extra) => {
 function blankQuote(cfg) {
   return {
     info: { proyecto: '', cliente: '', area: 'Proyectos', fecha: new Date().toLocaleDateString('en-CA'), contacto: '', presupuestista: '', numero: '', origen: ORIGEN_DEF },
-    roles: {}, cr: {}, ca: {}, renta: {}, mats: {}, eq: { tub: '0', disp: '0', extra: '3' },
+    roles: {}, cr: {}, ca: {}, renta: {}, mats: {}, eq: { tub: '', disp: '', extra: '' },
     margin: s(n(cfg.margin) * 100, 2), matMargin: s(n(cfg.matMargin) * 100, 2), cmp: ['15', '20', '25', '30', '35'], example: false, mat2: mat2Blank(cfg),
   };
 }
@@ -4628,13 +4670,18 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
   const initCfg = lsGet(CKEY) || { cfg: DEFAULT_CFG, updatedAt: null, source: 'Machote original (incluido en la app)' };
   const [cfgDoc, setCfgDoc] = useState(initCfg);
   const cfg = cfgDoc.cfg;
+  // Cada usuario tiene su propia cotización en proceso (aunque usen la misma
+  // computadora); varias personas pueden cotizar al mismo tiempo sin pisarse.
+  const qk = QKEY + '.' + (usuarioId || 'sin-usuario');
   const [q, setQRaw] = useState(() => {
-    const g = lsGet(QKEY);
+    try { localStorage.removeItem(QKEY); } catch (e) { /* llave vieja compartida */ }
+    const g = lsGet(qk);
+    if (!g || g.example) return blankQuote(initCfg.cfg);
     // Cotizaciones guardadas con el comparativo viejo pasan a 15, 20, 25, 30 y 35 %
-    if (g && Array.isArray(g.cmp) && g.cmp.join('|') === '25|27.5|30|32.5|35') g.cmp = ['15', '20', '25', '30', '35'];
-    return g || exampleQuote(initCfg.cfg);
+    if (Array.isArray(g.cmp) && g.cmp.join('|') === '25|27.5|30|32.5|35') g.cmp = ['15', '20', '25', '30', '35'];
+    return g;
   });
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(0);
   const [viaTab, setViaTab] = useState('cr');
   const [search, setSearch] = useState('');
   const [showCfg, setShowCfg] = useState(false);
@@ -4649,7 +4696,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
   const cfgRef = useRef(cfg); cfgRef.current = cfg;
   const toastT = useRef(null);
 
-  const setQ = (fn) => setQRaw((prev) => { const next = fn(clone(prev)); lsSet(QKEY, next); return next; });
+  const setQ = (fn) => setQRaw((prev) => { const next = fn(clone(prev)); lsSet(qk, next); return next; });
   const flash = (t) => { setToast(t); clearTimeout(toastT.current); toastT.current = setTimeout(() => setToast(''), 4200); };
 
   const receiveCfg = (row) => {
@@ -4657,7 +4704,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
     const oldCfg = cfgRef.current;
     const doc = { cfg: row.data.cfg, updatedAt: row.updated_at || row.data.updatedAt || null, source: row.data.source || '' };
     setCfgDoc(doc); lsSet(CKEY, doc);
-    setQRaw((prev) => { const next = remapQuote(oldCfg, doc.cfg, prev); lsSet(QKEY, next); return next; });
+    setQRaw((prev) => { const next = remapQuote(oldCfg, doc.cfg, prev); lsSet(qk, next); return next; });
   };
 
   // Configuración compartida en Supabase. Se lee por una función que revisa
@@ -4701,7 +4748,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
     setGuardando(false);
     if (error) { flash(/cot_hist_|cot_puede|schema cache|Could not find/i.test(error.message || '') ? 'Falta correr en Supabase el SQL "cotizador_historial.sql".' : 'No se pudo guardar: ' + (error.message || error)); return; }
     if (q.solicitud && onSolicitudRealizada) onSolicitudRealizada(q.solicitud.id);
-    const b = blankQuote(cfg); setQRaw(b); lsSet(QKEY, b);
+    const b = blankQuote(cfg); setQRaw(b); lsSet(qk, b);
     setConfirmFin(false); setStep(0);
     flash('Cotización ' + (reg.numero || '') + ' guardada en el historial' + (q.solicitud ? ' y la solicitud #' + q.solicitud.consecutivo + ' quedó «Realizado».' : '.'));
     if (onTerminada) setTimeout(() => onTerminada(), 700);
@@ -4715,7 +4762,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
       nextQ = { ...nextQ, roles: alsoQty.roles, cr: alsoQty.cr, ca: alsoQty.ca, renta: alsoQty.renta, mats: alsoQty.mats, eq: alsoQty.eq,
         margin: s(n(newCfg.margin) * 100, 3), matMargin: s(n(newCfg.matMargin) * 100, 3), example: false };
     }
-    setQRaw(nextQ); lsSet(QKEY, nextQ);
+    setQRaw(nextQ); lsSet(qk, nextQ);
     setCfgDoc(doc); lsSet(CKEY, doc);
     if (!supabase) return 'local';
     const { error } = await supabase.rpc('cot_config_guardar', { p_usuario: usuarioId, p_data: doc });
@@ -4878,13 +4925,13 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
     const fmtQ = (v) => (Math.round(n(v) * 100) / 100).toLocaleString('es-CR', { maximumFractionDigits: 2 });
     const cantidad = (r) => {
       const it = MAT2_ITEMS[r];
-      if (it.tipo === 'in') return <NumIn cls="verde" value={(m2.F || {})[r] ?? ''} label={'Cantidad ' + it.n} onChange={(v) => setMF('F', r, v)} />;
+      if (it.tipo === 'in') return <NumIn cls="verde" step={1} value={(m2.F || {})[r] ?? ''} label={'Cantidad ' + it.n} onChange={(v) => setMF('F', r, v === '' ? '' : String(Math.max(0, Math.ceil(Number(v) || 0))))} />;
       if (it.tipo === 'auto') {
         const tiene = m2.ov && m2.ov[r] != null && m2.ov[r] !== '';
         return (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <input className={'num verde' + (tiene ? '' : ' auto')} type="number" inputMode="decimal" step="any" min={0} aria-label={'Cantidad ' + it.n}
-              value={tiene ? m2.ov[r] : ''} placeholder={fmtQ(mt.F[r])} onChange={(e) => setMF('ov', r, e.target.value)} />
+              value={tiene ? m2.ov[r] : ''} placeholder={fmtQ(mt.F[r])} step={1} onChange={(e) => { const v = e.target.value; setMF('ov', r, v === '' ? '' : String(Math.max(0, Math.ceil(Number(v) || 0)))); }} />
             {tiene && <button type="button" className="rm" title="Volver al cálculo automático" aria-label="Volver al cálculo automático" onClick={() => setMF('ov', r, '')} style={{ width: 26, height: 26 }}>↺</button>}
           </span>
         );
@@ -4917,7 +4964,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
     );
     body = (
       <div>
-        <div className="banner b-info" style={{ marginBottom: 14 }}>Mismo cálculo que el machote de materiales. Las casillas <span className="verdetxt">verdes</span> se digitan; el resto se calcula solo. Las verdes con número gris son automáticas: puede escribir otro valor y con ↺ vuelve al cálculo.</div>
+        <div className="banner b-info" style={{ marginBottom: 14 }}>Mismo cálculo que el machote de materiales, con todas las cantidades cerradas (se redondean hacia arriba). Las casillas <span className="verdetxt">verdes</span> se digitan; el resto se calcula solo. Las verdes con número gris son automáticas: puede escribir otro valor y con ↺ vuelve al cálculo.</div>
         <div className="grid3">
           <label className="field">Margen de materiales (%)<NumIn cls="full verde" id="mat-margin" step="0.5" value={m2.margen} onChange={(v) => setM('margen', v)} /></label>
           <label className="field">Transporte (costo con Full Protection)<NumIn cls="full" value={m2.A60} label="Transporte" onChange={(v) => setM('A60', v)} /></label>
@@ -4964,6 +5011,30 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
             <tr><td /><td className="strong">Total oferta</td><td className="r strong">{usd(c.costo + c.matCost)}</td><td className="r strong" style={{ color: 'var(--red-text)' }}>{usd(c.oferta)}</td></tr>
           </tbody>
         </table></div>
+        <h2 className="sec">Desglose por rubro</h2>
+        {desgloseRubros(cfg, q, c).map((g) => (
+          <div key={g.id} className="desg">
+            <div className="desg-h"><span>{g.t}</span><span>Costo {usd(g.costo)} · <strong>Venta {usd(g.venta)}</strong></span></div>
+            {g.rows.length ? (
+              <div className="tblbox"><table>
+                <thead><tr><th>Descripción</th><th>Detalle</th><th className="r">Cantidad</th><th className="r">P/U (costo)</th><th className="r">Costo</th><th className="r">Precio venta</th></tr></thead>
+                <tbody>
+                  {g.rows.map((r, i) => (
+                    <tr key={i}>
+                      <td className="strong" style={{ whiteSpace: 'normal', minWidth: 180 }}>{r.d}</td>
+                      <td style={{ whiteSpace: 'normal', color: 'var(--muted)', fontSize: 12.5 }}>{r.det}</td>
+                      <td className="r">{(Math.round(r.cant * 100) / 100).toLocaleString('es-CR')} {r.um}</td>
+                      <td className="r">{usd(r.pu)}</td>
+                      <td className="r">{usd(r.costo)}</td>
+                      <td className="r strong">{usd(r.venta)}</td>
+                    </tr>
+                  ))}
+                  <tr className="subt"><td colSpan={4}>Subtotal {g.t.toLowerCase()}{g.nota ? <span className="fx" style={{ display: 'inline', marginLeft: 8 }}>{g.nota}</span> : null}</td><td className="r">{usd(g.costo)}</td><td className="r strong">{usd(g.venta)}</td></tr>
+                </tbody>
+              </table></div>
+            ) : <div className="note" style={{ margin: '0 0 4px' }}>Sin datos en este rubro.</div>}
+          </div>
+        ))}
         <h2 className="sec">Comparativo de márgenes (servicios)</h2>
         <p className="note" style={{ margin: '0 0 10px' }}>Escriba cualquier margen en las casillas para comparar; «Usar» lo aplica a la cotización.</p>
         <div style={{ overflowX: 'auto' }}><div className="cmp">
@@ -5028,7 +5099,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
       </div></div>
       {confirmNew && (() => {
         const pendientes = solicitudes.filter((r) => (r.estado || 'Solicitud') === 'Solicitud');
-        const empezar = (nueva, msg) => { setQRaw(nueva); lsSet(QKEY, nueva); setConfirmNew(false); setSolElegida(''); setStep(0); flash(msg); };
+        const empezar = (nueva, msg) => { setQRaw(nueva); lsSet(qk, nueva); setConfirmNew(false); setSolElegida(''); setStep(0); flash(msg); };
         return (
           <div className="nuevapanel">
             <div className="np-t">Nueva cotización <span>— reemplaza la que está abierta</span></div>
@@ -5046,9 +5117,12 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
                   {pendientes.map((r) => <option key={r.id} value={r.id}>#{r.consecutivo} · {r.cliente}{r.descripcion ? ' — ' + String(r.descripcion).slice(0, 60) : ''}</option>)}
                 </select>
                 {onTomarSolicitud && <label className="check" style={{ marginTop: 8 }}><input type="checkbox" checked={pasarEnProceso} onChange={(e) => setPasarEnProceso(e.target.checked)} /><span>Pasar la solicitud a «En proceso»</span></label>}
-                <button type="button" className="btn btn-red" disabled={!solElegida} style={{ marginTop: 8 }} onClick={() => {
+                <button type="button" className="btn btn-red" disabled={!solElegida} style={{ marginTop: 8 }} onClick={async () => {
                   const r = pendientes.find((x) => String(x.id) === String(solElegida)); if (!r) return;
-                  if (pasarEnProceso && onTomarSolicitud) onTomarSolicitud(r.id);
+                  if (pasarEnProceso && onTomarSolicitud) {
+                    const ok = await onTomarSolicitud(r.id);
+                    if (ok === false) { setSolElegida(''); flash('La solicitud #' + r.consecutivo + ' ya la tomó otra persona. Elija otra.'); return; }
+                  }
                   empezar(quoteDesdeSolicitud(cfg, r, usuarioNombre), 'Cotización creada desde la solicitud #' + r.consecutivo + (pasarEnProceso && onTomarSolicitud ? ' (ahora está En proceso).' : '.'));
                 }}>Usar esta solicitud</button>
               </div>
@@ -5535,6 +5609,7 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
     };
     var secM = function (r, texto) { M.mergeCells('A' + r + ':I' + r); cell(M, 'A' + r, texto, { font: { bold: true, color: { argb: C.white } }, fill: C.accent, al: { indent: 1 } }); };
     var FX = { 6: 'F5*3', 7: 'F5*2', 8: 'F5*2', 9: 'F5/30', 15: 'H44', 16: '2*D43', 17: 'F5/9+F43+F44', 18: 'F5/9+E43+E44+E45+E46', 19: 'F17+F18*1', 20: 'F19*1', 23: '+J23', 24: 'F23*3', 25: 'F23*2', 26: 'F23*2', 54: 'F53*3', 55: 'F53*2', 56: 'F53*2' };
+    Object.keys(FX).forEach(function (k) { FX[k] = 'ROUNDUP(' + FX[k] + ',0)'; });
     var filaM = function (r, z) {
       var it = MAT2_ITEMS[r], verde = it.tipo === 'in' || it.tipo === 'auto';
       M.mergeCells('A' + r + ':C' + r);
@@ -5542,8 +5617,8 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
       cell(M, 'D' + r, mt.D[r], dat(USD, z));
       cell(M, 'E' + r, it.u, dat(null, z, { al: { horizontal: 'center' } }));
       var ovr = it.tipo === 'auto' && m2.ov && m2.ov[r] != null && m2.ov[r] !== '';
-      var fv = it.tipo === 'in' ? n((m2.F || {})[r]) : ovr ? n(m2.ov[r]) : r === 11 ? 0 : F(FX[r]);
-      cell(M, 'F' + r, fv, verde ? inpV('0.##') : dat('0.##', z, { al: { horizontal: 'right' } }));
+      var fv = it.tipo === 'in' || ovr ? mt.F[r] : r === 11 ? 0 : F(FX[r]);
+      cell(M, 'F' + r, fv, verde ? inpV('0') : dat('0', z, { al: { horizontal: 'right' } }));
       cell(M, 'G' + r, F('D' + r + '+(D' + r + '*G$3)'), dat(USD, z));
       M.mergeCells('H' + r + ':I' + r);
       cell(M, 'H' + r, F('F' + r + '*G' + r), dat(USD0, z, { font: { bold: true } }));
@@ -5653,7 +5728,31 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
     cell(G, 'B41', 'TOTAL OFERTA (servicios + materiales)', { font: { bold: true, size: 14, color: { argb: C.white } }, fill: C.steel, border: box, al: { vertical: 'middle', indent: 1 } });
     cell(G, 'G41', F('G39+G40'), { font: { bold: true, size: 14, color: { argb: C.white } }, fill: C.steel, border: box, fmt: USD, al: { vertical: 'middle', horizontal: 'right' } });
     G.getRow(41).height = 28;
-    cell(G, 'B43', 'Generado por el Cotizador A&D · by Anthony Campos Medina', { font: { italic: true, size: 9, color: { argb: C.muted } } });
+    // Desglose de rubros (valores de la cotización)
+    var cDes = L.compute(cfg, q), grupos = desgloseRubros(cfg, q, cDes), rD = 45;
+    seccion(G, 'B' + rD + ':G' + rD, 'DESGLOSE POR RUBRO'); rD++;
+    ['Descripción', 'Detalle', 'Cantidad', 'P/U (costo)', 'Costo', 'Precio venta'].forEach(function (h, i) { cell(G, String.fromCharCode(66 + i) + rD, h, i < 2 ? hdrL : hdr); });
+    rD++;
+    grupos.forEach(function (g) {
+      G.mergeCells('B' + rD + ':G' + rD);
+      cell(G, 'B' + rD, g.t.toUpperCase(), { font: { bold: true, color: { argb: C.steel } }, fill: C.light, border: box, al: { indent: 1 } }); rD++;
+      if (!g.rows.length) { cell(G, 'B' + rD, 'Sin datos en este rubro', { font: { italic: true, size: 9, color: { argb: C.muted } } }); rD++; }
+      g.rows.forEach(function (r, i) {
+        var z = i % 2 === 1;
+        cell(G, 'B' + rD, r.d, dat(null, z, { font: { bold: true }, al: { wrapText: true, vertical: 'middle' } }));
+        cell(G, 'C' + rD, [r.det, r.um].filter(Boolean).join(' · '), dat(null, z, { font: { size: 9, color: { argb: C.muted } }, al: { wrapText: true, vertical: 'middle' } }));
+        cell(G, 'D' + rD, Math.round(r.cant * 100) / 100, dat('#,##0.##', z));
+        cell(G, 'E' + rD, r.pu, dat(USD, z)); cell(G, 'F' + rD, r.costo, dat(USD, z)); cell(G, 'G' + rD, r.venta, dat(USD, z, { font: { bold: true } }));
+        rD++;
+      });
+      G.mergeCells('B' + rD + ':E' + rD);
+      cell(G, 'B' + rD, 'Subtotal ' + g.t.toLowerCase(), { font: { bold: true }, fill: C.accentSoft, border: box });
+      cell(G, 'F' + rD, g.costo, { font: { bold: true }, fill: C.accentSoft, border: box, fmt: USD });
+      cell(G, 'G' + rD, g.venta, { font: { bold: true }, fill: C.accentSoft, border: box, fmt: USD });
+      rD += 2;
+    });
+    cell(G, 'B' + rD, 'Generado por el Cotizador A&D · by Anthony Campos Medina', { font: { italic: true, size: 9, color: { argb: C.muted } } });
+
 
     [G, E, S, M].forEach(function (ws) { ws.pageSetup = { orientation: ws === G ? 'portrait' : 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 1, margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } }; });
     return wb;
@@ -5981,7 +6080,17 @@ function Cotizaciones() {
         <Card style={{ padding: 16 }}>
           <CotizadorAD supabase={supabase} isAdmin={isAdmin} usuarioId={currentUser?.id} usuarioNombre={currentUser?.name}
             solicitudes={rows}
-            onTomarSolicitud={(id) => setEstado(id, "En proceso")}
+            onTomarSolicitud={async (id) => {
+              // Solo la toma si sigue en «Solicitud» (por si otra persona la tomó al mismo tiempo)
+              const { data, error } = await supabase.from("cotizaciones").update({ estado: "En proceso" }).eq("id", id).eq("estado", "Solicitud").select();
+              if (!error && Array.isArray(data) && data.length === 0) {
+                const { data: fila } = await supabase.from("cotizaciones").select("*").eq("id", id).maybeSingle();
+                if (fila) setRows((prev) => prev.map((r) => r.id === id ? cotRowFromDb(fila) : r));
+                return false;
+              }
+              setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado: "En proceso" } : r));
+              return true;
+            }}
             onPasarMonto={(id, monto, numCot) => { setMonto(id, monto); if (numCot) setNumCot(id, numCot); }}
             onSolicitudRealizada={(id) => setEstado(id, "Realizado")}
             onTerminada={() => setVistaCot("historial")} />
@@ -8720,6 +8829,24 @@ const EVAL_EXCLUIR = [
 ];
 const evalExcluida = (...textos) => textos.some((t) => t && EVAL_EXCLUIR.some((r) => r.test(t)));
 
+// Figuras de las preguntas (se buscan por el texto, así sirve también para
+// evaluaciones ya asignadas sin guardar la imagen en Supabase)
+let EVAL_IMG_CACHE = null;
+function evalImagenDe(texto) {
+  if (!EVAL_IMG_CACHE) {
+    EVAL_IMG_CACHE = {};
+    const add = (t, img) => { if (t && img) EVAL_IMG_CACHE[String(t).trim()] = img; };
+    try {
+      PREGUNTAS_NFPA72.forEach((p) => add(p.texto, p.imagen));
+      Object.values(NIVELES_ELECTRONICA).flat().forEach((p) => add(p.texto, p.imagen));
+      PREGUNTAS_NICET.forEach((p) => { add(p.es && p.es.texto, p.imagen); add(p.en && p.en.texto, p.imagen); });
+      FAS_NIVEL1_QUIZZES.flatMap((q) => q.preguntas).forEach((p) => { add(p.es && p.es.texto, p.imagen); add(p.en && p.en.texto, p.imagen); });
+      PREGUNTAS_NOTIFIER.forEach((p) => add(p.texto, p.imagen));
+    } catch (e) { /* banco sin imágenes */ }
+  }
+  return EVAL_IMG_CACHE[String(texto || '').trim()] || null;
+}
+
 function evalBancoTecnico(areas) {
   const bancos = {
     nfpa: () => PREGUNTAS_NFPA72.map((p) => ({ modulo: "NFPA 72", texto: p.texto, opciones: p.opciones, correctas: [p.correcta] })),
@@ -8841,7 +8968,7 @@ function generarHtmlEvaluacion(cfg, res = null) {
       const ok = sel.length > 0 && [...sel].sort().join(",") === [...p.correctas].sort().join(",");
       marca = !sel.length ? ' <span class="res sin">Sin responder</span>' : ok ? ' <span class="res bien">✓ Correcta</span>' : ' <span class="res mal">✗ Incorrecta</span>';
     }
-    return `<div class="preg"><div class="pt"><b>${num}.</b> ${p.cat ? `<span class="tag">${esc(p.cat)}</span> ` : p.modulo ? `<span class="tag">${esc(p.modulo)}</span> ` : ""}${esc(p.texto)}${multiple ? ' <i>(marque todas las correctas)</i>' : ""}${marca}</div>` +
+    return `<div class="preg"><div class="pt"><b>${num}.</b> ${p.cat ? `<span class="tag">${esc(p.cat)}</span> ` : p.modulo ? `<span class="tag">${esc(p.modulo)}</span> ` : ""}${esc(p.texto)}${multiple ? ' <i>(marque todas las correctas)</i>' : ""}${marca}</div>` + (evalImagenDe(p.texto) ? `<div class="fig"><img src="${evalImagenDe(p.texto)}" alt="Figura"></div>` : "") +
       `<div class="ops">${p.opciones.map((o, j) => {
         const cls = res ? (p.correctas.includes(j) ? " ok" : sel.includes(j) ? " malop" : "") : "";
         return `<div class="op${cls}">${cb(sel.includes(j))}<b>${L[j]})</b> ${esc(o)}</div>`;
@@ -8940,7 +9067,7 @@ function generarHtmlEvaluacion(cfg, res = null) {
   .sech{display:flex;gap:10px;align-items:center;border-bottom:2px solid #1e2d45;padding-bottom:5px;margin-bottom:8px}
   .letra{background:#c62828;color:#fff;font-weight:800;width:26px;height:26px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:14px;flex:0 0 26px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .sect{font-size:14px;font-weight:800;color:#1e2d45} .secd{font-size:10.5px;color:#667}
-  .preg{page-break-inside:avoid;break-inside:avoid;margin:0 0 8px} .pt{line-height:1.4}
+  .preg{page-break-inside:avoid;break-inside:avoid;margin:0 0 8px} .fig{margin:4px 0 4px 16px} .fig img{max-width:60%;max-height:200px;border:1px solid #d5d8de;border-radius:4px} .pt{line-height:1.4}
   .tag{display:inline-block;font-size:9px;font-weight:700;color:#445;background:#eef0f4;border-radius:3px;padding:0 4px;text-transform:uppercase;letter-spacing:.3px}
   .res{display:inline-block;font-size:9.5px;font-weight:800;border-radius:3px;padding:0 5px;margin-left:4px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .res.bien{color:#1b6b45;background:#dff3e8} .res.mal{color:#b3261e;background:#fbe2e0} .res.sin{color:#8a6100;background:#fdf0cf}
@@ -9129,6 +9256,7 @@ function EvalResponder({ row, onSalir }) {
                 <b>{num}.</b> {(q.cat || q.modulo) && <span style={{ fontSize: 10, fontWeight: 800, color: T.inkSoft, background: T.graySoft, borderRadius: 4, padding: "1px 5px", marginRight: 4, textTransform: "uppercase" }}>{q.cat || q.modulo}</span>}
                 {q.texto}{q.multiple && <i style={{ color: T.accent }}> (marque todas las correctas)</i>}
               </div>
+              {evalImagenDe(q.texto) && <img src={evalImagenDe(q.texto)} alt="Figura de la pregunta" style={{ maxWidth: '100%', maxHeight: 320, display: 'block', margin: '0 0 8px', borderRadius: 8, border: `1px solid ${T.line}`, background: '#fff' }} />}
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {q.opciones.map((o, j) => {
                   const on = sel.includes(j);

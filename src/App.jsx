@@ -3751,7 +3751,17 @@ const COTZ_CSS = `.cotz{--bg:#F3F5F7;--surface:#FFFFFF;--surface2:#F7F8FA;--line
 .cotz .check{display:flex;gap:10px;align-items:flex-start;font-size:13px;margin-top:12px;cursor:pointer}
 .cotz .check input{width:18px;height:18px;margin-top:1px;accent-color:var(--red)}
 .cotz .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:70;background:var(--slate);color:#fff;padding:10px 16px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.25);font-size:13px;max-width:calc(100% - 32px)}
+.cotz .origenbox{background:var(--surface2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:16px}
+.cotz .tab.big{min-height:40px;padding:8px 16px;font-size:13.5px}
 .cotz .finbox{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:16px;padding:14px 16px;border-radius:12px;background:var(--red-soft);border:1px solid #F5C4A8}
+.cotz .origenes{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-top:10px}
+.cotz .orig{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;border:1px solid var(--line);background:#fff;border-radius:10px;padding:8px 12px;cursor:pointer}
+.cotz .orig.on{border-color:var(--red);background:var(--red-soft)}
+.cotz .o-n{font-size:12px;font-weight:700;color:var(--muted)}
+.cotz .o-v{font-size:16px;font-weight:800;color:var(--fg);font-variant-numeric:tabular-nums}
+.cotz .o-c{font-size:11.5px;color:var(--muted)}
+.cotz .chip{display:inline-block;font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 9px;background:var(--sky);color:var(--slate)}
+.cotz .chip.vend{background:var(--red-soft);color:var(--red-text)}
 .cotz .nuevapanel{margin-top:10px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
 .cotz .np-t{font-weight:800;font-size:14px;margin-bottom:10px}
 .cotz .np-t span{font-weight:400;color:var(--muted);font-size:12.5px}
@@ -4396,9 +4406,21 @@ const Icon = {
 };
 
 /* ---------- cotización ---------- */
+// Quién realizó la venta
+// Los vendedores se administran en Configuración → Vendedores (se guardan con la configuración)
+const ORIGEN_DEF = 'Departamento de Alarmas';
+const VENDEDORES_DEF = ['Eddie', 'Hernán'];
+const vendedoresDe = (c) => (Array.isArray(c && c.vendedores) ? c.vendedores : VENDEDORES_DEF).filter((v) => String(v || '').trim());
+// Todas las cotizaciones son del departamento; esto clasifica cómo llegaron
+const origenTxt = (o) => (!o || o === ORIGEN_DEF ? 'Directo del departamento' : 'Por vendedor: ' + o);
+const origenesDe = (c, extra) => {
+  const out = [ORIGEN_DEF, ...vendedoresDe(c)];
+  (extra || []).forEach((o) => { if (o && !out.includes(o)) out.push(o); });
+  return out;
+};
 function blankQuote(cfg) {
   return {
-    info: { proyecto: '', cliente: '', area: 'Proyectos', fecha: new Date().toLocaleDateString('en-CA'), contacto: '', presupuestista: '', numero: '' },
+    info: { proyecto: '', cliente: '', area: 'Proyectos', fecha: new Date().toLocaleDateString('en-CA'), contacto: '', presupuestista: '', numero: '', origen: ORIGEN_DEF },
     roles: {}, cr: {}, ca: {}, renta: {}, mats: {}, eq: { tub: '0', disp: '0', extra: '3' },
     margin: s(n(cfg.margin) * 100, 2), matMargin: s(n(cfg.matMargin) * 100, 2), cmp: ['15', '20', '25', '30', '35'], example: false,
   };
@@ -4458,6 +4480,7 @@ function toDraft(c) {
     ca: c.ca.map((x) => ({ id: x.id, n: x.n, um: x.um, pu: s(x.pu) })),
     renta: c.renta.map((x) => ({ id: x.id, n: x.n, um: x.um, pu: s(x.pu) })),
     mats: c.mats.map((x) => ({ id: x.id, n: x.n, um: x.um, list: s(x.list, 6) })),
+    vendedores: vendedoresDe(c).map((v, i) => ({ id: 'v' + i + '_' + v, n: v })),
   };
 }
 function fromDraft(d) {
@@ -4474,6 +4497,7 @@ function fromDraft(d) {
     ca: named(d.ca, 'n').map((x) => ({ id: x.id, n: x.n.trim(), um: x.um || '', pu: n(x.pu) })),
     renta: named(d.renta, 'n').map((x) => ({ id: x.id, n: x.n.trim(), um: x.um || '', pu: n(x.pu) })),
     mats: named(d.mats, 'n').map((x) => ({ id: x.id, n: x.n.trim(), um: x.um || '', list: n(x.list) })),
+    vendedores: [...new Set(named(d.vendedores || [], 'n').map((x) => x.n.trim()).filter((v) => v.toLowerCase() !== ORIGEN_DEF.toLowerCase()))],
   };
   if (!c.roles.length) errs.push('Debe existir al menos un puesto con salario.');
   return { cfg: c, errs };
@@ -4555,7 +4579,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
     const r2 = (v) => Math.round(n(v) * 100) / 100;
     const reg = {
       numero: q.info.numero || '', proyecto: q.info.proyecto || '', cliente: q.info.cliente || '', area: q.info.area || '',
-      presupuestista: usuarioNombre || q.info.presupuestista || '', fecha: q.info.fecha || '',
+      presupuestista: usuarioNombre || q.info.presupuestista || '', fecha: q.info.fecha || '', origen: q.info.origen || ORIGEN_DEF,
       solicitud_id: q.solicitud ? String(q.solicitud.id) : '', solicitud_consecutivo: q.solicitud ? String(q.solicitud.consecutivo) : '',
       costo: r2(c.costo + c.matCost), precio_servicios: r2(c.precio), materiales: r2(c.matVenta), total_oferta: r2(c.oferta), margen: n(q.margin),
       datos: { cfg: clone(cfg), q: clone(q) },
@@ -4618,6 +4642,15 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
             </div>
           </div>
         )}
+        <div className="origenbox">
+          <div className="field" style={{ marginBottom: 6 }}>¿Cómo llegó esta cotización al departamento?</div>
+          <div className="tabs" role="radiogroup" aria-label="Origen de la cotización" style={{ marginBottom: 0 }}>
+            {origenesDe(cfg, [q.info.origen]).map((o) => (
+              <button key={o} type="button" role="radio" aria-checked={(q.info.origen || ORIGEN_DEF) === o} className={'tab big' + ((q.info.origen || ORIGEN_DEF) === o ? ' on' : '')}
+                onClick={() => setQ((x) => { x.info.origen = o; return x; })}>{origenTxt(o)}</button>
+            ))}
+          </div>
+        </div>
         <div className="grid2">
           {[['numero', 'N.º de cotización'], ['proyecto', 'Proyecto'], ['cliente', 'Cliente'], ['contacto', 'Contacto']].map(([k, lab]) => (
             <label className="field" key={k}>{lab}<input className="txt" id={'info-' + k} type="text" value={q.info[k] || ''} onChange={setInfo(k)} /></label>
@@ -4814,7 +4847,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
           <div style={{ minWidth: 0 }}>
             <div className="btitle">{q.info.numero ? 'COTIZACIÓN ' + q.info.numero : 'COTIZACIÓN'}</div>
-            <div className="bsub">{q.info.proyecto || 'Sin nombre de proyecto'}{q.info.cliente ? ' · ' + q.info.cliente : ''}{q.solicitud ? ' · solicitud #' + q.solicitud.consecutivo : ''}</div>
+            <div className="bsub">{q.info.proyecto || 'Sin nombre de proyecto'}{q.info.cliente ? ' · ' + q.info.cliente : ''}{q.solicitud ? ' · solicitud #' + q.solicitud.consecutivo : ''} · {origenTxt(q.info.origen)}</div>
           </div>
         </div>
         <div className="hbtns">
@@ -4949,7 +4982,7 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
     rd.onload = () => {
       try {
         const res = L.parseMachote(XLSX, new Uint8Array(rd.result));
-        setD(toDraft(res.cfg)); setDirty(true); setPendingQty(res.qty); setSource('Excel: ' + file.name);
+        setD({ ...toDraft(res.cfg), vendedores: d.vendedores }); setDirty(true); setPendingQty(res.qty); setSource('Excel: ' + file.name);
         const over = res.cfg.roles.length > L.LIM.roles ? ' Atención: trae ' + res.cfg.roles.length + ' puestos y el formato del machote admite ' + L.LIM.roles + '.' : '';
         setMsg({ ok: true, t: 'Se leyó «' + file.name + '»: ' + res.cfg.roles.length + ' puestos, ' + res.cfg.cr.length + ' viáticos C.R., ' + res.cfg.ca.length + ' viáticos C.A., ' + res.cfg.renta.length + ' rentas y ' + res.cfg.mats.length + ' materiales. Tipo de cambio ' + crc(res.cfg.tc) + ', cargas ' + pct(res.cfg.cs) + ', overhead ' + pct(res.cfg.fa) + '. Revise las pestañas y pulse «Guardar configuración».' + over });
       } catch (err) { setMsg({ ok: false, t: 'No se pudo leer «' + file.name + '»: ' + (err && err.message ? err.message : err) }); }
@@ -4974,7 +5007,7 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
     }
   }
 
-  const tabs = [['general', 'General'], ['roles', 'Personal y salarios'], ['cr', 'Viáticos C.R.'], ['ca', 'Viáticos C.A.'], ['renta', 'Renta de equipos'], ['mats', 'Materiales'], ['excel', 'Importar / exportar Excel']];
+  const tabs = [['general', 'General'], ['roles', 'Personal y salarios'], ['cr', 'Viáticos C.R.'], ['ca', 'Viáticos C.A.'], ['renta', 'Renta de equipos'], ['mats', 'Materiales'], ['vendedores', 'Vendedores'], ['excel', 'Importar / exportar Excel']];
 
   const listTable = (key, title) => {
     const rows = d[key], lim = L.LIM[key];
@@ -5049,6 +5082,25 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
         <div className="addrow"><button type="button" className="btn btn-line" disabled={ro || d.roles.length >= L.LIM.roles} onClick={() => addRow('roles')}>{Icon.plus} Agregar puesto</button></div>
       </div>
     );
+  } else if (tab === 'vendedores') {
+    body = (
+      <div>
+        <h3>Vendedores</h3>
+        <p className="note" style={{ marginTop: 0 }}>Todas las cotizaciones son del Departamento de Alarmas; aquí se definen los vendedores por los que puede llegar una cotización. En la cotización se elige «Directo del departamento» (siempre está) o «Por vendedor». Si quita un vendedor, sus cotizaciones del historial se conservan y se pueden seguir filtrando por su nombre.</p>
+        <div className="tblbox" style={{ marginTop: 12, maxWidth: 520 }}><table>
+          <thead><tr><th>Nombre del vendedor</th><th><span className="sr">Quitar</span></th></tr></thead>
+          <tbody>
+            {(d.vendedores || []).length ? d.vendedores.map((v, i) => (
+              <tr key={v.id}>
+                <td><input className="txt cell" type="text" value={v.n} disabled={ro} aria-label="Nombre del vendedor" placeholder="Nombre" onChange={(e) => setRow('vendedores', i, 'n')(e.target.value)} /></td>
+                <td><button type="button" className="rm" disabled={ro} aria-label={'Quitar ' + (v.n || 'vendedor')} title="Quitar vendedor" onClick={() => delRow('vendedores', i)}>{Icon.x}</button></td>
+              </tr>
+            )) : <tr><td colSpan={2} style={{ padding: 14, color: 'var(--muted)' }}>No hay vendedores. Las cotizaciones quedarán como «Directo del departamento».</td></tr>}
+          </tbody>
+        </table></div>
+        <div className="addrow"><button type="button" className="btn btn-line" disabled={ro} onClick={() => upd((x) => { x.vendedores = [...(x.vendedores || []), { id: L.uid('v'), n: '' }]; })}>{Icon.plus} Agregar vendedor</button></div>
+      </div>
+    );
   } else if (tab === 'cr') body = listTable('cr', 'Viáticos Costa Rica');
   else if (tab === 'ca') body = listTable('ca', 'Viáticos Centroamérica');
   else if (tab === 'renta') body = listTable('renta', 'Renta de equipos y otros');
@@ -5092,7 +5144,7 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
         <button type="button" className="btn btn-dark" onClick={onDownload}>{Icon.down} Descargar Excel actual</button>
         <h4 className="sec">Restaurar</h4>
         <p className="note" style={{ marginTop: 0 }}>Vuelve a los valores del machote original (octubre 2025). Se aplica al pulsar «Guardar configuración».</p>
-        <button type="button" className="btn btn-line" disabled={ro} onClick={() => { setD(toDraft(DEFAULT_CFG)); setDirty(true); setSource('Machote original'); setPendingQty(null); setMsg({ ok: true, t: 'Valores del machote original cargados. Pulse «Guardar configuración» para aplicarlos.' }); }}>Restaurar machote original</button>
+        <button type="button" className="btn btn-line" disabled={ro} onClick={() => { setD({ ...toDraft(DEFAULT_CFG), vendedores: d.vendedores }); setDirty(true); setSource('Machote original'); setPendingQty(null); setMsg({ ok: true, t: 'Valores del machote original cargados. Pulse «Guardar configuración» para aplicarlos.' }); }}>Restaurar machote original</button>
       </div>
     );
   }
@@ -5330,6 +5382,8 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
     dato(7, 'B', 'C', 'D', 'Contacto', info0.contacto); dato(7, 'E', 'F', 'G', 'Área', info0.area);
     dato(8, 'B', 'C', 'D', 'Presupuestista', info0.presupuestista); dato(8, 'E', 'F', 'G', 'Margen servicios', '');
     G.getCell('F8').value = F(RS + 'B1'); G.getCell('F8').numFmt = '0.00%'; G.getCell('F8').alignment = { horizontal: 'left' };
+    dato(9, 'B', 'C', 'G', 'Origen', (!info0.origen || info0.origen === 'Departamento de Alarmas') ? 'Directo del departamento' : 'Por vendedor: ' + info0.origen);
+    G.getCell('C9').font = { name: FONT, size: 11, bold: true, color: { argb: 'FFC9541C' } };
     var tablaItems = function (r0, titulo2, conMargen) {
       seccion(G, 'B' + r0 + ':G' + r0, titulo2);
       ['Ítem', 'Descripción', 'Cantidad', 'U/M', 'P/U', 'Total'].forEach(function (h, i) { cell(G, String.fromCharCode(66 + i) + (r0 + 1), h, i === 1 ? hdrL : hdr); });
@@ -5410,13 +5464,17 @@ const hErr = (e) => { const m = String((e && e.message) || e || ''); return /cot
 const fechaCorta = (iso) => { if (!iso) return ''; const d = new Date(String(iso).length === 10 ? iso + 'T12:00:00' : iso); return isNaN(d) ? String(iso) : d.toLocaleDateString('es-CR'); };
 
 function HistorialCot({ supabase, usuarioId, isAdmin }) {
+  const [cfgVend, setCfgVend] = useState(() => { const g = lsGet(CKEY); return g && g.cfg ? g.cfg : null; });
+  useEffect(() => {
+    supabase.rpc('cot_config_leer', { p_usuario: usuarioId }).then(({ data }) => { if (data && data.data && data.data.cfg) setCfgVend(data.data.cfg); });
+  }, [supabase, usuarioId]);
   const confirmar = useContext(ConfirmContext);
   const [lista, setLista] = useState([]);
   const [ocultas, setOcultas] = useState(false);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
-  const [f, setF] = useState({ texto: '', area: '', desde: '', hasta: '' });
+  const [f, setF] = useState({ texto: '', area: '', origen: '', desde: '', hasta: '' });
   const toastT = useRef(null);
   const flash = (t) => { setToast(t); clearTimeout(toastT.current); toastT.current = setTimeout(() => setToast(''), 4200); };
 
@@ -5432,14 +5490,17 @@ function HistorialCot({ supabase, usuarioId, isAdmin }) {
 
   const filtradas = lista.filter((r) => {
     const t = norm(f.texto);
-    if (t && ![r.numero, r.proyecto, r.cliente, r.presupuestista, r.creado_por_nombre, r.solicitud_consecutivo].some((v) => norm(v).includes(t))) return false;
+    if (t && ![r.numero, r.proyecto, r.cliente, r.presupuestista, r.creado_por_nombre, r.solicitud_consecutivo, r.origen].some((v) => norm(v).includes(t))) return false;
     if (f.area && r.area !== f.area) return false;
+    if (f.origen === '__vend' ? (r.origen || ORIGEN_DEF) === ORIGEN_DEF : (f.origen && (r.origen || ORIGEN_DEF) !== f.origen)) return false;
     const fe = String(r.fecha || r.creado_en || '').slice(0, 10);
     if (f.desde && fe < f.desde) return false;
     if (f.hasta && fe > f.hasta) return false;
     return true;
   });
   const sumaTotal = filtradas.reduce((a, r) => a + n(r.total_oferta), 0);
+  const ORIGENES = origenesDe(cfgVend, lista.map((r) => r.origen));
+  const vendTxt = ORIGENES.filter((o) => o !== ORIGEN_DEF);
 
   const excel = async (r) => {
     const { data, error: err } = await supabase.rpc('cot_hist_obtener', { p_usuario: usuarioId, p_id: r.id });
@@ -5480,12 +5541,25 @@ function HistorialCot({ supabase, usuarioId, isAdmin }) {
         <div className="grid3" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))' }}>
           <label className="field" style={{ gridColumn: 'span 2' }}>Buscar<input className="txt" type="search" placeholder="N.º, proyecto, cliente, presupuestista…" value={f.texto} onChange={set('texto')} /></label>
           <label className="field">Área<select className="sel" value={f.area} onChange={set('area')}><option value="">Todas</option><option>Proyectos</option><option>Inspecciones</option></select></label>
+          <label className="field">Origen<select className="sel" value={f.origen} onChange={set('origen')}><option value="">Todos</option><option value="__vend">Por vendedores{vendTxt.length ? ' (' + vendTxt.join(', ') + ')' : ''}</option>{ORIGENES.map((o) => <option key={o} value={o}>{origenTxt(o)}</option>)}</select></label>
           <label className="field">Desde<input className="txt" type="date" value={f.desde} onChange={set('desde')} /></label>
           <label className="field">Hasta<input className="txt" type="date" value={f.hasta} onChange={set('hasta')} /></label>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginTop: 10, fontSize: 13, color: 'var(--muted)' }}>
-          <span>{cargando ? 'Cargando…' : filtradas.length + ' de ' + lista.length + ' cotizaciones'}{(f.texto || f.area || f.desde || f.hasta) ? <button type="button" className="use" style={{ marginLeft: 8 }} onClick={() => setF({ texto: '', area: '', desde: '', hasta: '' })}>Limpiar filtros</button> : null}</span>
+          <span>{cargando ? 'Cargando…' : filtradas.length + ' de ' + lista.length + ' cotizaciones'}{(f.texto || f.area || f.origen || f.desde || f.hasta) ? <button type="button" className="use" style={{ marginLeft: 8 }} onClick={() => setF({ texto: '', area: '', origen: '', desde: '', hasta: '' })}>Limpiar filtros</button> : null}</span>
           <span>Total ofertado: <strong style={{ color: 'var(--red-text)' }}>{usd(sumaTotal)}</strong></span>
+        </div>
+        <div className="origenes">
+          {ORIGENES.map((o) => {
+            const de = filtradas.filter((r) => (r.origen || ORIGEN_DEF) === o);
+            return (
+              <button type="button" key={o} className={'orig' + (f.origen === o ? ' on' : '')} onClick={() => setF((x) => ({ ...x, origen: x.origen === o ? '' : o }))}>
+                <span className="o-n">{origenTxt(o)}</span>
+                <span className="o-v">{usd(de.reduce((a, r) => a + n(r.total_oferta), 0))}</span>
+                <span className="o-c">{de.length} cotización{de.length === 1 ? '' : 'es'}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -5494,7 +5568,7 @@ function HistorialCot({ supabase, usuarioId, isAdmin }) {
           : !cargando && !filtradas.length ? <div style={{ padding: 18, color: 'var(--muted)', fontSize: 13 }}>{lista.length ? 'Ninguna cotización coincide con los filtros.' : ocultas ? 'No hay cotizaciones quitadas.' : 'Todavía no hay cotizaciones terminadas. En «Cotización en proceso», al final (Resumen) use «Terminar y pasar al historial».'}</div>
           : (
             <div style={{ overflowX: 'auto' }}><table>
-              <thead><tr><th>Fecha</th><th>N.º</th><th>Proyecto</th><th>Cliente</th><th>Área</th><th>Presupuestista</th><th className="r">Servicios</th><th className="r">Materiales</th><th className="r">Total oferta</th><th>Solicitud</th><th><span className="sr">Acciones</span></th></tr></thead>
+              <thead><tr><th>Fecha</th><th>N.º</th><th>Proyecto</th><th>Cliente</th><th>Área</th><th>Presupuestista</th><th>Origen</th><th className="r">Servicios</th><th className="r">Materiales</th><th className="r">Total oferta</th><th>Solicitud</th><th><span className="sr">Acciones</span></th></tr></thead>
               <tbody>
                 {filtradas.map((r) => (
                   <tr key={r.id}>
@@ -5504,6 +5578,7 @@ function HistorialCot({ supabase, usuarioId, isAdmin }) {
                     <td style={{ whiteSpace: 'normal', minWidth: 140 }}>{r.cliente || '—'}</td>
                     <td>{r.area || ''}</td>
                     <td>{r.presupuestista || r.creado_por_nombre || ''}</td>
+                    <td><span className={'chip' + ((r.origen || ORIGEN_DEF) === ORIGEN_DEF ? '' : ' vend')}>{(r.origen || ORIGEN_DEF) === ORIGEN_DEF ? 'Directo' : r.origen}</span></td>
                     <td className="r">{usd(n(r.precio_servicios))}</td>
                     <td className="r">{usd(n(r.materiales))}</td>
                     <td className="r strong" style={{ color: 'var(--red-text)' }}>{usd(n(r.total_oferta))}</td>

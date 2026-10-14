@@ -4340,7 +4340,7 @@ var CotLogic = (function () {
     put(G, 'B13', 'COSTO TOTAL'); put(G, 'G13', F('SUM(G8:G12)', USD));
     put(G, 'B14', 'MARGEN DE UTILIDAD');
     put(G, 'B15', 'Margen'); put(G, 'B16', 'Precio Venta'); put(G, 'B17', 'Ganancia');
-    (q.cmp || ['25', '27.5', '30', '32.5', '35']).slice(0, 5).forEach(function (raw, i) {
+    (q.cmp || ['15', '20', '25', '30', '35']).slice(0, 5).forEach(function (raw, i) {
       var c = String.fromCharCode(67 + i), v = Math.min(n(raw) / 100, 0.95);
       put(G, c + '15', Math.abs(v - mg) < 1e-9 ? F(RS + 'B1', '0.00%') : N(v, '0.00%'));
       put(G, c + '16', F('$G$13/(1-' + c + '15)', USD)); put(G, c + '17', F(c + '16-$G$13', USD));
@@ -4400,7 +4400,7 @@ function blankQuote(cfg) {
   return {
     info: { proyecto: '', cliente: '', area: 'Proyectos', fecha: new Date().toLocaleDateString('en-CA'), contacto: '', presupuestista: '', numero: '' },
     roles: {}, cr: {}, ca: {}, renta: {}, mats: {}, eq: { tub: '0', disp: '0', extra: '3' },
-    margin: s(n(cfg.margin) * 100, 2), matMargin: s(n(cfg.matMargin) * 100, 2), cmp: ['25', '27.5', '30', '32.5', '35'], example: false,
+    margin: s(n(cfg.margin) * 100, 2), matMargin: s(n(cfg.matMargin) * 100, 2), cmp: ['15', '20', '25', '30', '35'], example: false,
   };
 }
 function exampleQuote(cfg) {
@@ -4491,7 +4491,12 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
   const initCfg = lsGet(CKEY) || { cfg: DEFAULT_CFG, updatedAt: null, source: 'Machote original (incluido en la app)' };
   const [cfgDoc, setCfgDoc] = useState(initCfg);
   const cfg = cfgDoc.cfg;
-  const [q, setQRaw] = useState(() => lsGet(QKEY) || exampleQuote(initCfg.cfg));
+  const [q, setQRaw] = useState(() => {
+    const g = lsGet(QKEY);
+    // Cotizaciones guardadas con el comparativo viejo pasan a 15, 20, 25, 30 y 35 %
+    if (g && Array.isArray(g.cmp) && g.cmp.join('|') === '25|27.5|30|32.5|35') g.cmp = ['15', '20', '25', '30', '35'];
+    return g || exampleQuote(initCfg.cfg);
+  });
   const [step, setStep] = useState(1);
   const [viaTab, setViaTab] = useState('cr');
   const [search, setSearch] = useState('');
@@ -4550,7 +4555,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
     const r2 = (v) => Math.round(n(v) * 100) / 100;
     const reg = {
       numero: q.info.numero || '', proyecto: q.info.proyecto || '', cliente: q.info.cliente || '', area: q.info.area || '',
-      presupuestista: q.info.presupuestista || usuarioNombre || '', fecha: q.info.fecha || '',
+      presupuestista: usuarioNombre || q.info.presupuestista || '', fecha: q.info.fecha || '',
       solicitud_id: q.solicitud ? String(q.solicitud.id) : '', solicitud_consecutivo: q.solicitud ? String(q.solicitud.consecutivo) : '',
       costo: r2(c.costo + c.matCost), precio_servicios: r2(c.precio), materiales: r2(c.matVenta), total_oferta: r2(c.oferta), margen: n(q.margin),
       datos: { cfg: clone(cfg), q: clone(q) },
@@ -4590,6 +4595,11 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
   const m = c.m;
   const isOn = (raw) => Math.abs(Math.min(n(raw) / 100, 0.95) - m) < 1e-9;
   const statusTxt = online === null ? 'Conectando…' : online ? 'Configuración en línea' : 'Configuración local (sin conexión)';
+  // El presupuestista es siempre el usuario que inició sesión
+  useEffect(() => {
+    if (usuarioNombre && q.info.presupuestista !== usuarioNombre) setQ((x) => { x.info.presupuestista = usuarioNombre; return x; });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usuarioNombre, q.info.presupuestista]);
   const setInfo = (k) => (e) => { const v = e.target.value; setQ((x) => { x.info[k] = v; return x; }); };
 
   let body;
@@ -4609,13 +4619,14 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
           </div>
         )}
         <div className="grid2">
-          {[['numero', 'N.º de cotización'], ['proyecto', 'Proyecto'], ['cliente', 'Cliente'], ['contacto', 'Contacto'], ['presupuestista', 'Presupuestista']].map(([k, lab]) => (
+          {[['numero', 'N.º de cotización'], ['proyecto', 'Proyecto'], ['cliente', 'Cliente'], ['contacto', 'Contacto']].map(([k, lab]) => (
             <label className="field" key={k}>{lab}<input className="txt" id={'info-' + k} type="text" value={q.info[k] || ''} onChange={setInfo(k)} /></label>
           ))}
+          <label className="field">Presupuestista<input className="txt" id="info-presupuestista" type="text" value={q.info.presupuestista || usuarioNombre || ''} readOnly disabled title="Se llena con el usuario que inició sesión" /></label>
           <label className="field">Área<select className="sel" id="info-area" value={q.info.area} onChange={setInfo('area')}><option>Proyectos</option><option>Inspecciones</option></select></label>
           <label className="field">Fecha<input className="txt" id="info-fecha" type="date" value={q.info.fecha} onChange={setInfo('fecha')} /></label>
         </div>
-        <p className="note">Salarios, tipo de cambio, overhead y catálogos se administran en <strong>Configuración</strong> (botón del engranaje). Esta cotización se guarda en este equipo mientras trabaja.</p>
+        <p className="note">Salarios, tipo de cambio, overhead y catálogos se administran en <strong>Configuración</strong> (botón del engranaje). El presupuestista es automáticamente el usuario que inició sesión. Esta cotización se guarda en este equipo mientras trabaja.</p>
       </div>
     );
   } else if (step === 1) {
@@ -5336,7 +5347,7 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
     G.mergeCells('B' + rCosto + ':F' + rCosto); cell(G, 'B' + rCosto, 'COSTO TOTAL', tot()); cell(G, 'G' + rCosto, F('SUM(G12:G15)'), tot(USD));
     seccion(G, 'B18:G18', 'MARGEN DE UTILIDAD — comparativo');
     cell(G, 'B19', 'Margen', hdrL); cell(G, 'B20', 'Precio de venta', dat(null, false, { font: { bold: true } })); cell(G, 'B21', 'Ganancia', dat(null, true, { font: { bold: true } }));
-    (q.cmp || ['25', '27.5', '30', '32.5', '35']).slice(0, 5).forEach(function (raw, i) {
+    (q.cmp || ['15', '20', '25', '30', '35']).slice(0, 5).forEach(function (raw, i) {
       var c = String.fromCharCode(67 + i), v = Math.min(n(raw) / 100, 0.95), uso = Math.abs(v - mg) < 1e-9;
       var stUso = uso ? { fill: C.accentSoft, font: { bold: true, color: { argb: 'FFC9541C' } } } : {};
       cell(G, c + '19', uso ? F(RS + 'B1') : v, Object.assign({}, hdr, { fmt: '0.00%' }, uso ? { fill: C.accent } : {}));

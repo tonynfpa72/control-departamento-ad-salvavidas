@@ -4551,7 +4551,11 @@ const mat2Cfg = (cfg) => {
   MAT2_FILAS.forEach((r) => { const v = m.costos && m.costos[r]; costos[r] = v == null || v === '' || isNaN(Number(v)) ? MAT2_ITEMS[r].d : Number(v); });
   return { margen: m.margen == null || m.margen === '' || isNaN(Number(m.margen)) ? MAT2_MARGEN_DEF : Number(m.margen), costos };
 };
-const mat2Blank = (cfg) => ({ margen: s(mat2Cfg(cfg).margen * 100, 3), F: {}, ov: {}, D43: '', D45: '', D46: '', M4: '', M5: '', M6: '', M7: '', A60: '' });
+const mat2Blank = (cfg) => ({ margen: s(mat2Cfg(cfg).margen * 100, 3), F: {}, Mt: {}, ov: {}, D43: '', D45: '', D46: '', M4: '', M5: '', M6: '', M7: '', A60: '' });
+// Cables: se cotizan por METRO (con decimales). Cantidad en carruchas = metros ÷ largo de la carrucha.
+const MAT2_CABLES_M = [28, 29, 30, 31, 32, 33, 34, 35, 36, 37];
+const mat2Largo = (r) => { const m = /\((\d+(?:[.,]\d+)?)\s*m\)/i.exec((MAT2_ITEMS[r] || {}).u || ''); return m ? Number(m[1].replace(',', '.')) : 1; };
+const MAT2_SUG_M = { 29: 'M4', 30: 'M6', 34: 'M5', 35: 'M7' };
 const roundUp = (x) => { const v = Number(Number(x).toFixed(9)); return v > 0 ? Math.ceil(v) : (v < 0 ? Math.floor(v) : 0); };
 
 // Calcula toda la hoja igual que Excel
@@ -4579,7 +4583,14 @@ function matCalc(cfg, m0) {
   F[18] = U(ov(18) != null ? ov(18) : F[5] / 9 + E43 + E44 + E45 + E46);
   F[19] = U(F[17] + F[18] * 1); F[20] = U(F[19] * 1); F[21] = U(inp(21));
   F[23] = U(ov(23) != null ? ov(23) : J23); F[24] = U(F[23] * 3); F[25] = U(F[23] * 2); F[26] = U(F[23] * 2);
-  [28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38].forEach((r) => { F[r] = U(inp(r)); });
+  // Cables por metro (decimales); cotizaciones viejas sin metros usan las carruchas digitadas
+  const Mt = {};
+  MAT2_CABLES_M.forEach((r) => {
+    const tieneM = m.Mt && m.Mt[r] != null && m.Mt[r] !== '';
+    Mt[r] = tieneM ? Math.max(0, N(m.Mt[r])) : inp(r) * mat2Largo(r);
+    F[r] = Mt[r] / mat2Largo(r);
+  });
+  F[38] = U(inp(38));
   F[53] = U(inp(53)); F[54] = U(F[53] * 3); F[55] = U(F[53] * 2); F[56] = U(F[53] * 2); F[57] = U(inp(57));
   const G = {}, H = {};
   let costo = 0;
@@ -4588,7 +4599,7 @@ function matCalc(cfg, m0) {
   const sub = {}; MAT2_SECCIONES.forEach((sc) => { sub[sc.id] = suma(sc.rows); });
   const H58 = sub.ves;
   const H39 = sub.int + sub.rig + sub.cab + H58 + A60;
-  return { g3, D, F, G, H, sub, H58, H39, A60, costo: costo + A60, venta: H39,
+  return { g3, D, F, G, H, Mt, sub, H58, H39, A60, costo: costo + A60, venta: H39,
     eq: { D43, E43, F43, H43, D44, F44, H44, D45, E45, G45, D46, E46, H46 },
     cab: { M4, M5, M6, M7, N4, N6, J5, J23, J29, J30, J34, J35 } };
 }
@@ -4619,7 +4630,7 @@ function desgloseRubros(cfg, q, c) {
   const mats = [];
   if (mt) {
     MAT2_SECCIONES.forEach((sc) => {
-      const rs = sc.rows.filter((r) => mt.F[r] > 0).map((r) => ({ d: MAT2_ITEMS[r].n, det: ({ int: 'Interiores', rig: 'Exteriores (rígida)', cab: 'Cables', ves: 'VESDA' })[sc.id], cant: mt.F[r], um: MAT2_ITEMS[r].u, pu: mt.D[r], costo: mt.F[r] * mt.D[r], venta: mt.H[r] }));
+      const rs = sc.rows.filter((r) => mt.F[r] > 0).map((r) => { const esM = MAT2_CABLES_M.includes(r), lg = mat2Largo(r); return { d: MAT2_ITEMS[r].n, det: ({ int: 'Interiores', rig: 'Exteriores (rígida)', cab: 'Cables', ves: 'VESDA' })[sc.id] + (esM ? ' · ' + fq(mt.F[r]) + ' carr. de ' + lg + ' m' : ''), cant: esM ? mt.Mt[r] : mt.F[r], um: esM ? 'm' : MAT2_ITEMS[r].u, pu: esM ? mt.D[r] / lg : mt.D[r], costo: mt.F[r] * mt.D[r], venta: mt.H[r] }; });
       mats.push(...rs);
     });
     if (mt.A60 > 0) mats.push({ d: 'Transporte', det: 'Costo con Full Protection', cant: 1, um: 'Gbl', pu: mt.A60, costo: mt.A60, venta: mt.A60 });
@@ -5061,6 +5072,21 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
     const fmtQ = (v) => (Math.round(n(v) * 100) / 100).toLocaleString('es-CR', { maximumFractionDigits: 2 });
     const cantidad = (r) => {
       const it = MAT2_ITEMS[r];
+      if (MAT2_CABLES_M.includes(r)) {
+        const tieneM = m2.Mt && m2.Mt[r] != null && m2.Mt[r] !== '';
+        const sug = MAT2_SUG_M[r] ? n(m2[MAT2_SUG_M[r]]) : 0;
+        return (
+          <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <input className="num verde" type="number" inputMode="decimal" step="any" min={0} aria-label={'Metros ' + it.n}
+                value={tieneM ? m2.Mt[r] : (mt.Mt[r] > 0 ? String(Math.round(mt.Mt[r] * 100) / 100) : '')} placeholder={sug > 0 ? fmtQ(sug) : '0'}
+                onChange={(e) => { const v = e.target.value; setQ((x) => { x.mat2 = x.mat2 || mat2Blank(cfg); x.mat2.Mt = { ...(x.mat2.Mt || {}), [r]: v === '' ? '' : String(Math.max(0, Number(v) || 0)) }; x.mat2.F = { ...(x.mat2.F || {}), [r]: '' }; return x; }); }} />
+              <span style={{ fontSize: 12, color: 'var(--muted)' }}>m</span>
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--muted)' }}>{mt.F[r] > 0 ? '= ' + (Math.round(mt.F[r] * 1000) / 1000).toLocaleString('es-CR', { maximumFractionDigits: 3 }) + ' carr.' : (sug > 0 ? 'sugerido ' + fmtQ(sug) + ' m' : '')}</span>
+          </span>
+        );
+      }
       if (it.tipo === 'in') return <NumIn cls="verde" step={1} value={(m2.F || {})[r] ?? ''} label={'Cantidad ' + it.n} onChange={(v) => setMF('F', r, v === '' ? '' : String(Math.max(0, Math.ceil(Number(v) || 0))))} />;
       if (it.tipo === 'auto') {
         const tiene = m2.ov && m2.ov[r] != null && m2.ov[r] !== '';
@@ -5085,7 +5111,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
               return (
                 <tr key={r} className={usa ? '' : 'apagada'}>
                   <td className="strong" style={{ whiteSpace: 'normal', minWidth: 210 }}>{it.n}{it.f && it.tipo !== 'in' ? <span className="fx">{it.tipo === 'auto' ? 'auto: ' : ''}{it.f}</span> : null}</td>
-                  <td>{it.u}</td>
+                  <td>{it.u}{MAT2_CABLES_M.includes(r) ? <span className="fx">por metro: {usd(mt.G[r] / mat2Largo(r))}</span> : null}</td>
                   <td className="r">{usd(mt.D[r])}</td>
                   <td className="r">{usd(mt.G[r])}</td>
                   <td className="r">{cantidad(r)}</td>
@@ -5100,7 +5126,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
     );
     body = (
       <div>
-        <div className="banner b-info" style={{ marginBottom: 14 }}>Mismo cálculo que el machote de materiales, con todas las cantidades cerradas (se redondean hacia arriba). Las casillas <span className="verdetxt">verdes</span> se digitan; el resto se calcula solo. Las verdes con número gris son automáticas: puede escribir otro valor y con ↺ vuelve al cálculo.</div>
+        <div className="banner b-info" style={{ marginBottom: 14 }}>Mismo cálculo que el machote de materiales, con las cantidades cerradas (se redondean hacia arriba), excepto los <strong>cables, que se digitan en metros</strong> y se cobran la fracción de carrucha que corresponde. Las casillas <span className="verdetxt">verdes</span> se digitan; el resto se calcula solo. Las verdes con número gris son automáticas: puede escribir otro valor y con ↺ vuelve al cálculo.</div>
         <div className="grid3">
           <label className="field">Margen de materiales (%)<NumIn cls="full verde" id="mat-margin" step="0.5" value={m2.margen} onChange={(v) => setM('margen', v)} /></label>
           <label className="field">Transporte (costo con Full Protection)<NumIn cls="full" value={m2.A60} label="Transporte" onChange={(v) => setM('A60', v)} /></label>
@@ -5747,12 +5773,13 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
     var filaM = function (r, z) {
       var it = MAT2_ITEMS[r], verde = it.tipo === 'in' || it.tipo === 'auto';
       M.mergeCells('A' + r + ':C' + r);
-      cell(M, 'A' + r, it.n, dat(null, z, { font: { bold: mt.F[r] > 0, color: { argb: mt.F[r] > 0 ? C.ink : C.muted } } }));
+      var esM = MAT2_CABLES_M.indexOf(r) >= 0;
+      cell(M, 'A' + r, it.n + (esM && mt.F[r] > 0 ? ' — ' + (Math.round(mt.Mt[r] * 100) / 100).toLocaleString('es-CR') + ' m' : ''), dat(null, z, { font: { bold: mt.F[r] > 0, color: { argb: mt.F[r] > 0 ? C.ink : C.muted } } }));
       cell(M, 'D' + r, mt.D[r], dat(USD, z));
       cell(M, 'E' + r, it.u, dat(null, z, { al: { horizontal: 'center' } }));
       var ovr = it.tipo === 'auto' && m2.ov && m2.ov[r] != null && m2.ov[r] !== '';
       var fv = it.tipo === 'in' || ovr ? mt.F[r] : r === 11 ? 0 : F(FX[r]);
-      cell(M, 'F' + r, fv, verde ? inpV('0') : dat('0', z, { al: { horizontal: 'right' } }));
+      cell(M, 'F' + r, esM ? mt.F[r] : fv, esM ? inpV('0.000') : verde ? inpV('0') : dat('0', z, { al: { horizontal: 'right' } }));
       cell(M, 'G' + r, F('D' + r + '+(D' + r + '*G$3)'), dat(USD, z));
       M.mergeCells('H' + r + ':I' + r);
       cell(M, 'H' + r, F('F' + r + '*G' + r), dat(USD0, z, { font: { bold: true } }));

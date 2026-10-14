@@ -1745,6 +1745,8 @@ function cotRowFromDb(r) {
     monto: r.monto || 0,
     creado: r.created_at || r.creado_en || r.fecha || "",
     fechaEnvio: r.fecha_envio || "",
+    moneda: r.moneda || "USD",
+    tipoCambio: r.tipo_cambio || null,
   };
 }
 
@@ -3582,22 +3584,62 @@ function FacturacionIpmCard() {
   );
 }
 
+// ===== Tipo de cambio del día (colones por dólar, venta) =====
+// Tipo de cambio de REFERENCIA del Banco Central de Costa Rica (venta).
+// Se toma una vez al día de /api/tc (Vercel → servicio web del BCCR; respaldo:
+// Hacienda, que publica el mismo dato del BCCR); si no, el último guardado.
+const TC_RESPALDO = 505;
+const hoyCR = () => new Date().toLocaleDateString("en-CA");
+function leerTCGuardado() { try { return JSON.parse(localStorage.getItem("tcDia") || "null"); } catch (e) { return null; } }
+let TC_PROMESA = null;
+function obtenerTipoCambio() {
+  const hoy = hoyCR(), g = leerTCGuardado();
+  if (g && g.dia === hoy && g.venta > 0) return Promise.resolve(g);
+  if (TC_PROMESA) return TC_PROMESA;
+  const fuentes = [
+    async () => { const r = await fetch("/api/tc"); if (!r.ok) throw new Error("api"); const j = await r.json(); return { venta: Number(j.venta), compra: Number(j.compra), fecha: j.fecha, fuente: j.fuente || "Banco Central de Costa Rica" }; },
+    async () => { const r = await fetch("https://api.hacienda.go.cr/indicadores/tc/dolar"); if (!r.ok) throw new Error("hacienda"); const j = await r.json(); return { venta: Number(j && j.venta && j.venta.valor), compra: Number(j && j.compra && j.compra.valor), fecha: j && j.venta && j.venta.fecha, fuente: "BCCR (referencia, venta) vía Hacienda" }; },
+  ];
+  TC_PROMESA = (async () => {
+    for (const f of fuentes) {
+      try { const x = await f(); if (x.venta > 0) { const out = { ...x, dia: hoy }; try { localStorage.setItem("tcDia", JSON.stringify(out)); } catch (e) { /* nada */ } return out; } } catch (e) { /* siguiente fuente */ }
+    }
+    if (g && g.venta > 0) return { ...g, viejo: true };
+    return { venta: TC_RESPALDO, fecha: "", fuente: "valor de respaldo (no se pudo consultar)", dia: hoy, respaldo: true };
+  })();
+  TC_PROMESA.finally(() => { setTimeout(() => { TC_PROMESA = null; }, 60000); });
+  return TC_PROMESA;
+}
+function useTipoCambio() {
+  const [tc, setTc] = useState(() => { const g = leerTCGuardado(); return g && g.venta > 0 ? g : { venta: TC_RESPALDO, fuente: "consultando…" }; });
+  useEffect(() => { let vivo = true; obtenerTipoCambio().then((x) => { if (vivo) setTc(x); }); return () => { vivo = false; }; }, []);
+  return tc;
+}
+// Monto de una solicitud en dólares (si está en colones se divide entre su tipo de cambio)
+const aUSD = (monto, moneda, tcFila, tcHoy) => (moneda === "CRC" ? (Number(monto) || 0) / (Number(tcFila) || Number(tcHoy) || TC_RESPALDO) : Number(monto) || 0);
+const fmtCRC = (v) => "₡" + Math.round(Number(v) || 0).toLocaleString("es-CR");
+const tcTexto = (tc) => "₡" + (Number(tc.venta) || TC_RESPALDO).toLocaleString("es-CR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + (tc.fecha ? " (" + String(tc.fecha).slice(0, 10) + ")" : "") + (tc.respaldo ? " · respaldo" : tc.viejo ? " · último disponible" : "");
+
 function ResumenCotizacionesCard() {
   const [rows, setRows] = useState([]);
   useEffect(() => {
     const cargar = async () => {
-      const { data } = await supabase.from("cotizaciones").select("actividad, monto");
+      const { data } = await supabase.from("cotizaciones").select("*");
       if (data) setRows(data);
     };
     cargar();
     const intervalo = setInterval(cargar, 20000); // se refresca sola cada 20s
     return () => clearInterval(intervalo);
   }, []);
+  const tc = useTipoCambio();
   const total = rows.length;
   const conOC = rows.filter((r) => r.actividad === "Con OC").length;
   const tasaConversion = total > 0 ? Math.round((conOC / total) * 1000) / 10 : 0;
-  const pipelineAbierto = rows.filter((r) => r.actividad === "Seguimiento").reduce((s, r) => s + (Number(r.monto) || 0), 0);
-  const valorGanado = rows.filter((r) => r.actividad === "Con OC").reduce((s, r) => s + (Number(r.monto) || 0), 0);
+  // Montos en colones se convierten a dólares con su tipo de cambio (o el de hoy)
+  const usdDe = (r) => aUSD(r.monto, r.moneda, r.tipo_cambio, tc.venta);
+  const pipelineAbierto = rows.filter((r) => r.actividad === "Seguimiento").reduce((s, r) => s + usdDe(r), 0);
+  const valorGanado = rows.filter((r) => r.actividad === "Con OC").reduce((s, r) => s + usdDe(r), 0);
+  const enColones = rows.filter((r) => r.moneda === "CRC").length;
 
   return (
     <Card title="Cotizaciones — conversión y pipeline">
@@ -3609,12 +3651,15 @@ function ResumenCotizacionesCard() {
         <div style={{ background: T.amberSoft, borderRadius: 10, padding: 14 }}>
           <div style={{ fontSize: 22, fontWeight: 800, color: T.amber }}>{fmtMoney(pipelineAbierto)}</div>
           <div style={{ fontSize: 12, color: T.inkSoft }}>Valor del pipeline abierto (en Seguimiento)</div>
+          <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 2 }}>≈ {fmtCRC(pipelineAbierto * tc.venta)}</div>
         </div>
         <div style={{ background: T.greenSoft, borderRadius: 10, padding: 14 }}>
           <div style={{ fontSize: 22, fontWeight: 800, color: T.green }}>{fmtMoney(valorGanado)}</div>
           <div style={{ fontSize: 12, color: T.inkSoft }}>Valor ganado (Con OC)</div>
+          <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 2 }}>≈ {fmtCRC(valorGanado * tc.venta)}</div>
         </div>
       </div>
+      <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 10 }}>Montos en dólares. {enColones ? enColones + " cotización(es) en colones se convierten con su tipo de cambio. " : ""}Tipo de cambio de hoy (venta): <b>{tcTexto(tc)}</b> · {tc.fuente}</div>
     </Card>
   );
 }
@@ -3705,6 +3750,16 @@ const COTZ_CSS = `.cotz{--bg:#F3F5F7;--surface:#FFFFFF;--surface2:#F7F8FA;--line
 .cotz .desg-h span:last-child{font-weight:500;color:var(--muted);font-size:12.5px}
 .cotz .desg-h strong{color:var(--red-text)}
 .cotz .editbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-top:10px;padding:10px 14px;border-radius:12px;background:var(--warn-bg);color:var(--warn-fg);font-size:13px;border:1px solid #F0C36D}
+.cotz .embudo{display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;margin-top:10px}
+.cotz .emb-c{flex:1 1 170px;border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#fff}
+.cotz .emb-c.gan{background:var(--ok-bg);border-color:#A8D5AA}
+.cotz .emb-t{font-size:12px;font-weight:700;color:var(--muted)}
+.cotz .emb-n{font-size:28px;font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums}
+.cotz .emb-m{font-size:14px;font-weight:700;color:var(--slate);font-variant-numeric:tabular-nums}
+.cotz .emb-s{font-size:11.5px;color:var(--muted)}
+.cotz .emb-f{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:11.5px;color:var(--muted);padding:0 4px}
+.cotz .emb-f span{font-size:16px;font-weight:800;color:var(--red-text)}
+.cotz .emb-f::after{content:'→';font-size:18px;color:var(--muted);line-height:1}
 .cotz .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:12px}
 .cotz .kpi{border:1px solid var(--line);border-radius:10px;padding:9px 12px;background:#fff}
 .cotz .kpi-t{font-size:11.5px;font-weight:700;color:var(--muted)}
@@ -4587,7 +4642,7 @@ const origenesDe = (c, extra) => {
 };
 function blankQuote(cfg) {
   return {
-    info: { proyecto: '', cliente: '', area: 'Proyectos', fecha: new Date().toLocaleDateString('en-CA'), contacto: '', presupuestista: '', numero: '', origen: ORIGEN_DEF, inicio: new Date().toLocaleDateString('en-CA') },
+    info: { proyecto: '', cliente: '', area: 'Proyectos', fecha: new Date().toLocaleDateString('en-CA'), contacto: '', presupuestista: '', numero: '', origen: ORIGEN_DEF, inicio: new Date().toLocaleDateString('en-CA'), moneda: 'USD' },
     roles: {}, cr: {}, ca: {}, renta: {}, mats: {}, eq: { tub: '', disp: '', extra: '' },
     margin: s(n(cfg.margin) * 100, 2), matMargin: s(n(cfg.matMargin) * 100, 2), cmp: ['15', '20', '25', '30', '35'], example: false, mat2: mat2Blank(cfg),
   };
@@ -4780,7 +4835,13 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
   const line = (key, id) => q[key][id] || {};
   const setLine = (key, id, field, v) => setQ((x) => { x[key][id] = { ...(x[key][id] || {}), [field]: v }; return x; });
 
-  const downloadExcel = () => descargarExcelCotz(cfg, q, flash);
+  // Moneda de la oferta: los cálculos van en USD; si es en colones se muestra con el tipo de cambio de HOY
+  const tcHoy = useTipoCambio();
+  const enCRC = q.info.moneda === 'CRC';
+  const tcUsar = n(tcHoy.venta) || TC_RESPALDO;
+  const mon = (v) => (enCRC ? fmtCRC(n(v) * tcUsar) : usd(v));
+  const qConTC = () => ({ ...q, info: { ...q.info, tcVenta: tcUsar, tcFecha: tcHoy.fecha || '' } });
+  const downloadExcel = () => descargarExcelCotz(cfg, qConTC(), flash);
   async function terminar() {
     if (!supabase) return;
     setGuardando(true);
@@ -4792,15 +4853,15 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
     let sol = q.solicitud ? { ...q.solicitud } : null;
     if (!sol && onCrearSolicitud) {
       const ns = await onCrearSolicitud({ cliente: q.info.cliente, contacto: q.info.contacto, proyecto: q.info.proyecto, area: q.info.area,
-        numero: numeroReal, presupuestista: usuarioNombre || q.info.presupuestista, monto: r2(c.oferta) });
+        numero: numeroReal, presupuestista: usuarioNombre || q.info.presupuestista, monto: enCRC ? Math.round(c.oferta * tcUsar) : r2(c.oferta), moneda: enCRC ? 'CRC' : 'USD', tc: tcUsar });
       if (ns) sol = { id: ns.id, consecutivo: ns.consecutivo, creadaAuto: true };
     }
-    const qGuardar = clone(q); if (sol) qGuardar.solicitud = sol;
+    const qGuardar = clone(qConTC()); if (sol) qGuardar.solicitud = sol;
     delete qGuardar.histId; delete qGuardar.histNumero;
     const reg = {
       numero: q.info.numero || '', proyecto: q.info.proyecto || '', cliente: q.info.cliente || '', area: q.info.area || '',
       presupuestista: usuarioNombre || q.info.presupuestista || '', fecha: q.info.fecha || '', origen: q.info.origen || ORIGEN_DEF,
-      fecha_carga: q.info.inicio || '',
+      fecha_carga: q.info.inicio || '', moneda: enCRC ? 'CRC' : 'USD', tipo_cambio: enCRC ? tcUsar : '',
       solicitud_id: sol ? String(sol.id) : '', solicitud_consecutivo: sol ? String(sol.consecutivo) : '',
       costo: r2(c.costo + c.matCost), precio_servicios: r2(c.precio), materiales: r2(c.matVenta), total_oferta: r2(c.oferta), margen: n(q.margin),
       datos: { cfg: clone(cfg), q: qGuardar },
@@ -4809,7 +4870,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
     setGuardando(false);
     if (error) { flash(/cot_hist_|cot_puede|schema cache|Could not find/i.test(error.message || '') ? 'Falta correr en Supabase el SQL "cotizador_historial.sql".' : 'No se pudo guardar: ' + (error.message || error)); return; }
     // El total de la oferta pasa al MONTO de la solicitud (cuenta en conversión y pipeline)
-    if (sol && onPasarMonto) onPasarMonto(sol.id, r2(c.oferta), numeroReal);
+    if (sol && onPasarMonto) onPasarMonto(sol.id, enCRC ? Math.round(c.oferta * tcUsar) : r2(c.oferta), numeroReal, enCRC ? 'CRC' : 'USD', enCRC ? tcUsar : null);
     if (q.solicitud && onSolicitudRealizada && !editando) onSolicitudRealizada(q.solicitud.id);
     const b = blankQuote(cfg); setQRaw(b); lsSet(qk, b);
     setConfirmFin(false); setStep(0);
@@ -4834,7 +4895,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
   }
 
   const names = ['Proyecto', 'Mano de obra', 'Viáticos', 'Equipos y renta', 'Materiales', 'Resumen'];
-  const subs = ['Datos generales', usd(c.mo), usd(c.cr + c.ca), usd(c.renta), usd(c.matVenta), usd(c.oferta)];
+  const subs = ['Datos generales', mon(c.mo), mon(c.cr + c.ca), mon(c.renta), mon(c.matVenta), mon(c.oferta)];
   const hints = ['Información general de la cotización', 'Agregue solo los puestos que participan', 'Complete solo los conceptos que apliquen', 'Tiempo estimado y equipos de apoyo', 'Tubería, cajas, cables y VESDA (machote de materiales)', 'Revise márgenes y descargue el Excel'];
   const R = L.rates(cfg);
   const activeRoles = cfg.roles.filter((r) => line('roles', r.id).on);
@@ -4866,6 +4927,16 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
             </div>
           </div>
         )}
+        <div className="origenbox">
+          <div className="field" style={{ marginBottom: 6 }}>Moneda de la oferta</div>
+          <div className="tabs" role="radiogroup" aria-label="Moneda" style={{ marginBottom: 6 }}>
+            {[['USD', 'Dólares (USD)'], ['CRC', 'Colones (₡)']].map(([k, t]) => (
+              <button key={k} type="button" role="radio" aria-checked={(q.info.moneda || 'USD') === k} className={'tab big' + ((q.info.moneda || 'USD') === k ? ' on' : '')}
+                onClick={() => setQ((x) => { x.info.moneda = k; return x; })}>{t}</button>
+            ))}
+          </div>
+          <div className="note" style={{ margin: 0 }}>Tipo de cambio de hoy (venta): <strong>{tcTexto(tcHoy)}</strong> · {tcHoy.fuente}. Se actualiza cada día; al terminar la cotización queda guardado el de ese día.</div>
+        </div>
         <div className="origenbox">
           <div className="field" style={{ marginBottom: 6 }}>¿Cómo llegó esta cotización al departamento?</div>
           <div className="tabs" role="radiogroup" aria-label="Origen de la cotización" style={{ marginBottom: 0 }}>
@@ -5072,14 +5143,15 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
         <div className="tblbox"><table>
           <thead><tr><th>Ítem</th><th>Descripción</th><th className="r">Costo</th><th className="r">Precio venta</th></tr></thead>
           <tbody>
-            {rows.map((z) => <tr key={z[0]}><td>{z[0]}</td><td className="strong">{z[1]}</td><td className="r">{usd(z[2])}</td><td className="r strong">{usd(z[3])}</td></tr>)}
-            <tr><td /><td className="strong">Total oferta</td><td className="r strong">{usd(c.costo + c.matCost)}</td><td className="r strong" style={{ color: 'var(--red-text)' }}>{usd(c.oferta)}</td></tr>
+            {rows.map((z) => <tr key={z[0]}><td>{z[0]}</td><td className="strong">{z[1]}</td><td className="r">{mon(z[2])}</td><td className="r strong">{mon(z[3])}</td></tr>)}
+            <tr><td /><td className="strong">Total oferta</td><td className="r strong">{mon(c.costo + c.matCost)}</td><td className="r strong" style={{ color: 'var(--red-text)' }}>{mon(c.oferta)}</td></tr>
           </tbody>
         </table></div>
+        {enCRC && <div className="banner b-info" style={{ marginTop: 12 }}>Montos en colones al tipo de cambio de hoy <strong>{tcTexto(tcHoy)}</strong>. El costo se calcula en dólares (salarios, viáticos y materiales del machote).</div>}
         <h2 className="sec">Desglose por rubro</h2>
         {desgloseRubros(cfg, q, c).map((g) => (
           <div key={g.id} className="desg">
-            <div className="desg-h"><span>{g.t}</span><span>Costo {usd(g.costo)} · <strong>Venta {usd(g.venta)}</strong></span></div>
+            <div className="desg-h"><span>{g.t}</span><span>Costo {mon(g.costo)} · <strong>Venta {mon(g.venta)}</strong></span></div>
             {g.rows.length ? (
               <div className="tblbox"><table>
                 <thead><tr><th>Descripción</th><th>Detalle</th><th className="r">Cantidad</th><th className="r">P/U (costo)</th><th className="r">Costo</th><th className="r">Precio venta</th></tr></thead>
@@ -5089,12 +5161,12 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
                       <td className="strong" style={{ whiteSpace: 'normal', minWidth: 180 }}>{r.d}</td>
                       <td style={{ whiteSpace: 'normal', color: 'var(--muted)', fontSize: 12.5 }}>{r.det}</td>
                       <td className="r">{(Math.round(r.cant * 100) / 100).toLocaleString('es-CR')} {r.um}</td>
-                      <td className="r">{usd(r.pu)}</td>
-                      <td className="r">{usd(r.costo)}</td>
-                      <td className="r strong">{usd(r.venta)}</td>
+                      <td className="r">{mon(r.pu)}</td>
+                      <td className="r">{mon(r.costo)}</td>
+                      <td className="r strong">{mon(r.venta)}</td>
                     </tr>
                   ))}
-                  <tr className="subt"><td colSpan={4}>Subtotal {g.t.toLowerCase()}{g.nota ? <span className="fx" style={{ display: 'inline', marginLeft: 8 }}>{g.nota}</span> : null}</td><td className="r">{usd(g.costo)}</td><td className="r strong">{usd(g.venta)}</td></tr>
+                  <tr className="subt"><td colSpan={4}>Subtotal {g.t.toLowerCase()}{g.nota ? <span className="fx" style={{ display: 'inline', marginLeft: 8 }}>{g.nota}</span> : null}</td><td className="r">{mon(g.costo)}</td><td className="r strong">{mon(g.venta)}</td></tr>
                 </tbody>
               </table></div>
             ) : <div className="note" style={{ margin: '0 0 4px' }}>Sin datos en este rubro.</div>}
@@ -5106,9 +5178,9 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
           <div className="mc lab">Margen (%)</div>
           {q.cmp.map((raw, i) => <div key={'a' + i} className={'mc' + (isOn(raw) ? ' on' : '')}><NumIn step="0.5" value={raw} label={'Margen de comparación ' + (i + 1)} onChange={(v) => setQ((x) => { x.cmp[i] = v; return x; })} /></div>)}
           <div className="mc lab">Precio venta</div>
-          {q.cmp.map((raw, i) => { const mg = Math.min(n(raw) / 100, 0.95); return <div key={'b' + i} className={'mc' + (isOn(raw) ? ' on' : '')}>{usd(c.costo / (1 - mg))}</div>; })}
+          {q.cmp.map((raw, i) => { const mg = Math.min(n(raw) / 100, 0.95); return <div key={'b' + i} className={'mc' + (isOn(raw) ? ' on' : '')}>{mon(c.costo / (1 - mg))}</div>; })}
           <div className="mc lab">Ganancia</div>
-          {q.cmp.map((raw, i) => { const mg = Math.min(n(raw) / 100, 0.95); return <div key={'c' + i} className={'mc' + (isOn(raw) ? ' on' : '')}>{usd(c.costo / (1 - mg) - c.costo)}</div>; })}
+          {q.cmp.map((raw, i) => { const mg = Math.min(n(raw) / 100, 0.95); return <div key={'c' + i} className={'mc' + (isOn(raw) ? ' on' : '')}>{mon(c.costo / (1 - mg) - c.costo)}</div>; })}
           <div className="mc lab" />
           {q.cmp.map((raw, i) => <div key={'d' + i} className={'mc' + (isOn(raw) ? ' on' : '')}><button type="button" className="use" onClick={() => setQ((x) => { x.margin = raw; return x; })}>{isOn(raw) ? 'En uso' : 'Usar'}</button></div>)}
         </div></div>
@@ -5118,7 +5190,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
         <div className="finbox">
           {confirmFin ? (
             <>
-              <div style={{ flex: '1 1 280px', fontSize: 13.5 }}>{q.histId ? <><strong>¿Guardar los cambios en la cotización {q.histNumero || q.info.numero || ''} del historial?</strong> Se actualiza el mismo registro con un total de <strong>{usd(c.oferta)}</strong> (las fechas de envío se conservan), también el monto de su solicitud, y «en proceso» queda en blanco.</> : <><strong>¿Terminar la cotización {q.info.numero || ''}?</strong> Se guarda en el Historial con un total de <strong>{usd(c.oferta)}</strong> y se quita de «en proceso» (queda en blanco para la siguiente).{q.solicitud ? <> La solicitud <strong>#{q.solicitud.consecutivo}</strong> pasa a «Realizado» y su monto queda en {usd(c.oferta)}.</> : <> Se crea su solicitud en Cotizaciones con ese monto (cuenta en conversión y pipeline).</>}</>}</div>
+              <div style={{ flex: '1 1 280px', fontSize: 13.5 }}>{q.histId ? <><strong>¿Guardar los cambios en la cotización {q.histNumero || q.info.numero || ''} del historial?</strong> Se actualiza el mismo registro con un total de <strong>{mon(c.oferta)}</strong> (las fechas de envío se conservan), también el monto de su solicitud, y «en proceso» queda en blanco.</> : <><strong>¿Terminar la cotización {q.info.numero || ''}?</strong> Se guarda en el Historial con un total de <strong>{mon(c.oferta)}</strong> y se quita de «en proceso» (queda en blanco para la siguiente).{q.solicitud ? <> La solicitud <strong>#{q.solicitud.consecutivo}</strong> pasa a «Realizado» y su monto queda en {mon(c.oferta)}.</> : <> Se crea su solicitud en Cotizaciones con ese monto (cuenta en conversión y pipeline).</>}</>}</div>
               <button type="button" className="btn btn-line" onClick={() => setConfirmFin(false)}>Cancelar</button>
               <button type="button" className="btn btn-red" disabled={guardando} onClick={terminar}>{guardando ? 'Guardando…' : 'Sí, terminar'}</button>
             </>
@@ -5138,7 +5210,7 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
       <style>{COTZ_CSS}</style>
       <div className="topinfo"><div className="wrap">
         <span><span className="dot" style={{ background: online ? '#2E9B57' : '#C98A00' }} />{statusTxt}{cfgDoc.updatedAt ? ' · actualizada ' + fmtDate(cfgDoc.updatedAt) : ''}</span>
-        <span>Tipo de cambio <strong>{crc(n(cfg.tc))}</strong> · Cargas sociales <strong>{pct(n(cfg.cs))}</strong> · Overhead <strong>{pct(n(cfg.fa))}</strong></span>
+        <span>TC de hoy <strong>{tcTexto(tcHoy)}</strong> · TC de salarios <strong>{crc(n(cfg.tc))}</strong> · Cargas sociales <strong>{pct(n(cfg.cs))}</strong> · Overhead <strong>{pct(n(cfg.fa))}</strong></span>
       </div></div>
       <div className="brand"><div className="wrap">
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
@@ -5216,9 +5288,9 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
         </section>
         <aside className="side" aria-label="Resumen de la cotización">
           <div className="dark">
-            <div className="kicker" style={{ color: 'rgba(255,255,255,.75)' }}>Precio de venta servicios</div>
-            <div className="bignum" style={{ fontSize: 28, marginTop: 2, whiteSpace: 'nowrap' }}>{usd(c.precio)}</div>
-            <div className="kv" style={{ border: 0, color: '#fff' }}><span>Ganancia</span><strong>{usd(c.ganancia)}</strong></div>
+            <div className="kicker" style={{ color: 'rgba(255,255,255,.75)' }}>Precio de venta servicios{enCRC ? ' (colones)' : ''}</div>
+            <div className="bignum" style={{ fontSize: 28, marginTop: 2, whiteSpace: 'nowrap' }}>{mon(c.precio)}</div>
+            <div className="kv" style={{ border: 0, color: '#fff' }}><span>Ganancia</span><strong>{mon(c.ganancia)}</strong></div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 10 }}>
               <label htmlFor="cotz-margin" style={{ fontSize: 13 }}>Margen de utilidad (%)</label>
               <NumIn id="cotz-margin" step="0.5" value={q.margin} label="Margen de utilidad" onChange={(v) => setQ((x) => { x.margin = v; return x; })} />
@@ -5227,21 +5299,21 @@ function Cotizador({ supabase, isAdmin = false, usuarioId, usuarioNombre, solici
           </div>
           <div className="card">
             <h2 className="ctitle">Detalle de costos</h2>
-            <div className="kv"><span>Mano de obra</span><span>{usd(c.mo)}</span></div>
-            <div className="kv"><span>Viáticos C.R.</span><span>{usd(c.cr)}</span></div>
-            <div className="kv"><span>Viáticos C.A.</span><span>{usd(c.ca)}</span></div>
-            <div className="kv"><span>Renta de equipos</span><span>{usd(c.renta)}</span></div>
-            <div className="kv" style={{ fontWeight: 700, fontSize: 14 }}><span style={{ color: 'var(--fg)' }}>Costo total</span><span style={{ color: 'var(--red-text)' }}>{usd(c.costo)}</span></div>
+            <div className="kv"><span>Mano de obra</span><span>{mon(c.mo)}</span></div>
+            <div className="kv"><span>Viáticos C.R.</span><span>{mon(c.cr)}</span></div>
+            <div className="kv"><span>Viáticos C.A.</span><span>{mon(c.ca)}</span></div>
+            <div className="kv"><span>Renta de equipos</span><span>{mon(c.renta)}</span></div>
+            <div className="kv" style={{ fontWeight: 700, fontSize: 14 }}><span style={{ color: 'var(--fg)' }}>Costo total</span><span style={{ color: 'var(--red-text)' }}>{mon(c.costo)}</span></div>
           </div>
           <div className="card" style={{ borderTop: '4px solid var(--red)' }}>
             <h2 className="ctitle">Overhead administrativo</h2>
-            <div className="kv"><span>Incluido en M.O. ({pct(n(cfg.fa))})</span><strong>{usd(c.adm)}</strong></div>
+            <div className="kv"><span>Incluido en M.O. ({pct(n(cfg.fa))})</span><strong>{mon(c.adm)}</strong></div>
             <div className="kv"><span>% sobre costo directo</span><strong>{pct(c.directo > 0 ? c.adm / c.directo : 0)}</strong></div>
             <div className="kv"><span>% sobre precio de venta</span><strong>{pct(c.precio > 0 ? c.adm / c.precio : 0)}</strong></div>
           </div>
           <div className="redcard">
             <div className="kicker" style={{ color: 'rgba(255,255,255,.85)' }}>Total oferta (servicios + materiales)</div>
-            <div className="bignum" style={{ fontSize: 26, marginTop: 2, whiteSpace: 'nowrap' }}>{usd(c.oferta)}</div>
+            <div className="bignum" style={{ fontSize: 26, marginTop: 2, whiteSpace: 'nowrap' }}>{mon(c.oferta)}</div>
           </div>
         </aside>
       </div>
@@ -5790,6 +5862,15 @@ function Config({ cfg, cfgDoc, online, canEdit, onClose, onApply, onDownload, fl
     cell(G, 'B41', 'TOTAL OFERTA (servicios + materiales)', { font: { bold: true, size: 14, color: { argb: C.white } }, fill: C.steel, border: box, al: { vertical: 'middle', indent: 1 } });
     cell(G, 'G41', F('G39+G40'), { font: { bold: true, size: 14, color: { argb: C.white } }, fill: C.steel, border: box, fmt: USD, al: { vertical: 'middle', horizontal: 'right' } });
     G.getRow(41).height = 28;
+    if (info0.moneda === 'CRC') {
+      var tcx = n(info0.tcVenta) || 505;
+      G.mergeCells('B42:E42'); cell(G, 'B42', 'Tipo de cambio de referencia BCCR (venta)' + (info0.tcFecha ? ' del ' + String(info0.tcFecha).slice(0, 10) : ''), { font: { size: 10, color: { argb: C.muted } }, border: box });
+      cell(G, 'F42', 'TC', { font: { bold: true, color: { argb: C.muted } }, border: box, al: { horizontal: 'right' } });
+      cell(G, 'G42', tcx, { border: box, fmt: '"₡"#,##0.00' });
+      G.mergeCells('B43:F43'); cell(G, 'B43', 'TOTAL OFERTA EN COLONES', { font: { bold: true, size: 14, color: { argb: C.white } }, fill: C.accent, border: box, al: { vertical: 'middle', indent: 1 } });
+      cell(G, 'G43', F('ROUND(G41*G42,0)'), { font: { bold: true, size: 14, color: { argb: C.white } }, fill: C.accent, border: box, fmt: '"₡"#,##0', al: { vertical: 'middle', horizontal: 'right' } });
+      G.getRow(43).height = 28;
+    }
     // Desglose de rubros (valores de la cotización)
     var cDes = L.compute(cfg, q), grupos = desgloseRubros(cfg, q, cDes), rD = 45;
     seccion(G, 'B' + rD + ':G' + rD, 'DESGLOSE POR RUBRO'); rD++;
@@ -6062,7 +6143,9 @@ function HistorialCot({ supabase, usuarioId, isAdmin, onModificar, onSolicitudEn
                       </td>
                       <td className="r strong" style={{ color: est === 'tarde' || est === 'pendtarde' ? '#C13E3E' : undefined }}>{d == null ? '—' : d}</td>
                       <td><span className="chip" style={{ background: es, color: ec }}>{et}</span></td>
-                      <td className="r strong" style={{ color: 'var(--red-text)' }}>{usd(n(r.total_oferta))}</td>
+                      <td className="r strong" style={{ color: 'var(--red-text)' }}>{r.moneda === 'CRC' && n(r.tipo_cambio) > 0
+                        ? <>{fmtCRC(n(r.total_oferta) * n(r.tipo_cambio))}<div style={{ fontSize: 11, color: 'var(--muted, #5B6572)', fontWeight: 500 }}>{usd(n(r.total_oferta))} · TC {n(r.tipo_cambio).toFixed(2)}</div></>
+                        : usd(n(r.total_oferta))}</td>
                       <td>{r.presupuestista || r.creado_por_nombre || ''}</td>
                       <td>
                         <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
@@ -6097,7 +6180,7 @@ const ETAPAS = [
 const etapaInfo = (k) => ETAPAS.find((e) => e[0] === k) || ETAPAS[0];
 const fechaLocal = (iso) => { if (!iso) return ''; if (/^\d{4}-\d{2}-\d{2}$/.test(String(iso))) return String(iso); const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString('en-CA'); };
 
-function unificarCotizaciones(sols, hist, proc) {
+function unificarCotizaciones(sols, hist, proc, tcHoy) {
   const items = [];
   const hPorSol = {}, pPorSol = {};
   hist.forEach((h) => { if (h.solicitud_id) hPorSol[String(h.solicitud_id)] = h; });
@@ -6114,8 +6197,8 @@ function unificarCotizaciones(sols, hist, proc) {
     else etapa = 'solicitud';
     items.push({ key: 's' + s.id, numero: s.numCot || (h && h.numero) || '#' + s.consecutivo, consecutivo: s.consecutivo, cliente: s.cliente || (h && h.cliente) || '',
       proyecto: s.descripcion || (h && h.proyecto) || '', area: s.tipo || (h && h.area) || '', origen: (h && h.origen) || (p && p.origen) || ORIGEN_DEF,
-      responsable: (p && p.usuario_nombre) || (h && h.presupuestista) || s.solicitante || '', monto: n(s.monto) || n(h && h.total_oferta) || n(p && p.total),
-      carga, envio, etapa, sinFechaEnvio: etapa === 'enviada' && !envio });
+      responsable: (p && p.usuario_nombre) || (h && h.presupuestista) || s.solicitante || '', monto: aUSD(s.monto, s.moneda, s.tipoCambio, tcHoy) || n(h && h.total_oferta) || n(p && p.total), moneda: s.moneda || 'USD',
+      carga, envio, etapa, sinFechaEnvio: etapa === 'enviada' && !envio, compra: s.actividad === 'Con OC' });
   });
   const solIds = new Set(sols.map((x) => String(x.id)));
   hist.filter((h) => !h.solicitud_id || !solIds.has(String(h.solicitud_id))).forEach((h) => {
@@ -6155,7 +6238,8 @@ function ControlCotizaciones({ supabase, usuarioId }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { cargar(); }, [usuarioId]);
 
-  const todos = unificarCotizaciones(sols, hist, proc);
+  const tcHoy = useTipoCambio();
+  const todos = unificarCotizaciones(sols, hist, proc, n(tcHoy.venta) || TC_RESPALDO);
   const ORIGENES = origenesDe(null, todos.map((x) => x.origen));
   const items = todos.filter((x) => {
     if (f.origen === '__vend' ? x.origen === ORIGEN_DEF : (f.origen && x.origen !== f.origen)) return false;
@@ -6193,6 +6277,21 @@ function ControlCotizaciones({ supabase, usuarioId }) {
     return Object.values(m).sort((a, b) => (a.k < b.k ? -1 : 1)).slice(-12).map((x) => ({ ...x, mes: MESES[Number(x.k.slice(5, 7)) - 1] + ' ' + x.k.slice(2, 4), prom: x.nd ? Math.round((x.sum / x.nd) * 10) / 10 : 0 }));
   })();
   const atrasadas = [...pendTarde].sort((a, b) => (diasDe(b) ?? 0) - (diasDe(a) ?? 0));
+  // Embudo comercial: solicitadas → enviadas → compradas (actividad «Con OC»)
+  const fueEnviada = (x) => x.etapa === 'enviada' || !!x.envio || x.compra;
+  const emb = (rows) => {
+    const env = rows.filter(fueEnviada), com = rows.filter((x) => x.compra);
+    const sm = (r) => r.reduce((a, x) => a + n(x.monto), 0);
+    return { sol: rows.length, solM: sm(rows), env: env.length, envM: sm(env), com: com.length, comM: sm(com) };
+  };
+  const E = emb(items);
+  const pctTxt = (a, b) => (b ? Math.round((a / b) * 100) + ' %' : '—');
+  const embMes = (() => {
+    const m = {};
+    items.forEach((x) => { const k = (x.carga || '').slice(0, 7); if (!k) return; m[k] = m[k] || []; m[k].push(x); });
+    return Object.keys(m).sort().slice(-12).map((k) => { const e = emb(m[k]); return { mes: MESES[Number(k.slice(5, 7)) - 1] + ' ' + k.slice(2, 4), solicitadas: e.sol, enviadas: e.env, compradas: e.com }; });
+  })();
+  const embOrigen = origenesDe(null, items.map((x) => x.origen)).map((o) => ({ o, ...emb(items.filter((x) => x.origen === o)) })).filter((x) => x.sol);
 
   const ejeTick = { fontSize: 11, fill: '#5B6572' };
   const tip = { contentStyle: { borderRadius: 8, border: '1px solid #E1E6EB', fontSize: 12 }, cursor: { fill: 'rgba(31,58,95,.06)' } };
@@ -6321,6 +6420,52 @@ function ControlCotizaciones({ supabase, usuarioId }) {
         </div>
       </div>
 
+      <div className="card" style={{ marginTop: 12 }}>
+        <h2 className="ctitle">Ofertas: solicitadas → enviadas → compradas</h2>
+        <div className="embudo">
+          <div className="emb-c"><div className="emb-t">Solicitadas</div><div className="emb-n">{E.sol}</div><div className="emb-m">{usd(E.solM)}</div><div className="emb-s">todas las que nos han pedido</div></div>
+          <div className="emb-f"><span>{pctTxt(E.env, E.sol)}</span>se envían</div>
+          <div className="emb-c"><div className="emb-t">Enviadas</div><div className="emb-n">{E.env}</div><div className="emb-m">{usd(E.envM)}</div><div className="emb-s">ofertas entregadas al cliente</div></div>
+          <div className="emb-f"><span>{pctTxt(E.com, E.env)}</span>se compran</div>
+          <div className="emb-c gan"><div className="emb-t">Compradas (con OC)</div><div className="emb-n">{E.com}</div><div className="emb-m">{usd(E.comM)}</div><div className="emb-s">{pctTxt(E.com, E.sol)} de las solicitadas</div></div>
+        </div>
+        <div className="charts">
+          <div className="chartbox">
+            <div className="chart-t">Por mes de carga: solicitadas, enviadas y compradas</div>
+            {embMes.length ? (
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={embMes} margin={{ top: 18, right: 6, left: -18, bottom: 0 }} barGap={2}>
+                  <CartesianGrid vertical={false} stroke="#EDEFF2" />
+                  <XAxis dataKey="mes" tick={ejeTick} axisLine={false} tickLine={false} />
+                  <YAxis allowDecimals={false} tick={ejeTick} axisLine={false} tickLine={false} />
+                  <Tooltip {...tip} />
+                  <Bar dataKey="solicitadas" name="Solicitadas" fill="#1F3A5F" radius={[4, 4, 0, 0]} maxBarSize={20} />
+                  <Bar dataKey="enviadas" name="Enviadas" fill="#E86A2C" radius={[4, 4, 0, 0]} maxBarSize={20} />
+                  <Bar dataKey="compradas" name="Compradas" fill="#2E7D5B" radius={[4, 4, 0, 0]} maxBarSize={20} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : <div className="chart-vacio">Sin datos.</div>}
+            {ley([['Solicitadas', '#1F3A5F'], ['Enviadas', '#E86A2C'], ['Compradas', '#2E7D5B']])}
+          </div>
+          <div className="chartbox" style={{ padding: 0, overflow: 'hidden' }}>
+            <div className="chart-t" style={{ padding: '10px 12px 0' }}>Por origen</div>
+            <div style={{ overflowX: 'auto' }}><table>
+              <thead><tr><th>Origen</th><th className="r">Solicitadas</th><th className="r">Enviadas</th><th className="r">Compradas</th><th className="r">Conversión</th><th className="r">Monto comprado</th></tr></thead>
+              <tbody>
+                {embOrigen.map((x) => (
+                  <tr key={x.o}>
+                    <td className="strong">{origenTxt(x.o)}</td>
+                    <td className="r">{x.sol}</td><td className="r">{x.env}</td><td className="r strong" style={{ color: '#2E7D5B' }}>{x.com}</td>
+                    <td className="r">{pctTxt(x.com, x.sol)}</td><td className="r">{usd(x.comM)}</td>
+                  </tr>
+                ))}
+                <tr className="subt"><td>Total</td><td className="r">{E.sol}</td><td className="r">{E.env}</td><td className="r">{E.com}</td><td className="r">{pctTxt(E.com, E.sol)}</td><td className="r">{usd(E.comM)}</td></tr>
+              </tbody>
+            </table></div>
+          </div>
+        </div>
+      </div>
+
       <div className="card" style={{ marginTop: 12, padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '12px 16px 0' }}><h2 className="ctitle">Pendientes con más de {meta} días sin enviar ({atrasadas.length})</h2></div>
         {atrasadas.length ? (
@@ -6420,8 +6565,12 @@ function Cotizaciones() {
     };
     setForm({ solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "", dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Solicitud", actividad: "Seguimiento", tipo: "Inspecciones", frecuencia: "", observaciones: "", monto: "" });
     setOpen(false);
+    const monedaForm = form.moneda || "USD";
     const { data, error } = await supabase.from("cotizaciones").insert(payload).select().single();
-    if (!error && data) setRows((prev) => [cotRowFromDb(data), ...prev]);
+    if (!error && data) {
+      setRows((prev) => [cotRowFromDb(data), ...prev]);
+      if (monedaForm === "CRC") setMoneda(data.id, "CRC");
+    }
   };
   const setEstado = (id, estado, fechaEnvio) => {
     const fila = rows.find((r) => r.id === id);
@@ -6446,6 +6595,13 @@ function Cotizaciones() {
   const setObservaciones = (id, observaciones) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, observaciones } : r));
     supabase.from("cotizaciones").update({ observaciones }).eq("id", id).then();
+  };
+  const tcHoy = useTipoCambio();
+  // Moneda de la solicitud; si es en colones se guarda el tipo de cambio del día
+  const setMoneda = (id, moneda, tcUsar) => {
+    const tcv = moneda === "CRC" ? (Number(tcUsar) || tcHoy.venta) : null;
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, moneda, tipoCambio: tcv } : r));
+    supabase.from("cotizaciones").update({ moneda, tipo_cambio: tcv }).eq("id", id).then();
   };
   const setMonto = (id, monto) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, monto } : r));
@@ -6523,7 +6679,7 @@ function Cotizaciones() {
               setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado: "En proceso" } : r));
               return true;
             }}
-            onPasarMonto={(id, monto, numCot) => { setMonto(id, monto); if (numCot) setNumCot(id, numCot); }}
+            onPasarMonto={(id, monto, numCot, moneda, tcv) => { setMonto(id, monto); if (numCot) setNumCot(id, numCot); setMoneda(id, moneda || "USD", tcv); }}
             onSolicitudRealizada={(id) => setEstado(id, "Realizado")}
             onCrearSolicitud={async (d) => {
               const numero = rows.reduce((mx, r) => Math.max(mx, Number(r.consecutivo) || 0), 0) + 1;
@@ -6533,6 +6689,7 @@ function Cotizaciones() {
               const { data, error } = await supabase.from("cotizaciones").insert(payload).select().single();
               if (error || !data) return null;
               const fila = cotRowFromDb(data); setRows((prev) => [fila, ...prev]);
+              if (d.moneda === "CRC") setMoneda(fila.id, "CRC", d.tc);
               return { id: fila.id, consecutivo: fila.consecutivo };
             }}
             onTerminada={() => setVistaCot("historial")} />
@@ -6584,7 +6741,12 @@ function Cotizaciones() {
                 {TIPO_OFERTA_OPCIONES.map((t) => <option key={t}>{t}</option>)}
               </select>
             </Field>
-            <Field label="Monto estimado ($)"><input style={inputStyle} type="number" value={form.monto} onChange={(e) => setForm({ ...form, monto: e.target.value })} placeholder="0.00" /></Field>
+            <Field label="Monto estimado">
+              <div style={{ display: "flex", gap: 6 }}>
+                <select style={{ ...inputStyle, width: 70 }} value={form.moneda || "USD"} onChange={(e) => setForm({ ...form, moneda: e.target.value })}><option value="USD">$ USD</option><option value="CRC">₡ CRC</option></select>
+                <input style={{ ...inputStyle, flex: 1 }} type="number" value={form.monto} onChange={(e) => setForm({ ...form, monto: e.target.value })} placeholder="0.00" />
+              </div>
+            </Field>
             <div style={{ gridColumn: "1 / -1" }}>
               <Field label="Observaciones"><input style={inputStyle} value={form.observaciones} onChange={(e) => setForm({ ...form, observaciones: e.target.value })} placeholder="Notas adicionales..." /></Field>
             </div>
@@ -6651,8 +6813,13 @@ function Cotizaciones() {
                 </td>
                 <td>
                   {canEditEstadoCot ? (
-                    <input type="number" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 100 }} value={r.monto || ""} onChange={(e) => setMonto(r.id, e.target.value)} placeholder="0.00" />
-                  ) : (fmtMoney(r.monto))}
+                    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                      <select style={{ ...inputStyle, fontSize: 12, padding: "5px 4px", width: 52 }} value={r.moneda || "USD"} onChange={(e) => setMoneda(r.id, e.target.value)} title="Moneda">
+                        <option value="USD">$</option><option value="CRC">₡</option>
+                      </select>
+                      <input type="number" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 100 }} value={r.monto || ""} onChange={(e) => setMonto(r.id, e.target.value)} placeholder="0.00" />
+                    </div>
+                  ) : (r.moneda === "CRC" ? fmtCRC(r.monto) : fmtMoney(r.monto))}
                 </td>
                 <td>
                   {canEditEstadoCot ? (

@@ -313,11 +313,38 @@ if (typeof window !== "undefined" && EN_APK && puenteArchivos() && !window.__des
   }, true);
 }
 
+// Las librerías del PDF (jsPDF y html2canvas) se cargan de internet solo
+// cuando se genera un PDF: así no hay que instalar nada en el proyecto.
+const LIBS_PDF = {
+  jspdf: ["https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js", "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"],
+  html2canvas: ["https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js", "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"],
+};
+const cargarScript = (urls) => new Promise((res, rej) => {
+  const probar = (i) => {
+    if (i >= urls.length) { rej(new Error("No se pudo descargar la librería del PDF (revise el internet)")); return; }
+    const sc = document.createElement("script");
+    sc.src = urls[i]; sc.async = true; sc.crossOrigin = "anonymous";
+    sc.onload = () => res(); sc.onerror = () => { sc.remove(); probar(i + 1); };
+    document.head.appendChild(sc);
+  };
+  probar(0);
+});
+let LIBS_PDF_PROMESA = null;
+function cargarLibreriasPdf() {
+  if (!LIBS_PDF_PROMESA) {
+    LIBS_PDF_PROMESA = Promise.all([
+      window.jspdf && window.jspdf.jsPDF ? null : cargarScript(LIBS_PDF.jspdf),
+      window.html2canvas ? null : cargarScript(LIBS_PDF.html2canvas),
+    ]).then(() => ({ jsPDF: window.jspdf.jsPDF, html2canvas: window.html2canvas }))
+      .catch((e) => { LIBS_PDF_PROMESA = null; throw e; });
+  }
+  return LIBS_PDF_PROMESA;
+}
 const cargarImagen = (src) => new Promise((res) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = src; });
 
 // Arma el PDF de un reporte HTML. Devuelve el PDF en base64.
 async function htmlAPdfBase64(html, { horizontal = false, membrete = true } = {}) {
-  const [{ jsPDF }, { default: html2canvas }] = await Promise.all([import("jspdf"), import("html2canvas")]);
+  const { jsPDF, html2canvas } = await cargarLibreriasPdf();
   // Medidas en pulgadas (carta) y en píxeles CSS (96 por pulgada)
   const PW = horizontal ? 11 : 8.5, PH = horizontal ? 8.5 : 11, MX = 0.5;
   const ARRIBA = membrete ? 1.0 : 0.5, ABAJO = membrete ? 0.8 : 0.5;

@@ -380,9 +380,29 @@ const b64urlAUint8 = (s) => {
   const bin = atob(b64);
   return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 };
+// ---- Alertas nativas de la APK v3 (servicio de Android que vigila
+// eventos_panel aunque la app esté cerrada). Usa la llave pública de
+// Supabase, la misma que ya usa la web. ----
+const alertasApk = () => {
+  try {
+    const p = typeof window !== "undefined" ? window.SalvavidasAndroid : null;
+    return p && typeof p.alertasActivar === "function" ? p : null;
+  } catch { return null; }
+};
+const alertasApkEstado = () => { try { const p = alertasApk(); return p ? JSON.parse(p.alertasEstado() || "{}") : null; } catch { return null; } };
+const alertasApkActivar = (sitios, usuario, silencioso) => {
+  const p = alertasApk(); if (!p) return null;
+  try {
+    return JSON.parse(p.alertasActivar(JSON.stringify({
+      url: import.meta.env.VITE_SUPABASE_URL || "", llave: import.meta.env.VITE_SUPABASE_ANON_KEY || "",
+      sitios: sitios && sitios.length ? sitios : null, usuario: usuario || "", silencioso: !!silencioso,
+    })) || "{}");
+  } catch (e) { return { error: String(e?.message || e) }; }
+};
 // Al cerrar sesión se da de baja este celular, para que no siga recibiendo
 // alertas de un usuario que ya salió.
 async function bajaPushDeEsteDispositivo() {
+  try { const p = alertasApk(); if (p) p.alertasDesactivar(); } catch (e) {}
   if (!PUSH_SOPORTADO) return;
   try {
     const reg = await navigator.serviceWorker.getRegistration();
@@ -9819,29 +9839,88 @@ function EvalResponder({ row, onSalir }) {
   const currentUser = useContext(CurrentUserContext);
   const confirmar = useContext(ConfirmContext);
   const preg = row.preguntas || {};
-  const vacio = (p) => (preg[p] || []).map((_, i) => (row.respuestas?.[p]?.[i]) || []);
-  const [resp, setResp] = useState({ A: vacio("A"), B: vacio("B"), C: vacio("C") });
-  const [escritos, setEscritos] = useState({ F1: row.escritos?.F1 || "", F2: row.escritos?.F2 || "" });
+  const claveLocal = "evalAvance." + row.id;
+  const vacioDe = (src, p) => (preg[p] || []).map((_, i) => (src?.[p]?.[i]) || []);
+  const cuenta = (src) => ["A", "B", "C"].reduce((a, p) => a + (preg[p] || []).filter((_, i) => (src?.[p]?.[i] || []).length).length, 0);
+  // Respaldo en el equipo por si se cae la señal: se usa si tiene más respuestas que lo guardado en Supabase
+  const respaldo = (() => { try { return JSON.parse(localStorage.getItem(claveLocal) || "null"); } catch (e) { return null; } })();
+  const usarRespaldo = respaldo && cuenta(respaldo.resp) > cuenta(row.respuestas);
+  const baseResp = usarRespaldo ? respaldo.resp : row.respuestas;
+  const baseEsc = usarRespaldo ? (respaldo.escritos || {}) : (row.escritos || {});
+  const [resp, setResp] = useState({ A: vacioDe(baseResp, "A"), B: vacioDe(baseResp, "B"), C: vacioDe(baseResp, "C") });
+  const [escritos, setEscritos] = useState({ F1: baseEsc.F1 || "", F2: baseEsc.F2 || "" });
+  const [vencida, setVencida] = useState(false);
+  // Tiempo límite con el reloj del SERVIDOR (offset = servidor - este equipo)
+  const [limite, setLimite] = useState(row.limite ? new Date(row.limite).getTime() : null);
+  const offset = useRef(row.ahora ? new Date(row.ahora).getTime() - Date.now() : 0);
+  const autoEnviando = useRef(false);
   const [guardado, setGuardado] = useState("");
   const [enviada, setEnviada] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [ahora, setAhora] = useState(Date.now());
   const inicio = useRef(row.iniciado_en ? new Date(row.iniciado_en).getTime() : Date.now());
-  const sucio = useRef(false);
+  const sucio = useRef(!!usarRespaldo);
+  const terminada = useRef(false);
   const ultimo = useRef({ resp, escritos });
   ultimo.current = { resp, escritos };
 
-  useEffect(() => { const t = setInterval(() => setAhora(Date.now()), 30000); return () => clearInterval(t); }, []);
+  useEffect(() => { const t = setInterval(() => setAhora(Date.now()), 1000); return () => clearInterval(t); }, []);
+  // Al abrir: arranca (o retoma) el tiempo en el servidor
+  useEffect(() => {
+    let vivo = true;
+    (async () => {
+      const { data, error: err } = await supabase.rpc("eval_iniciar", { p_usuario: currentUser?.id, p_id: row.id });
+      if (!vivo || err || !data) return; // sin el SQL nuevo funciona como antes (sin límite)
+      if (data.ahora) offset.current = new Date(data.ahora).getTime() - Date.now();
+      if (data.iniciado_en) inicio.current = new Date(data.iniciado_en).getTime();
+      setLimite(data.limite ? new Date(data.limite).getTime() : null);
+      if (data.estado && data.estado !== "en_curso" && data.estado !== "pendiente") {
+        terminada.current = true; sucio.current = false; setVencida(true); setEnviada(true);
+        try { localStorage.removeItem(claveLocal); } catch (e) { /* nada */ }
+        return;
+      }
+      // Si se respondió desde otro equipo, se toma lo de Supabase (salvo que aquí haya más avance)
+      if (!sucio.current && data.respuestas && cuenta(data.respuestas) > cuenta(ultimo.current.resp)) {
+        setResp({ A: vacioDe(data.respuestas, "A"), B: vacioDe(data.respuestas, "B"), C: vacioDe(data.respuestas, "C") });
+        setEscritos({ F1: data.escritos?.F1 || "", F2: data.escritos?.F2 || "" });
+      }
+    })();
+    return () => { vivo = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const marcarEnviada = (venc) => {
+    terminada.current = true; sucio.current = false;
+    try { localStorage.removeItem(claveLocal); } catch (e) { /* nada */ }
+    if (venc) setVencida(true);
+    setEnviada(true);
+  };
   const guardar = async () => {
-    if (!sucio.current) return;
+    if (!sucio.current || terminada.current) return;
     sucio.current = false;
     setGuardado("Guardando…");
-    const { error: err } = await supabase.rpc("eval_responder", { p_usuario: currentUser?.id, p_id: row.id, p_respuestas: ultimo.current.resp, p_escritos: ultimo.current.escritos, p_enviar: false });
-    setGuardado(err ? "No se pudo guardar: " + evalMsgError(err) : "Avance guardado ✓");
+    const { data, error: err } = await supabase.rpc("eval_responder", { p_usuario: currentUser?.id, p_id: row.id, p_respuestas: ultimo.current.resp, p_escritos: ultimo.current.escritos, p_enviar: false });
+    if (err) { sucio.current = true; setGuardado("Sin conexión: se guardó en este equipo y se reintenta solo…"); return; }
+    if (data && data.enviada) { marcarEnviada(true); return; }
+    setGuardado("Avance guardado ✓");
   };
-  useEffect(() => { if (!sucio.current) return; const t = setTimeout(guardar, 1500); return () => clearTimeout(t); }, [resp, escritos]);
-  useEffect(() => () => { guardar(); }, []);
+  // Cada cambio: respaldo inmediato en el equipo y a Supabase en 1,5 s
+  useEffect(() => {
+    if (!sucio.current) return;
+    try { localStorage.setItem(claveLocal, JSON.stringify({ resp, escritos, t: Date.now() })); } catch (e) { /* nada */ }
+    const t = setTimeout(guardar, 1500); return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resp, escritos]);
+  // Reintento si quedó algo sin subir
+  useEffect(() => { const t = setInterval(() => { if (sucio.current) guardar(); }, 10000); return () => clearInterval(t); }, []);
+  // Si sale de la app (cambia de app, bloquea el celular o cierra la pestaña) se guarda de una vez
+  useEffect(() => {
+    const alSalir = () => { if (document.visibilityState === "hidden") guardar(); };
+    const alCerrar = () => guardar();
+    document.addEventListener("visibilitychange", alSalir); window.addEventListener("pagehide", alCerrar);
+    return () => { document.removeEventListener("visibilitychange", alSalir); window.removeEventListener("pagehide", alCerrar); guardar(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const marcar = (p, i, j, multiple) => {
     sucio.current = true;
@@ -9853,8 +9932,22 @@ function EvalResponder({ row, onSalir }) {
   };
   const total = ["A", "B", "C"].reduce((a, p) => a + (preg[p] || []).length, 0);
   const contestadas = ["A", "B", "C"].reduce((a, p) => a + resp[p].filter((x) => x && x.length).length, 0);
-  const minutos = Math.max(0, Math.round((ahora - inicio.current) / 60000));
+  const minutos = Math.max(0, Math.round((ahora + offset.current - inicio.current) / 60000));
   const tiempo = Number(row.datos?.tiempo) || 0;
+  const restanteMs = limite ? limite - (ahora + offset.current) : null;
+  const mmss = (ms) => { const t = Math.max(0, Math.ceil(ms / 1000)); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sg = t % 60; return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(sg).padStart(2, "0"); };
+  // Se cumplió el tiempo: se envía sola con lo que tenga marcado
+  useEffect(() => {
+    if (restanteMs == null || restanteMs > 0 || autoEnviando.current || terminada.current) return;
+    autoEnviando.current = true;
+    (async () => {
+      setGuardado("Se cumplió el tiempo: enviando…");
+      const { error: err } = await supabase.rpc("eval_responder", { p_usuario: currentUser?.id, p_id: row.id, p_respuestas: ultimo.current.resp, p_escritos: ultimo.current.escritos, p_enviar: true });
+      if (err && !/ya fue enviada/i.test(err.message || "")) { autoEnviando.current = false; setGuardado("Se cumplió el tiempo; reintentando el envío…"); return; }
+      marcarEnviada(true);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restanteMs != null && restanteMs <= 0, ahora]);
 
   const enviar = async () => {
     const faltan = total - contestadas;
@@ -9865,15 +9958,15 @@ function EvalResponder({ row, onSalir }) {
     const { error: err } = await supabase.rpc("eval_responder", { p_usuario: currentUser?.id, p_id: row.id, p_respuestas: resp, p_escritos: escritos, p_enviar: true });
     setBusy(false);
     if (err) { setError(evalMsgError(err)); return; }
-    sucio.current = false;
-    setEnviada(true);
+    marcarEnviada(false);
   };
 
   if (enviada) {
     return (
       <EvalPantalla titulo="Evaluación de competencias" onCerrar={() => onSalir(true)}>
-        <Card title="¡Evaluación enviada!">
+        <Card title={vencida ? "Se cumplió el tiempo" : "¡Evaluación enviada!"}>
           <div style={{ fontSize: 14, lineHeight: 1.6, color: T.ink }}>
+            {vencida && <b>El tiempo de la evaluación terminó y se envió automáticamente con las respuestas que tenía guardadas. </b>}
             Sus respuestas quedaron guardadas y calificadas. Ahora su jefe inmediato ({row.jefe_nombre || "asignado"}) completará la evaluación práctica y la rúbrica.
             El resultado final lo comunicará la jefatura.
           </div>
@@ -9922,13 +10015,16 @@ function EvalResponder({ row, onSalir }) {
     <EvalPantalla titulo={`Evaluación de competencias · ${row.codigo}`} sub={`${row.tecnico_nombre} · aspira a ${row.datos?.puestoAspira || "—"} · jefe inmediato: ${row.jefe_nombre || "—"}`} onCerrar={() => { guardar(); onSalir(false); }}>
       <Card title="Instrucciones">
         <div style={{ fontSize: 13.5, lineHeight: 1.55, color: T.ink }}>
-          Lea cada pregunta y toque la respuesta correcta. Sus respuestas se <b>guardan solas</b>: si sale de la pantalla puede volver y seguir donde quedó.
-          Cuando termine toque <b>Enviar evaluación</b>; después de enviarla ya no podrá cambiar nada. Tiempo sugerido: <b>{tiempo} minutos</b>.
+          Lea cada pregunta y toque la respuesta correcta. Sus respuestas se <b>guardan solas</b>: si sale de la app (o se le cierra) puede volver a entrar y seguir donde quedó <b>mientras no se cumpla el tiempo</b>.
+          {limite ? <> Tiene <b>{tiempo} minutos</b> desde que la abrió por primera vez; <b>el tiempo sigue corriendo aunque salga de la app</b> y al cumplirse se envía sola con lo que haya contestado.</> : <> Tiempo sugerido: <b>{tiempo} minutos</b>.</>}
+          {" "}Cuando termine toque <b>Enviar evaluación</b>; después de enviarla ya no podrá cambiar nada.
         </div>
       </Card>
       <div style={{ position: "sticky", top: 60, zIndex: 1, background: "#fff", border: `1px solid ${T.line}`, borderRadius: 10, padding: "8px 12px", display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", fontSize: 13, boxShadow: "0 2px 6px rgba(0,0,0,.06)" }}>
         <span><b>{contestadas}</b> de {total} contestadas</span>
-        <span style={{ display: "flex", alignItems: "center", gap: 4, color: tiempo && minutos > tiempo ? T.red : T.inkSoft }}><Clock size={14} /> {minutos} min{tiempo ? ` de ${tiempo}` : ""}</span>
+        {restanteMs != null
+          ? <span style={{ display: "flex", alignItems: "center", gap: 4, fontWeight: 800, color: restanteMs <= 5 * 60000 ? T.red : T.ink, background: restanteMs <= 5 * 60000 ? T.redSoft || "#FDECEC" : "transparent", borderRadius: 6, padding: "1px 6px" }}><Clock size={14} /> Quedan {mmss(restanteMs)}</span>
+          : <span style={{ display: "flex", alignItems: "center", gap: 4, color: tiempo && minutos > tiempo ? T.red : T.inkSoft }}><Clock size={14} /> {minutos} min{tiempo ? ` de ${tiempo}` : ""}</span>}
         <span style={{ flex: 1, textAlign: "right", fontSize: 12, color: /No se pudo/.test(guardado) ? T.red : T.green }}>{guardado}</span>
       </div>
       {parteUI("A", "Conocimiento técnico", "NFPA 72, electrónica, NICET, FAS y Notifier.")}
@@ -10105,6 +10201,7 @@ function EvalJefe({ row, onSalir }) {
 // jefe inmediato (aparece solo cuando tienen una evaluación pendiente).
 function AvisoEvaluaciones() {
   const currentUser = useContext(CurrentUserContext);
+  const confirmar = useContext(ConfirmContext);
   const [filas, setFilas] = useState([]);
   const [abierta, setAbierta] = useState(null); // { row, modo }
   const cargar = useCallback(async () => {
@@ -10125,9 +10222,15 @@ function AvisoEvaluaciones() {
               <Award size={20} color={T.accent} />
               <div style={{ flex: 1, minWidth: 200, fontSize: 13.5 }}>
                 <b>Tiene una evaluación de competencias asignada</b> ({r.datos?.puestoAspira ? `puesto: ${r.datos.puestoAspira}` : r.codigo}).
-                <span style={{ color: T.inkSoft }}> {r.estado === "en_curso" ? "Ya la empezó; puede seguir donde quedó." : `Tiempo sugerido ${r.datos?.tiempo || "—"} min.`}</span>
+                <span style={{ color: T.inkSoft }}> {r.estado === "en_curso"
+                  ? (r.limite && r.ahora ? `Ya la empezó; puede seguir donde quedó. Le quedan ${Math.max(0, Math.round((new Date(r.limite) - new Date(r.ahora)) / 60000))} min (el tiempo sigue corriendo).` : "Ya la empezó; puede seguir donde quedó.")
+                  : `Tiempo: ${r.datos?.tiempo || "—"} min desde que la abra.`}</span>
               </div>
-              <Btn variant="accent" small onClick={() => setAbierta({ row: r, modo: "tecnico" })}>{r.estado === "en_curso" ? "Continuar" : "Comenzar"}</Btn>
+              <Btn variant="accent" small onClick={async () => {
+                if (r.estado !== "en_curso" && Number(r.datos?.tiempo) > 0 &&
+                  !(await confirmar(`Al comenzar empieza a correr el tiempo de ${r.datos.tiempo} minutos. Si sale de la app puede volver a entrar y seguir, pero el tiempo no se detiene; al cumplirse la evaluación se envía sola. ¿Comenzar ahora?`, { confirmLabel: "Sí, comenzar", variant: "accent" }))) return;
+                setAbierta({ row: r, modo: "tecnico" });
+              }}>{r.estado === "en_curso" ? "Continuar" : "Comenzar"}</Btn>
             </div>
           ))}
           {comoJefe.map((r) => (
@@ -11478,20 +11581,36 @@ function generarHtmlMantenimientoPanel(filas) {
   return o;
 }
 
-function generarHtmlTendenciasPanel(texto) {
-  const r = tendenciasAnalizar(texto); const ev = r.ev;
-  if (!ev.length) {
+// op (todo opcional; sin op sale igual que siempre):
+//   desde / hasta: Date — solo los eventos con fecha dentro del período
+//   agrupar: "auto" | "dia" | "semana" | "mes"
+//   cats: ["alarma","problema","supervision"] — categorías que salen
+//   sec: { resumen, tiempo, hora, dia, repetidas, recurrentes, lista } — partes del informe
+function generarHtmlTendenciasPanel(texto, op = {}) {
+  const r = tendenciasAnalizar(texto);
+  if (!r.ev.length) {
     return '<p style="margin:6px 0 0;color:#666;font-size:13px">Todavía no hay un historial capturado para este sitio. Imprime el historial desde el panel (volcado <b>INICIO HIST…</b>, <b>IMPRES.HIST…</b> o <b>HISTORY PRINT…</b>); el equipo lo sube solo y esta sección se completa sola.</p>';
   }
+  const S = { resumen: true, tiempo: true, hora: true, dia: true, repetidas: true, recurrentes: true, lista: false, ...(op.sec || {}) };
+  const CATS_SEL = TENDENCIAS_ORDEN.filter((c) => !op.cats || !op.cats.length || op.cats.includes(c));
+  const conPeriodo = !!(op.desde || op.hasta);
+  let ev = r.ev.filter((e) => CATS_SEL.includes(e.cat));
+  if (conPeriodo) ev = ev.filter((e) => e.fecha && (!op.desde || e.fecha >= op.desde) && (!op.hasta || e.fecha <= op.hasta));
+  if (!ev.length) {
+    return `<p style="margin:6px 0 0;color:#888;font-size:12.5px">No hay ${CATS_SEL.map((c) => TENDENCIAS_CATS[c].n.toLowerCase()).join(", ")} ${conPeriodo ? "en este período" : "en el historial"}.</p>`;
+  }
   const fs = ev.filter((e) => e.fecha).map((e) => +e.fecha);
-  const min = fs.length ? new Date(Math.min(...fs)) : null, max = fs.length ? new Date(Math.max(...fs)) : null;
-  let tipo = "mes"; const dias = fs.length ? (max - min) / 864e5 : 0;
+  // Con período el eje cubre el período completo (aunque haya días sin eventos)
+  const min = op.desde || (fs.length ? new Date(Math.min(...fs)) : null);
+  const max = op.hasta && fs.length ? new Date(Math.min(+op.hasta, Math.max(Date.now(), ...fs))) : (fs.length ? new Date(Math.max(...fs)) : null);
+  let tipo = "mes"; const dias = min && max ? (max - min) / 864e5 : 0;
   if (dias <= 45) tipo = "dia"; else if (dias <= 280) tipo = "semana";
+  if (op.agrupar && op.agrupar !== "auto") tipo = op.agrupar;
   const ini = tipo === "dia" ? (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
     : tipo === "semana" ? (d) => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
     : (d) => new Date(d.getFullYear(), d.getMonth(), 1);
   const claves = [], etq = [];
-  if (min) {
+  if (min && max && fs.length) {
     let d = ini(min), g = 0;
     while (d <= max && g++ < 2000) {
       claves.push(+d);
@@ -11517,49 +11636,125 @@ function generarHtmlTendenciasPanel(texto) {
   const th = 'style="text-align:left;padding:6px 4px;border-bottom:1px solid #ddd"';
   const td = 'style="padding:6px 4px;border-bottom:1px solid #eee"';
   const nomAgr = { dia: "por día", semana: "por semana", mes: "por mes" }[tipo];
+  const fMin = fs.length ? new Date(Math.min(...fs)) : null, fMax = fs.length ? new Date(Math.max(...fs)) : null;
   let h = `<p style="margin:4px 0 12px;color:#666;font-size:12.5px">Fuente: último historial impreso por el panel · <b>${ev.length}</b> eventos` +
-    (min ? ` del <b>${tFechaCorta(min)}</b> al <b>${tFechaCorta(max)}</b>` : "") +
-    (r.br ? ` · ${r.br} restablecimientos (BR) no contados` : "") + "</p>";
+    (fMin ? ` del <b>${tFechaCorta(fMin)}</b> al <b>${tFechaCorta(fMax)}</b>` : "") +
+    (r.br && !conPeriodo ? ` · ${r.br} restablecimientos (BR) no contados` : "") + "</p>";
 
-  h += `<table style="width:100%;border-collapse:collapse;font-size:12.5px"><tr><th ${th}>Categoría</th><th ${th}>Total</th><th ${th}>Tendencia</th><th ${th}>Evento más repetido</th><th ${th}>Veces</th></tr>`;
-  TENDENCIAS_ORDEN.forEach((c) => {
-    const tot = ev.filter((e) => e.cat === c).length, g = grupos(c)[0];
-    h += `<tr><td ${td}><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${TENDENCIAS_CATS[c].c};margin-right:6px"></span>${TENDENCIAS_CATS[c].n}</td>` +
-      `<td ${td}><b>${tot}</b></td><td ${td}>${tendenciasTendencia(serie(c))}</td>` +
-      `<td ${td} style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${g ? tEsc(g.e.etiqueta + (g.e.dir ? " · " + g.e.dir : "")) : "—"}</td>` +
-      `<td ${td}>${g ? `${g.n} <span style="color:#777">(${Math.round((g.n / tot) * 100)}%)</span>` : "—"}</td></tr>`;
-  });
-  h += "</table>";
+  if (S.resumen) {
+    h += `<table style="width:100%;border-collapse:collapse;font-size:12.5px"><tr><th ${th}>Categoría</th><th ${th}>Total</th><th ${th}>Tendencia</th><th ${th}>Evento más repetido</th><th ${th}>Veces</th></tr>`;
+    CATS_SEL.forEach((c) => {
+      const tot = ev.filter((e) => e.cat === c).length, g = grupos(c)[0];
+      h += `<tr><td ${td}><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${TENDENCIAS_CATS[c].c};margin-right:6px"></span>${TENDENCIAS_CATS[c].n}</td>` +
+        `<td ${td}><b>${tot}</b></td><td ${td}>${tendenciasTendencia(serie(c))}</td>` +
+        `<td ${td} style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${g ? tEsc(g.e.etiqueta + (g.e.dir ? " · " + g.e.dir : "")) : "—"}</td>` +
+        `<td ${td}>${g ? `${g.n} <span style="color:#777">(${Math.round((g.n / tot) * 100)}%)</span>` : "—"}</td></tr>`;
+    });
+    h += "</table>";
+  }
 
   const punto = (c) => `<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${TENDENCIAS_CATS[c].c};margin-right:6px"></span>`;
   const DIAS_SEM = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
-  // Por cada categoría (Alarmas, Averías, Supervisiones): gráfico en el
-  // tiempo + por hora del día + por día de la semana.
-  TENDENCIAS_ORDEN.forEach((c) => {
+  // Por cada categoría elegida: gráfico en el tiempo + por hora del día +
+  // por día de la semana + las más repetidas (cada parte se puede quitar).
+  const hayGraficos = S.tiempo || S.hora || S.dia;
+  if (hayGraficos || S.repetidas) CATS_SEL.forEach((c) => {
     const delCat = ev.filter((e) => e.cat === c), conFecha = delCat.filter((e) => e.fecha);
     h += `<div style="page-break-inside:avoid;break-inside:avoid;margin-top:16px;border-top:1px solid #e3e5ea;padding-top:8px">`;
     h += `<div style="font-size:14px;font-weight:700;color:#222">${punto(c)}${TENDENCIAS_CATS[c].n} <span style="font-weight:400;color:#666;font-size:12.5px">· ${delCat.length} eventos${conFecha.length < delCat.length ? ` (${delCat.length - conFecha.length} sin fecha)` : ""}</span></div>`;
-    if (!delCat.length) { h += `<p style="margin:6px 0 0;color:#888;font-size:12.5px">Sin ${TENDENCIAS_CATS[c].n.toLowerCase()} en el historial.</p></div>`; return; }
-    if (!conFecha.length || !claves.length) { h += `<p style="margin:6px 0 0;color:#888;font-size:12.5px">Las líneas de ${TENDENCIAS_CATS[c].n.toLowerCase()} no traen fecha: no se pueden graficar en el tiempo.</p></div>`; return; }
-    const v = serie(c);
-    h += `<div style="font-size:12px;color:#666;margin:6px 0 2px">${nomAgr} · tendencia: ${tendenciasTendencia(v)}</div>${tendenciasGrafico(etq, v, TENDENCIAS_CATS[c].c)}`;
-    const hora = Array(24).fill(0), dia = Array(7).fill(0);
-    conFecha.forEach((e) => { hora[e.fecha.getHours()]++; dia[(e.fecha.getDay() + 6) % 7]++; });
-    h += `<div style="display:flex;gap:14px;margin-top:6px"><div style="flex:3;min-width:0"><div style="font-size:12px;color:#666;margin-bottom:2px">Por hora del día</div>${tendenciasGrafico(hora.map((_, i) => `${i}h`), hora, TENDENCIAS_CATS[c].c, { ancho: 460, alto: 130, tendencia: false })}</div>` +
-      `<div style="flex:2;min-width:0"><div style="font-size:12px;color:#666;margin-bottom:2px">Por día de la semana</div>${tendenciasGrafico(DIAS_SEM, dia, TENDENCIAS_CATS[c].c, { ancho: 300, alto: 130, tendencia: false })}</div></div>`;
-    const tops = grupos(c).slice(0, 5);
-    h += `<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px"><tr><th ${th}>${TENDENCIAS_CATS[c].s} más repetidas</th><th ${th}>Veces</th><th ${th}>Última</th></tr>` +
-      tops.map((x) => `<tr><td ${td} style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px">${tEsc(x.e.etiqueta + (x.e.dir ? " · " + x.e.dir : ""))}</td><td ${td}><b>${x.n}</b></td><td ${td}>${x.ult ? tFechaCorta(x.ult) : "—"}</td></tr>`).join("") + `</table>`;
+    if (!delCat.length) { h += `<p style="margin:6px 0 0;color:#888;font-size:12.5px">Sin ${TENDENCIAS_CATS[c].n.toLowerCase()} ${conPeriodo ? "en este período" : "en el historial"}.</p></div>`; return; }
+    if (hayGraficos && (!conFecha.length || !claves.length)) h += `<p style="margin:6px 0 0;color:#888;font-size:12.5px">Las líneas de ${TENDENCIAS_CATS[c].n.toLowerCase()} no traen fecha: no se pueden graficar en el tiempo.</p>`;
+    else {
+      if (S.tiempo) {
+        const v = serie(c);
+        h += `<div style="font-size:12px;color:#666;margin:6px 0 2px">${nomAgr} · tendencia: ${tendenciasTendencia(v)}</div>${tendenciasGrafico(etq, v, TENDENCIAS_CATS[c].c)}`;
+      }
+      if (S.hora || S.dia) {
+        const hora = Array(24).fill(0), dia = Array(7).fill(0);
+        conFecha.forEach((e) => { hora[e.fecha.getHours()]++; dia[(e.fecha.getDay() + 6) % 7]++; });
+        h += `<div style="display:flex;gap:14px;margin-top:6px">` +
+          (S.hora ? `<div style="flex:3;min-width:0"><div style="font-size:12px;color:#666;margin-bottom:2px">Por hora del día</div>${tendenciasGrafico(hora.map((_, i) => `${i}h`), hora, TENDENCIAS_CATS[c].c, { ancho: S.dia ? 460 : 760, alto: 130, tendencia: false })}</div>` : "") +
+          (S.dia ? `<div style="flex:2;min-width:0"><div style="font-size:12px;color:#666;margin-bottom:2px">Por día de la semana</div>${tendenciasGrafico(DIAS_SEM, dia, TENDENCIAS_CATS[c].c, { ancho: S.hora ? 300 : 760, alto: 130, tendencia: false })}</div>` : "") +
+          `</div>`;
+      }
+    }
+    if (S.repetidas) {
+      const tops = grupos(c).slice(0, 5);
+      h += `<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px"><tr><th ${th}>${TENDENCIAS_CATS[c].s} más repetidas</th><th ${th}>Veces</th><th ${th}>Última</th></tr>` +
+        tops.map((x) => `<tr><td ${td} style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px">${tEsc(x.e.etiqueta + (x.e.dir ? " · " + x.e.dir : ""))}</td><td ${td}><b>${x.n}</b></td><td ${td}>${x.ult ? tFechaCorta(x.ult) : "—"}</td></tr>`).join("") + `</table>`;
+    }
     h += `</div>`;
   });
 
-  const top = grupos(null).slice(0, 10);
-  h += `<h3 style="font-size:13px;margin:18px 0 0;color:#222">Eventos más recurrentes</h3><table style="width:100%;border-collapse:collapse;font-size:12.5px"><tr><th ${th}>#</th><th ${th}>Evento</th><th ${th}>Categoría</th><th ${th}>Veces</th><th ${th}>Última</th></tr>`;
-  top.forEach((x, i) => {
-    h += `<tr><td ${td}>${i + 1}</td><td ${td} style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${tEsc(x.e.etiqueta + (x.e.dir ? " · " + x.e.dir : ""))}</td><td ${td}>${TENDENCIAS_CATS[x.e.cat].s}</td><td ${td}><b>${x.n}</b></td><td ${td}>${x.ult ? tFechaCorta(x.ult) : "—"}</td></tr>`;
-  });
-  h += '</table><p style="margin:8px 0 0;font-size:11.5px;color:#888">La línea punteada de cada gráfico es la tendencia (mínimos cuadrados). La tendencia compara la segunda mitad del período con la primera.</p>';
+  if (S.recurrentes) {
+    const top = grupos(null).slice(0, 10);
+    h += `<h3 style="font-size:13px;margin:18px 0 0;color:#222">Eventos más recurrentes</h3><table style="width:100%;border-collapse:collapse;font-size:12.5px"><tr><th ${th}>#</th><th ${th}>Evento</th><th ${th}>Categoría</th><th ${th}>Veces</th><th ${th}>Última</th></tr>`;
+    top.forEach((x, i) => {
+      h += `<tr><td ${td}>${i + 1}</td><td ${td} style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${tEsc(x.e.etiqueta + (x.e.dir ? " · " + x.e.dir : ""))}</td><td ${td}>${TENDENCIAS_CATS[x.e.cat].s}</td><td ${td}><b>${x.n}</b></td><td ${td}>${x.ult ? tFechaCorta(x.ult) : "—"}</td></tr>`;
+    });
+    h += "</table>";
+  }
+
+  if (S.lista) {
+    // Lista completa de los eventos del período, del más reciente al más viejo
+    const hhmm = (d) => `${tf2(d.getHours())}:${tf2(d.getMinutes())}`;
+    const orden = [...ev].sort((a, b) => (b.fecha ? +b.fecha : -1) - (a.fecha ? +a.fecha : -1));
+    h += `<h3 style="font-size:13px;margin:18px 0 0;color:#222">Lista completa de eventos (${orden.length})</h3>` +
+      `<table style="width:100%;border-collapse:collapse;font-size:11.5px"><tr><th ${th}>Fecha</th><th ${th}>Hora</th><th ${th}>Categoría</th><th ${th}>Evento</th><th ${th}>Dirección</th></tr>` +
+      orden.map((e) => `<tr style="page-break-inside:avoid"><td ${td}>${e.fecha ? tFechaCorta(e.fecha) : "—"}</td><td ${td}>${e.fecha ? hhmm(e.fecha) : ""}</td>` +
+        `<td ${td}>${punto(e.cat)}${TENDENCIAS_CATS[e.cat].s}</td><td ${td} style="font-family:ui-monospace,Consolas,monospace;font-size:11px">${tEsc(e.etiqueta)}</td><td ${td}>${tEsc(e.dir || "")}</td></tr>`).join("") +
+      `</table>`;
+  }
+  if (S.tiempo) h += '<p style="margin:8px 0 0;font-size:11.5px;color:#888">La línea punteada de cada gráfico es la tendencia (mínimos cuadrados). La tendencia compara la segunda mitad del período con la primera.</p>';
   return h;
+}
+
+// ---- Períodos del informe de tendencias ----
+// Los rangos relativos (30 / 90 días, 12 meses) se cuentan hacia atrás desde
+// el último evento del historial, igual que los filtros de la vista.
+const TEND_PERIODOS_FIJOS = [
+  { id: "todo", t: "Todo el historial" },
+  { id: "365", t: "Últimos 12 meses" },
+  { id: "90", t: "Últimos 90 días" },
+  { id: "30", t: "Últimos 30 días" },
+];
+const TEND_SECCIONES = [
+  { id: "resumen", t: "Resumen por categoría", d: "Totales, tendencia y el evento más repetido" },
+  { id: "tiempo", t: "Histograma en el tiempo", d: "Barras por día / semana / mes con línea de tendencia" },
+  { id: "hora", t: "Por hora del día", d: "En qué horas pasan más eventos" },
+  { id: "dia", t: "Por día de la semana", d: "Qué días se repiten más" },
+  { id: "repetidas", t: "Más repetidas por categoría", d: "Top 5 de cada categoría" },
+  { id: "recurrentes", t: "Eventos más recurrentes", d: "Top 10 general" },
+  { id: "lista", t: "Lista completa de eventos", d: "Todos los eventos del período, con fecha y hora" },
+];
+const TEND_INFORME_DEF = {
+  periodos: ["todo"], rangos: [], agrupar: "auto", cats: ["alarma", "problema", "supervision"],
+  sec: { resumen: true, tiempo: true, hora: true, dia: true, repetidas: true, recurrentes: true, lista: false }, mant: true,
+};
+function tendenciasUltimaFecha(texto) {
+  const fs = tendenciasAnalizar(texto).ev.filter((e) => e.fecha).map((e) => +e.fecha);
+  return fs.length ? new Date(Math.max(...fs)) : null;
+}
+// Convierte la selección en la lista de períodos a imprimir: [{ titulo, desde, hasta }]
+function tendenciasPeriodosElegidos(cfg, texto) {
+  const ult = tendenciasUltimaFecha(texto) || new Date();
+  const fin = new Date(ult.getFullYear(), ult.getMonth(), ult.getDate(), 23, 59, 59);
+  const out = [];
+  TEND_PERIODOS_FIJOS.forEach((p) => {
+    if (!(cfg.periodos || []).includes(p.id)) return;
+    if (p.id === "todo") { out.push({ titulo: p.t }); return; }
+    const desde = new Date(fin); desde.setDate(desde.getDate() - (+p.id) + 1); desde.setHours(0, 0, 0, 0);
+    out.push({ titulo: `${p.t} (del ${tFechaCorta(desde)} al ${tFechaCorta(fin)})`, desde, hasta: fin });
+  });
+  (cfg.rangos || []).forEach((rg) => {
+    if (!rg.desde && !rg.hasta) return;
+    const aFecha = (s, finDia) => { const [y, m, d] = String(s).split("-").map(Number); return new Date(y, m - 1, d, finDia ? 23 : 0, finDia ? 59 : 0, finDia ? 59 : 0); };
+    const desde = rg.desde ? aFecha(rg.desde, false) : null, hasta = rg.hasta ? aFecha(rg.hasta, true) : null;
+    const t = desde && hasta && +desde === +new Date(hasta.getFullYear(), hasta.getMonth(), hasta.getDate())
+      ? `Día ${tFechaCorta(desde)}` : `Del ${desde ? tFechaCorta(desde) : "inicio"} al ${hasta ? tFechaCorta(hasta) : "último evento"}`;
+    out.push({ titulo: (rg.nombre ? rg.nombre + " — " : "") + t, desde, hasta });
+  });
+  return out;
 }
 
 
@@ -11632,6 +11827,117 @@ const leerLocal = (k) => { try { return localStorage.getItem(k) || ""; } catch {
 const guardarLocal = (k, v) => { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch { /* sin almacenamiento */ } };
 
 // Ventana que se abre antes de generar el reporte: nombres, notas y firmas.
+// ---- Armar el informe de tendencias: qué partes, qué períodos y qué
+// categorías salen en el PDF. La selección se recuerda en el equipo. ----
+function ModalInformeTendencias({ sitio, texto, hayMant, onCerrar, onContinuar }) {
+  const [cfg, setCfg] = useState(() => {
+    try {
+      const g = JSON.parse(localStorage.getItem("tendInforme.v1") || "null");
+      if (g && typeof g === "object") return { ...TEND_INFORME_DEF, ...g, sec: { ...TEND_INFORME_DEF.sec, ...(g.sec || {}) }, rangos: Array.isArray(g.rangos) ? g.rangos : [] };
+    } catch (e) { /* nada */ }
+    return TEND_INFORME_DEF;
+  });
+  const set = (f) => setCfg((c) => { const n = f({ ...c, sec: { ...c.sec }, rangos: c.rangos.map((x) => ({ ...x })) }); return n; });
+  const alternar = (lista, v) => (lista.includes(v) ? lista.filter((x) => x !== v) : [...lista, v]);
+  const periodos = useMemo(() => tendenciasPeriodosElegidos(cfg, texto), [cfg, texto]);
+  const conteo = useMemo(() => {
+    const ev = tendenciasAnalizar(texto).ev.filter((e) => cfg.cats.includes(e.cat));
+    return periodos.map((p) => (p.desde || p.hasta ? ev.filter((e) => e.fecha && (!p.desde || e.fecha >= p.desde) && (!p.hasta || e.fecha <= p.hasta)).length : ev.length));
+  }, [periodos, texto, cfg.cats]);
+  const ult = useMemo(() => tendenciasUltimaFecha(texto), [texto]);
+  const algunaSec = Object.values(cfg.sec).some(Boolean) || (cfg.mant && hayMant);
+  const valido = periodos.length > 0 && cfg.cats.length > 0 && algunaSec;
+  const continuar = () => {
+    try { localStorage.setItem("tendInforme.v1", JSON.stringify(cfg)); } catch (e) { /* nada */ }
+    onContinuar(cfg);
+  };
+  const chip = (on) => ({ border: `1.5px solid ${on ? T.accent : T.line}`, background: on ? T.accentSoft : "#fff", color: on ? T.ink : T.inkSoft,
+    borderRadius: 999, padding: "6px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 });
+  const titulo = { fontSize: 12, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.8, margin: "16px 0 8px" };
+  const caja = { border: `1px solid ${T.line}`, borderRadius: 8, padding: "6px 8px", fontSize: 13, fontFamily: "inherit" };
+  return (
+    <div onClick={onCerrar} style={{ position: "fixed", inset: 0, background: "rgba(16,24,38,0.55)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 10 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", color: T.ink, borderRadius: 16, width: 680, maxWidth: "100%", maxHeight: "calc(100vh - 20px)", overflowY: "auto", padding: 18, boxShadow: "0 20px 60px rgba(0,0,0,.35)" }}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 2 }}>
+          <div style={{ fontSize: 18, fontWeight: 800, flex: 1 }}>Armar el informe de tendencias</div>
+          <button type="button" aria-label="Cerrar" onClick={onCerrar} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.gray }}><X size={18} /></button>
+        </div>
+        <div style={{ fontSize: 12.5, color: T.inkSoft }}>{sitio}. Elija lo que quiere que salga en el PDF; puede marcar varios períodos y cada uno sale como un bloque con sus gráficos.</div>
+
+        <div style={titulo}>1. Períodos</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {TEND_PERIODOS_FIJOS.map((p) => {
+            const on = cfg.periodos.includes(p.id);
+            return <button key={p.id} type="button" aria-pressed={on} style={chip(on)} onClick={() => set((c) => ({ ...c, periodos: alternar(c.periodos, p.id) }))}>{on ? "✓ " : ""}{p.t}</button>;
+          })}
+        </div>
+        {ult && <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 6 }}>Los últimos 30 / 90 días y 12 meses se cuentan hacia atrás desde el último evento del historial ({tFechaCorta(ult)}).</div>}
+        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+          {cfg.rangos.map((rg, i) => (
+            <div key={i} style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", background: T.graySoft, borderRadius: 10, padding: "6px 8px" }}>
+              <span style={{ fontSize: 12.5, fontWeight: 700 }}>Fechas específicas</span>
+              <label style={{ fontSize: 12, color: T.inkSoft }}>del <input type="date" style={caja} value={rg.desde || ""} max={rg.hasta || undefined} onChange={(e) => { const v = e.target.value; set((c) => { c.rangos[i].desde = v; return c; }); }} /></label>
+              <label style={{ fontSize: 12, color: T.inkSoft }}>al <input type="date" style={caja} value={rg.hasta || ""} min={rg.desde || undefined} onChange={(e) => { const v = e.target.value; set((c) => { c.rangos[i].hasta = v; return c; }); }} /></label>
+              <input style={{ ...caja, flex: 1, minWidth: 120 }} placeholder="Nombre (opcional)" value={rg.nombre || ""} onChange={(e) => { const v = e.target.value; set((c) => { c.rangos[i].nombre = v; return c; }); }} />
+              <button type="button" aria-label="Quitar este período" onClick={() => set((c) => { c.rangos.splice(i, 1); return c; })} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.red }}><X size={16} /></button>
+            </div>
+          ))}
+          <div>
+            <button type="button" style={chip(false)} onClick={() => set((c) => { c.rangos.push({ desde: "", hasta: "", nombre: "" }); return c; })}>+ Agregar período por fechas (histograma adicional)</button>
+          </div>
+        </div>
+
+        <div style={titulo}>2. Categorías</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {TENDENCIAS_ORDEN.map((c) => {
+            const on = cfg.cats.includes(c);
+            return <button key={c} type="button" aria-pressed={on} style={chip(on)} onClick={() => set((x) => ({ ...x, cats: alternar(x.cats, c) }))}>
+              <span style={{ width: 9, height: 9, borderRadius: 2, background: TENDENCIAS_CATS[c].c, display: "inline-block" }} />{TENDENCIAS_CATS[c].n}</button>;
+          })}
+        </div>
+
+        <div style={titulo}>3. Partes del informe</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 6 }}>
+          {TEND_SECCIONES.map((s) => (
+            <label key={s.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", border: `1px solid ${cfg.sec[s.id] ? T.accent : T.line}`, borderRadius: 10, padding: "8px 10px", cursor: "pointer", background: cfg.sec[s.id] ? T.accentSoft : "#fff" }}>
+              <input type="checkbox" checked={!!cfg.sec[s.id]} onChange={() => set((c) => { c.sec[s.id] = !c.sec[s.id]; return c; })} style={{ marginTop: 2 }} />
+              <span><span style={{ fontSize: 13, fontWeight: 700 }}>{s.t}</span><br /><span style={{ fontSize: 11.5, color: T.inkSoft }}>{s.d}</span></span>
+            </label>
+          ))}
+          {hayMant && (
+            <label style={{ display: "flex", gap: 8, alignItems: "flex-start", border: `1px solid ${cfg.mant ? T.accent : T.line}`, borderRadius: 10, padding: "8px 10px", cursor: "pointer", background: cfg.mant ? T.accentSoft : "#fff" }}>
+              <input type="checkbox" checked={!!cfg.mant} onChange={() => set((c) => ({ ...c, mant: !c.mant }))} style={{ marginTop: 2 }} />
+              <span><span style={{ fontSize: 13, fontWeight: 700 }}>Mantenimiento de detectores</span><br /><span style={{ fontSize: 11.5, color: T.inkSoft }}>Drift Compensation (sale una vez al final)</span></span>
+            </label>
+          )}
+        </div>
+        {(cfg.sec.tiempo) && (
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
+            <span style={{ fontSize: 12.5, fontWeight: 700, color: T.inkSoft }}>Agrupar el histograma:</span>
+            {[["auto", "Automático"], ["dia", "Por día"], ["semana", "Por semana"], ["mes", "Por mes"]].map(([k, t]) => (
+              <button key={k} type="button" aria-pressed={cfg.agrupar === k} style={chip(cfg.agrupar === k)} onClick={() => set((c) => ({ ...c, agrupar: k }))}>{t}</button>
+            ))}
+          </div>
+        )}
+
+        <div style={{ ...titulo, marginTop: 18 }}>Lo que va a salir</div>
+        {periodos.length ? (
+          <div style={{ fontSize: 13, display: "flex", flexDirection: "column", gap: 3 }}>
+            {periodos.map((p, i) => <div key={i}>• {p.titulo} — <b>{conteo[i]}</b> eventos</div>)}
+          </div>
+        ) : <div style={{ fontSize: 13, color: T.red }}>Elija al menos un período.</div>}
+        {!cfg.cats.length && <div style={{ fontSize: 13, color: T.red, marginTop: 4 }}>Elija al menos una categoría.</div>}
+        {!algunaSec && <div style={{ fontSize: 13, color: T.red, marginTop: 4 }}>Elija al menos una parte del informe.</div>}
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap", marginTop: 16 }}>
+          <Btn variant="ghost" onClick={onCerrar}>Cancelar</Btn>
+          <Btn variant="accent" onClick={continuar} disabled={!valido}>Siguiente: firmas</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ModalFirmasReporte({ titulo, usuario, onCerrar, onGenerar }) {
   const esCliente = MODO_CLIENTE || usuario?.categoria === "cliente";
   const claveFirma = `firma_guardada_${usuario?.email || usuario?.id || "anon"}`;
@@ -11867,6 +12173,13 @@ function MonitoreoNotifier() {
     }, { onConflict: "endpoint" });
   };
   useEffect(() => {
+    if (alertasApk()) {
+      const e = alertasApkEstado();
+      setPushEstado(e && e.activo ? "activo" : "inactivo");
+      // Mantiene al día los sitios del usuario en el servicio (sin volver a pedir permisos)
+      if (e && e.activo) alertasApkActivar(esCliente ? sitiosCliente : null, currentUser?.name, true);
+      return;
+    }
     if (!PUSH_SOPORTADO || EN_APK) { setPushEstado("no-soportado"); return; }
     if (Notification.permission === "denied") { setPushEstado("bloqueado"); return; }
     navigator.serviceWorker.getRegistration().then(async (reg) => {
@@ -11876,8 +12189,16 @@ function MonitoreoNotifier() {
     }).catch(() => setPushEstado("inactivo"));
   }, []);
   const activarPush = async () => {
+    if (alertasApk()) {
+      const r = alertasApkActivar(esCliente ? sitiosCliente : null, currentUser?.name, false);
+      if (r && r.error) { alert(r.error); setPushEstado("inactivo"); return; }
+      setPushEstado("activo");
+      await confirmar("Alertas activadas en este celular. Le avisará de alarmas, averías y supervisiones aunque la app esté cerrada (también después de reiniciar el celular).\n\nPara que no fallen: si Android pregunta, toque PERMITIR las notificaciones y PERMITIR que la app funcione en segundo plano (sin restricción de batería). Verá un aviso fijo «Monitoreo Salvavidas activo»: es normal y no se debe quitar.", { confirmLabel: "Entendido", soloAviso: true });
+      return;
+    }
     if (!PUSH_SOPORTADO || EN_APK) {
       const esIphone = /iPhone|iPad/.test(navigator.userAgent || "");
+      if (EN_APK && !esIphone) { alert("Para recibir alertas con la app cerrada instale la versión nueva de la app (Monitoreo_Salvavidas.apk versión 3). Pídasela al administrador."); return; }
       alert(esIphone
         ? "En iPhone las alertas con la app cerrada funcionan cuando la app está agregada a la pantalla de inicio: en Safari toca Compartir → Agregar a inicio, ábrela desde ese ícono y vuelve a tocar \"Activar alertas\"."
         : "Esta versión de la app no puede recibir alertas con la app cerrada. Para tenerlas, abre el enlace del monitoreo en Google Chrome → menú ⋮ → \"Instalar app\", entra desde ese ícono y toca \"Activar alertas\".");
@@ -11905,6 +12226,7 @@ function MonitoreoNotifier() {
   };
   const desactivarPush = async () => {
     if (!(await confirmar("¿Dejar de recibir alertas de alarma en este dispositivo?", { confirmLabel: "Sí, desactivar" }))) return;
+    if (alertasApk()) { try { alertasApk().alertasDesactivar(); } catch (e) {} setPushEstado("inactivo"); return; }
     setPushEstado("trabajando");
     await bajaPushDeEsteDispositivo();
     setPushEstado("inactivo");
@@ -11912,6 +12234,8 @@ function MonitoreoNotifier() {
   const [generandoReporte, setGenerandoReporte] = useState(false);
   const [verActualizarFw, setVerActualizarFw] = useState(false);
   const [firmasPara, setFirmasPara] = useState(null); // "reporte" | "tendencias": abre la ventana de firmas
+  const [armarInformeTend, setArmarInformeTend] = useState(false); // ventana para elegir qué sale en el informe de tendencias
+  const cfgInformeTend = React.useRef(TEND_INFORME_DEF);
   const refListaEventos = React.useRef(null);
   const [categoriaSeleccionada, setCategoriaSeleccionada] = useState(null); // tarjeta activa (filtro)
   const [errorCarga, setErrorCarga] = useState("");
@@ -12386,10 +12710,26 @@ function MonitoreoNotifier() {
   const imprimirTendencias = (firmas) => {
     const imp = abrirImpresion(`Tendencias - ${sitioSeleccionado}`);
     if (!imp) return;
+    // Arma el informe con lo elegido en "Armar informe": cada período es un bloque
+    const texto = (histArchivos.find((h) => h.sitio === sitioSeleccionado) || histArchivos[0] || {}).texto || "";
+    const cfg = cfgInformeTend.current || TEND_INFORME_DEF;
+    const periodos = tendenciasPeriodosElegidos(cfg, texto);
+    const escH = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const pintar = "-webkit-print-color-adjust:exact;print-color-adjust:exact";
+    let cuerpo = `<div style="border-bottom:3px solid #c62828;padding-bottom:8px;margin-bottom:10px;${pintar}"><div style="font-size:21px;font-weight:800">Tendencias del historial — ${escH(sitioSeleccionado)}</div>` +
+      `<div style="color:#667;font-size:12px;margin-top:2px">Generado el ${escH(new Date().toLocaleString("es-CR"))} · Categorías: ${cfg.cats.map((c) => TENDENCIAS_CATS[c].n).join(", ")}` +
+      ` · Períodos: ${periodos.map((p) => escH(p.titulo)).join(" · ")}</div></div>`;
+    periodos.forEach((p, i) => {
+      cuerpo += `<section style="${i ? "page-break-before:always;break-before:page;" : ""}${pintar}"><h2 style="font-size:15px;margin:14px 0 4px;color:#1f2430;border-bottom:1px solid #e3e5ea;padding-bottom:4px">${escH(p.titulo)}</h2>` +
+        generarHtmlTendenciasPanel(texto, { desde: p.desde, hasta: p.hasta, agrupar: cfg.agrupar, cats: cfg.cats, sec: cfg.sec }) + `</section>`;
+    });
+    if (cfg.mant && mantenimientoHtml) {
+      cuerpo += `<section style="page-break-before:always;break-before:page;${pintar}"><h2 style="font-size:15px;margin:14px 0 8px;color:#1f2430">Mantenimiento de detectores (Drift Compensation)</h2>${mantenimientoHtml}</section>`;
+    }
     imp.escribir(
       `<!doctype html><html><head><meta charset="utf-8" /><title>Tendencias - ${sitioSeleccionado}</title>` +
       `<style>body{font-family:system-ui,-apple-system,sans-serif;margin:24px;color:#2a2620;}</style></head>` +
-      `<body>${historialHtml}${htmlFirmasReporte(firmas)}<p style="margin-top:24px;color:#99a;font-size:10.5px">IgnisMonitor · Departamento A&amp;D Salvavidas · <i>by Anthony Campos Medina</i></p></body></html>`,
+      `<body>${cuerpo}${htmlFirmasReporte(firmas)}<p style="margin-top:24px;color:#99a;font-size:10.5px">IgnisMonitor · Departamento A&amp;D Salvavidas · <i>by Anthony Campos Medina</i></p></body></html>`,
       400 // tiempo para que el navegador termine de pintar antes de imprimir
     );
   };
@@ -12771,7 +13111,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               )}
             </div>
             {!cargandoHistorial && historialHtml && (
-              <Btn small variant="accent" onClick={() => setFirmasPara("tendencias")}><Download size={13} /> Imprimir / Guardar PDF</Btn>
+              <Btn small variant="accent" onClick={() => setArmarInformeTend(true)}><Download size={13} /> Armar informe / PDF</Btn>
             )}
           </div>
           {cargandoHistorial ? (
@@ -12934,6 +13274,15 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
       {esMovilNotifier && <div style={{ height: 54 }} />}
       {verActualizarFw && (
         <ModalActualizarFirmware dispositivos={dispositivos} sitioInicial={sitioSeleccionado} onCerrar={() => setVerActualizarFw(false)} />
+      )}
+      {armarInformeTend && (
+        <ModalInformeTendencias
+          sitio={sitioSeleccionado}
+          texto={(histArchivos.find((h) => h.sitio === sitioSeleccionado) || histArchivos[0] || {}).texto || ""}
+          hayMant={!!mantenimientoHtml}
+          onCerrar={() => setArmarInformeTend(false)}
+          onContinuar={(cfg) => { cfgInformeTend.current = cfg; setArmarInformeTend(false); setFirmasPara("tendencias"); }}
+        />
       )}
       {firmasPara && (
         <ModalFirmasReporte

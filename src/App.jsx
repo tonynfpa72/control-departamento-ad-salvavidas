@@ -9729,6 +9729,77 @@ function evalImagenDe(texto) {
   return EVAL_IMG_CACHE[String(texto || '').trim()] || null;
 }
 
+// Situaciones de los juegos de lógica (compuertas, escalera y tablas de la verdad)
+// para armar preguntas de selección en la evaluación de competencias.
+const EVAL_ESCENARIOS_LOGICA = [
+  { modulo: "Compuertas lógicas", frase: '"Activa la Notificación Audible si hay Sensor de Humo o Estación Manual."', terminales: ["Sensor de Humo", "Estación Manual"], evaluar: (v) => v["Sensor de Humo"] || v["Estación Manual"] },
+  { modulo: "Compuertas lógicas", frase: '"Envía al Extractor de Humo si hay Sensor de Humo y Sensor de Temperatura."', terminales: ["Sensor de Humo", "Sensor de Temperatura"], evaluar: (v) => v["Sensor de Humo"] && v["Sensor de Temperatura"] },
+  { modulo: "Compuertas lógicas", frase: '"El Inyector de Aire debe estar apagado mientras haya Sensor de Humo activo."', terminales: ["Sensor de Humo"], evaluar: (v) => !v["Sensor de Humo"] },
+  { modulo: "Compuertas lógicas", frase: '"El Extractor de Humo se apaga únicamente cuando el Sensor de Humo y el Sensor de Temperatura están ambos activos a la vez; en cualquier otro caso, sigue encendido."', terminales: ["Sensor de Humo", "Sensor de Temperatura"], evaluar: (v) => !(v["Sensor de Humo"] && v["Sensor de Temperatura"]) },
+  { modulo: "Compuertas lógicas", frase: '"El Sistema de Diluvio solo se habilita cuando no hay Sensor de Gas LPG ni Falla del Sistema activos."', terminales: ["Sensor de Gas LPG", "Falla del Sistema"], evaluar: (v) => !(v["Sensor de Gas LPG"] || v["Falla del Sistema"]) },
+  { modulo: "Compuertas lógicas", frase: '"Activa Notificación Visible si hay Sensor de Flama o Sensor de Temperatura, y no hay Falla del Sistema."', terminales: ["Sensor de Flama", "Sensor de Temperatura", "Falla del Sistema"], evaluar: (v) => (v["Sensor de Flama"] || v["Sensor de Temperatura"]) && !v["Falla del Sistema"] },
+  { modulo: "Compuertas lógicas", frase: '"Abre las Puertas si hay Sensor de Gas LPG y no hay Falla del Sistema."', terminales: ["Sensor de Gas LPG", "Falla del Sistema"], evaluar: (v) => v["Sensor de Gas LPG"] && !v["Falla del Sistema"] },
+  { modulo: "Compuertas lógicas", frase: '"Control de Elevadores baja al vestíbulo si hay Estación Manual y no hay Falla del Sistema."', terminales: ["Estación Manual", "Falla del Sistema"], evaluar: (v) => v["Estación Manual"] && !v["Falla del Sistema"] },
+  { modulo: "Compuertas lógicas", frase: '"Activa el Sistema de Espuma si hay Sensor de Flama y Sensor de Flujo, y no hay Sensor de Monóxido."', terminales: ["Sensor de Flama", "Sensor de Flujo", "Sensor de Monóxido"], evaluar: (v) => v["Sensor de Flama"] && v["Sensor de Flujo"] && !v["Sensor de Monóxido"] },
+  { modulo: "Compuertas lógicas", frase: '"La Notificación Audible se silencia únicamente cuando la Estación Manual y el Llavín de Mantenimiento están ambos activos a la vez; en cualquier otro caso, suena."', terminales: ["Estación Manual", "Llavín de Mantenimiento"], evaluar: (v) => !(v["Estación Manual"] && v["Llavín de Mantenimiento"]) },
+  { modulo: "Compuertas lógicas", frase: '"El Control de Elevadores solo se habilita para el recall cuando no hay Sensor de Humo ni Sensor de Monóxido activos."', terminales: ["Sensor de Humo", "Sensor de Monóxido"], evaluar: (v) => !(v["Sensor de Humo"] || v["Sensor de Monóxido"]) },
+  { modulo: "Compuertas lógicas", frase: 'Activa el Sistema de Diluvio cuando cualquiera de los sensores de detección (Humo, Flama o Estación Manual) se dispare, siempre que además haya flujo de agua confirmado por el Sensor de Flujo.', terminales: ["Sensor de Humo", "Sensor de Flama", "Estación Manual", "Sensor de Flujo"], evaluar: (v) => (v["Sensor de Humo"] || v["Sensor de Flama"] || v["Estación Manual"]) && v["Sensor de Flujo"] },
+  { modulo: "Compuertas lógicas", frase: 'El Agente Limpio se descarga si los tres sensores (Humo, Temperatura y Flama) detectan la condición al mismo tiempo, o si alguien activa la Estación Manual.', terminales: ["Sensor de Humo", "Sensor de Temperatura", "Sensor de Flama", "Estación Manual"], evaluar: (v) => (v["Sensor de Humo"] && v["Sensor de Temperatura"] && v["Sensor de Flama"]) || v["Estación Manual"] },
+  { modulo: "Compuertas lógicas", frase: 'El Extractor de Humo se enciende si hay Sensor de Humo o se activó la Estación Manual junto con temperatura elevada; también se enciende automáticamente si hay una fuga detectada por el Sensor de Gas LPG.', terminales: ["Sensor de Humo", "Estación Manual", "Sensor de Temperatura", "Sensor de Gas LPG"], evaluar: (v) => ((v["Sensor de Humo"] || v["Estación Manual"]) && v["Sensor de Temperatura"]) || v["Sensor de Gas LPG"] },
+  { modulo: "Compuertas lógicas", frase: 'El Control de Elevadores hace el recall si detecta Humo o Monóxido junto con el Sensor de Flama, o si se activa la Estación Manual.', terminales: ["Sensor de Humo", "Sensor de Monóxido", "Sensor de Flama", "Estación Manual"], evaluar: (v) => ((v["Sensor de Humo"] || v["Sensor de Monóxido"]) && v["Sensor de Flama"]) || v["Estación Manual"] },
+  { modulo: "Compuertas lógicas", frase: 'Prueba Final — Sistema de Agente Limpio: hay dos sensores de humo. Si ambos sensores están activos a la vez, se debe iniciar la Descarga del agente — a menos que se presione el Botón de Aborto o esté puesto el Llavín de Mantenimiento. También hay un Botón de Descarga Directa que dispara la Descarga de inmediato, pero solo si el Llavín de Mantenimiento no está puesto.', terminales: ["Sensor Humo 1", "Sensor Humo 2", "Botón Aborto", "Llavín Mantenimiento", "Botón Descarga Directa"], evaluar: (v) => (v["Sensor Humo 1"] && v["Sensor Humo 2"] && !v["Botón Aborto"] && !v["Llavín Mantenimiento"]) || (v["Botón Descarga Directa"] && !v["Llavín Mantenimiento"]) },
+  { modulo: "Lógica en escalera", frase: '"Activa el Sistema de Espuma si hay Sensor de Flama y Sensor de Flujo, y no hay Falla del Sistema."', terminales: ["Sensor de Flama", "Sensor de Flujo", "Falla del Sistema"], evaluar: (v) => v["Sensor de Flama"] && v["Sensor de Flujo"] && !v["Falla del Sistema"] },
+  { modulo: "Lógica en escalera", frase: '"Abre las Puertas si hay Sensor de Gas LPG o se activa la Estación Manual, y no hay Falla del Sistema."', terminales: ["Sensor de Gas LPG", "Estación Manual", "Falla del Sistema"], evaluar: (v) => (v["Sensor de Gas LPG"] || v["Estación Manual"]) && !v["Falla del Sistema"] },
+  { modulo: "Lógica en escalera", frase: '"El Inyector de Aire funciona solo si no hay Sensor de Humo ni Sensor de Temperatura activos."', terminales: ["Sensor de Humo", "Sensor de Temperatura"], evaluar: (v) => !(v["Sensor de Humo"] || v["Sensor de Temperatura"]) },
+  { modulo: "Lógica en escalera", frase: 'Activa la Notificación Audible si los tres sensores (Humo, Temperatura y Monóxido) detectan la condición al mismo tiempo, o si alguien activa la Estación Manual.', terminales: ["Sensor de Humo", "Sensor de Temperatura", "Sensor de Monóxido", "Estación Manual"], evaluar: (v) => (v["Sensor de Humo"] && v["Sensor de Temperatura"] && v["Sensor de Monóxido"]) || v["Estación Manual"] },
+  { modulo: "Tablas de la verdad", frase: "Notificación Audible = Sensor de Humo OR Estación Manual", vars: ["Sensor de Humo", "Estación Manual"], evaluar: (v) => v[0] || v[1] },
+  { modulo: "Tablas de la verdad", frase: "Extractor de Humo = Sensor de Humo AND Sensor de Temperatura", vars: ["Sensor de Humo", "Sensor de Temperatura"], evaluar: (v) => v[0] && v[1] },
+  { modulo: "Tablas de la verdad", frase: "Inyector de Aire = NOT Sensor de Humo", vars: ["Sensor de Humo"], evaluar: (v) => !v[0] },
+  { modulo: "Tablas de la verdad", frase: "Recall de Elevadores = Sensor de Humo NAND Sensor de Temperatura (se cancela solo cuando ambos sensores están activos a la vez)", vars: ["Sensor de Humo", "Sensor de Temperatura"], evaluar: (v) => !(v[0] && v[1]) },
+  { modulo: "Tablas de la verdad", frase: "Sistema de Diluvio = Sensor de Gas LPG NOR Falla del Sistema (solo se habilita cuando ninguno de los dos está activo)", vars: ["Sensor de Gas LPG", "Falla del Sistema"], evaluar: (v) => !(v[0] || v[1]) },
+  { modulo: "Tablas de la verdad", frase: "Notificación Visible = (Sensor de Flama OR Sensor de Temperatura) AND NOT Falla del Sistema", vars: ["Sensor de Flama", "Sensor de Temperatura", "Falla del Sistema"], evaluar: (v) => (v[0] || v[1]) && !v[2] },
+  { modulo: "Tablas de la verdad", frase: "Sistema de Espuma = Sensor de Flama AND Sensor de Flujo AND NOT Sensor de Monóxido", vars: ["Sensor de Flama", "Sensor de Flujo", "Sensor de Monóxido"], evaluar: (v) => v[0] && v[1] && !v[2] },
+  { modulo: "Tablas de la verdad", frase: "Apertura de Puertas = NOT (Sensor de Gas LPG OR Falla del Sistema)", vars: ["Sensor de Gas LPG", "Falla del Sistema"], evaluar: (v) => !(v[0] || v[1]) },
+  { modulo: "Tablas de la verdad", frase: "Agente Limpio = Estación Manual NAND Llavín de Mantenimiento (se cancela solo cuando ambos están activos a la vez)", vars: ["Estación Manual", "Llavín de Mantenimiento"], evaluar: (v) => !(v[0] && v[1]) },
+  { modulo: "Tablas de la verdad", frase: "Notificación de Descarga = Sensor de Humo NOR Sensor de Temperatura (solo se habilita cuando ninguno de los dos está activo)", vars: ["Sensor de Humo", "Sensor de Temperatura"], evaluar: (v) => !(v[0] || v[1]) },
+  { modulo: "Tablas de la verdad", frase: "Sistema de Diluvio = (Sensor de Humo OR Sensor de Flama OR Estación Manual) AND Sensor de Flujo", vars: ["Sensor de Humo", "Sensor de Flama", "Estación Manual", "Sensor de Flujo"], evaluar: (v) => (v[0] || v[1] || v[2]) && v[3] },
+  { modulo: "Tablas de la verdad", frase: "Agente Limpio = (Sensor de Humo AND Sensor de Temperatura AND Sensor de Flama) OR Estación Manual", vars: ["Sensor de Humo", "Sensor de Temperatura", "Sensor de Flama", "Estación Manual"], evaluar: (v) => (v[0] && v[1] && v[2]) || v[3] },
+];
+
+// Preguntas de lógica generadas: con cuál condición se activa (o no) la salida,
+// o en cuántas combinaciones de la tabla de la verdad se activa.
+function evalPreguntasLogica() {
+  const out = [];
+  EVAL_ESCENARIOS_LOGICA.forEach((sc) => {
+    const vars = sc.terminales || sc.vars || [];
+    const n = vars.length; if (!n || n > 4) return;
+    const ev = (bits) => { try { return !!(sc.terminales ? sc.evaluar(Object.fromEntries(vars.map((t, i) => [t, bits[i]]))) : sc.evaluar(bits)); } catch (e) { return false; } };
+    const combos = []; for (let m = 0; m < (1 << n); m++) combos.push(vars.map((_, i) => !!(m & (1 << (n - 1 - i)))));
+    const si = evalMezclar(combos.filter(ev)), no = evalMezclar(combos.filter((c) => !ev(c)));
+    const txt = (c) => vars.map((t, i) => `${t}: ${c[i] ? "ACTIVO" : "normal"}`).join(" · ");
+    const frase = String(sc.frase).replace(/^"+|"+$/g, "").replace(/[.\s]+$/, "");
+    let q = null;
+    if (si.length >= 1 && no.length >= 3) q = { texto: `Según esta lógica: «${frase}». ¿Con cuál de estas condiciones SE ACTIVA la salida?`, opciones: [txt(si[0]), ...no.slice(0, 3).map(txt)] };
+    else if (no.length >= 1 && si.length >= 3) q = { texto: `Según esta lógica: «${frase}». ¿Con cuál de estas condiciones la salida NO se activa?`, opciones: [txt(no[0]), ...si.slice(0, 3).map(txt)] };
+    else {
+      const total = combos.length, ok = si.length;
+      const otras = evalMezclar([...Array(total + 1).keys()].filter((x) => x !== ok)).slice(0, 3);
+      q = { texto: `Según esta lógica: «${frase}». De las ${total} combinaciones posibles de entradas (tabla de la verdad), ¿en cuántas se activa la salida?`, opciones: [String(ok), ...otras.map(String)] };
+    }
+    if (q && q.opciones.length >= 2) out.push({ modulo: sc.modulo, texto: q.texto, opciones: q.opciones, correctas: [0] });
+  });
+  return out;
+}
+// Ecuaciones Simplex: qué hace cada ecuación (las otras descripciones son distractores)
+function evalPreguntasSimplex() {
+  const ej = (typeof EJERCICIOS_SIMPLEX !== "undefined" ? EJERCICIOS_SIMPLEX : []).filter((e) => e.titulo && e.explicacion);
+  return ej.map((e) => {
+    const nombre = String(e.titulo).replace(/^Ejercicio\s*#\d+\s*[—-]\s*/i, "");
+    const otras = evalMezclar(ej.filter((x) => x !== e)).slice(0, 3).map((x) => x.explicacion);
+    return { modulo: "Ecuaciones Simplex", texto: `En la programación del panel Simplex, ¿qué hace la ecuación «${nombre}»?`, opciones: [e.explicacion, ...otras], correctas: [0] };
+  });
+}
+
 function evalBancoTecnico(areas) {
   const bancos = {
     nfpa: () => PREGUNTAS_NFPA72.map((p) => ({ modulo: "NFPA 72", texto: p.texto, opciones: p.opciones, correctas: [p.correcta] })),
@@ -9736,6 +9807,11 @@ function evalBancoTecnico(areas) {
     nicet: () => PREGUNTAS_NICET.map((p) => ({ modulo: "NICET", texto: p.es.texto, textoEn: p.en?.texto, opciones: p.es.opciones, correctas: p.multiple ? p.correctas : [p.correcta] })),
     fas1: () => FAS_NIVEL1_QUIZZES.flatMap((q) => q.preguntas).map((p) => ({ modulo: "FAS Nivel I", texto: p.es.texto, textoEn: p.en?.texto, opciones: p.es.opciones, correctas: p.multiple ? p.correctas : [p.correcta] })),
     notifier: () => PREGUNTAS_NOTIFIER.map((p) => ({ modulo: "Notifier", texto: p.texto, opciones: p.opciones, correctas: [p.correcta] })),
+    mant_notifier: () => PREGUNTAS_MANTENIMIENTO_NOTIFIER.map((p) => ({ modulo: "Mantenimiento Notifier", texto: p.texto, opciones: p.opciones, correctas: p.correctas || [p.correcta] })),
+    medicion: () => [...PREGUNTAS_MULTIMETRO.map((p) => ({ modulo: "Multímetro", texto: p.texto, opciones: p.opciones, correctas: p.correctas || [p.correcta] })),
+      ...PREGUNTAS_MEGOMETRO.map((p) => ({ modulo: "Megóhmetro", texto: p.texto, opciones: p.opciones, correctas: p.correctas || [p.correcta] }))],
+    simplex: () => evalPreguntasSimplex(),
+    logica: () => evalPreguntasLogica(),
   };
   return areas.map((a) => (bancos[a] ? bancos[a]().filter((p) => Array.isArray(p.opciones) && p.opciones.length >= 2 && !evalExcluida(p.texto, p.textoEn)) : []));
 }
@@ -10247,7 +10323,7 @@ function EvalResponder({ row, onSalir }) {
           : <span style={{ display: "flex", alignItems: "center", gap: 4, color: tiempo && minutos > tiempo ? T.red : T.inkSoft }}><Clock size={14} /> {minutos} min{tiempo ? ` de ${tiempo}` : ""}</span>}
         <span style={{ flex: 1, textAlign: "right", fontSize: 12, color: /No se pudo/.test(guardado) ? T.red : T.green }}>{guardado}</span>
       </div>
-      {parteUI("A", "Conocimiento técnico", "NFPA 72, electrónica, NICET, FAS y Notifier.")}
+      {parteUI("A", "Conocimiento técnico", [...new Set((preg.A || []).map((q) => q.modulo).filter(Boolean))].join(", ") + ".")}
       {parteUI("B", "Servicio al cliente", "Elija lo que haría en cada situación.")}
       {parteUI("C", "Habilidades administrativas", "Coordinación, comunicación, informes, correo electrónico, manejo de personal, seguridad y gestión.")}
       {row.incluir?.F && (
@@ -10483,7 +10559,7 @@ function EvaluacionCompetencias() {
   const [f, setF] = useState({
     tecnicoId: "", nombre: "", jefeId: currentUser?.id || "", cedula: "", puestoActual: "", puestoAspira: "Técnico II", area: "Inspecciones",
     antiguedad: "", fecha: hoy.toLocaleDateString("es-CR"),
-    nTec: 30, areas: { nfpa: true, electronica: true, nicet: true, fas1: true, notifier: true },
+    nTec: 30, areas: { nfpa: true, electronica: true, nicet: true, fas1: true, notifier: true, mant_notifier: true, medicion: true, simplex: true, logica: true },
     nServ: 10, nAdmin: 15, D: true, E: true, F: true, clave: true, tiempo: 90,
     pesos: { A: 40, B: 15, C: 20, D: 15, E: 10 },
   });
@@ -10564,7 +10640,7 @@ function EvaluacionCompetencias() {
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} /> {texto}
     </label>
   );
-  const AREAS_TEC = [["nfpa", "NFPA 72"], ["electronica", "Electrónica"], ["nicet", "NICET"], ["fas1", "FAS Nivel I"], ["notifier", "Notifier"]];
+  const AREAS_TEC = [["nfpa", "NFPA 72"], ["electronica", "Electrónica"], ["nicet", "NICET"], ["fas1", "FAS Nivel I"], ["notifier", "Ecuaciones Notifier"], ["mant_notifier", "Mantenimiento Notifier"], ["medicion", "Equipos de medición"], ["simplex", "Ecuaciones Simplex"], ["logica", "Compuertas, escalera y tablas de verdad"]];
   const fmt = (v) => (v == null ? "—" : Number(v).toLocaleString("es-CR", { maximumFractionDigits: 1 }));
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -14904,11 +14980,45 @@ function Entrenamiento() {
     else setPuntajes([]);
   }, [jugadorCodigo]);
 
+  // Los puntos se guardan en Supabase. Si no se puede (sin señal o un
+  // permiso de la tabla), quedan pendientes en este equipo, se muestran
+  // igual en el puntaje y se reintentan solos — así no se pierde ninguno.
+  const CLAVE_PENDIENTES = "entrenamiento.pendientes.v1";
+  const [pendientes, setPendientes] = useState(() => { try { return JSON.parse(localStorage.getItem(CLAVE_PENDIENTES) || "[]"); } catch (e) { return []; } });
+  const [errorPuntos, setErrorPuntos] = useState("");
+  const guardarPendientes = (lista) => { setPendientes(lista); try { localStorage.setItem(CLAVE_PENDIENTES, JSON.stringify(lista)); } catch (e) { /* nada */ } };
+  const pendientesRef = React.useRef(pendientes);
+  pendientesRef.current = pendientes;
+  const subiendoRef = React.useRef(false);
+  const subirPendientes = async () => {
+    if (subiendoRef.current || !pendientesRef.current.length) return;
+    subiendoRef.current = true;
+    try {
+      let quedan = [...pendientesRef.current];
+      for (const pend of [...quedan]) {
+        const { local_id, ...fila } = pend;
+        const { data, error } = await supabase.from("entrenamiento_puntajes").insert(fila).select().single();
+        if (error) { setErrorPuntos(error.message || String(error)); break; }
+        quedan = quedan.filter((x) => x.local_id !== local_id);
+        guardarPendientes(quedan);
+        if (data && data.personal_codigo === jugadorCodigoRef.current) setPuntajes((prev) => [...prev, data]);
+      }
+      if (!quedan.length) setErrorPuntos("");
+    } finally { subiendoRef.current = false; }
+  };
+  const jugadorCodigoRef = React.useRef(jugadorCodigo);
+  jugadorCodigoRef.current = jugadorCodigo;
+  useEffect(() => { subirPendientes(); const t = setInterval(subirPendientes, 30000); return () => clearInterval(t); }, []);
   const registrarPuntos = async (segmento, ejercicio, puntos) => {
-    if (!jugador) return;
-    const payload = { personal_codigo: jugador.codigo, personal_nombre: jugador.nombre, segmento, ejercicio, puntos, fecha: todayISO() };
-    const { data } = await supabase.from("entrenamiento_puntajes").insert(payload).select().single();
-    if (data) setPuntajes((prev) => [...prev, data]);
+    const quien = jugador || (jugadorCodigo ? { codigo: jugadorCodigo, nombre: currentUser?.name || "" } : null);
+    if (!quien) { setErrorPuntos("No hay un jugador elegido: elija su nombre arriba para que se guarden los puntos."); return; }
+    const payload = { personal_codigo: quien.codigo, personal_nombre: quien.nombre, segmento, ejercicio, puntos: Number(puntos) || 0, fecha: todayISO() };
+    const { data, error } = await supabase.from("entrenamiento_puntajes").insert(payload).select().single();
+    if (!error && data) { setPuntajes((prev) => [...prev, data]); return; }
+    if (!error) { cargarPuntajes(quien.codigo); return; } // se guardó pero no se pudo leer la fila: se recarga
+    console.error("No se guardaron los puntos de Entrenamiento:", error);
+    setErrorPuntos(error.message || String(error));
+    guardarPendientes([...pendientesRef.current, { ...payload, local_id: Date.now() + "-" + Math.random().toString(36).slice(2) }]);
   };
 
   // Solo Admin puede reiniciar un módulo bloqueado. Si además decide
@@ -14928,15 +15038,18 @@ function Entrenamiento() {
         );
         return;
       }
-      const { data: todos } = await supabase.from("entrenamiento_puntajes").select("*");
-      if (todos) setPuntajes(todos);
+      const { data: suyos } = await supabase.from("entrenamiento_puntajes").select("*").eq("personal_codigo", jugador.codigo);
+      if (suyos) setPuntajes(suyos);
+      guardarPendientes(pendientesRef.current.filter((p) => !(p.personal_codigo === jugador.codigo && p.segmento === segmentoId)));
     }
   };
 
-  const puntosDeSegmento = (segId) => puntajes.filter((p) => p.segmento === segId).reduce((s, p) => s + p.puntos, 0);
+  const misPendientes = pendientes.filter((p) => p.personal_codigo === jugadorCodigo);
+  const puntajesConPendientes = misPendientes.length ? [...puntajes, ...misPendientes] : puntajes;
+  const puntosDeSegmento = (segId) => puntajesConPendientes.filter((p) => p.segmento === segId).reduce((s, p) => s + (Number(p.puntos) || 0), 0);
   // El puntaje del Reto NUNCA debe sumarse al ranking general — solo
   // vive en su propia columna. Por eso se excluye aquí explícitamente.
-  const puntosTotal = puntajes.filter((p) => p.segmento !== "reto").reduce((s, p) => s + p.puntos, 0);
+  const puntosTotal = puntajesConPendientes.filter((p) => p.segmento !== "reto").reduce((s, p) => s + (Number(p.puntos) || 0), 0);
   const puntosPorSegmento = {};
   SEGMENTOS_ENTRENAMIENTO.forEach((s) => { puntosPorSegmento[s.id] = puntosDeSegmento(s.id); });
 
@@ -15107,6 +15220,20 @@ function Entrenamiento() {
   // y el contenido de cada pestaña ocupa toda la pantalla con scroll
   // independiente (como un APK real).
   // ============================================================
+  // Aviso si hay puntos que todavía no se pudieron guardar en Supabase
+  const avisoPuntosEl = (misPendientes.length > 0 || errorPuntos) ? (
+    <div role="status" style={{ position: "fixed", left: 12, right: 12, bottom: 70, zIndex: 10001, maxWidth: 520, margin: "0 auto", background: "#fff4e5", border: "1px solid #f0a35c", borderRadius: 12, padding: "10px 12px", boxShadow: "0 8px 24px rgba(0,0,0,.18)", fontSize: 13, color: "#5a3410", display: "flex", gap: 10, alignItems: "center" }}>
+      <span style={{ fontSize: 18 }}>⚠️</span>
+      <span style={{ flex: 1 }}>
+        {misPendientes.length > 0
+          ? <><b>{misPendientes.length} puntaje(s) sin guardar</b> todavía (se cuentan igual y se reintenta solo).</>
+          : <b>No se pudieron guardar los puntos.</b>}
+        {errorPuntos && <><br /><span style={{ fontSize: 11.5, color: "#8a5a2b" }}>Supabase: {errorPuntos}</span></>}
+      </span>
+      {misPendientes.length > 0 && <button type="button" onClick={subirPendientes} style={{ border: "1px solid #f0a35c", background: "#fff", borderRadius: 8, padding: "5px 10px", fontWeight: 700, cursor: "pointer", color: "#5a3410" }}>Reintentar</button>}
+    </div>
+  ) : null;
+
   if (vistaModo === "movil") {
     const TABS_MOVIL = [
       { id: "inicio", icon: "🏠", label: "Inicio" },
@@ -15120,6 +15247,7 @@ function Entrenamiento() {
         display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
         padding: esMovilReal ? 0 : "16px 0", overflowY: "auto",
       }}>
+        {avisoPuntosEl}
         <style>{`@keyframes flameFloatSlow { 0%,100% { transform: translateY(0) rotate(-10deg) scale(1); opacity: 0.12; } 50% { transform: translateY(-8px) rotate(-6deg) scale(1.05); opacity: 0.2; } }
           @keyframes rachaPulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.15); opacity: 0.75; } }`}</style>
         <div style={esMovilReal
@@ -15261,6 +15389,7 @@ function Entrenamiento() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: anchoVista, margin: anchoVista ? "0 auto" : undefined, transition: "max-width 0.2s ease" }}>
+      {avisoPuntosEl}
       {subioDeRango && (
         <>
         <style>{`

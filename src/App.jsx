@@ -15611,7 +15611,7 @@ function Entrenamiento() {
 // un ejercicio nuevo, avisa hacia arriba para sumar puntos.
 // =====================================================================
 // CLASE GUIADA CON VOZ (Entrenamiento)
-// El profesor (Anthony) explica cada tema con voz natural (Azure, voz de Costa
+// El profesor explica cada tema con voz natural (Azure, voz de Costa
 // Rica, vía /api/voz), pone un ejercicio, felicita al acertar y avanza.
 // Si la voz del servidor no está disponible, usa la voz del dispositivo;
 // los subtítulos siempre se ven.
@@ -15806,11 +15806,11 @@ function TablaVerdadMini({ tipo, entradas }) {
 // pronuncian). texto: el subtítulo que se ve.
 const CLASE_COMPUERTAS = {
   titulo: "Clase guiada: compuertas lógicas",
-  profesor: "Anthony",
+  profesor: "Profesor",
   pasos: [
     { titulo: "Bienvenida",
-      voz: "¡Hola, chicos! ¿Cómo están? Hola, {nombre}. Soy Anthony, Tony para los amigos, y hoy les quiero explicar las compuertas lógicas, que son la base de cómo piensa un panel contra incendio. Vamos paso a paso: en cada tema les explico la idea y después les pongo un ejercicio corto. Con calma, no hay prisa: si se equivocan, lo intentamos otra vez.",
-      texto: "¡Hola, chicos! Soy Anthony (Tony) y hoy les explico las compuertas lógicas. En cada tema: una explicación corta y un ejercicio. Si se equivoca, lo intenta otra vez.",
+      voz: "¡Hola, chicos! ¿Cómo están? Hola, {nombre}. Soy su profesor de hoy y les quiero explicar las compuertas lógicas, que son la base de cómo piensa un panel contra incendio. Vamos paso a paso: en cada tema les explico la idea y después les pongo un ejercicio corto. Con calma, no hay prisa: si se equivocan, lo intentamos otra vez.",
+      texto: "¡Hola, chicos! Hoy les explico las compuertas lógicas. En cada tema: una explicación corta y un ejercicio. Si se equivoca, lo intenta otra vez.",
       visual: { tipo: "emoji", valor: "👋" } },
     { titulo: "Encendido o apagado",
       voz: "Primero, una idea clave. En un sistema contra incendio casi todo se puede ver como encendido o apagado. Un detector está en reposo o en alarma, y una estación manual está normal o activada. En lógica a eso le decimos cero y uno: cero es apagado y uno es activo.",
@@ -16009,7 +16009,7 @@ function ClaseGuiada({ clase, onTerminar, onSalir, onGuia, nombre: nombreProp })
           <div style={{ fontSize: 20, fontWeight: 800, color: T.ink, marginTop: 4 }}>{clase.titulo}</div>
           {nombre && <div style={{ fontSize: 14.5, fontWeight: 700, color: "#e8590c", marginTop: 2 }}>Hola, {nombre} 👋</div>}
           <div style={{ fontSize: 13.5, color: T.inkSoft, margin: "8px auto 16px", maxWidth: 460, lineHeight: 1.5 }}>
-            {clase.profesor} le explica cada tema con voz, le pone un ejercicio y avanza cuando lo logra. Suba el volumen o use audífonos. Son {total} pasos, unos 10 minutos.
+            El profesor le explica cada tema con voz, le pone un ejercicio y avanza cuando lo logra. Suba el volumen o use audífonos. Son {total} pasos, unos 10 minutos.
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
             <Btn variant="accent" onClick={comenzar}>▶ Comenzar la clase</Btn>
@@ -16026,10 +16026,10 @@ function ClaseGuiada({ clase, onTerminar, onSalir, onGuia, nombre: nombreProp })
       <style>{`@keyframes claseOnda{0%,100%{transform:scaleY(.35)}50%{transform:scaleY(1)}} @keyframes claseRebote{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}} @keyframes claseEntra{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}`}</style>
       {/* Encabezado: instructora + progreso */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-        <div style={{ width: 48, height: 48, borderRadius: "50%", backgroundImage: FOTO_PROFESOR ? `url(${FOTO_PROFESOR})` : "linear-gradient(135deg, #1c3d6e, #2e5482)", backgroundSize: "cover", backgroundPosition: "center", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 800, flex: "0 0 48px", boxShadow: N.hablando && !N.pausado ? "0 0 0 6px rgba(232,89,12,.18)" : "none", transition: "box-shadow .2s" }}>{FOTO_PROFESOR ? "" : clase.profesor[0]}</div>
+        <div style={{ width: 48, height: 48, borderRadius: "50%", backgroundImage: FOTO_PROFESOR ? `url(${FOTO_PROFESOR})` : "linear-gradient(135deg, #1c3d6e, #2e5482)", backgroundSize: "cover", backgroundPosition: "center", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 800, flex: "0 0 48px", boxShadow: N.hablando && !N.pausado ? "0 0 0 6px rgba(232,89,12,.18)" : "none", transition: "box-shadow .2s" }}>{FOTO_PROFESOR ? "" : "👨‍🏫"}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 8 }}>
-            {clase.profesor} · Profesor
+            Profesor · Entrenamiento A&D
             {N.hablando && !N.pausado && (
               <span aria-hidden="true" style={{ display: "inline-flex", gap: 2, alignItems: "center", height: 14 }}>
                 {[0, 1, 2, 3].map((k) => <span key={k} style={{ width: 3, height: 14, background: "#e8590c", borderRadius: 2, animation: `claseOnda .9s ${k * 0.15}s ease-in-out infinite` }} />)}

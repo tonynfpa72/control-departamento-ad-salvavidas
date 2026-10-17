@@ -15653,8 +15653,16 @@ function useNarradora() {
     if (!ss || typeof SpeechSynthesisUtterance === "undefined") { fuenteRef.current = "ninguna"; setFuente("ninguna"); terminar(); return; }
     const u = new SpeechSynthesisUtterance(texto);
     const voces = ss.getVoices() || [];
-    u.voice = voces.find((v) => /es[-_]CR/i.test(v.lang)) || voces.find((v) => /es[-_](MX|US|419)/i.test(v.lang)) || voces.find((v) => /^es/i.test(v.lang)) || null;
-    u.lang = (u.voice && u.voice.lang) || "es-MX"; u.rate = 1; u.pitch = 1;
+    // El profesor es hombre: se busca una voz masculina en español del equipo
+    // (Windows: Raúl, Jorge, Pablo…; Android: voces "x-esd"/"x-eed"…). Si no hay, se baja el tono.
+    const esp = voces.filter((v) => /^es/i.test(v.lang));
+    const hombre = /ra[uú]l|jorge|pablo|diego|juan|carlos|enrique|[aá]lvaro|gonzalo|alonso|andr[eé]s|gerardo|lorenzo|male|hombre|masculin|x-esd|x-eed|x-eea|x-esf-?m/i;
+    const latam = (v) => /es[-_](CR|MX|US|419|CO|AR|CL|PE)/i.test(v.lang);
+    const voz = esp.find((v) => hombre.test(v.name) && latam(v)) || esp.find((v) => hombre.test(v.name))
+      || esp.find((v) => /es[-_]CR/i.test(v.lang)) || esp.find(latam) || esp[0] || null;
+    u.voice = voz;
+    u.lang = (voz && voz.lang) || "es-MX"; u.rate = 1;
+    u.pitch = voz && hombre.test(voz.name) ? 1 : 0.8;
     u.onend = u.onerror = () => terminar();
     ss.cancel(); ss.speak(u);
     if (fuenteRef.current !== "dispositivo") { fuenteRef.current = "dispositivo"; setFuente("dispositivo"); }
@@ -15688,7 +15696,11 @@ function useNarradora() {
   };
   // Descarga por adelantado la siguiente frase para que no haya espera
   const precargar = (texto) => { if (texto && fuenteRef.current === "servidor") { try { fetch(urlVozClase(texto)).catch(() => {}); } catch (e) { /* nada */ } } };
-  useEffect(() => () => callar(), []); // al salir de la clase deja de hablar
+  useEffect(() => {
+    // Chrome carga la lista de voces del equipo después de abrir: se pide de una vez
+    try { if (window.speechSynthesis) { window.speechSynthesis.getVoices(); window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices(); } } catch (e) { /* nada */ }
+    return () => callar(); // al salir de la clase deja de hablar
+  }, []);
   return { hablar, callar, pausar, precargar, hablando, pausado, silencio, setSilencio, fuente };
 }
 

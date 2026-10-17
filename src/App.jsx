@@ -15610,6 +15610,135 @@ function Entrenamiento() {
 // (gris = incompleto, verde = correcto, rojo = incorrecto). Al acertar
 // un ejercicio nuevo, avisa hacia arriba para sumar puntos.
 // =====================================================================
+// Íconos realistas de dispositivos contra incendio (SVG en texto, para
+// usarlos en la práctica de compuertas y en la clase guiada).
+// iconoEntrada(nombre, activo) → detectores, estaciones manuales, etc.
+// iconoSalida(nombre, activo)  → luz/bocina, extractor, diluvio, agente…
+// =====================================================================
+const CSS_DISPOSITIVOS = `
+@keyframes dvParpadeo { 0%,100% { opacity: 1 } 50% { opacity: .15 } }
+@keyframes dvGira { to { transform: rotate(360deg) } }
+@keyframes dvGota { 0% { transform: translateY(0); opacity: 1 } 100% { transform: translateY(14px); opacity: 0 } }
+@keyframes dvHumo { 0% { transform: translateY(0) scale(.8); opacity: .7 } 100% { transform: translateY(-10px) scale(1.25); opacity: 0 } }
+@keyframes dvOnda { 0% { opacity: .9 } 100% { opacity: 0 } }
+@keyframes dvCorriente { to { stroke-dashoffset: -36; } }
+.dv-led-on { animation: dvParpadeo .8s steps(2) infinite; }
+.dv-strobe { animation: dvParpadeo .45s steps(2) infinite; }
+.dv-gira { transform-box: fill-box; transform-origin: center; animation: dvGira .7s linear infinite; }
+.dv-gota { animation: dvGota .8s linear infinite; }
+.dv-humo { transform-box: fill-box; transform-origin: center; animation: dvHumo 1.4s ease-out infinite; }
+.dv-onda { animation: dvOnda .9s ease-out infinite; }
+.dv-corriente { animation: dvCorriente .9s linear infinite; }
+`;
+const tipoEntrada = (n) => {
+  const t = String(n || "").toLowerCase();
+  if (/manual|estaci/.test(t)) return "manual";
+  if (/aborto/.test(t)) return "aborto";
+  if (/llav[ií]n|llave|mantenimiento/.test(t)) return "llave";
+  if (/descarga|bot[oó]n/.test(t)) return "boton";
+  if (/flujo/.test(t)) return "flujo";
+  if (/flama|llama/.test(t)) return "flama";
+  if (/temperatura|calor|t[eé]rmico/.test(t)) return "temperatura";
+  if (/mon[oó]xido|\bco\b/.test(t)) return "co";
+  if (/gas|lpg/.test(t)) return "gas";
+  if (/falla|supervis|problema|aver/.test(t)) return "falla";
+  if (/humo/.test(t)) return "humo";
+  return "sensor";
+};
+function iconoEntrada(nombre, activo, tam = 36) {
+  const tipo = tipoEntrada(nombre);
+  const led = (x, y) => `<circle cx="${x}" cy="${y}" r="3" fill="${activo ? "#ff2a2a" : "#7a828c"}" ${activo ? 'class="dv-led-on"' : ""}/>`;
+  const disco = (extra) => `<circle cx="24" cy="26" r="19" fill="#f8f9fa" stroke="#9aa1a9" stroke-width="2"/><circle cx="24" cy="26" r="13" fill="#eef0f2" stroke="#c4c9cf" stroke-width="1.5"/>${extra}`;
+  let c;
+  switch (tipo) {
+    case "humo":
+      c = disco(`<g stroke="#b5bbc2" stroke-width="1.6">${[0, 1, 2, 3, 4, 5].map((k) => { const a = (k * Math.PI) / 3; return `<line x1="${24 + 8 * Math.cos(a)}" y1="${26 + 8 * Math.sin(a)}" x2="${24 + 12 * Math.cos(a)}" y2="${26 + 12 * Math.sin(a)}"/>`; }).join("")}</g>${led(35, 15)}`) +
+        (activo ? `<g fill="#868e96"><circle class="dv-humo" cx="16" cy="9" r="4" opacity=".6"/><circle class="dv-humo" cx="26" cy="6" r="5" opacity=".5" style="animation-delay:.4s"/><circle class="dv-humo" cx="34" cy="8" r="3.5" opacity=".5" style="animation-delay:.8s"/></g>` : "");
+      break;
+    case "temperatura":
+      c = disco(`<circle cx="24" cy="26" r="6" fill="${activo ? "#f76707" : "#c97b40"}" stroke="#8a4b1c" stroke-width="1.5"/><path d="M24 20 v-4" stroke="#8a4b1c" stroke-width="2"/>${led(35, 15)}`) +
+        (activo ? `<path class="dv-onda" d="M8 8 q3 -4 0 -8 M40 8 q3 -4 0 -8" stroke="#f76707" stroke-width="2" fill="none"/>` : "");
+      break;
+    case "flama":
+      c = `<rect x="7" y="9" width="34" height="32" rx="7" fill="#495057" stroke="#212529" stroke-width="2"/><circle cx="24" cy="25" r="10" fill="#1c1f23" stroke="#868e96" stroke-width="1.5"/>` +
+        (activo ? `<path class="dv-strobe" d="M24 17 c5 6 6 9 3 13 c-1 2 -5 2 -6 0 c-2 -3 -1 -6 3 -13z" fill="#ff922b" stroke="#ffd43b" stroke-width="1"/>` : `<circle cx="21" cy="22" r="3" fill="#495057"/>`) + led(35, 13);
+      break;
+    case "manual":
+      c = `<rect x="8" y="4" width="32" height="40" rx="4" fill="#e03131" stroke="#a51111" stroke-width="2"/><rect x="12" y="8" width="24" height="8" rx="1.5" fill="#fff"/><text x="24" y="14.6" font-size="6.2" font-weight="900" text-anchor="middle" fill="#e03131" font-family="Arial,sans-serif">FUEGO</text>` +
+        `<rect x="14" y="${activo ? 28 : 20}" width="20" height="8" rx="2" fill="#fff" stroke="#c92a2a" stroke-width="1.2"/><text x="24" y="${activo ? 34.4 : 26.4}" font-size="4.6" font-weight="800" text-anchor="middle" fill="#c92a2a" font-family="Arial,sans-serif">HALE</text>` +
+        (activo ? `<path d="M24 40 v-3" stroke="#fff" stroke-width="2"/>` : "");
+      break;
+    case "flujo":
+      c = `<rect x="2" y="26" width="44" height="12" rx="3" fill="#adb5bd" stroke="#6c757d" stroke-width="1.5"/><rect x="14" y="8" width="20" height="16" rx="3" fill="#e03131" stroke="#a51111" stroke-width="1.5"/><path d="M24 24 v6" stroke="#495057" stroke-width="2.5"/>` +
+        (activo ? `<g fill="#339af0"><path class="dv-onda" d="M6 32 h8 l-3 -3 M6 32 l5 3" stroke="#1c7ed6" stroke-width="2" fill="none"/><path d="M24 30 l7 5" stroke="#1c7ed6" stroke-width="2.5"/></g>` : `<path d="M24 30 v6" stroke="#495057" stroke-width="2.5"/>`) + led(30, 12);
+      break;
+    case "co": case "gas":
+      c = `<rect x="7" y="7" width="34" height="36" rx="8" fill="#f8f9fa" stroke="#9aa1a9" stroke-width="2"/><text x="24" y="30" font-size="${tipo === "co" ? 13 : 10}" font-weight="900" text-anchor="middle" fill="#495057" font-family="Arial,sans-serif">${tipo === "co" ? "CO" : "GAS"}</text>${led(35, 14)}<g stroke="#ced4da" stroke-width="1.5"><line x1="14" y1="36" x2="34" y2="36"/><line x1="14" y1="39" x2="34" y2="39"/></g>`;
+      break;
+    case "aborto":
+      c = `<rect x="6" y="6" width="36" height="36" rx="5" fill="#fab005" stroke="#c48a00" stroke-width="2"/><circle cx="24" cy="24" r="${activo ? 10 : 11}" fill="#1971c2" stroke="#0b4a8b" stroke-width="2"/><text x="24" y="40" font-size="5" font-weight="900" text-anchor="middle" fill="#5c4400" font-family="Arial,sans-serif">ABORTO</text>`;
+      break;
+    case "llave":
+      c = `<rect x="6" y="6" width="36" height="36" rx="5" fill="#dee2e6" stroke="#868e96" stroke-width="2"/><circle cx="24" cy="24" r="10" fill="#fff" stroke="#495057" stroke-width="2"/><rect x="${activo ? 22 : 15}" y="${activo ? 15 : 22.5}" width="${activo ? 4 : 18}" height="${activo ? 18 : 4}" rx="1.5" fill="#495057"/>`;
+      break;
+    case "boton":
+      c = `<rect x="6" y="20" width="36" height="22" rx="4" fill="#ffd43b" stroke="#c48a00" stroke-width="2"/><ellipse cx="24" cy="${activo ? 22 : 18}" rx="13" ry="7" fill="#e03131" stroke="#a51111" stroke-width="2"/>`;
+      break;
+    case "falla":
+      c = `<path d="M24 6 L44 40 H4 Z" fill="${activo ? "#fab005" : "#ffe8a3"}" stroke="#c48a00" stroke-width="2.5" stroke-linejoin="round"/><path d="M24 17 v12" stroke="#5c4400" stroke-width="3.5" stroke-linecap="round"/><circle cx="24" cy="34.5" r="2.2" fill="#5c4400"/>`;
+      break;
+    default:
+      c = disco(led(35, 15));
+  }
+  return `<svg width="${tam}" height="${tam}" viewBox="0 0 48 48" aria-hidden="true" style="display:block;overflow:visible">${c}</svg>`;
+}
+const tipoSalida = (texto) => {
+  const t = String(texto || "").toLowerCase();
+  if (/diluvio|rociador/.test(t)) return "diluvio";
+  if (/agente|descarga/.test(t)) return "agente";
+  if (/extractor|inyector|ventila/.test(t)) return "ventilador";
+  if (/elevador/.test(t)) return "elevador";
+  if (/gas/.test(t) && /corte|v[aá]lvula|suministro/.test(t)) return "valvula";
+  return "sirena";
+};
+// Nombre de la salida según la frase del ejercicio ("Activa la Notificación Audible si…")
+function nombreSalidaDe(frase) {
+  const f = String(frase || "").replace(/^["'\s]+/, "");
+  const m = f.match(/(Notificaci[oó]n (?:Audible|Visible)|Extractor de Humo|Inyector de Aire|Agente Limpio|Descarga del agente|Sistema de Diluvio|Diluvio|Control de Elevadores|Elevadores?|Corte de (?:suministro de )?gas|V[aá]lvula de gas|Luz Estrobosc[oó]pica|Sirena|Bocina|Alarma General)/i);
+  if (m) return m[1].charAt(0).toUpperCase() + m[1].slice(1);
+  const igual = f.match(/^([^=]{3,40}?)\s*=/);
+  return igual ? igual[1].trim() : "Salida";
+}
+function iconoSalida(texto, activo, tam = 54) {
+  const tipo = tipoSalida(texto);
+  let c;
+  switch (tipo) {
+    case "ventilador":
+      c = `<circle cx="28" cy="28" r="24" fill="#e9ecef" stroke="#6c757d" stroke-width="2.5"/><g ${activo ? 'class="dv-gira"' : ""}>${[0, 120, 240].map((g) => `<path d="M28 28 C 24 14, 34 10, 36 16 C 37 22, 31 25, 28 28 Z" fill="${activo ? "#1c7ed6" : "#868e96"}" transform="rotate(${g} 28 28)"/>`).join("")}</g><circle cx="28" cy="28" r="4" fill="#343a40"/>`;
+      break;
+    case "diluvio":
+      c = `<rect x="22" y="2" width="12" height="12" fill="#adb5bd" stroke="#6c757d" stroke-width="1.5"/><path d="M18 14 h20 l-4 8 h-12 z" fill="#c92a2a" stroke="#8a1c1c" stroke-width="1.5"/><path d="M12 25 h32" stroke="#868e96" stroke-width="3" stroke-linecap="round"/>` +
+        (activo ? [10, 18, 28, 38, 46].map((x, k) => `<path class="dv-gota" style="animation-delay:${k * 0.15}s" d="M${x} 32 q2 4 0 6 q-2 -2 0 -6z" fill="#339af0"/>`).join("") + [14, 24, 34, 42].map((x, k) => `<path class="dv-gota" style="animation-delay:${0.4 + k * 0.15}s" d="M${x} 40 q2 4 0 6 q-2 -2 0 -6z" fill="#74c0fc"/>`).join("") : "");
+      break;
+    case "agente":
+      c = `<rect x="16" y="12" width="24" height="40" rx="10" fill="#e03131" stroke="#a51111" stroke-width="2"/><rect x="24" y="4" width="8" height="10" fill="#868e96" stroke="#495057" stroke-width="1.5"/><path d="M32 8 h10" stroke="#495057" stroke-width="3"/><rect x="20" y="24" width="16" height="10" rx="2" fill="#fff"/><text x="28" y="31.5" font-size="5.5" font-weight="900" text-anchor="middle" fill="#e03131" font-family="Arial,sans-serif">FM-200</text>` +
+        (activo ? `<g fill="#dee2e6"><circle class="dv-humo" cx="46" cy="8" r="5"/><circle class="dv-humo" cx="50" cy="4" r="4" style="animation-delay:.3s"/><circle class="dv-humo" cx="44" cy="2" r="3.5" style="animation-delay:.6s"/></g>` : "");
+      break;
+    case "elevador":
+      c = `<rect x="6" y="4" width="44" height="48" rx="3" fill="#ced4da" stroke="#6c757d" stroke-width="2"/><rect x="10" y="12" width="17" height="38" fill="#adb5bd" stroke="#868e96"/><rect x="29" y="12" width="17" height="38" fill="#adb5bd" stroke="#868e96"/><rect x="18" y="5" width="20" height="6" rx="1" fill="#212529"/><text x="28" y="10" font-size="5" font-weight="900" text-anchor="middle" fill="${activo ? "#ff6b6b" : "#868e96"}" font-family="Arial,sans-serif" ${activo ? 'class="dv-strobe"' : ""}>${activo ? "RECALL" : "1"}</text>`;
+      break;
+    case "valvula":
+      c = `<rect x="2" y="32" width="52" height="12" rx="3" fill="#ffd43b" stroke="#c48a00" stroke-width="1.5"/><path d="M20 28 L36 48 M36 28 L20 48" stroke="#495057" stroke-width="0"/><rect x="18" y="24" width="20" height="20" rx="3" fill="#868e96" stroke="#495057" stroke-width="1.5"/><rect x="${activo ? 26 : 12}" y="${activo ? 6 : 14}" width="${activo ? 4 : 32}" height="${activo ? 20 : 4}" rx="2" fill="${activo ? "#e03131" : "#2f9e44"}"/><text x="28" y="54" font-size="6" font-weight="900" text-anchor="middle" fill="${activo ? "#e03131" : "#2f9e44"}" font-family="Arial,sans-serif">${activo ? "CERRADA" : "ABIERTA"}</text>`;
+      break;
+    default: // luz / bocina (horn strobe) roja
+      c = `<rect x="6" y="6" width="44" height="44" rx="6" fill="#e03131" stroke="#a51111" stroke-width="2"/><g stroke="#a51111" stroke-width="2">${[13, 17, 21, 25].map((y) => `<line x1="12" y1="${y}" x2="44" y2="${y}"/>`).join("")}</g>` +
+        `<rect x="14" y="30" width="28" height="14" rx="3" fill="${activo ? "#ffffff" : "#f1f3f5"}" stroke="#ced4da" stroke-width="1.5" ${activo ? 'class="dv-strobe"' : ""}/><text x="28" y="40.5" font-size="6.5" font-weight="900" text-anchor="middle" fill="#e03131" font-family="Arial,sans-serif">FUEGO</text>` +
+        (activo ? `<circle cx="28" cy="37" r="16" fill="#ffffff" opacity=".55" class="dv-strobe"/><g stroke="#e03131" stroke-width="2.5" fill="none" class="dv-onda"><path d="M52 18 q5 10 0 20"/><path d="M4 18 q-5 10 0 20"/></g>` : "");
+  }
+  return `<svg width="${tam}" height="${tam}" viewBox="0 0 56 56" aria-hidden="true" style="display:block;overflow:visible${activo ? ";filter:drop-shadow(0 0 8px rgba(255,212,59,.9))" : ""}">${c}</svg>`;
+}
+
+// =====================================================================
 // CLASE GUIADA CON VOZ (Entrenamiento)
 // El profesor explica cada tema con voz natural (Azure, voz de Costa
 // Rica, vía /api/voz), pone un ejercicio, felicita al acertar y avanza.
@@ -15646,9 +15775,17 @@ function useNarradora() {
     turnoRef.current++;
     try { if (audioRef.current) { audioRef.current.onended = audioRef.current.onerror = null; audioRef.current.pause(); } } catch (e) { /* nada */ }
     try { window.speechSynthesis && window.speechSynthesis.cancel(); } catch (e) { /* nada */ }
+    try { const pa = window.SalvavidasAndroid; if (pa && typeof pa.callar === "function") pa.callar(); } catch (e) { /* nada */ }
     terminar();
   };
+  // APK v5: voz del motor de Android (la pantalla interna de la APK no trae voz propia)
+  const apkVoz = () => { try { const p = window.SalvavidasAndroid; return p && typeof p.hablar === "function" && (!p.vozDisponible || p.vozDisponible()) ? p : null; } catch (e) { return null; } };
   const vozDispositivo = (texto) => {
+    const pa = apkVoz();
+    if (pa) {
+      window.__vozApkFin = () => terminar();
+      try { pa.hablar(texto); if (fuenteRef.current !== "dispositivo") { fuenteRef.current = "dispositivo"; setFuente("dispositivo"); } return; } catch (e) { /* sigue con la del navegador */ }
+    }
     const ss = typeof window !== "undefined" ? window.speechSynthesis : null;
     if (!ss || typeof SpeechSynthesisUtterance === "undefined") { fuenteRef.current = "ninguna"; setFuente("ninguna"); terminar(); return; }
     const u = new SpeechSynthesisUtterance(texto);
@@ -15677,7 +15814,8 @@ function useNarradora() {
     let a = audioRef.current;
     if (!a) { a = new Audio(); a.preload = "auto"; audioRef.current = a; }
     const turno = ++turnoRef.current; // si llega otra frase, esta ya no cuenta
-    const fallo = () => { if (turno !== turnoRef.current) return; fuenteRef.current = "dispositivo"; setFuente("dispositivo"); vozDispositivo(texto); };
+    let yaCambio = false; // el error puede llegar dos veces (evento y promesa): solo se habla una vez
+    const fallo = () => { if (yaCambio || turno !== turnoRef.current) return; yaCambio = true; fuenteRef.current = "dispositivo"; setFuente("dispositivo"); vozDispositivo(texto); };
     a.onended = () => { if (turno === turnoRef.current) terminar(); };
     a.onerror = fallo;
     a.src = urlVozClase(texto);
@@ -15732,14 +15870,17 @@ function CompuertaViva({ tipo, entradas, onTocar, etiquetas = ["A", "B"], salida
   );
   return (
     <svg viewBox="0 0 340 160" width={W} height={160 * esc} style={{ display: "block", maxWidth: "100%" }} aria-label={`Compuerta ${tipo}`}>
-      {ent.map(([y, v], i) => <line key={"l" + i} x1="70" y1={y} x2={una ? 120 : 125} y2={una ? 80 : y < 80 ? 52 : 108} stroke={v ? on : off} strokeWidth="5" strokeLinecap="round" />)}
+      {ent.map(([y, v], i) => <g key={"l" + i}>
+        {v && <line x1="70" y1={y} x2={una ? 120 : 125} y2={una ? 80 : y < 80 ? 52 : 108} stroke="rgba(64,192,87,.35)" strokeWidth="11" strokeLinecap="round" />}
+        <line x1="70" y1={y} x2={una ? 120 : 125} y2={una ? 80 : y < 80 ? 52 : 108} stroke={v ? on : off} strokeWidth="5" strokeLinecap="round" strokeDasharray={v ? "12 6" : undefined} className={v ? "dv-corriente" : undefined} />
+      </g>)}
       <g fill="#fff" stroke={tinta} strokeWidth="3" strokeLinejoin="round">{cuerpo}</g>
       {burbuja && <circle cx={burbuja[0]} cy={burbuja[1]} r="8" fill="#fff" stroke={tinta} strokeWidth="3" />}
       <text x={una ? 140 : 140} y="86" fontSize="15" fontWeight="800" fill={tinta}>{tipo}</text>
-      <line x1={xSal} y1="80" x2="282" y2="80" stroke={sal ? on : off} strokeWidth="5" strokeLinecap="round" />
-      <circle cx="304" cy="80" r="20" fill={sal ? "#ffd43b" : "#e9ecef"} stroke={sal ? "#f08c00" : off} strokeWidth="3" style={{ filter: sal ? "drop-shadow(0 0 8px #ffd43b)" : "none", transition: "all .2s" }} />
-      <text x="304" y="86" fontSize="16" fontWeight="900" textAnchor="middle" fill={sal ? "#7a4a00" : "#868e96"}>{sal ? 1 : 0}</text>
-      <text x="304" y="122" fontSize="11.5" fontWeight="700" textAnchor="middle" fill="#5b6572">{salidaNombre}</text>
+      {sal && <line x1={xSal} y1="80" x2="276" y2="80" stroke="rgba(64,192,87,.35)" strokeWidth="11" strokeLinecap="round" />}
+      <line x1={xSal} y1="80" x2="276" y2="80" stroke={sal ? on : off} strokeWidth="5" strokeLinecap="round" strokeDasharray={sal ? "12 6" : undefined} className={sal ? "dv-corriente" : undefined} />
+      <g transform="translate(276,50)" dangerouslySetInnerHTML={{ __html: iconoSalida("Luz y bocina", sal, 58) }} />
+      <text x="305" y="128" fontSize="12" fontWeight="800" textAnchor="middle" fill={sal ? "#e8590c" : "#5b6572"}>{sal ? "¡Activa! (1)" : "Apagada (0)"}</text>
       {ent.map(([y, v], i) => boton(i, y, v))}
     </svg>
   );
@@ -15751,32 +15892,31 @@ function CircuitoDiluvio({ entradas, onTocar }) {
   const on = "#2f9e44", off = "#adb5bd", tinta = "#1f2430";
   const e = entradas.map(Boolean);
   const or = e[0] || e[1] || e[2], sal = or && e[3];
-  const ent = [["🔥 Humo", 42], ["🔆 Flama", 102], ["🖐 Manual", 162], ["💧 Flujo", 252]];
+  const ent = [["Humo", 42, "Sensor de Humo"], ["Flama", 102, "Sensor de Flama"], ["Manual", 162, "Estación Manual"], ["Flujo", 252, "Sensor de Flujo"]];
+  const cable = (d, v, k) => <g key={k}>{v && <path d={d} stroke="rgba(64,192,87,.35)" strokeWidth="12" fill="none" strokeLinecap="round" />}<path d={d} stroke={v ? on : off} strokeWidth="5" fill="none" strokeLinecap="round" strokeDasharray={v ? "12 6" : undefined} className={v ? "dv-corriente" : undefined} /></g>;
   return (
     <svg viewBox="0 8 725 282" width="100%" style={{ display: "block", maxWidth: 740 }} aria-label="Circuito del sistema de diluvio">
-      <g fill="none" strokeWidth="5" strokeLinecap="round">
-        <path d="M160,42 H215 V80 H250" stroke={e[0] ? on : off} />
-        <path d="M160,102 H250" stroke={e[1] ? on : off} />
-        <path d="M160,162 H215 V124 H250" stroke={e[2] ? on : off} />
-        <path d="M352,102 H420 V150 H470" stroke={or ? on : off} />
-        <path d="M160,252 H420 V194 H470" stroke={e[3] ? on : off} />
-        <path d="M570,172 H648" stroke={sal ? on : off} />
-      </g>
+      {cable("M162,42 H215 V80 H250", e[0], 1)}
+      {cable("M162,102 H250", e[1], 2)}
+      {cable("M162,162 H215 V124 H250", e[2], 3)}
+      {cable("M352,102 H420 V150 H470", or, 4)}
+      {cable("M162,252 H420 V194 H470", e[3], 5)}
+      {cable("M570,172 H646", sal, 6)}
       <path d="M242,62 C300,62 330,80 352,102 C330,124 300,142 242,142 C262,118 262,86 242,62 Z" fill="#fff" stroke={tinta} strokeWidth="3" />
       <text x="268" y="110" fontSize="21" fontWeight="800" fill={tinta}>OR</text>
       <path d="M470,132 L520,132 A40,40 0 0 1 520,212 L470,212 Z" fill="#fff" stroke={tinta} strokeWidth="3" />
       <text x="476" y="180" fontSize="21" fontWeight="800" fill={tinta}>AND</text>
-      <circle cx="680" cy="172" r="26" fill={sal ? "#ffd43b" : "#e9ecef"} stroke={sal ? "#f08c00" : off} strokeWidth="3" style={{ filter: sal ? "drop-shadow(0 0 8px #ffd43b)" : "none", transition: "all .2s" }} />
-      <text x="680" y="179" fontSize="22" fontWeight="900" textAnchor="middle" fill={sal ? "#7a4a00" : "#868e96"}>{sal ? 1 : 0}</text>
-      <text x="680" y="228" fontSize="17" fontWeight="700" textAnchor="middle" fill="#5b6572">Diluvio</text>
+      <g transform="translate(646,136)" dangerouslySetInnerHTML={{ __html: iconoSalida("Sistema de Diluvio", sal, 68) }} />
+      <text x="680" y="232" fontSize="17" fontWeight="800" textAnchor="middle" fill={sal ? "#1c7ed6" : "#5b6572"}>{sal ? "¡Diluvio activo!" : "Diluvio"}</text>
       <text x="292" y="172" fontSize="16" fontWeight="700" textAnchor="middle" fill={or ? "#2b8a3e" : "#868e96"}>{or ? "detecta" : "sin detección"}</text>
       <text x="515" y="244" fontSize="16" fontWeight="700" textAnchor="middle" fill={sal ? "#2b8a3e" : "#868e96"}>detección Y flujo</text>
-      {ent.map(([t, y], i) => (
-        <g key={i} role="button" tabIndex={0} aria-label={`${t.slice(2).trim()}: ${e[i] ? "activo" : "normal"}. Tocar para cambiar`} style={{ cursor: onTocar ? "pointer" : "default" }}
+      {ent.map(([t, y, nombreDisp], i) => (
+        <g key={i} role="button" tabIndex={0} aria-label={`${t}: ${e[i] ? "activo" : "normal"}. Tocar para cambiar`} style={{ cursor: onTocar ? "pointer" : "default" }}
           onClick={() => onTocar && onTocar(i)} onKeyDown={(ev) => { if ((ev.key === "Enter" || ev.key === " ") && onTocar) { ev.preventDefault(); onTocar(i); } }}>
-          <rect x="6" y={y - 24} width="156" height="48" rx="11" fill={e[i] ? "#d3f9d8" : "#f1f3f5"} stroke={e[i] ? on : off} strokeWidth="2.5" />
-          <text x="16" y={y + 7} fontSize="19" fontWeight="800" fill={tinta}>{t}</text>
-          <text x="140" y={y + 7} fontSize="20" fontWeight="800" fill={e[i] ? on : "#868e96"}>{e[i] ? 1 : 0}</text>
+          <rect x="4" y={y - 27} width="158" height="54" rx="12" fill={e[i] ? "#ebfbee" : "#fff"} stroke={e[i] ? on : "#ced4da"} strokeWidth="2.5" />
+          <g transform={`translate(9,${y - 21})`} dangerouslySetInnerHTML={{ __html: iconoEntrada(nombreDisp, e[i], 42) }} />
+          <text x="56" y={y + 7} fontSize="18" fontWeight="800" fill={tinta}>{t}</text>
+          <text x="140" y={y + 7} fontSize="20" fontWeight="900" fill={e[i] ? on : "#868e96"}>{e[i] ? 1 : 0}</text>
         </g>
       ))}
     </svg>
@@ -15809,7 +15949,7 @@ const CLASE_COMPUERTAS = {
   profesor: "Profesor",
   pasos: [
     { titulo: "Bienvenida",
-      voz: "¡Hola, chicos! ¿Cómo están? Hola, {nombre}. Soy su profesor de hoy y les quiero explicar las compuertas lógicas, que son la base de cómo piensa un panel contra incendio. Vamos paso a paso: en cada tema les explico la idea y después les pongo un ejercicio corto. Con calma, no hay prisa: si se equivocan, lo intentamos otra vez.",
+      voz: "¡Hola, chicos! ¿Cómo están? Qué gusto tenerle aquí, {nombre}. Hoy vamos a ver las compuertas lógicas, que son la base de cómo piensa un panel contra incendio. Vamos a ir con calma: primero les explico cada idea y después hacemos un ejercicio cortito. Y tranquilos, si alguien se equivoca, lo volvemos a intentar.",
       texto: "¡Hola, chicos! Hoy les explico las compuertas lógicas. En cada tema: una explicación corta y un ejercicio. Si se equivoca, lo intenta otra vez.",
       visual: { tipo: "emoji", valor: "👋" } },
     { titulo: "Encendido o apagado",
@@ -16023,7 +16163,7 @@ function ClaseGuiada({ clase, onTerminar, onSalir, onGuia, nombre: nombreProp })
   const btnCtl = { border: `1px solid ${T.line}`, background: "#fff", borderRadius: 999, padding: "6px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer", color: T.ink };
   return (
     <Card>
-      <style>{`@keyframes claseOnda{0%,100%{transform:scaleY(.35)}50%{transform:scaleY(1)}} @keyframes claseRebote{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}} @keyframes claseEntra{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}`}</style>
+      <style>{CSS_DISPOSITIVOS + `@keyframes claseOnda{0%,100%{transform:scaleY(.35)}50%{transform:scaleY(1)}} @keyframes claseRebote{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}} @keyframes claseEntra{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}`}</style>
       {/* Encabezado: instructora + progreso */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
         <div style={{ width: 48, height: 48, borderRadius: "50%", backgroundImage: FOTO_PROFESOR ? `url(${FOTO_PROFESOR})` : "linear-gradient(135deg, #1c3d6e, #2e5482)", backgroundSize: "cover", backgroundPosition: "center", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 800, flex: "0 0 48px", boxShadow: N.hablando && !N.pausado ? "0 0 0 6px rgba(232,89,12,.18)" : "none", transition: "box-shadow .2s" }}>{FOTO_PROFESOR ? "" : "👨‍🏫"}</div>
@@ -16203,6 +16343,22 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
       };
       return `<svg width="66" height="40" viewBox="-10 0 76 40" style="display:block; color:${T.ink};">${shapes[tipo]}</svg>`;
     }
+    // Compuerta del lienzo: más grande, rellena y con su nombre (los puertos coinciden con los cables)
+    function svgGateLienzo(tipo) {
+      const s = "#1f2430", y1 = 11.2, y2 = 28.8;
+      const dos = `<line x1="-10" y1="${y1}" x2="4" y2="${y1}" stroke="${s}" stroke-width="2.5"/><line x1="-10" y1="${y2}" x2="4" y2="${y2}" stroke="${s}" stroke-width="2.5"/>`;
+      const una = `<line x1="-10" y1="20" x2="4" y2="20" stroke="${s}" stroke-width="2.5"/>`;
+      const salida = (x) => `<line x1="${x}" y1="20" x2="56" y2="20" stroke="${s}" stroke-width="2.5"/>`;
+      const formas = {
+        AND: `${dos}<path d="M2,2 L20,2 A18,18 0 0 1 20,38 L2,38 Z" fill="#fff" stroke="${s}" stroke-width="2.5"/>${salida(38)}`,
+        NAND: `${dos}<path d="M2,2 L18,2 A18,18 0 0 1 18,38 L2,38 Z" fill="#fff" stroke="${s}" stroke-width="2.5"/><circle cx="40" cy="20" r="4" fill="#fff" stroke="${s}" stroke-width="2.5"/>${salida(44)}`,
+        OR: `${dos}<path d="M2,2 C18,2 26,8 34,20 C26,32 18,38 2,38 C10,28 10,12 2,2 Z" fill="#fff" stroke="${s}" stroke-width="2.5" stroke-linejoin="round"/>${salida(34)}`,
+        NOR: `${dos}<path d="M2,2 C16,2 24,8 30,20 C24,32 16,38 2,38 C10,28 10,12 2,2 Z" fill="#fff" stroke="${s}" stroke-width="2.5" stroke-linejoin="round"/><circle cx="35" cy="20" r="4" fill="#fff" stroke="${s}" stroke-width="2.5"/>${salida(39)}`,
+        NOT: `${una}<path d="M2,3 L2,37 L32,20 Z" fill="#fff" stroke="${s}" stroke-width="2.5" stroke-linejoin="round"/><circle cx="36" cy="20" r="4" fill="#fff" stroke="${s}" stroke-width="2.5"/>${salida(40)}`,
+      };
+      const xTxt = { AND: 7, NAND: 6, OR: 9, NOR: 8, NOT: 5 }[tipo];
+      return `<svg width="91" height="48" viewBox="-10 0 76 40" style="display:block;overflow:visible">${formas[tipo]}<text x="${xTxt}" y="23.5" font-size="${tipo.length > 3 ? 7.5 : 8.5}" font-weight="800" fill="${s}" font-family="system-ui,sans-serif">${tipo}</text></svg>`;
+    }
 
     let ejActual = 0, nodos = {}, conexiones = [], nodoIdSeq = 1, conexionIdSeq = 1, arrastreCable = null, circuitoCorrecto = false;
 
@@ -16280,8 +16436,9 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
       // número fijo), para que siempre quede visible sin tener que
       // deslizar en pantallas angostas.
       const anchoLienzo = Math.max(elCanvas.getBoundingClientRect().width, 320);
-      ej.terminales.forEach((nombre, i2) => crearNodo("term", nombre, 10, 16 + i2 * 72));
-      crearNodo("salida", "Salida", anchoLienzo - 90, 160);
+      const pasoY = ej.terminales.length > 4 ? 62 : 74;
+      ej.terminales.forEach((nombre, i2) => crearNodo("term", nombre, 10, 14 + i2 * pasoY));
+      crearNodo("salida", "Salida", anchoLienzo - 130, 150);
       forceRender((n) => n + 1);
     }
     cargarEjercicioRef.current = cargarEjercicio;
@@ -16319,12 +16476,15 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
       el.style.left = x + "px"; el.style.top = y + "px";
 
       if (tipo === "gate") {
-        el.innerHTML = svgGate(label) +
+        el.innerHTML = svgGateLienzo(label) +
           `<button class="je-btn-borrar" style="position:absolute; top:-8px; right:-4px; width:18px; height:18px; padding:0; border-radius:50%; background:${T.red}; color:#fff; border:none; font-size:11px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center;">×</button>`;
       } else if (tipo === "term") {
-        el.innerHTML = `<div style="padding:8px 12px; background:${T.blueSoft}; color:${T.blue}; border-radius:8px; font-size:12px; font-weight:700; min-width:50px; text-align:center;">${label}</div>`;
+        el.innerHTML = `<div class="je-term" title="Toque para activar o desactivar" style="display:flex; align-items:center; gap:6px; height:48px; box-sizing:border-box; padding:4px 10px 4px 4px; background:#fff; border:2px solid #ced4da; border-radius:12px; min-width:150px; max-width:190px; box-shadow:0 1px 3px rgba(0,0,0,.08); transition:all .2s;">` +
+          `<span class="je-ico">${iconoEntrada(label, false, 38)}</span><span style="font-size:11.5px; font-weight:800; color:${T.ink}; line-height:1.15; flex:1;">${label}</span><span class="je-val" style="font-size:15px; font-weight:900; color:#868e96;">0</span></div>`;
       } else {
-        el.innerHTML = `<div style="padding:8px 12px; background:#fff; border:1px solid ${T.line}; border-radius:8px; font-size:12px; font-weight:700; min-width:50px; text-align:center;">Salida</div>`;
+        const nomSal = nombreSalidaDe(EJERCICIOS_JUEGO[ejActual] && EJERCICIOS_JUEGO[ejActual].frase);
+        el.innerHTML = `<div class="je-sal" style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:84px; box-sizing:border-box; padding:4px 8px; background:#fff; border:2px solid #ced4da; border-radius:12px; min-width:96px; max-width:120px; transition:all .2s;">` +
+          `<span class="je-ico-sal">${iconoSalida(nomSal, false, 50)}</span><span style="font-size:10.5px; font-weight:800; color:${T.ink}; text-align:center; line-height:1.1; margin-top:2px;">${nomSal}</span></div>`;
       }
       elCanvas.appendChild(el);
       nodos[id] = { tipo, label, x, y, valorFijo: tipo === "term" ? false : null };
@@ -16335,11 +16495,10 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
 
       if (tipo === "term") {
         el.onclick = (e) => {
-          if (e.target.classList.contains("je-puerto")) return;
+          if (e.target.closest && e.target.closest(".je-puerto")) return;
           nodos[id].valorFijo = !nodos[id].valorFijo;
-          const box = el.querySelector("div");
-          box.style.background = nodos[id].valorFijo ? T.greenSoft : T.blueSoft;
-          box.style.color = nodos[id].valorFijo ? T.green : T.blue;
+          pintarTerminal(id);
+          dibujarConexiones(); // la corriente corre por los cables según lo que esté activo
         };
       }
       if (tipo === "gate") {
@@ -16351,7 +16510,16 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
       return id;
     }
 
-    function altoNodo(tipo) { return tipo === "gate" ? 40 : 34; }
+    function altoNodo(tipo) { return tipo === "gate" ? 48 : tipo === "salida" ? 84 : 48; }
+    // Sensor activo: verde, con su ícono "encendido" (LED, humo, palanca abajo…)
+    function pintarTerminal(id) {
+      const n = nodos[id]; const el = elCanvas.querySelector('.je-nodo[data-id="' + id + '"]'); if (!n || !el) return;
+      const box = el.querySelector(".je-term"); if (!box) return;
+      box.style.borderColor = n.valorFijo ? "#2f9e44" : "#ced4da";
+      box.style.background = n.valorFijo ? "#ebfbee" : "#fff";
+      el.querySelector(".je-ico").innerHTML = iconoEntrada(n.label, !!n.valorFijo, 38);
+      const v = el.querySelector(".je-val"); v.textContent = n.valorFijo ? "1" : "0"; v.style.color = n.valorFijo ? "#2f9e44" : "#868e96";
+    }
 
     function crearPuerto(nodoEl, nodoId, puertoId, dir, idx, total, tipo) {
       // El contenedor es un área de toque grande (28x28) — mucho más fácil
@@ -16362,7 +16530,7 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
       const h = altoNodo(tipo);
       const offsetY = total > 1 ? (idx === 0 ? h * 0.28 : h * 0.72) : h / 2;
       dot.style.cssText = `position:absolute; width:28px; height:28px; display:flex; align-items:center; justify-content:center; cursor:crosshair; top:${offsetY}px; transform:translate(-50%,-50%); z-index:2; touch-action:none;`;
-      dot.style.left = dir === "in" ? "0px" : (tipo === "gate" ? "62px" : "100%");
+      dot.style.left = dir === "in" ? "0px" : (tipo === "gate" ? "79px" : "100%");
       const puntoVisible = document.createElement("div");
       puntoVisible.style.cssText = `width:12px; height:12px; border-radius:50%; background:${T.steel}; pointer-events:none;`;
       dot.appendChild(puntoVisible);
@@ -16456,6 +16624,8 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
 
     function dibujarConexiones() {
       elSvg.innerHTML = "";
+      const cacheVivo = new Map();
+      const vivo = (id) => { try { return !!evaluarNodo(id, cacheVivo); } catch (e) { return false; } };
       conexiones.forEach((c) => {
         if (!nodos[c.deNodo] || !nodos[c.aNodo]) return;
         const p1 = centroPuerto(c.deNodo, c.dePuerto);
@@ -16470,14 +16640,21 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
         hit.style.pointerEvents = "stroke";
         const visible = document.createElementNS("http://www.w3.org/2000/svg", "path");
         visible.setAttribute("d", curva(p1, p2));
-        if (circuitoCorrecto) {
-          visible.setAttribute("stroke", T.green);
-          visible.setAttribute("stroke-width", "2.5");
-          visible.setAttribute("stroke-dasharray", "6 4");
-          visible.setAttribute("class", "je-corriente");
+        const conCorriente = vivo(c.deNodo);
+        if (conCorriente) {
+          // Brillo de fondo + pulsos de corriente que corren hacia la salida
+          const brillo = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          brillo.setAttribute("d", curva(p1, p2)); brillo.setAttribute("stroke", "rgba(64,192,87,.35)"); brillo.setAttribute("stroke-width", "10");
+          brillo.setAttribute("fill", "none"); brillo.setAttribute("stroke-linecap", "round"); brillo.style.pointerEvents = "none";
+          grupo.appendChild(brillo);
+          visible.setAttribute("stroke", "#2f9e44");
+          visible.setAttribute("stroke-width", "4");
+          visible.setAttribute("stroke-dasharray", "12 6");
+          visible.setAttribute("stroke-linecap", "round");
+          visible.setAttribute("class", "dv-corriente");
         } else {
-          visible.setAttribute("stroke", T.inkSoft);
-          visible.setAttribute("stroke-width", "2");
+          visible.setAttribute("stroke", circuitoCorrecto ? "#8ce99a" : "#adb5bd");
+          visible.setAttribute("stroke-width", "3");
         }
         visible.setAttribute("fill", "none");
         visible.style.pointerEvents = "none";
@@ -16487,9 +16664,20 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
           actualizarEstado();
         });
         hit.addEventListener("mouseenter", () => { if (!circuitoCorrecto) visible.setAttribute("stroke", T.red); });
-        hit.addEventListener("mouseleave", () => { if (!circuitoCorrecto) visible.setAttribute("stroke", T.inkSoft); });
+        hit.addEventListener("mouseleave", () => { if (!circuitoCorrecto) visible.setAttribute("stroke", conCorriente ? "#2f9e44" : "#adb5bd"); });
         grupo.appendChild(hit); grupo.appendChild(visible);
         elSvg.appendChild(grupo);
+      });
+      // Compuertas con salida en 1 brillan, y la salida (luz, extractor, diluvio…) se enciende
+      Object.keys(nodos).forEach((id) => {
+        const n = nodos[id]; const el = elCanvas.querySelector('.je-nodo[data-id="' + id + '"]'); if (!el) return;
+        if (n.tipo === "gate") { const svg = el.querySelector("svg"); if (svg) svg.style.filter = vivo(id) ? "drop-shadow(0 0 6px rgba(47,158,68,.8))" : "none"; }
+        if (n.tipo === "salida") {
+          const on = vivo(id), box = el.querySelector(".je-sal"), ic = el.querySelector(".je-ico-sal");
+          const nomSal = nombreSalidaDe(EJERCICIOS_JUEGO[ejActual] && EJERCICIOS_JUEGO[ejActual].frase);
+          if (ic && ic.dataset.on !== String(on)) { ic.innerHTML = iconoSalida(nomSal, on, 50); ic.dataset.on = String(on); }
+          if (box) { box.style.borderColor = on ? "#f08c00" : "#ced4da"; box.style.background = on ? "#fff9db" : "#fff"; }
+        }
       });
       if (arrastreCable) {
         const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
@@ -16729,9 +16917,10 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
         <div className="je-wrapper" style={{ overflowX: "auto", borderRadius: 12, WebkitOverflowScrolling: "touch", touchAction: "pan-x" }}>
           <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 900, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s" }}>
             <svg className="je-wires" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}></svg>
-            <style>{`@keyframes marchHormigas { to { stroke-dashoffset: -20; } } .je-corriente { animation: marchHormigas 0.6s linear infinite; }`}</style>
+            <style>{`@keyframes marchHormigas { to { stroke-dashoffset: -20; } } .je-corriente { animation: marchHormigas 0.6s linear infinite; } ${CSS_DISPOSITIVOS}`}</style>
           </div>
         </div>
+        <div style={{ fontSize: 12.5, color: T.ink, fontWeight: 700, marginTop: 8 }}>⚡ Toque un sensor o una estación manual para activarlo: la corriente corre por los cables y, si su circuito está bien, se enciende el dispositivo de salida.</div>
         <div style={{ fontSize: 10.5, color: T.gray, marginTop: 4 }}>💡 En celular: 1 dedo mueve las compuertas y conecta los cables. 2 dedos deslizan el lienzo hacia los lados para ver todo el circuito.</div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
           <span className="je-resultado" style={{ fontSize: 14 }}></span>

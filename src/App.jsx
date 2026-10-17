@@ -15609,6 +15609,502 @@ function Entrenamiento() {
 // conéctalas dibujando el cable a mano, y el fondo cambia de color solo
 // (gris = incompleto, verde = correcto, rojo = incorrecto). Al acertar
 // un ejercicio nuevo, avisa hacia arriba para sumar puntos.
+// =====================================================================
+// CLASE GUIADA CON VOZ (Entrenamiento)
+// El profesor (Anthony) explica cada tema con voz natural (Azure, voz de Costa
+// Rica, vía /api/voz), pone un ejercicio, felicita al acertar y avanza.
+// Si la voz del servidor no está disponible, usa la voz del dispositivo;
+// los subtítulos siempre se ven.
+// =====================================================================
+const VOZ_CLASE = "es-CR-JuanNeural"; // voz de hombre de Costa Rica
+// Foto del profesor: pegar aquí la dirección de una imagen (o un data:image/...) para usarla en vez de la inicial
+const FOTO_PROFESOR = "";
+const urlVozClase = (texto) => `/api/voz?v=${VOZ_CLASE}&t=${encodeURIComponent(String(texto || "").trim())}`;
+const FELICITACIONES = ["¡Excelente!", "¡Muy bien, así es!", "¡Eso es! Lo hizo perfecto.", "¡Correcto! Va muy bien.", "¡Perfecto! Siga así.", "¡Muy bien hecho!",
+  "¡Excelente, {nombre}!", "¡Muy bien, {nombre}!", "¡Eso es, {nombre}! Va muy bien.", "¡Perfecto, {nombre}!"];
+const ANIMOS = ["Casi. Inténtelo otra vez.", "No pasa nada, probemos de nuevo.", "Todavía no. Fíjese bien en la regla.", "Uy, no es esa. Vamos otra vez.", "Casi, {nombre}. Probemos otra vez."];
+// Pone el primer nombre de quien tiene la sesión ("{nombre}"); si no hay nombre, lo quita con su coma
+const primerNombre = (n) => { const p = String(n || "").trim().split(/\s+/)[0] || ""; return p ? p.charAt(0).toUpperCase() + p.slice(1).toLowerCase() : ""; };
+const conNombre = (texto, nombre) => String(texto || "").replace(/,?\s*\{nombre\}/g, (m) => (nombre ? m.replace("{nombre}", nombre) : ""));
+const alAzar = (l) => l[Math.floor(Math.random() * l.length)];
+
+// Narradora: un solo elemento de audio (así el celular deja reproducir
+// después del primer toque) y respaldo con la voz del dispositivo.
+function useNarradora() {
+  const audioRef = React.useRef(null);
+  const fuenteRef = React.useRef("servidor"); // "servidor" | "dispositivo" | "ninguna"
+  const finRef = React.useRef(null);
+  const turnoRef = React.useRef(0);
+  const [hablando, setHablando] = useState(false);
+  const [pausado, setPausado] = useState(false);
+  const [silencio, setSilencioRaw] = useState(() => { try { return localStorage.getItem("clase.silencio") === "1"; } catch (e) { return false; } });
+  const [fuente, setFuente] = useState("servidor");
+  const silencioRef = React.useRef(silencio);
+  const setSilencio = (v) => { silencioRef.current = v; setSilencioRaw(v); try { localStorage.setItem("clase.silencio", v ? "1" : "0"); } catch (e) { /* nada */ } if (v) callar(); };
+  const terminar = () => { setHablando(false); setPausado(false); const f = finRef.current; finRef.current = null; if (f) f(); };
+  const callar = () => {
+    turnoRef.current++;
+    try { if (audioRef.current) { audioRef.current.onended = audioRef.current.onerror = null; audioRef.current.pause(); } } catch (e) { /* nada */ }
+    try { window.speechSynthesis && window.speechSynthesis.cancel(); } catch (e) { /* nada */ }
+    terminar();
+  };
+  const vozDispositivo = (texto) => {
+    const ss = typeof window !== "undefined" ? window.speechSynthesis : null;
+    if (!ss || typeof SpeechSynthesisUtterance === "undefined") { fuenteRef.current = "ninguna"; setFuente("ninguna"); terminar(); return; }
+    const u = new SpeechSynthesisUtterance(texto);
+    const voces = ss.getVoices() || [];
+    u.voice = voces.find((v) => /es[-_]CR/i.test(v.lang)) || voces.find((v) => /es[-_](MX|US|419)/i.test(v.lang)) || voces.find((v) => /^es/i.test(v.lang)) || null;
+    u.lang = (u.voice && u.voice.lang) || "es-MX"; u.rate = 1; u.pitch = 1;
+    u.onend = u.onerror = () => terminar();
+    ss.cancel(); ss.speak(u);
+    if (fuenteRef.current !== "dispositivo") { fuenteRef.current = "dispositivo"; setFuente("dispositivo"); }
+  };
+  // Devuelve una promesa que se cumple cuando termina de hablar
+  const hablar = (texto) => new Promise((resolver) => {
+    callar();
+    if (!texto || silencioRef.current) { resolver(); return; }
+    finRef.current = resolver;
+    setHablando(true); setPausado(false);
+    if (fuenteRef.current !== "servidor") { vozDispositivo(texto); return; }
+    let a = audioRef.current;
+    if (!a) { a = new Audio(); a.preload = "auto"; audioRef.current = a; }
+    const turno = ++turnoRef.current; // si llega otra frase, esta ya no cuenta
+    const fallo = () => { if (turno !== turnoRef.current) return; fuenteRef.current = "dispositivo"; setFuente("dispositivo"); vozDispositivo(texto); };
+    a.onended = () => { if (turno === turnoRef.current) terminar(); };
+    a.onerror = fallo;
+    a.src = urlVozClase(texto);
+    const p = a.play();
+    if (p && p.catch) p.catch((e) => {
+      if (turno !== turnoRef.current || (e && e.name === "AbortError")) return; // la cortó otra frase
+      if (e && e.name === "NotAllowedError") { terminar(); return; } // el celular no dejó sonar sin un toque
+      fallo();
+    });
+  });
+  const pausar = () => {
+    if (!hablando) return;
+    if (fuenteRef.current === "servidor" && audioRef.current) { if (pausado) audioRef.current.play().catch(() => {}); else audioRef.current.pause(); }
+    else if (window.speechSynthesis) { if (pausado) window.speechSynthesis.resume(); else window.speechSynthesis.pause(); }
+    setPausado(!pausado);
+  };
+  // Descarga por adelantado la siguiente frase para que no haya espera
+  const precargar = (texto) => { if (texto && fuenteRef.current === "servidor") { try { fetch(urlVozClase(texto)).catch(() => {}); } catch (e) { /* nada */ } } };
+  useEffect(() => () => callar(), []); // al salir de la clase deja de hablar
+  return { hablar, callar, pausar, precargar, hablando, pausado, silencio, setSilencio, fuente };
+}
+
+// Compuerta "viva": entradas que se tocan, cables que se encienden y salida
+const FN_COMPUERTA = { AND: (a, b) => a && b, OR: (a, b) => a || b, NOT: (a) => !a, NAND: (a, b) => !(a && b), NOR: (a, b) => !(a || b) };
+function CompuertaViva({ tipo, entradas, onTocar, etiquetas = ["A", "B"], salidaNombre = "Salida", grande = true }) {
+  const una = tipo === "NOT";
+  const a = !!entradas[0], b = !!entradas[1];
+  const sal = !!(una ? FN_COMPUERTA.NOT(a) : FN_COMPUERTA[tipo](a, b));
+  const on = "#2f9e44", off = "#adb5bd", tinta = "#1f2430";
+  const W = grande ? 340 : 260, esc = W / 340;
+  const cuerpo = {
+    AND: <path d="M120,30 L165,30 A50,50 0 0 1 165,130 L120,130 Z" />,
+    NAND: <path d="M120,30 L160,30 A50,50 0 0 1 160,130 L120,130 Z" />,
+    OR: <path d="M112,30 C160,30 185,55 205,80 C185,105 160,130 112,130 C130,105 130,55 112,30 Z" />,
+    NOR: <path d="M112,30 C155,30 178,55 196,80 C178,105 155,130 112,130 C130,105 130,55 112,30 Z" />,
+    NOT: <path d="M120,35 L120,125 L195,80 Z" />,
+  }[tipo];
+  const burbuja = { NAND: [218, 80], NOR: [208, 80], NOT: [205, 80] }[tipo];
+  const xSal = burbuja ? burbuja[0] + 8 : { AND: 215, OR: 205 }[tipo];
+  const ent = una ? [[80, a]] : [[52, a], [108, b]];
+  const boton = (i, y, v) => (
+    <g key={i} role="button" tabIndex={0} aria-label={`Entrada ${etiquetas[i]}: ${v ? "activa" : "apagada"}. Tocar para cambiar`} style={{ cursor: onTocar ? "pointer" : "default" }}
+      onClick={() => onTocar && onTocar(i)} onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && onTocar) { e.preventDefault(); onTocar(i); } }}>
+      <rect x="6" y={y - 19} width="64" height="38" rx="10" fill={v ? "#d3f9d8" : "#f1f3f5"} stroke={v ? on : off} strokeWidth="2.5" />
+      <text x="24" y={y + 6} fontSize="17" fontWeight="800" fill={tinta}>{etiquetas[i]}</text>
+      <text x="48" y={y + 6} fontSize="17" fontWeight="800" fill={v ? on : "#868e96"}>{v ? 1 : 0}</text>
+    </g>
+  );
+  return (
+    <svg viewBox="0 0 340 160" width={W} height={160 * esc} style={{ display: "block", maxWidth: "100%" }} aria-label={`Compuerta ${tipo}`}>
+      {ent.map(([y, v], i) => <line key={"l" + i} x1="70" y1={y} x2={una ? 120 : 125} y2={una ? 80 : y < 80 ? 52 : 108} stroke={v ? on : off} strokeWidth="5" strokeLinecap="round" />)}
+      <g fill="#fff" stroke={tinta} strokeWidth="3" strokeLinejoin="round">{cuerpo}</g>
+      {burbuja && <circle cx={burbuja[0]} cy={burbuja[1]} r="8" fill="#fff" stroke={tinta} strokeWidth="3" />}
+      <text x={una ? 140 : 140} y="86" fontSize="15" fontWeight="800" fill={tinta}>{tipo}</text>
+      <line x1={xSal} y1="80" x2="282" y2="80" stroke={sal ? on : off} strokeWidth="5" strokeLinecap="round" />
+      <circle cx="304" cy="80" r="20" fill={sal ? "#ffd43b" : "#e9ecef"} stroke={sal ? "#f08c00" : off} strokeWidth="3" style={{ filter: sal ? "drop-shadow(0 0 8px #ffd43b)" : "none", transition: "all .2s" }} />
+      <text x="304" y="86" fontSize="16" fontWeight="900" textAnchor="middle" fill={sal ? "#7a4a00" : "#868e96"}>{sal ? 1 : 0}</text>
+      <text x="304" y="122" fontSize="11.5" fontWeight="700" textAnchor="middle" fill="#5b6572">{salidaNombre}</text>
+      {ent.map(([y, v], i) => boton(i, y, v))}
+    </svg>
+  );
+}
+
+// Circuito de varias compuertas: Diluvio = (Humo O Flama O Manual) Y Flujo
+const salidaDiluvio = (e) => !!((e[0] || e[1] || e[2]) && e[3]);
+function CircuitoDiluvio({ entradas, onTocar }) {
+  const on = "#2f9e44", off = "#adb5bd", tinta = "#1f2430";
+  const e = entradas.map(Boolean);
+  const or = e[0] || e[1] || e[2], sal = or && e[3];
+  const ent = [["🔥 Humo", 42], ["🔆 Flama", 102], ["🖐 Manual", 162], ["💧 Flujo", 252]];
+  return (
+    <svg viewBox="0 8 725 282" width="100%" style={{ display: "block", maxWidth: 740 }} aria-label="Circuito del sistema de diluvio">
+      <g fill="none" strokeWidth="5" strokeLinecap="round">
+        <path d="M160,42 H215 V80 H250" stroke={e[0] ? on : off} />
+        <path d="M160,102 H250" stroke={e[1] ? on : off} />
+        <path d="M160,162 H215 V124 H250" stroke={e[2] ? on : off} />
+        <path d="M352,102 H420 V150 H470" stroke={or ? on : off} />
+        <path d="M160,252 H420 V194 H470" stroke={e[3] ? on : off} />
+        <path d="M570,172 H648" stroke={sal ? on : off} />
+      </g>
+      <path d="M242,62 C300,62 330,80 352,102 C330,124 300,142 242,142 C262,118 262,86 242,62 Z" fill="#fff" stroke={tinta} strokeWidth="3" />
+      <text x="268" y="110" fontSize="21" fontWeight="800" fill={tinta}>OR</text>
+      <path d="M470,132 L520,132 A40,40 0 0 1 520,212 L470,212 Z" fill="#fff" stroke={tinta} strokeWidth="3" />
+      <text x="476" y="180" fontSize="21" fontWeight="800" fill={tinta}>AND</text>
+      <circle cx="680" cy="172" r="26" fill={sal ? "#ffd43b" : "#e9ecef"} stroke={sal ? "#f08c00" : off} strokeWidth="3" style={{ filter: sal ? "drop-shadow(0 0 8px #ffd43b)" : "none", transition: "all .2s" }} />
+      <text x="680" y="179" fontSize="22" fontWeight="900" textAnchor="middle" fill={sal ? "#7a4a00" : "#868e96"}>{sal ? 1 : 0}</text>
+      <text x="680" y="228" fontSize="17" fontWeight="700" textAnchor="middle" fill="#5b6572">Diluvio</text>
+      <text x="292" y="172" fontSize="16" fontWeight="700" textAnchor="middle" fill={or ? "#2b8a3e" : "#868e96"}>{or ? "detecta" : "sin detección"}</text>
+      <text x="515" y="244" fontSize="16" fontWeight="700" textAnchor="middle" fill={sal ? "#2b8a3e" : "#868e96"}>detección Y flujo</text>
+      {ent.map(([t, y], i) => (
+        <g key={i} role="button" tabIndex={0} aria-label={`${t.slice(2).trim()}: ${e[i] ? "activo" : "normal"}. Tocar para cambiar`} style={{ cursor: onTocar ? "pointer" : "default" }}
+          onClick={() => onTocar && onTocar(i)} onKeyDown={(ev) => { if ((ev.key === "Enter" || ev.key === " ") && onTocar) { ev.preventDefault(); onTocar(i); } }}>
+          <rect x="6" y={y - 24} width="156" height="48" rx="11" fill={e[i] ? "#d3f9d8" : "#f1f3f5"} stroke={e[i] ? on : off} strokeWidth="2.5" />
+          <text x="16" y={y + 7} fontSize="19" fontWeight="800" fill={tinta}>{t}</text>
+          <text x="140" y={y + 7} fontSize="20" fontWeight="800" fill={e[i] ? on : "#868e96"}>{e[i] ? 1 : 0}</text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+// Tabla de la verdad pequeña (resalta la fila que está en pantalla)
+function TablaVerdadMini({ tipo, entradas }) {
+  const una = tipo === "NOT";
+  const filas = una ? [[0], [1]] : [[0, 0], [0, 1], [1, 0], [1, 1]];
+  const actual = filas.findIndex((f) => f.every((v, i) => !!v === !!entradas[i]));
+  return (
+    <table style={{ borderCollapse: "collapse", fontSize: 13, margin: "0 auto" }}>
+      <thead><tr>{(una ? ["A"] : ["A", "B"]).map((h) => <th key={h} style={{ padding: "3px 12px", color: "#5b6572" }}>{h}</th>)}<th style={{ padding: "3px 12px", color: "#5b6572" }}>Salida</th></tr></thead>
+      <tbody>{filas.map((f, i) => {
+        const s = una ? FN_COMPUERTA.NOT(!!f[0]) : FN_COMPUERTA[tipo](!!f[0], !!f[1]);
+        return <tr key={i} style={{ background: i === actual ? "#fff3bf" : "transparent", transition: "background .2s" }}>
+          {f.map((v, j) => <td key={j} style={{ padding: "3px 12px", textAlign: "center", borderTop: "1px solid #e9ecef" }}>{v}</td>)}
+          <td style={{ padding: "3px 12px", textAlign: "center", fontWeight: 800, borderTop: "1px solid #e9ecef", color: s ? "#2f9e44" : "#868e96" }}>{s ? 1 : 0}</td></tr>;
+      })}</tbody>
+    </table>
+  );
+}
+
+// ---- Guion de la clase de Compuertas lógicas ----
+// voz: lo que dice el profesor (palabras en inglés escritas como se
+// pronuncian). texto: el subtítulo que se ve.
+const CLASE_COMPUERTAS = {
+  titulo: "Clase guiada: compuertas lógicas",
+  profesor: "Anthony",
+  pasos: [
+    { titulo: "Bienvenida",
+      voz: "¡Hola, chicos! ¿Cómo están? Hola, {nombre}. Soy Anthony, Tony para los amigos, y hoy les quiero explicar las compuertas lógicas, que son la base de cómo piensa un panel contra incendio. Vamos paso a paso: en cada tema les explico la idea y después les pongo un ejercicio corto. Con calma, no hay prisa: si se equivocan, lo intentamos otra vez.",
+      texto: "¡Hola, chicos! Soy Anthony (Tony) y hoy les explico las compuertas lógicas. En cada tema: una explicación corta y un ejercicio. Si se equivoca, lo intenta otra vez.",
+      visual: { tipo: "emoji", valor: "👋" } },
+    { titulo: "Encendido o apagado",
+      voz: "Primero, una idea clave. En un sistema contra incendio casi todo se puede ver como encendido o apagado. Un detector está en reposo o en alarma, y una estación manual está normal o activada. En lógica a eso le decimos cero y uno: cero es apagado y uno es activo.",
+      texto: "En lógica cada señal vale 0 (apagado / normal) o 1 (activo / en alarma).",
+      visual: { tipo: "senales" },
+      ejercicio: { tipo: "opcion", voz: "Una pregunta rápida. Si un detector de humo pasa a alarma, ¿qué valor tiene su señal?", pregunta: "Un detector de humo pasa a alarma. ¿Qué valor tiene su señal?", opciones: ["1 (activo)", "0 (apagado)"], correcta: 0,
+        bien: "Cuando el detector está en alarma, su señal vale uno.", pista: "Recuerde: uno es activo y cero es apagado o en reposo." } },
+    { titulo: "¿Qué es una compuerta?",
+      voz: "Ahora sí: ¿qué es una compuerta lógica? Es como un pequeño juez. Mira sus entradas y, siguiendo una regla fija, decide si su salida se enciende o no. Con unas pocas compuertas, el panel decide cuándo sonar la sirena, cuándo llamar el elevador o cuándo cortar el gas.",
+      texto: "Una compuerta mira sus entradas y, según una regla fija, decide si su salida se enciende (1) o no (0).",
+      visual: { tipo: "compuerta", compuerta: "AND", fija: [1, 0] } },
+    { titulo: "Compuerta AND (y)",
+      voz: "Empecemos con la compuerta and, que en español quiere decir y. Su regla es: la salida se enciende solo si todas sus entradas están activas al mismo tiempo. Piénselo como dos interruptores en serie: la corriente solo pasa si los dos están cerrados. Toque las entradas para verla funcionar.",
+      texto: "AND: la salida se enciende solo si TODAS las entradas están en 1. Como dos interruptores en serie.",
+      visual: { tipo: "compuerta", compuerta: "AND", libre: true, tabla: true } },
+    { titulo: "Ejercicio AND",
+      voz: "Ahora le toca a usted, {nombre}. Toque las entradas A y B hasta que se encienda la salida de la and.",
+      texto: "Toque las entradas A y B hasta que la salida de la AND se encienda.",
+      ejercicio: { tipo: "interruptores", compuerta: "AND", inicio: [0, 0], meta: "encender",
+        bien: "Las dos entradas activas: así es como se enciende una and." } },
+    { titulo: "Pregunta AND",
+      ejercicio: { tipo: "opcion", voz: "Una más. En una and, si A está en uno y B está en cero, ¿cómo queda la salida?", pregunta: "AND con A = 1 y B = 0. ¿Cómo queda la salida?", opciones: ["0 (apagada)", "1 (encendida)"], correcta: 0, compuerta: "AND", fija: [1, 0],
+        bien: "Como B está en cero, la and se queda apagada.", pista: "Recuerde que la and necesita que todas sus entradas estén en uno." } },
+    { titulo: "Compuerta OR (o)",
+      voz: "Sigue la compuerta or, que quiere decir o. Aquí basta con que una sola entrada esté activa para que la salida se encienda. Es como dos interruptores en paralelo: con cualquiera que se cierre, pasa la corriente.",
+      texto: "OR: la salida se enciende si CUALQUIERA de las entradas está en 1. Como dos interruptores en paralelo.",
+      visual: { tipo: "compuerta", compuerta: "OR", libre: true, tabla: true } },
+    { titulo: "Ejercicio OR",
+      voz: "Vamos a buscar todas las formas de encender la or. Son tres combinaciones distintas. Encuéntrelas tocando las entradas.",
+      texto: "Encuentre las 3 combinaciones de A y B que encienden la OR.",
+      ejercicio: { tipo: "encontrarTodas", compuerta: "OR", inicio: [0, 0], meta: "encender",
+        bien: "Encontró las tres: con A, con B o con las dos, la or se enciende." } },
+    { titulo: "Caso real: la sirena",
+      ejercicio: { tipo: "opcion", voz: "Pensemos en un panel. La sirena debe sonar si hay humo, o si alguien activa la estación manual. ¿Qué compuerta usaría?", pregunta: "La sirena suena si hay humo O si activan la estación manual. ¿Qué compuerta usa?", opciones: ["OR", "AND", "NOT"], correcta: 0,
+        bien: "Con cualquiera de las dos señales tiene que sonar, por eso es una or.", pista: "Fíjese: con una sola de las dos señales ya debe sonar." } },
+    { titulo: "Compuerta NOT (inversor)",
+      voz: "La compuerta not, o inversor, tiene una sola entrada y hace lo contrario de lo que recibe. Si le llega un uno, entrega un cero. Si le llega un cero, entrega un uno. Se usa, por ejemplo, para apagar un ventilador de inyección de aire cuando hay humo.",
+      texto: "NOT: invierte la entrada. 1 → 0 y 0 → 1.",
+      visual: { tipo: "compuerta", compuerta: "NOT", libre: true, tabla: true } },
+    { titulo: "Ejercicio NOT",
+      voz: "Fíjese que la salida del inversor está encendida. Haga que se apague.",
+      texto: "Haga que la salida del inversor (NOT) se apague.",
+      ejercicio: { tipo: "interruptores", compuerta: "NOT", inicio: [0], meta: "apagar",
+        bien: "Al activar la entrada, el inversor apaga su salida." } },
+    { titulo: "NAND y NOR",
+      voz: "Hay dos compuertas más que salen de combinar las anteriores. La nand es una and con un inversor a la salida: se enciende siempre, menos cuando todas sus entradas están activas. Y la nor es una or con inversor: solo se enciende cuando ninguna entrada está activa.",
+      texto: "NAND = AND + inversor: apagada solo con todas en 1. NOR = OR + inversor: encendida solo con todas en 0.",
+      visual: { tipo: "par", compuertas: ["NAND", "NOR"] } },
+    { titulo: "Ejercicio NOR",
+      voz: "Esta nor tiene las dos entradas activas y la salida está apagada. Encienda la salida.",
+      texto: "Encienda la salida de la NOR.",
+      ejercicio: { tipo: "interruptores", compuerta: "NOR", inicio: [1, 1], meta: "encender",
+        bien: "La nor solo se enciende cuando ninguna entrada está activa." } },
+    { titulo: "Pregunta NAND",
+      ejercicio: { tipo: "opcion", voz: "En una nand con las dos entradas activas, ¿qué pasa con la salida?", pregunta: "NAND con A = 1 y B = 1. ¿Qué pasa con la salida?", opciones: ["Se apaga (0)", "Se enciende (1)"], correcta: 0, compuerta: "NAND", fija: [1, 1],
+        bien: "Es el único caso en que la nand se apaga.", pista: "La nand es lo contrario de una and: piense qué haría la and y luego inviértalo." } },
+    { titulo: "Reto: agente limpio",
+      ejercicio: { tipo: "opcion", voz: "Ahora un reto, {nombre}. El agente limpio solo debe liberarse si hay humo y además temperatura alta, para no descargar por una falsa alarma. ¿Qué compuerta usa?", pregunta: "Liberar el agente limpio solo si hay humo Y temperatura alta. ¿Qué compuerta usa?", opciones: ["AND", "OR", "NOR"], correcta: 0,
+        bien: "Necesita las dos señales a la vez, por eso es una and.", pista: "Aquí no basta con una sola señal: tienen que estar las dos." } },
+    { titulo: "Circuito de varias compuertas",
+      voz: "Ahora juntemos todo, {nombre}. En un sistema real casi nunca se usa una compuerta sola. Mire este circuito de un sistema de diluvio. Primero, una or junta los tres detectores: humo, flama y estación manual. Con que uno solo detecte, la or se enciende. Después, una and revisa dos cosas a la vez: que haya detección y que el sensor de flujo confirme que hay agua. Solo si las dos se cumplen, se dispara el diluvio. Toque las entradas y siga la señal con la vista, de izquierda a derecha.",
+      texto: "Diluvio = (Humo O Flama O Manual) Y Flujo de agua. La OR junta los detectores y la AND exige además el flujo. Toque las entradas y siga la señal de izquierda a derecha.",
+      visual: { tipo: "circuito", libre: true, inicio: [0, 0, 0, 0] } },
+    { titulo: "Ejercicio: dispare el diluvio",
+      voz: "Su turno. Active las entradas necesarias para que se dispare el diluvio.",
+      texto: "Active las entradas necesarias para que se dispare el diluvio.",
+      ejercicio: { tipo: "circuito", inicio: [0, 0, 0, 0],
+        bien: "Al menos un detector enciende la or, y con el flujo confirmado la and deja pasar la señal al diluvio." } },
+    { titulo: "Pregunta del circuito",
+      ejercicio: { tipo: "opcion", voz: "Una última pregunta del circuito. El diluvio está disparado por humo y hay flujo. Si de pronto se pierde el flujo de agua, ¿qué pasa con el diluvio?", pregunta: "Diluvio disparado (Humo = 1 y Flujo = 1). Si se pierde el flujo, ¿qué pasa?", opciones: ["Se apaga", "Sigue encendido"], correcta: 0, circuito: [1, 0, 0, 1],
+        bien: "La and necesita las dos condiciones: sin flujo, aunque haya humo, la salida se apaga.", pista: "Fíjese en la and del final: necesita detección y flujo al mismo tiempo." } },
+    { titulo: "¡Clase terminada!",
+      voz: "¡Felicidades, {nombre}! Terminó la clase de compuertas lógicas. Ya sabe cómo funcionan and, or, not, nand y nor, y cómo se combinan en un circuito. Ahora viene la práctica: ahí usted mismo arrastra las compuertas y conecta los cables para armar cada circuito, y así gana sus puntos. ¡Mucho éxito!",
+      texto: "¡Felicidades, {nombre}! Ya conoce AND, OR, NOT, NAND y NOR y cómo se combinan. En la práctica usted arrastra las compuertas y conecta los cables para armar cada circuito y ganar sus puntos.",
+      visual: { tipo: "emoji", valor: "🏆" }, final: true },
+  ],
+};
+
+function VisualClase({ v, entradas, setEntradas }) {
+  if (!v) return null;
+  if (v.tipo === "emoji") return <div style={{ fontSize: 76, textAlign: "center", lineHeight: 1.1, animation: "claseRebote 1.6s ease-in-out infinite" }}>{v.valor}</div>;
+  if (v.tipo === "senales") {
+    const t = (icono, nombre, val) => (
+      <div style={{ border: `2px solid ${val ? "#e03131" : "#ced4da"}`, background: val ? "#fff5f5" : "#f8f9fa", borderRadius: 14, padding: "12px 16px", textAlign: "center", minWidth: 120 }}>
+        <div style={{ fontSize: 30 }}>{icono}</div><div style={{ fontSize: 13, fontWeight: 700, color: "#343a40" }}>{nombre}</div>
+        <div style={{ fontSize: 26, fontWeight: 900, color: val ? "#e03131" : "#868e96" }}>{val}</div>
+      </div>
+    );
+    return <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>{t("🟢", "Detector en reposo", 0)}{t("🔥", "Detector en alarma", 1)}</div>;
+  }
+  if (v.tipo === "circuito") {
+    const tocar = v.libre ? (i) => setEntradas((x) => x.map((y, j) => (j === i ? (y ? 0 : 1) : y))) : null;
+    return <CircuitoDiluvio entradas={v.libre ? entradas : v.fija} onTocar={tocar} />;
+  }
+  if (v.tipo === "par") return <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>{v.compuertas.map((c) => <CompuertaViva key={c} tipo={c} entradas={c === "NAND" ? [1, 1] : [0, 0]} grande={false} />)}</div>;
+  if (v.tipo === "compuerta") {
+    const e = v.libre ? entradas : v.fija;
+    const tocar = v.libre ? (i) => setEntradas((x) => x.map((y, j) => (j === i ? (y ? 0 : 1) : y))) : null;
+    return (
+      <div style={{ display: "flex", gap: 14, alignItems: "center", justifyContent: "center", flexWrap: "wrap" }}>
+        <CompuertaViva tipo={v.compuerta} entradas={e} onTocar={tocar} />
+        {v.tabla && <TablaVerdadMini tipo={v.compuerta} entradas={e} />}
+      </div>
+    );
+  }
+  return null;
+}
+
+// Reproductor de la clase
+function ClaseGuiada({ clase, onTerminar, onSalir, onGuia, nombre: nombreProp }) {
+  const usuarioClase = useContext(CurrentUserContext);
+  const nombre = primerNombre(nombreProp || (usuarioClase && usuarioClase.name));
+  const Nbase = useNarradora();
+  const N = { ...Nbase, hablar: (t) => Nbase.hablar(conNombre(t, nombre)), precargar: (t) => Nbase.precargar(conNombre(t, nombre)) };
+  const nb = (t) => conNombre(t, nombre);
+  const [i, setI] = useState(0);
+  const [empezo, setEmpezo] = useState(false);
+  const [entradas, setEntradas] = useState([0, 0]);
+  const [estadoEj, setEstadoEj] = useState(null); // null | "bien" | "mal"
+  const [mensaje, setMensaje] = useState("");
+  const [encontradas, setEncontradas] = useState([]);
+  const [listoParaSeguir, setListoParaSeguir] = useState(false);
+  const paso = clase.pasos[i];
+  const ej = paso.ejercicio;
+  const total = clase.pasos.length;
+
+  const preparar = (k) => {
+    const p = clase.pasos[k], e = p.ejercicio;
+    setEstadoEj(null); setMensaje(""); setEncontradas([]);
+    const ini = e && e.inicio ? e.inicio : p.visual && p.visual.inicio ? p.visual.inicio : p.visual && p.visual.compuerta === "NOT" ? [0] : [0, 0];
+    setEntradas(ini.slice());
+    setListoParaSeguir(!e); // explicación: se puede seguir; ejercicio: hay que resolverlo
+  };
+  const ir = (k) => {
+    const p = clase.pasos[k];
+    setI(k); preparar(k);
+    const dicho = [p.voz, p.ejercicio && p.ejercicio.voz].filter(Boolean).join(" ");
+    N.hablar(dicho);
+    const sig = clase.pasos[k + 1];
+    if (sig) N.precargar([sig.voz, sig.ejercicio && sig.ejercicio.voz].filter(Boolean).join(" "));
+  };
+  const comenzar = () => { setEmpezo(true); ir(0); };
+  const acertar = (texto) => {
+    setEstadoEj("bien");
+    const f = nb(alAzar(FELICITACIONES));
+    setMensaje(`${f} ${texto || ""}`.trim());
+    setListoParaSeguir(true);
+    N.hablar(`${f} ${texto || ""}`);
+  };
+  const fallar = (pista) => {
+    setEstadoEj("mal");
+    const a = nb(alAzar(ANIMOS));
+    setMensaje(`${a} ${pista || ""}`.trim());
+    N.hablar(`${a} ${pista || ""}`);
+  };
+  // Ejercicios con interruptores: revisa cada vez que cambian las entradas
+  const tocarEj = (k) => {
+    if (estadoEj === "bien") return;
+    const nuevas = entradas.map((y, j) => (j === k ? (y ? 0 : 1) : y));
+    setEntradas(nuevas);
+    if (ej.tipo === "circuito") {
+      if (salidaDiluvio(nuevas)) acertar(ej.bien);
+      else if ((nuevas[0] || nuevas[1] || nuevas[2]) && !nuevas[3] && !mensaje) { const t = "Bien, la or ya detecta. Pero fíjese: la and también necesita algo más."; setMensaje(t); N.hablar(t); }
+      return;
+    }
+    const una = ej.compuerta === "NOT";
+    const sal = !!(una ? FN_COMPUERTA.NOT(!!nuevas[0]) : FN_COMPUERTA[ej.compuerta](!!nuevas[0], !!nuevas[1]));
+    const quiere = ej.meta === "encender";
+    if (ej.tipo === "interruptores" && sal === quiere) acertar(ej.bien);
+    if (ej.tipo === "encontrarTodas" && sal === quiere) {
+      const clave = nuevas.join("");
+      if (!encontradas.includes(clave)) {
+        const lista = [...encontradas, clave];
+        setEncontradas(lista);
+        const meta = [[0, 0], [0, 1], [1, 0], [1, 1]].filter(([x, y]) => !!FN_COMPUERTA[ej.compuerta](!!x, !!y) === quiere).length;
+        if (lista.length >= meta) acertar(ej.bien);
+        else { const t = `¡Bien, esa es una! Le faltan ${meta - lista.length}.`; setMensaje(t); N.hablar(t); }
+      }
+    }
+  };
+  const responder = (k) => {
+    if (estadoEj === "bien") return;
+    if (k === ej.correcta) acertar(ej.bien); else fallar(ej.pista);
+  };
+  const siguiente = () => {
+    if (paso.final || i >= total - 1) { N.callar(); onTerminar && onTerminar(); return; }
+    ir(i + 1);
+  };
+
+  const azul = "#1c3d6e";
+  if (!empezo) {
+    return (
+      <Card>
+        <div style={{ textAlign: "center", padding: "18px 8px" }}>
+          <div style={{ fontSize: 54 }}>🎧</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: T.ink, marginTop: 4 }}>{clase.titulo}</div>
+          {nombre && <div style={{ fontSize: 14.5, fontWeight: 700, color: "#e8590c", marginTop: 2 }}>Hola, {nombre} 👋</div>}
+          <div style={{ fontSize: 13.5, color: T.inkSoft, margin: "8px auto 16px", maxWidth: 460, lineHeight: 1.5 }}>
+            {clase.profesor} le explica cada tema con voz, le pone un ejercicio y avanza cuando lo logra. Suba el volumen o use audífonos. Son {total} pasos, unos 10 minutos.
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+            <Btn variant="accent" onClick={comenzar}>▶ Comenzar la clase</Btn>
+            {onGuia && <Btn variant="ghost" onClick={() => { N.callar(); onGuia(); }}>📖 Leer la guía escrita</Btn>}
+            <Btn variant="ghost" onClick={() => { N.callar(); onSalir && onSalir(); }}>Ir directo a la práctica</Btn>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+  const btnCtl = { border: `1px solid ${T.line}`, background: "#fff", borderRadius: 999, padding: "6px 12px", fontSize: 13, fontWeight: 700, cursor: "pointer", color: T.ink };
+  return (
+    <Card>
+      <style>{`@keyframes claseOnda{0%,100%{transform:scaleY(.35)}50%{transform:scaleY(1)}} @keyframes claseRebote{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}} @keyframes claseEntra{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}`}</style>
+      {/* Encabezado: instructora + progreso */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+        <div style={{ width: 48, height: 48, borderRadius: "50%", backgroundImage: FOTO_PROFESOR ? `url(${FOTO_PROFESOR})` : "linear-gradient(135deg, #1c3d6e, #2e5482)", backgroundSize: "cover", backgroundPosition: "center", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 800, flex: "0 0 48px", boxShadow: N.hablando && !N.pausado ? "0 0 0 6px rgba(232,89,12,.18)" : "none", transition: "box-shadow .2s" }}>{FOTO_PROFESOR ? "" : clase.profesor[0]}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: T.ink, display: "flex", alignItems: "center", gap: 8 }}>
+            {clase.profesor} · Profesor
+            {N.hablando && !N.pausado && (
+              <span aria-hidden="true" style={{ display: "inline-flex", gap: 2, alignItems: "center", height: 14 }}>
+                {[0, 1, 2, 3].map((k) => <span key={k} style={{ width: 3, height: 14, background: "#e8590c", borderRadius: 2, animation: `claseOnda .9s ${k * 0.15}s ease-in-out infinite` }} />)}
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 12, color: T.inkSoft }}>Paso {i + 1} de {total} · {paso.titulo}</div>
+          <div style={{ height: 6, background: T.graySoft, borderRadius: 99, marginTop: 5, overflow: "hidden" }}>
+            <div style={{ width: `${((i + (listoParaSeguir ? 1 : 0.5)) / total) * 100}%`, height: "100%", background: "linear-gradient(90deg,#ff922b,#e8590c)", transition: "width .4s" }} />
+          </div>
+        </div>
+      </div>
+
+      <div key={i} style={{ animation: "claseEntra .35s ease-out" }}>
+        {/* Visual de la explicación o del ejercicio */}
+        <div style={{ background: "#f8f9fb", border: `1px solid ${T.line}`, borderRadius: 14, padding: 14, minHeight: 120, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          {ej && ej.tipo === "circuito" ? <CircuitoDiluvio entradas={entradas} onTocar={tocarEj} />
+            : ej && ej.circuito ? <CircuitoDiluvio entradas={ej.circuito} />
+            : ej && (ej.tipo === "interruptores" || ej.tipo === "encontrarTodas")
+            ? <div style={{ display: "flex", gap: 14, alignItems: "center", justifyContent: "center", flexWrap: "wrap" }}>
+                <CompuertaViva tipo={ej.compuerta} entradas={entradas} onTocar={tocarEj} />
+                {ej.tipo === "encontrarTodas" && (
+                  <div style={{ fontSize: 13, color: T.ink }}>
+                    <b>Encontradas:</b>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+                      {encontradas.length ? encontradas.map((c) => <span key={c} style={{ background: "#d3f9d8", borderRadius: 6, padding: "2px 8px", fontWeight: 700 }}>✓ A={c[0]} · B={c[1]}</span>) : <span style={{ color: T.inkSoft }}>Ninguna todavía</span>}
+                    </div>
+                  </div>
+                )}
+              </div>
+            : ej && ej.compuerta ? <CompuertaViva tipo={ej.compuerta} entradas={ej.fija} />
+            : <VisualClase v={paso.visual} entradas={entradas} setEntradas={setEntradas} />}
+        </div>
+
+        {/* Subtítulo de lo que se explica */}
+        {(paso.texto || (ej && ej.pregunta)) && (
+          <div style={{ fontSize: 15.5, lineHeight: 1.55, color: T.ink, margin: "14px 2px 4px" }}>
+            {paso.texto && <div>{nb(paso.texto)}</div>}
+            {ej && ej.pregunta && <div style={{ fontWeight: 800, marginTop: paso.texto ? 8 : 0 }}>{ej.pregunta}</div>}
+          </div>
+        )}
+
+        {/* Opciones */}
+        {ej && ej.tipo === "opcion" && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8, marginTop: 10 }}>
+            {ej.opciones.map((o, k) => {
+              const ok = estadoEj === "bien" && k === ej.correcta;
+              return <button key={k} type="button" onClick={() => responder(k)} disabled={estadoEj === "bien"}
+                style={{ border: `2px solid ${ok ? "#2f9e44" : T.line}`, background: ok ? "#d3f9d8" : "#fff", borderRadius: 12, padding: "12px 10px", fontSize: 15, fontWeight: 800, color: T.ink, cursor: estadoEj === "bien" ? "default" : "pointer" }}>{o}</button>;
+            })}
+          </div>
+        )}
+
+        {/* Felicitación o pista */}
+        {mensaje && (
+          <div role="status" style={{ marginTop: 12, borderRadius: 12, padding: "10px 12px", fontSize: 14.5, fontWeight: 700, lineHeight: 1.45,
+            background: estadoEj === "bien" ? "#ebfbee" : estadoEj === "mal" ? "#fff4e6" : "#e7f5ff", color: estadoEj === "bien" ? "#2b8a3e" : estadoEj === "mal" ? "#d9480f" : "#1864ab" }}>
+            {estadoEj === "bien" ? "🎉 " : estadoEj === "mal" ? "💡 " : "👍 "}{mensaje}
+          </div>
+        )}
+      </div>
+
+      {/* Controles */}
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 16 }}>
+        <button type="button" style={btnCtl} onClick={N.pausar} disabled={!N.hablando} aria-label={N.pausado ? "Seguir hablando" : "Pausar la voz"}>{N.pausado ? "▶ Seguir" : "⏸ Pausar"}</button>
+        <button type="button" style={btnCtl} onClick={() => N.hablar([paso.voz, ej && ej.voz].filter(Boolean).join(" "))} aria-label="Repetir la explicación">🔁 Repetir</button>
+        <button type="button" style={btnCtl} onClick={() => N.setSilencio(!N.silencio)} aria-pressed={N.silencio}>{N.silencio ? "🔇 Voz apagada" : "🔊 Voz"}</button>
+        {i > 0 && <button type="button" style={btnCtl} onClick={() => ir(i - 1)}>← Anterior</button>}
+        <div style={{ flex: 1 }} />
+        <button type="button" onClick={siguiente} disabled={!listoParaSeguir}
+          style={{ border: "none", borderRadius: 12, padding: "11px 20px", fontSize: 15, fontWeight: 800, cursor: listoParaSeguir ? "pointer" : "not-allowed", color: "#fff",
+            background: listoParaSeguir ? azul : "#adb5bd", boxShadow: listoParaSeguir && !N.hablando ? "0 0 0 4px rgba(28,61,110,.18)" : "none" }}>
+          {paso.final ? "Ir a la práctica →" : listoParaSeguir ? "Continuar →" : "Resuelva el ejercicio"}
+        </button>
+      </div>
+      {N.fuente !== "servidor" && (
+        <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 10 }}>
+          {N.fuente === "dispositivo" ? "Usando la voz del dispositivo." : "Este equipo no puede reproducir voz: siga la clase con los subtítulos."}
+        </div>
+      )}
+      <div style={{ textAlign: "right", marginTop: 8 }}>
+        <button type="button" onClick={() => { N.callar(); onSalir && onSalir(); }} style={{ border: "none", background: "transparent", color: T.inkSoft, fontSize: 12.5, cursor: "pointer", textDecoration: "underline" }}>Salir de la clase</button>
+      </div>
+    </Card>
+  );
+}
+
 function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
   const contenedorRef = React.useRef(null);
   const ganadosRef = React.useRef(new Set());
@@ -15618,6 +16114,7 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
   const nivelActualExpuestoRef = React.useRef("Básico");
   const nivelLongitudRef = React.useRef(0);
   const [mostrarIntro, setMostrarIntro] = useState(true);
+  const [verClase, setVerClase] = useState(true); // primero la clase guiada con voz
   const [, forceRender] = useState(0);
   const bloqueado = (clave) => falladosRef.current.has(clave) && !ganadosRef.current.has(clave);
   const reiniciarModulo = (borrarRanking) => {
@@ -16128,6 +16625,14 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
     return <svg width="66" height="40" viewBox="-10 0 76 40" style={{ display: "block" }}>{shapes[tipo]}</svg>;
   };
 
+  if (mostrarIntro && verClase) {
+    return (
+      <ClaseGuiada clase={CLASE_COMPUERTAS}
+        onTerminar={() => { onGanarPuntos && onGanarPuntos("Clase guiada completada", 0); setMostrarIntro(false); }}
+        onSalir={() => setMostrarIntro(false)}
+        onGuia={() => setVerClase(false)} />
+    );
+  }
   if (mostrarIntro) {
     const TEMA_INTRO_COMPUERTAS = {
       id: "intro",

@@ -12,6 +12,7 @@ import {
   AlertTriangle, Settings, Shield, HelpCircle, Trash2, Wrench, Wifi, TrendingUp, Volume2, VolumeX, Menu,
   Calculator, Pencil,
 } from "lucide-react";
+import { createPortal } from "react-dom";
 import { supabase } from "./supabaseClient";
 
 
@@ -15769,8 +15770,12 @@ function useNarradora() {
   const [silencio, setSilencioRaw] = useState(() => { try { return localStorage.getItem("clase.silencio") === "1"; } catch (e) { return false; } });
   const [fuente, setFuente] = useState("servidor");
   const silencioRef = React.useRef(silencio);
+  // Avance de la frase (para los subtítulos tipo karaoke) y velocidad de la voz
+  const progRef = React.useRef({ t0: 0, est: 1, frac: 0, fin: true, pausaDesde: 0 });
+  const velRef = React.useRef(1);
+  const estimarMs = (t) => { const s = String(t || ""); const pal = s.split(/\s+/).filter(Boolean).length; return (pal * 390 + (s.match(/[,;:]/g) || []).length * 220 + (s.match(/[.!?]/g) || []).length * 420 + 300) / velRef.current; };
   const setSilencio = (v) => { silencioRef.current = v; setSilencioRaw(v); try { localStorage.setItem("clase.silencio", v ? "1" : "0"); } catch (e) { /* nada */ } if (v) callar(); };
-  const terminar = () => { setHablando(false); setPausado(false); const f = finRef.current; finRef.current = null; if (f) f(); };
+  const terminar = () => { progRef.current.fin = true; setHablando(false); setPausado(false); const f = finRef.current; finRef.current = null; if (f) f(); };
   const callar = () => {
     turnoRef.current++;
     try { if (audioRef.current) { audioRef.current.onended = audioRef.current.onerror = null; audioRef.current.pause(); } } catch (e) { /* nada */ }
@@ -15798,7 +15803,8 @@ function useNarradora() {
     const voz = esp.find((v) => hombre.test(v.name) && latam(v)) || esp.find((v) => hombre.test(v.name))
       || esp.find((v) => /es[-_]CR/i.test(v.lang)) || esp.find(latam) || esp[0] || null;
     u.voice = voz;
-    u.lang = (voz && voz.lang) || "es-MX"; u.rate = 1;
+    u.lang = (voz && voz.lang) || "es-MX"; u.rate = velRef.current;
+    u.onboundary = (ev) => { if (ev && typeof ev.charIndex === "number" && texto.length) progRef.current.frac = ev.charIndex / texto.length; };
     u.pitch = voz && hombre.test(voz.name) ? 1 : 0.8;
     u.onend = u.onerror = () => terminar();
     ss.cancel(); ss.speak(u);
@@ -15809,6 +15815,7 @@ function useNarradora() {
     callar();
     if (!texto || silencioRef.current) { resolver(); return; }
     finRef.current = resolver;
+    progRef.current = { t0: Date.now(), est: estimarMs(texto), frac: 0, fin: false, pausaDesde: 0 };
     setHablando(true); setPausado(false);
     if (fuenteRef.current !== "servidor") { vozDispositivo(texto); return; }
     let a = audioRef.current;
@@ -15819,6 +15826,7 @@ function useNarradora() {
     a.onended = () => { if (turno === turnoRef.current) terminar(); };
     a.onerror = fallo;
     a.src = urlVozClase(texto);
+    try { a.defaultPlaybackRate = velRef.current; a.playbackRate = velRef.current; } catch (e) { /* nada */ }
     const p = a.play();
     if (p && p.catch) p.catch((e) => {
       if (turno !== turnoRef.current || (e && e.name === "AbortError")) return; // la cortó otra frase
@@ -15830,8 +15838,22 @@ function useNarradora() {
     if (!hablando) return;
     if (fuenteRef.current === "servidor" && audioRef.current) { if (pausado) audioRef.current.play().catch(() => {}); else audioRef.current.pause(); }
     else if (window.speechSynthesis) { if (pausado) window.speechSynthesis.resume(); else window.speechSynthesis.pause(); }
+    const pr = progRef.current;
+    if (!pausado) pr.pausaDesde = Date.now(); else if (pr.pausaDesde) { pr.t0 += Date.now() - pr.pausaDesde; pr.pausaDesde = 0; }
     setPausado(!pausado);
   };
+  // 0 → 1: cuánto de la frase actual ya se dijo
+  const progreso = () => {
+    const pr = progRef.current;
+    if (pr.fin) return 1;
+    const a = audioRef.current;
+    if (fuenteRef.current === "servidor" && a && isFinite(a.duration) && a.duration > 0) return Math.min(1, a.currentTime / a.duration);
+    if (pr.frac > 0) return Math.min(1, pr.frac + 0.04);
+    const t = (pr.pausaDesde || Date.now()) - pr.t0;
+    return Math.min(0.97, t / pr.est);
+  };
+  const setVelocidad = (r) => { velRef.current = r; try { if (audioRef.current) { audioRef.current.defaultPlaybackRate = r; audioRef.current.playbackRate = r; } } catch (e) { /* nada */ } };
+  const estado = () => ({ fuente: fuenteRef.current, silencio: silencioRef.current });
   // Descarga por adelantado la siguiente frase para que no haya espera
   const precargar = (texto) => { if (texto && fuenteRef.current === "servidor") { try { fetch(urlVozClase(texto)).catch(() => {}); } catch (e) { /* nada */ } } };
   useEffect(() => {
@@ -15839,7 +15861,7 @@ function useNarradora() {
     try { if (window.speechSynthesis) { window.speechSynthesis.getVoices(); window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices(); } } catch (e) { /* nada */ }
     return () => callar(); // al salir de la clase deja de hablar
   }, []);
-  return { hablar, callar, pausar, precargar, hablando, pausado, silencio, setSilencio, fuente };
+  return { hablar, callar, pausar, precargar, hablando, pausado, silencio, setSilencio, fuente, progreso, setVelocidad, estado, estimarMs };
 }
 
 // Compuerta "viva": entradas que se tocan, cables que se encienden y salida
@@ -16256,6 +16278,1676 @@ function ClaseGuiada({ clase, onTerminar, onSalir, onGuia, nombre: nombreProp })
     </Card>
   );
 }
+
+
+// =====================================================================
+// AULA: clase en pizarra con profesor, voz, subtítulos tipo karaoke,
+// temas en pestañas, ejercicios y práctica con problemas generados.
+// Cada clase es solo datos: temas → pasos → frases ("beats").
+//   beat: { t: lo que dice el profesor, s: subtítulo (si difiere),
+//           add: [[tipo, texto]] líneas de tiza (h título, n nota,
+//           f fórmula, r resultado, w ojo), hl: partes a resaltar,
+//           set: valores que el dibujo toma en ese momento }
+//   paso: { titulo, visual: { tipo, inicio, ... }, beats, ejercicio }
+//   ejercicio: opcion | numero | meta (se resuelve tocando el dibujo)
+// =====================================================================
+const AULA_CSS = `
+.aula{position:fixed;inset:0;z-index:100000;display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:8px;
+  padding:8px max(10px,env(safe-area-inset-right,0px)) 0 max(10px,env(safe-area-inset-left,0px));
+  background:radial-gradient(ellipse at top,#25302c,#1b2321 70%);color:#eef1ea;font-family:"Lexend",system-ui,-apple-system,"Segoe UI",sans-serif;font-size:15px;line-height:1.5;
+  --ch:#eef1ea;--chd:rgba(238,241,234,.45);--chy:#f3dc6b;--chb:#9fd0f0;--chp:#f5a3a3;--chg:#a6e3a1;--paper:#f4f6f1;--ink:#1b2321;--tiza:"Kalam","Comic Sans MS","Segoe Print",cursive}
+.aula *{box-sizing:border-box}
+.aula button{font-family:inherit}
+.aula .top{display:flex;align-items:center;gap:8px;min-width:0}
+.aula .brand{font-family:var(--tiza);font-weight:700;font-size:1.15rem;white-space:nowrap;line-height:1.05}
+.aula .brand small{display:block;font:500 .6rem "Lexend",sans-serif;letter-spacing:.1em;text-transform:uppercase;color:var(--chd)}
+.aula .tabs{display:flex;gap:6px;overflow-x:auto;flex:1;min-width:0;scrollbar-width:none;padding:2px}
+.aula .tabs::-webkit-scrollbar{display:none}
+.aula .tab{flex:0 0 auto;font:500 .8rem "Lexend",sans-serif;color:var(--ch);background:transparent;border:1.5px solid var(--chd);border-radius:999px;padding:5px 11px;cursor:pointer}
+.aula .tab[aria-selected="true"]{background:var(--chy);color:var(--ink);border-color:var(--chy)}
+.aula .tab.hecho:not([aria-selected="true"]){border-color:var(--chg)}
+.aula .ib{flex:0 0 auto;font:600 .78rem "Lexend",sans-serif;color:var(--ch);background:transparent;border:1.5px solid var(--chd);border-radius:10px;padding:6px 9px;cursor:pointer;white-space:nowrap}
+.aula button:focus-visible,.aula input:focus-visible,.aula select:focus-visible{outline:3px solid var(--chb);outline-offset:2px}
+.aula .board{min-height:0;background:#2c4a3e;border:10px solid #5b3f27;border-radius:6px;position:relative;display:flex;flex-direction:column;
+  box-shadow:inset 0 0 70px rgba(0,0,0,.38),0 8px 24px rgba(0,0,0,.35);background-image:radial-gradient(rgba(255,255,255,.035) 1px,transparent 1px);background-size:6px 6px}
+.aula .btitle{font-family:var(--tiza);font-size:clamp(1rem,2.1vw,1.3rem);color:var(--chb);padding:6px 14px 0;display:flex;justify-content:space-between;gap:10px}
+.aula .btitle span:last-child{color:var(--chd);font-size:.85em;white-space:nowrap}
+.aula .bgrid{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,6fr) minmax(0,5fr);gap:12px;padding:4px 14px 10px}
+.aula .bgrid.full{grid-template-columns:minmax(0,1fr)}
+.aula .vis{display:flex;flex-direction:column;align-items:stretch;justify-content:center;min-width:0;min-height:0;gap:6px;overflow:auto}
+.aula .vis>svg,.aula .vis .svgbox{flex:1 1 auto;min-height:0;width:100%;max-height:100%}
+.aula .vis svg.ch{width:100%;height:100%;display:block}
+.aula .chalk{font-family:var(--tiza);font-size:clamp(1rem,1.75vw,1.28rem);line-height:1.42;min-width:0;min-height:0;overflow-y:auto;padding-right:6px;scroll-behavior:smooth}
+.aula .ln{margin:2px 0;transition:opacity .5s}
+.aula .ln.old{opacity:.5}
+.aula .ln.h{font-weight:700;font-size:1.16em;color:var(--chb);border-bottom:2px dashed var(--chd);padding-bottom:2px;margin-bottom:6px}
+.aula .ln.f{display:table;border:2px solid var(--ch);border-radius:4px 10px 6px 12px;padding:1px 12px;margin:5px 0;font-weight:700}
+.aula .ln.r{color:var(--chy);font-weight:700;font-size:1.06em}
+.aula .ln.r::before{content:"→ "}
+.aula .ln.w{color:var(--chp)}
+.aula .ln.w::before{content:"¡Ojo! ";font-weight:700}
+.aula .ln.q{color:var(--chy);font-weight:700;margin-top:8px}
+.aula .ln.ok{color:var(--chg);font-weight:700}
+.aula .ln.mal{color:var(--chp);font-weight:700}
+.aula .ln.nueva{animation:aulaEscribe 1s steps(18) both}
+@keyframes aulaEscribe{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+.aula .ops{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:7px;margin:8px 0}
+.aula .op{font:700 1.02rem var(--tiza);color:var(--ch);background:rgba(0,0,0,.18);border:2px dashed var(--chd);border-radius:10px;padding:7px 10px;cursor:pointer;text-align:left;line-height:1.25}
+.aula .op:hover{border-color:var(--ch)}
+.aula .op.bien{border:2px solid var(--chg);color:var(--chg)}
+.aula .op.mal{border:2px solid var(--chp);color:var(--chp);opacity:.75}
+.aula .campo{display:flex;align-items:center;gap:6px;margin:6px 0;flex-wrap:wrap;font-family:var(--tiza)}
+.aula .campo input{font:700 1.05rem "Lexend",sans-serif;background:rgba(0,0,0,.2);color:var(--ch);border:2px dashed var(--chd);border-radius:8px;padding:5px 8px;width:9em;min-width:0}
+.aula .campo input.ok{border:2px solid var(--chg)}
+.aula .campo input.bad{border:2px solid var(--chp)}
+.aula .mini{font:600 .8rem "Lexend",sans-serif;border-radius:10px;padding:7px 11px;border:1.5px solid var(--chd);background:transparent;color:var(--ch);cursor:pointer}
+.aula .mini.pri{background:var(--chy);color:var(--ink);border-color:var(--chy)}
+.aula .perillas{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:4px 12px;flex:0 0 auto}
+.aula .perilla{display:flex;flex-direction:column;font-family:var(--tiza);font-size:.95rem;line-height:1.1}
+.aula .perilla b{color:var(--chy)}
+.aula .perilla input{width:100%;accent-color:#f3dc6b;height:22px}
+.aula .botones{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;flex:0 0 auto}
+.aula .chip{font:700 .85rem var(--tiza);color:var(--ch);background:rgba(0,0,0,.15);border:1.5px solid var(--chd);border-radius:999px;padding:4px 12px;cursor:pointer}
+.aula .chip[aria-pressed="true"]{background:var(--chb);color:var(--ink);border-color:var(--chb)}
+.aula .lamina{background:#fbfbf7;color:#1f2430;border-radius:6px;padding:10px;box-shadow:0 6px 18px rgba(0,0,0,.35);position:relative;margin:8px auto;max-width:100%;transform:rotate(-.4deg)}
+.aula .lamina svg{max-width:100%;height:auto}
+.aula .lamina::before,.aula .lamina::after{content:"";position:absolute;top:-9px;width:64px;height:18px;background:rgba(243,220,107,.55);transform:rotate(-4deg)}
+.aula .lamina::before{left:14px}.aula .lamina::after{right:14px;transform:rotate(5deg)}
+/* dibujos de tiza */
+.aula svg.ch path,.aula svg.ch line,.aula svg.ch polyline,.aula svg.ch rect.t,.aula svg.ch circle.t{fill:none;stroke:var(--ch);stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.aula svg.ch text{fill:var(--ch);font-family:var(--tiza);font-size:14px}
+.aula svg.ch text.y{fill:var(--chy);font-weight:700}
+.aula svg.ch text.b{fill:var(--chb)}
+.aula svg.ch text.p{fill:var(--chp)}
+.aula svg.ch text.g{fill:var(--chg)}
+.aula svg.ch text.d{fill:var(--chd);font-size:12px}
+.aula svg.ch .hot path,.aula svg.ch .hot line,.aula svg.ch .hot rect.t,.aula svg.ch .hot circle.t,.aula svg.ch .hot polyline{stroke:var(--chy);filter:drop-shadow(0 0 4px rgba(243,220,107,.85))}
+.aula svg.ch .hot text{fill:var(--chy)}
+.aula svg.ch path.cor{stroke:var(--chy);stroke-width:5;stroke-dasharray:3 13;opacity:.9;animation:aulaMarcha linear infinite;filter:drop-shadow(0 0 3px rgba(243,220,107,.7))}
+.aula svg.ch .toca{cursor:pointer}
+@keyframes aulaMarcha{to{stroke-dashoffset:-32}}
+@keyframes aulaOnda{from{transform:translateX(0)}to{transform:translateX(-120px)}}
+@keyframes aulaVaiven{0%,100%{transform:translateX(-14px)}50%{transform:translateX(14px)}}
+@keyframes aulaBrillo{0%,100%{opacity:.55}50%{opacity:1}}
+/* pie */
+.aula .foot{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"prof sub" "prof ctrl";gap:6px 12px;align-items:end;padding-bottom:calc(8px + env(safe-area-inset-bottom,0px))}
+.aula .prof{grid-area:prof;width:clamp(70px,10vw,120px);height:auto;align-self:end}
+.aula .bubble{grid-area:sub;position:relative;background:var(--paper);color:var(--ink);border-radius:16px;padding:9px 14px;font-size:clamp(.9rem,1.45vw,1.03rem);line-height:1.5;max-height:21vh;overflow-y:auto;box-shadow:0 6px 16px rgba(0,0,0,.3)}
+.aula .bubble::before{content:"";position:absolute;left:-11px;bottom:18px;border:11px solid transparent;border-right-color:var(--paper);border-left:0}
+.aula .who{font:600 .66rem "Lexend",sans-serif;letter-spacing:.09em;text-transform:uppercase;color:#4a6b5c;display:flex;gap:8px;align-items:center}
+.aula .sub{margin:0}
+.aula .sub .w{color:#8c9893;transition:color .15s}
+.aula .sub .w.on{color:var(--ink)}
+.aula .ctrl{grid-area:ctrl;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.aula .btn{font:600 .88rem "Lexend",sans-serif;border-radius:12px;padding:8px 13px;border:1.5px solid var(--chd);background:transparent;color:var(--ch);cursor:pointer}
+.aula .btn.pri{background:var(--chy);color:var(--ink);border-color:var(--chy);min-width:7.2em}
+.aula .btn:disabled{opacity:.35;cursor:default}
+.aula .btn.pulso{animation:aulaPulso 1.3s ease-in-out infinite}
+@keyframes aulaPulso{50%{box-shadow:0 0 0 6px rgba(243,220,107,.35)}}
+.aula .btn[aria-pressed="true"]{background:var(--chb);color:var(--ink);border-color:var(--chb)}
+.aula select.btn{padding:7px 8px;appearance:none;-webkit-appearance:none}
+.aula .prog{flex:1;min-width:70px;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:.72rem;color:var(--chd)}
+.aula .dots{display:flex;gap:4px;flex-wrap:wrap;justify-content:center}
+.aula .dots i{width:8px;height:8px;border-radius:50%;background:var(--chd);display:block;cursor:pointer}
+.aula .dots i.on{background:var(--chy)}
+.aula .prof .boca{transform-origin:60px 67px;transform-box:view-box;transform:scaleY(.25)}
+.aula .prof.habla .boca{animation:aulaBoca .32s ease-in-out infinite alternate}
+@keyframes aulaBoca{0%{transform:scaleY(.25)}35%{transform:scaleY(1)}60%{transform:scaleY(.5)}100%{transform:scaleY(.9)}}
+.aula .prof .ceja{transform-box:view-box;transition:transform .15s}
+.aula .prof .parpado{transform-origin:center;transform-box:fill-box;animation:aulaParpadeo 4.5s infinite}
+@keyframes aulaParpadeo{0%,94%,100%{transform:scaleY(0)}96%{transform:scaleY(1)}}
+.aula .prof .brazo{transform-origin:84px 98px;transform-box:view-box;transition:transform .35s ease}
+.aula .prof .cabeza{transform-origin:60px 80px;transform-box:view-box;transition:transform .5s ease}
+.aula .inicio{position:fixed;inset:0;z-index:100001;display:flex;align-items:center;justify-content:center;background:rgba(15,20,19,.84);backdrop-filter:blur(4px);padding:24px}
+.aula .inicio .card{max-width:470px;text-align:center;display:flex;flex-direction:column;gap:12px;align-items:center}
+.aula .inicio h1{font-family:var(--tiza);font-size:2rem;margin:0;line-height:1.1}
+.aula .inicio p{margin:0;color:rgba(238,241,234,.7)}
+.aula .inicio .btn.pri{font-size:1.05rem;padding:12px 26px}
+.aula.foco .top .tabs,.aula.foco .top .brand{display:none}
+.aula.foco .top{justify-content:flex-end}
+@media (orientation:portrait){
+  .aula .bgrid{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}
+  .aula .vis{overflow:visible;justify-content:flex-start}
+  .aula .vis>svg{flex:0 0 auto;height:auto}
+  .aula .vis svg.ch{height:auto;max-height:46vh}
+  .aula .bgrid.full{grid-template-rows:minmax(0,1fr)}
+  .aula .chalk{font-size:clamp(1rem,2.6vw,1.35rem)}
+}
+@media (max-width:760px){
+  .aula .brand{display:none}
+  .aula .board{border-width:6px}
+  .aula .bgrid{padding:4px 8px 8px;gap:8px}
+  .aula .bubble{max-height:16vh;padding:7px 11px}
+  .aula .ctrl .btn{padding:7px 9px;font-size:.8rem}
+  .aula .btn.pri{min-width:5.8em}
+  .aula .ib .tx{display:none}
+  .aula .perillas{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media (max-height:520px){.aula .prof{width:62px}.aula .bubble{max-height:24vh}.aula .btitle{padding-top:2px}}
+@media (prefers-reduced-motion:reduce){.aula .ln.nueva,.aula svg.ch path.cor,.aula .prof .parpado,.aula .btn.pulso,.aula .prof.habla .boca{animation:none}}
+`;
+
+// Fuentes de tiza (una sola vez)
+function cargarFuentesAula() {
+  try {
+    if (document.getElementById("aula-fuentes")) return;
+    const l = document.createElement("link");
+    l.id = "aula-fuentes"; l.rel = "stylesheet";
+    l.href = "https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&family=Lexend:wght@400;500;600&display=swap";
+    document.head.appendChild(l);
+  } catch (e) { /* sin fuentes: usa las del sistema */ }
+}
+
+// Formatos de números para la pizarra (coma decimal no: el técnico ve 0.12 como en el multímetro)
+const redondeo = (x, d = 3) => { if (!isFinite(x)) return "∞"; const r = Number(Number(x).toPrecision(d)); return String(r); };
+const fmtV = (v) => `${redondeo(v)} V`;
+const fmtA = (a) => (!isFinite(a) ? "—" : Math.abs(a) < 1 && a !== 0 ? `${redondeo(a * 1000)} mA` : `${redondeo(a)} A`);
+const fmtR = (r) => (!isFinite(r) ? "∞ Ω" : r >= 1e6 ? `${redondeo(r / 1e6)} MΩ` : r >= 1000 ? `${redondeo(r / 1000)} kΩ` : `${redondeo(r)} Ω`);
+const fmtW = (w) => (Math.abs(w) < 1 && w !== 0 ? `${redondeo(w * 1000)} mW` : `${redondeo(w)} W`);
+const entre = (a, b) => a + Math.random() * (b - a);
+const elegir = (l) => l[Math.floor(Math.random() * l.length)];
+// Duración de la animación de corriente: más corriente, más rápido
+const durCorriente = (I) => { const a = Math.abs(I); if (!a || !isFinite(a)) return 0; const s = Math.max(0.05, Math.min(1, (Math.log10(a) + 3.3) / 3.6)); return (2.8 - 2.45 * s).toFixed(2) + "s"; };
+
+// Cable de tiza con corriente animada encima
+function Hilo({ d, I = 0, on, k, hot, inverso }) {
+  const dur = durCorriente(I);
+  const corre = (on === undefined ? !!dur : on) && dur;
+  return (
+    <g className={hot ? "hot" : undefined} key={k}>
+      <path d={d} />
+      {corre ? <path className="cor" d={d} style={{ animationDuration: dur, animationDirection: inverso ? "reverse" : "normal" }} /> : null}
+    </g>
+  );
+}
+// Símbolos de tiza
+const zigzagH = (x, y, L = 60) => { const n = 6, w = L / n; let d = `M${x},${y}`; for (let i = 0; i < n; i++) d += ` L${x + w * (i + 0.5)},${y + (i % 2 ? 8 : -8)}`; return d + ` L${x + L},${y}`; };
+const zigzagV = (x, y, L = 60) => { const n = 6, h = L / n; let d = `M${x},${y}`; for (let i = 0; i < n; i++) d += ` L${x + (i % 2 ? 8 : -8)},${y + h * (i + 0.5)}`; return d + ` L${x},${y + L}`; };
+function Bateria({ x, y, vertical = true, hot, etiqueta, inv }) {
+  // placa larga = +, corta = −
+  const s = inv ? -1 : 1;
+  return (
+    <g className={hot ? "hot" : undefined}>
+      {vertical ? <>
+        <line x1={x - 16} y1={y - 5 * s} x2={x + 16} y2={y - 5 * s} />
+        <line x1={x - 8} y1={y + 5 * s} x2={x + 8} y2={y + 5 * s} style={{ strokeWidth: 4 }} />
+        <text x={x + 20} y={y - 6 * s + 4} className="b">+</text>
+        <text x={x + 13} y={y + 6 * s + 5} className="b">−</text>
+      </> : <>
+        <line x1={x - 5 * s} y1={y - 16} x2={x - 5 * s} y2={y + 16} />
+        <line x1={x + 5 * s} y1={y - 8} x2={x + 5 * s} y2={y + 8} style={{ strokeWidth: 4 }} />
+      </>}
+      {etiqueta && <text x={x - 22} y={y + 5} textAnchor="end" className="y">{etiqueta}</text>}
+    </g>
+  );
+}
+function Perilla({ etiqueta, valor, min, max, paso = 1, onCambio, fmt = (v) => v }) {
+  return (
+    <label className="perilla">
+      <span>{etiqueta}: <b>{fmt(valor)}</b></span>
+      <input type="range" min={min} max={max} step={paso} value={valor} onChange={(e) => onCambio(Number(e.target.value))} aria-label={etiqueta} />
+    </label>
+  );
+}
+
+// Profesor dibujado (sin nombre propio)
+function ProfeAula({ habla, gesto, duda }) {
+  return (
+    <svg className={"prof" + (habla ? " habla" : "")} viewBox="0 0 120 160" aria-hidden="true">
+      <path d="M20 160 L28 108 Q60 92 92 108 L100 160 Z" fill="#2e5482" />
+      <path d="M48 100 L60 130 L72 100 Z" fill="#f4f6f1" />
+      <path d="M57 104 L63 104 L65 128 L60 134 L55 128 Z" fill="#e8590c" />
+      <g className="brazo" style={{ transform: gesto ? "rotate(-28deg)" : "rotate(0deg)" }}>
+        <path d="M84 98 Q100 86 104 66" stroke="#2e5482" strokeWidth="11" fill="none" strokeLinecap="round" />
+        <circle cx="104" cy="64" r="6" fill="#d9a77c" />
+        <line x1="105" y1="62" x2="116" y2="20" stroke="#f4f6f1" strokeWidth="2.6" strokeLinecap="round" />
+      </g>
+      <g className="cabeza" style={{ transform: duda ? "rotate(-6deg)" : "rotate(0deg)" }}>
+        <rect x="53" y="76" width="14" height="14" fill="#c99369" />
+        <circle cx="60" cy="52" r="27" fill="#d9a77c" />
+        <path d="M33 48 Q31 20 60 20 Q89 20 87 48 Q84 30 60 31 Q38 30 33 48 Z" fill="#2b2420" />
+        <circle cx="33" cy="54" r="5" fill="#cf9b71" /><circle cx="87" cy="54" r="5" fill="#cf9b71" />
+        <circle cx="49" cy="50" r="2.6" fill="#1b2321" /><circle cx="71" cy="50" r="2.6" fill="#1b2321" />
+        <rect className="parpado" x="44" y="45" width="10" height="10" fill="#d9a77c" />
+        <rect className="parpado" x="66" y="45" width="10" height="10" fill="#d9a77c" />
+        <path className="ceja" d="M43 40 L55 38 M65 38 L77 40" stroke="#2b2420" strokeWidth="2.6" strokeLinecap="round" style={{ transform: duda ? "translateY(-3px)" : "none" }} />
+        <ellipse className="boca" cx="60" cy="67" rx="5.5" ry="3.4" fill="#7b2e2a" />
+        <path d="M44 66 Q60 86 76 66 Q74 80 60 82 Q46 80 44 66 Z" fill="#2b2420" opacity=".85" />
+      </g>
+    </svg>
+  );
+}
+
+// Lámina pegada en la pizarra (para los dibujos a color)
+const Lamina = ({ children, ancho }) => <div className="lamina" style={{ width: ancho || "auto" }}>{children}</div>;
+
+// Registro de dibujos: cada clase agrega los suyos
+const AULA_VISUALES = {};
+
+function DibujoAula({ v, valor, setValor, hl }) {
+  if (!v) return null;
+  const C = AULA_VISUALES[v.tipo];
+  if (!C) return null;
+  return <C p={v} valor={valor || {}} setValor={setValor} hl={hl || []} />;
+}
+
+const subtituloSpans = (t) => String(t || "").split(/\s+/).filter(Boolean).map((w, i) => <span key={i} className="w">{w} </span>);
+
+function AulaClase({ clase, onTerminar, onSalir, onGuia, onGanarPuntos, nombre: nombreProp, textoSalir = "Ir a la práctica", temaInicial = 0 }) {
+  const usuarioClase = useContext(CurrentUserContext);
+  const nombre = primerNombre(nombreProp || (usuarioClase && usuarioClase.name));
+  const nb = (t) => conNombre(t, nombre);
+  const N = useNarradora();
+  const temas = clase.temas;
+  const [empezo, setEmpezo] = useState(false);
+  const [ti, setTi] = useState(temaInicial);
+  const [pi, setPi] = useState(0);
+  const [lineas, setLineas] = useState([]);
+  const [hl, setHl] = useState([]);
+  const [valor, setValorRaw] = useState({});
+  const [sub, setSub] = useState("");
+  const [fase, setFase] = useState("idle"); // explica | ejercicio | listo
+  const [ej, setEj] = useState({ estado: null, msg: "", elegidas: [], entrada: "" });
+  const [auto, setAuto] = useState(() => { try { return localStorage.getItem("aula.auto") === "1"; } catch (e) { return false; } });
+  const [vel, setVel] = useState(1);
+  const [gesto, setGesto] = useState(false);
+  const [foco, setFoco] = useState(false);
+  const [final, setFinal] = useState(false);
+  const [hechos, setHechos] = useState({});
+  const [pausa, setPausa] = useState(false);
+  const [relojOn, setRelojOn] = useState(false);
+  // práctica
+  const [prob, setProb] = useState(null);
+  const [resp, setResp] = useState({});
+  const [revision, setRevision] = useState(null);
+  const [marcador, setMarcador] = useState({ bien: 0, total: 0, puntos: 0 });
+  const runRef = React.useRef(0);
+  const pausaRef = React.useRef(false);
+  const relojRef = React.useRef(null); // subtítulo sin voz: { t0, dur }
+  const tocadoRef = React.useRef(false);
+  const memRef = React.useRef({});
+  const subRef = React.useRef(null);
+  const chalkRef = React.useRef(null);
+  const raizRef = React.useRef(null);
+  const autoRef = React.useRef(auto); autoRef.current = auto;
+  const faseRef = React.useRef(fase); faseRef.current = fase;
+  const tema = temas[ti] || temas[0];
+  const esPractica = !!tema.practica;
+  const pasos = tema.pasos || [];
+  const paso = esPractica ? null : pasos[pi];
+  const ejercicio = paso && paso.ejercicio;
+  const visual = esPractica ? prob && prob.visual : paso && paso.visual;
+
+  useEffect(() => { cargarFuentesAula(); }, []);
+  useEffect(() => () => { runRef.current++; }, []);
+  // karaoke: enciende las palabras según avanza la voz
+  useEffect(() => {
+    let raf;
+    const ciclo = () => {
+      const el = subRef.current;
+      if (el) {
+        let f;
+        const r = relojRef.current;
+        if (r) f = pausaRef.current ? r.f || 0 : Math.min(1, (Date.now() - r.t0) / r.dur);
+        else f = N.progreso();
+        if (r && !pausaRef.current) r.f = f;
+        const ws = el.querySelectorAll(".w"), k = Math.round(f * ws.length);
+        for (let i = 0; i < ws.length; i++) { const on = i < k; if (ws[i].classList.contains("on") !== on) ws[i].classList.toggle("on", on); }
+      }
+      raf = requestAnimationFrame(ciclo);
+    };
+    raf = requestAnimationFrame(ciclo);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  useEffect(() => { const el = chalkRef.current; if (el) el.scrollTop = el.scrollHeight; }, [lineas, fase, ej, revision]);
+  useEffect(() => { const f = () => { if (!document.fullscreenElement) setFoco(false); }; document.addEventListener("fullscreenchange", f); return () => document.removeEventListener("fullscreenchange", f); }, []);
+
+  const esperar = (ms, tok) => new Promise((ok) => {
+    let falta = ms, ult = Date.now();
+    const tic = () => {
+      if (tok !== runRef.current) return ok(false);
+      const ahora = Date.now();
+      if (!pausaRef.current) falta -= ahora - ult;
+      ult = ahora;
+      if (falta <= 0) return ok(true);
+      setTimeout(tic, 80);
+    };
+    tic();
+  });
+  // Dice una frase: voz si hay; si no, deja el subtítulo el tiempo de leerlo
+  const decir = async (texto, tok) => {
+    const t = nb(texto);
+    setSub(t);
+    relojRef.current = null;
+    const t0 = Date.now();
+    let dicho = t;
+    (clase.pronuncia || []).forEach(([re, r]) => { dicho = dicho.replace(re, r); });
+    await N.hablar(dicho);
+    if (tok !== runRef.current) return false;
+    const est = N.estado();
+    const pasado = Date.now() - t0;
+    if (est.silencio || est.fuente === "ninguna" || pasado < 600) {
+      const dur = N.estimarMs(t) / (est.silencio ? 1.15 : 1);
+      const mio = { t0: Date.now() - pasado, dur };
+      relojRef.current = mio; setRelojOn(true);
+      const ok = await esperar(Math.max(0, dur - pasado), tok);
+      if (relojRef.current === mio) { relojRef.current = null; setRelojOn(false); }
+      return ok;
+    }
+    return true;
+  };
+
+  const lineasDe = (beats, hasta) => {
+    const l = [];
+    beats.slice(0, hasta).forEach((b) => (b.add || []).forEach((a) => l.push({ k: a[0], t: nb(a[1]), nueva: false })));
+    return l;
+  };
+  const prepararPaso = (p) => {
+    memRef.current = {}; tocadoRef.current = false;
+    setValorRaw({ ...((p && p.visual && p.visual.inicio) || {}) });
+    setEj({ estado: null, msg: "", elegidas: [], entrada: "" });
+    setHl([]); setLineas([]);
+  };
+  const reproducir = async (t, p, desde = 0) => {
+    const tok = ++runRef.current;
+    pausaRef.current = false; setPausa(false);
+    const ps = temas[t].pasos[p];
+    if (desde === 0) prepararPaso(ps);
+    setFase("explica");
+    const beats = ps.beats || [];
+    for (let b = desde; b < beats.length; b++) {
+      if (tok !== runRef.current) return;
+      const bt = beats[b];
+      if (bt.add && bt.add.length) {
+        setLineas((ls) => [...ls.map((x) => ({ ...x, nueva: false, old: true })), ...bt.add.map((a) => ({ k: a[0], t: nb(a[1]), nueva: true }))]);
+        setGesto(true); setTimeout(() => setGesto(false), 900);
+      }
+      setHl(bt.hl || []);
+      if (bt.set) setValorRaw((v) => ({ ...v, ...bt.set }));
+      const sig = beats[b + 1] || (temas[t].pasos[p + 1] && (temas[t].pasos[p + 1].beats || [])[0]);
+      if (sig && sig.t) { let d = nb(sig.t); (clase.pronuncia || []).forEach(([re, r]) => { d = d.replace(re, r); }); N.precargar(d); }
+      const ok = await decir(bt.t || "", tok);
+      if (!ok) return;
+    }
+    if (tok !== runRef.current) return;
+    setHl([]);
+    if (ps.ejercicio) {
+      setFase("ejercicio");
+      const e = ps.ejercicio;
+      if (e.t) await decir(e.t, tok);
+      return;
+    }
+    setFase("listo");
+    setHechos((h) => ({ ...h, [t + "." + p]: true }));
+    if (autoRef.current) { const ok = await esperar(900, tok); if (ok && tok === runRef.current) avanzar(t, p); }
+  };
+  const irA = (t, p) => {
+    N.callar(); setFinal(false);
+    setTi(t); setPi(p);
+    if (temas[t].practica) { runRef.current++; iniciarPractica(t); return; }
+    reproducir(t, p, 0);
+  };
+  const avanzar = (t = ti, p = pi) => {
+    const tt = temas[t];
+    if (!tt.practica && p < tt.pasos.length - 1) return irA(t, p + 1);
+    if (t < temas.length - 1) return irA(t + 1, 0);
+    N.callar(); runRef.current++; setFinal(true);
+    const tok = runRef.current;
+    decir(clase.despedida || "¡Felicidades, {nombre}! Terminó la clase.", tok);
+  };
+  const atras = () => {
+    if (esPractica || pi === 0) { if (ti > 0) { const pt = temas[ti - 1]; irA(ti - 1, pt.practica ? 0 : pt.pasos.length - 1); } return; }
+    irA(ti, pi - 1);
+  };
+  const setValorUsuario = (f) => { tocadoRef.current = true; setValorRaw((v) => (typeof f === "function" ? f(v) : { ...v, ...f })); };
+
+  // ---- ejercicios ----
+  const acertar = async (texto) => {
+    const tok = ++runRef.current;
+    const f = nb(alAzar(FELICITACIONES));
+    setEj((x) => ({ ...x, estado: "bien", msg: `${f} ${nb(texto || "")}`.trim() }));
+    setFase("listo");
+    setHechos((h) => ({ ...h, [ti + "." + pi]: true }));
+    const ok = await decir(`${f} ${texto || ""}`, tok);
+    if (ok && autoRef.current) { const ok2 = await esperar(900, tok); if (ok2) avanzar(); }
+  };
+  const fallar = (pista) => {
+    const tok = ++runRef.current;
+    const a = nb(alAzar(ANIMOS));
+    setEj((x) => ({ ...x, estado: "mal", msg: `${a} ${nb(pista || "")}`.trim() }));
+    decir(`${a} ${pista || ""}`, tok);
+  };
+  const avisar = (texto) => { const tok = ++runRef.current; setEj((x) => ({ ...x, estado: "parcial", msg: nb(texto) })); decir(texto, tok); };
+  const responderOpcion = (k) => {
+    if (!ejercicio || ej.estado === "bien" || fase !== "ejercicio") return;
+    setEj((x) => ({ ...x, elegidas: [...x.elegidas, k] }));
+    if (k === ejercicio.correcta) acertar(ejercicio.bien); else fallar((ejercicio.pistas && ejercicio.pistas[k]) || ejercicio.pista);
+  };
+  const leerNumero = (s) => { const n = Number(String(s || "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) && String(s).trim() !== "" ? n : null; };
+  const cerca = (x, r, tol = 0.03) => (r === 0 ? Math.abs(x) < 1e-9 : Math.abs(x - r) / Math.abs(r) <= tol);
+  const revisarNumero = () => {
+    if (!ejercicio || ej.estado === "bien") return;
+    const x = leerNumero(ej.entrada);
+    if (x === null) { avisar("Escriba un número para revisar."); return; }
+    if (cerca(x, ejercicio.respuesta, ejercicio.tol)) acertar(ejercicio.bien);
+    else if (ejercicio.unidadAlt && cerca(x, ejercicio.respuesta * ejercicio.unidadAlt[0], ejercicio.tol)) avisar(ejercicio.unidadAlt[1]);
+    else fallar(ejercicio.pista);
+  };
+  // ejercicio "meta": se revisa cada vez que el técnico toca el dibujo
+  useEffect(() => {
+    if (!tocadoRef.current || fase !== "ejercicio" || !ejercicio || ejercicio.tipo !== "meta" || ej.estado === "bien") return;
+    const r = ejercicio.revisar(valor, memRef.current);
+    if (r === true) acertar(ejercicio.bien);
+    else if (typeof r === "string" && r !== memRef.current.ultimo) { memRef.current.ultimo = r; avisar(r); }
+    else if (r && r.mal && r.mal !== memRef.current.ultimo) { memRef.current.ultimo = r.mal; fallar(r.mal); }
+  }, [valor]);
+
+  // ---- práctica con problemas generados ----
+  const nuevoProblema = (t = ti, decirlo = true) => {
+    const g = temas[t].practica;
+    const pr = g.generar();
+    setProb(pr); setResp({}); setRevision(null);
+    memRef.current = {}; tocadoRef.current = false;
+    setValorRaw({ ...((pr.visual && pr.visual.inicio) || {}) });
+    setHl([]);
+    setLineas((pr.lineas || []).map((a) => ({ k: a[0], t: a[1], nueva: true })));
+    setFase("ejercicio");
+    if (decirlo) { const tok = ++runRef.current; decir(pr.voz || "Resuelva este problema.", tok); }
+    return pr;
+  };
+  const iniciarPractica = (t) => {
+    const pr = nuevoProblema(t, false);
+    const tok = ++runRef.current;
+    (async () => { const ok = await decir(temas[t].practica.intro || "Ahora practique con problemas nuevos. Cada uno es distinto.", tok); if (ok) await decir(pr.voz || "", tok); })();
+  };
+  const marcadorRef = React.useRef(marcador);
+  const sumarPunto = (bien) => {
+    const m = marcadorRef.current;
+    const tope = clase.topePuntos || 50;
+    const dar = bien && m.puntos + 5 <= tope ? 5 : 0;
+    if (dar && onGanarPuntos) onGanarPuntos(clase.etiquetaPuntos || "Práctica de la clase", dar);
+    const n = { bien: m.bien + (bien ? 1 : 0), total: m.total + 1, puntos: m.puntos + dar };
+    marcadorRef.current = n; setMarcador(n);
+    return dar;
+  };
+  const revisarPractica = (k) => {
+    if (!prob || (revision && revision.ok)) return;
+    let ok;
+    let estados = {};
+    if (prob.opciones) { ok = k === prob.correcta; estados = { elegida: k }; }
+    else {
+      ok = prob.campos.every((c) => { const x = leerNumero(resp[c.id]); const b = x !== null && cerca(x, c.r, c.tol || 0.03); estados[c.id] = x === null ? "" : b ? "ok" : "bad"; return b; });
+    }
+    const primera = !revision;
+    const dio = primera ? sumarPunto(ok) : 0;
+    const tok = ++runRef.current;
+    if (ok) {
+      const f = nb(alAzar(FELICITACIONES));
+      setRevision({ ok: true, estados, msg: f + (dio ? ` +${dio} puntos` : "") });
+      decir(f, tok);
+    } else {
+      const a = nb(alAzar(ANIMOS));
+      setRevision({ ok: false, estados, msg: a });
+      decir(a + " " + (prob.pista || "Revise el procedimiento o toque Ver solución."), tok);
+    }
+  };
+  const verSolucion = async () => {
+    if (!prob) return;
+    const tok = ++runRef.current;
+    setRevision((r) => ({ ...(r || {}), ok: r && r.ok, sol: true, estados: (r && r.estados) || {} }));
+    setLineas((ls) => [...ls.map((x) => ({ ...x, nueva: false, old: true })), ...(prob.solucion || []).map((a) => ({ k: a[0], t: a[1], nueva: true }))]);
+    if (!revision) sumarPunto(false);
+    await decir(prob.vozSolucion || "Así se resuelve.", tok);
+  };
+
+  // ---- controles ----
+  const comenzar = () => { setEmpezo(true); irA(ti, 0); };
+  const play = () => {
+    if (N.hablando) { N.pausar(); pausaRef.current = !N.pausado; setPausa(!N.pausado); return; }
+    if (relojRef.current) { pausaRef.current = !pausaRef.current; setPausa(pausaRef.current); return; }
+    if (esPractica) { const tok = ++runRef.current; decir(prob ? prob.voz || "" : "", tok); return; }
+    if (fase === "ejercicio" && ejercicio && ejercicio.t) { const tok = ++runRef.current; decir(ejercicio.t, tok); return; }
+    reproducir(ti, pi, 0);
+  };
+  const repetir = () => { if (esPractica) { const tok = ++runRef.current; decir(prob ? prob.voz : "", tok); } else reproducir(ti, pi, 0); };
+  const cambiarVel = (r) => { setVel(r); N.setVelocidad(r); };
+  const cambiarAuto = () => { const v = !auto; setAuto(v); try { localStorage.setItem("aula.auto", v ? "1" : "0"); } catch (e) { /* nada */ } if (v && fase === "listo") avanzar(); };
+  const pantalla = () => {
+    const el = raizRef.current;
+    if (document.fullscreenElement) { try { document.exitFullscreen(); } catch (e) { /* nada */ } setFoco(false); return; }
+    let ok = false;
+    try { if (el && el.requestFullscreen) { el.requestFullscreen().catch(() => {}); ok = true; } } catch (e) { /* nada */ }
+    setFoco(ok ? true : !foco);
+  };
+  const salir = () => { runRef.current++; N.callar(); try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) { /* nada */ } onSalir && onSalir(); };
+  const terminar = () => { runRef.current++; N.callar(); try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) { /* nada */ } onTerminar && onTerminar(); };
+  useEffect(() => {
+    const k = (e) => {
+      if (!empezo || /input|select|textarea/i.test((e.target && e.target.tagName) || "")) return;
+      if (e.key === "ArrowRight") { e.preventDefault(); avanzar(); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); atras(); }
+    };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  });
+
+  const hablaAhora = (N.hablando && !N.pausado) || (relojOn && !pausa);
+  const tituloPizarra = final ? "¡Clase terminada!" : esPractica ? (tema.tab || "Práctica") : paso ? paso.titulo : "";
+  const cuenta = esPractica ? `${marcador.bien}/${marcador.total} bien · ${marcador.puntos} pts` : `Paso ${pi + 1} de ${pasos.length}`;
+  const pulsoSiguiente = !hablaAhora && (fase === "listo" || (esPractica && revision && (revision.ok || revision.sol)));
+
+  const contenido = (
+    <div className={"aula" + (foco ? " foco" : "")} ref={raizRef} role="dialog" aria-label={clase.titulo}>
+      <style>{AULA_CSS + CSS_DISPOSITIVOS}</style>
+      <div className="top">
+        <div className="brand"><small>{clase.marca || "Entrenamiento A&D"}</small>{clase.corto || clase.titulo}</div>
+        <div className="tabs" role="tablist">
+          {temas.map((t, k) => (
+            <button key={k} type="button" role="tab" className={"tab" + (Object.keys(hechos).some((h) => h.startsWith(k + ".")) ? " hecho" : "")} aria-selected={k === ti && empezo} onClick={() => { setEmpezo(true); irA(k, 0); }}>{t.tab}</button>
+          ))}
+        </div>
+        <button type="button" className="ib" onClick={pantalla} title="Pantalla completa">⛶<span className="tx"> {foco ? "Salir de pantalla" : "Pantalla completa"}</span></button>
+        <button type="button" className="ib" onClick={salir} title="Salir de la clase">✕<span className="tx"> Salir</span></button>
+      </div>
+
+      <section className="board" aria-label="Pizarra">
+        <div className="btitle"><span>{tituloPizarra}</span><span>{final ? "" : cuenta}</span></div>
+        <div className={"bgrid" + (visual && !final ? "" : " full")}>
+          {visual && !final && <div className="vis"><DibujoAula v={visual} valor={valor} setValor={setValorUsuario} hl={hl} /></div>}
+          <div className="chalk" ref={chalkRef} aria-live="polite">
+            {final ? (
+              <>
+                <div className="ln h nueva">¡Muy bien{nombre ? ", " + nombre : ""}!</div>
+                {(clase.resumen || []).map((r, k) => <div key={k} className="ln n nueva">✓ {r}</div>)}
+                <div className="ops" style={{ marginTop: 14 }}>
+                  {onTerminar && <button type="button" className="op" onClick={terminar}>➜ {textoSalir}</button>}
+                  {temas.some((t) => t.practica) && <button type="button" className="op" onClick={() => irA(temas.findIndex((t) => t.practica), 0)}>✎ Practicar con problemas</button>}
+                  <button type="button" className="op" onClick={() => irA(0, 0)}>↺ Ver la clase otra vez</button>
+                </div>
+              </>
+            ) : (
+              <>
+                {lineas.map((l, k) => <div key={k + l.t} className={`ln ${l.k}${l.nueva ? " nueva" : ""}${l.old ? " old" : ""}`}>{l.t}</div>)}
+                {/* ejercicio del paso */}
+                {!esPractica && ejercicio && (fase === "ejercicio" || fase === "listo") && (
+                  <div>
+                    <div className="ln q nueva">✎ {nb(ejercicio.pregunta || "")}</div>
+                    {ejercicio.tipo === "opcion" && (
+                      <div className="ops">
+                        {ejercicio.opciones.map((o, k) => {
+                          const bien = ej.estado === "bien" && k === ejercicio.correcta;
+                          const mal = ej.elegidas.includes(k) && k !== ejercicio.correcta;
+                          return <button key={k} type="button" className={"op" + (bien ? " bien" : mal ? " mal" : "")} onClick={() => responderOpcion(k)} disabled={ej.estado === "bien"}>{String.fromCharCode(97 + k)}) {o}</button>;
+                        })}
+                      </div>
+                    )}
+                    {ejercicio.tipo === "numero" && (
+                      <div className="campo">
+                        <input inputMode="decimal" value={ej.entrada} aria-label={ejercicio.pregunta} className={ej.estado === "bien" ? "ok" : ej.estado === "mal" ? "bad" : ""}
+                          onChange={(e) => setEj((x) => ({ ...x, entrada: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter") revisarNumero(); }} disabled={ej.estado === "bien"} />
+                        <span>{ejercicio.unidad}</span>
+                        {ej.estado !== "bien" && <button type="button" className="mini pri" onClick={revisarNumero}>Revisar</button>}
+                      </div>
+                    )}
+                    {ejercicio.tipo === "meta" && ej.estado !== "bien" && <div className="ln d" style={{ color: "var(--chd)", fontSize: ".9em" }}>☝ {ejercicio.indicacion || "Use el dibujo de la izquierda."}</div>}
+                    {ej.msg && <div className={"ln nueva " + (ej.estado === "bien" ? "ok" : ej.estado === "mal" ? "mal" : "r")}>{ej.estado === "bien" ? "✓ " : ej.estado === "mal" ? "✗ " : ""}{ej.msg}</div>}
+                  </div>
+                )}
+                {/* práctica */}
+                {esPractica && prob && (
+                  <div>
+                    {prob.opciones ? (
+                      <div className="ops">
+                        {prob.opciones.map((o, k) => {
+                          const bien = revision && revision.ok && k === prob.correcta;
+                          const mal = revision && !revision.ok && revision.estados && revision.estados.elegida === k;
+                          return <button key={k} type="button" className={"op" + (bien ? " bien" : mal ? " mal" : "")} onClick={() => revisarPractica(k)}>{String.fromCharCode(97 + k)}) {o}</button>;
+                        })}
+                      </div>
+                    ) : prob.campos.map((c) => (
+                      <div className="campo" key={c.id}>
+                        <span style={{ minWidth: "4.5em" }}>{c.label} =</span>
+                        <input inputMode="decimal" value={resp[c.id] || ""} aria-label={c.label} className={(revision && revision.estados && revision.estados[c.id]) || ""}
+                          onChange={(e) => setResp((r) => ({ ...r, [c.id]: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter") revisarPractica(); }} />
+                        <span>{c.unidad}</span>
+                      </div>
+                    ))}
+                    {revision && revision.msg && <div className={"ln nueva " + (revision.ok ? "ok" : "mal")}>{revision.ok ? "✓ " : "✗ "}{revision.msg}</div>}
+                    <div className="campo" style={{ marginTop: 10 }}>
+                      {!prob.opciones && !(revision && revision.ok) && <button type="button" className="mini pri" onClick={() => revisarPractica()}>Revisar</button>}
+                      {!(revision && revision.sol) && <button type="button" className="mini" onClick={verSolucion}>Ver solución</button>}
+                      <button type="button" className={"mini" + (revision && (revision.ok || revision.sol) ? " pri" : "")} onClick={() => nuevoProblema()}>Otro problema →</button>
+                    </div>
+                    {tema.practica.extra && onTerminar && <div className="campo"><button type="button" className="mini" onClick={terminar}>➜ {tema.practica.extra}</button></div>}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <div className="foot">
+        <ProfeAula habla={hablaAhora} gesto={gesto} duda={fase === "ejercicio" && !ej.estado} />
+        <div className="bubble">
+          <span className="who">Profesor · {clase.marca || "Entrenamiento A&D"}{N.fuente === "dispositivo" ? " · voz del equipo" : N.fuente === "ninguna" ? " · solo subtítulos" : ""}{N.silencio ? " · voz apagada" : ""}</span>
+          <p className="sub" ref={subRef}>{subtituloSpans(sub)}</p>
+        </div>
+        <nav className="ctrl" aria-label="Controles de la clase">
+          <button type="button" className="btn" onClick={atras} disabled={ti === 0 && pi === 0} aria-label="Paso anterior">←</button>
+          <button type="button" className="btn pri" onClick={play}>{hablaAhora ? "⏸ Pausa" : pausa ? "▶ Seguir" : "▶ Escuchar"}</button>
+          <button type="button" className={"btn" + (pulsoSiguiente ? " pulso" : "")} onClick={() => (final ? terminar() : esPractica ? nuevoProblema() : avanzar())}>{final ? textoSalir + " →" : esPractica ? "Otro →" : fase === "ejercicio" && ej.estado !== "bien" ? "Saltar →" : "Siguiente →"}</button>
+          <div className="prog">
+            <span>{tema.tab}</span>
+            {!esPractica && <div className="dots">{pasos.map((_, k) => <i key={k} className={k <= pi ? "on" : ""} onClick={() => irA(ti, k)} title={pasos[k].titulo} />)}</div>}
+          </div>
+          <button type="button" className="btn" onClick={repetir} aria-label="Repetir este paso">↺<span className="tx"> Repetir</span></button>
+          <select className="btn" value={vel} onChange={(e) => cambiarVel(Number(e.target.value))} aria-label="Velocidad de la voz">
+            <option value="0.85">0.85×</option><option value="1">1×</option><option value="1.15">1.15×</option>
+          </select>
+          <button type="button" className="btn" onClick={() => N.setSilencio(!N.silencio)} aria-pressed={N.silencio} title="Apagar o encender la voz">{N.silencio ? "🔇" : "🔊"}</button>
+          <button type="button" className="btn" onClick={cambiarAuto} aria-pressed={auto} title="Pasar solo al siguiente paso">Continuar solo</button>
+        </nav>
+      </div>
+
+      {!empezo && (
+        <div className="inicio">
+          <div className="card">
+            <div style={{ fontSize: 46 }}>🎧</div>
+            <h1>{clase.titulo}</h1>
+            {nombre && <div style={{ fontFamily: "var(--tiza)", fontSize: "1.2rem", color: "var(--chy)" }}>Hola, {nombre}</div>}
+            <p>{clase.intro || "Clase con voz, paso a paso, con ejercicios. Suba el volumen o use audífonos."}</p>
+            <button type="button" className="btn pri" onClick={comenzar}>▶ Comenzar la clase</button>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+              {temas.some((t) => t.practica) && <button type="button" className="btn" onClick={() => { setEmpezo(true); irA(temas.findIndex((t) => t.practica), 0); }}>✎ Solo practicar</button>}
+              {onGuia && <button type="button" className="btn" onClick={() => { N.callar(); onGuia(); }}>📖 Guía escrita</button>}
+              <button type="button" className="btn" onClick={salir}>{clase.textoDirecto || "Ir directo a la práctica"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+  return typeof document !== "undefined" ? createPortal(contenido, document.body) : contenido;
+}
+
+
+// ---- Dibujos de la clase de compuertas ----
+const PRON_COMPUERTAS = [[/\bNAND\b/g, "nand"], [/\bNOR\b/g, "nor"], [/\bAND\b/g, "and"], [/\bOR\b/g, "or"], [/\bNOT\b/g, "not"], [/\bFACP\b/g, "panel"]];
+const tocarEntrada = (setValor, i) => setValor((v) => ({ ...v, e: (v.e || []).map((x, j) => (j === i ? (x ? 0 : 1) : x)) }));
+
+AULA_VISUALES.cmp = function VisCompuerta({ p, valor, setValor }) {
+  const e = valor.e || (p.compuerta === "NOT" ? [0] : [0, 0]);
+  return (
+    <Lamina>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "center", flexWrap: "wrap" }}>
+        <CompuertaViva tipo={p.compuerta} entradas={e} onTocar={p.fija ? null : (i) => tocarEntrada(setValor, i)} />
+        {p.tabla && <TablaVerdadMini tipo={p.compuerta} entradas={e} />}
+      </div>
+      {!p.fija && <div style={{ textAlign: "center", fontSize: 12.5, color: "#5b6572", marginTop: 4 }}>☝ Toque A y B para cambiarlas</div>}
+    </Lamina>
+  );
+};
+AULA_VISUALES.cmpPar = function VisPar() {
+  return (
+    <Lamina>
+      <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
+        <div style={{ textAlign: "center" }}><CompuertaViva tipo="NAND" entradas={[1, 1]} grande={false} /><div style={{ fontSize: 12.5, fontWeight: 700 }}>NAND con A=1, B=1 → 0</div></div>
+        <div style={{ textAlign: "center" }}><CompuertaViva tipo="NOR" entradas={[0, 0]} grande={false} /><div style={{ fontSize: 12.5, fontWeight: 700 }}>NOR con A=0, B=0 → 1</div></div>
+      </div>
+    </Lamina>
+  );
+};
+AULA_VISUALES.diluvio = function VisDiluvio({ p, valor, setValor }) {
+  return <Lamina><CircuitoDiluvio entradas={valor.e || [0, 0, 0, 0]} onTocar={p.fija ? null : (i) => tocarEntrada(setValor, i)} /></Lamina>;
+};
+// Detector en reposo (0) y en alarma (1), dibujado en la pizarra
+AULA_VISUALES.senales = function VisSenales({ valor, setValor, hl }) {
+  const a = !!valor.alarma;
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 360 230" role="img" aria-label="Detector en reposo y en alarma">
+        <g className={hl.includes("reposo") ? "hot" : undefined}>
+          <rect className="t" x="22" y="24" width="140" height="150" rx="14" />
+          <g transform="translate(57,40)" dangerouslySetInnerHTML={{ __html: iconoEntrada("Detector de humo", false, 70) }} />
+          <text x="92" y="136" textAnchor="middle">En reposo</text>
+          <text x="92" y="166" textAnchor="middle" className="b" style={{ fontSize: 30 }}>0</text>
+        </g>
+        <g className={hl.includes("alarma") ? "hot" : undefined}>
+          <rect className="t" x="198" y="24" width="140" height="150" rx="14" />
+          <g transform="translate(233,40)" dangerouslySetInnerHTML={{ __html: iconoEntrada("Detector de humo", true, 70) }} />
+          <text x="268" y="136" textAnchor="middle">En alarma</text>
+          <text x="268" y="166" textAnchor="middle" className="y" style={{ fontSize: 30 }}>1</text>
+        </g>
+        <g className="toca" onClick={() => setValor((v) => ({ ...v, alarma: !v.alarma }))} role="button" aria-label="Tocar el detector de prueba">
+          <rect className="t" x="110" y="186" width="140" height="36" rx="18" style={{ stroke: a ? "var(--chy)" : undefined }} />
+          <g transform="translate(118,190)" dangerouslySetInnerHTML={{ __html: iconoEntrada("Detector de humo", a, 28) }} />
+          <text x="196" y="210" textAnchor="middle" className={a ? "y" : undefined}>Prueba: {a ? "1" : "0"}</text>
+        </g>
+      </svg>
+    </>
+  );
+};
+// Analogía: interruptores en serie (AND) o en paralelo (OR) que encienden la luz de alarma
+AULA_VISUALES.interruptores = function VisInterruptores({ p, valor, setValor, hl }) {
+  const e = valor.e || [0, 0];
+  const serie = p.modo !== "paralelo";
+  const pasa = serie ? e[0] && e[1] : e[0] || e[1];
+  const I = pasa ? 0.5 : 0;
+  const sw = (x, y, cerrado, i) => (
+    <g className={"toca" + (hl.includes("s" + i) ? " hot" : "")} onClick={() => tocarEntrada(setValor, i)} role="button" aria-label={`Interruptor ${i ? "B" : "A"} ${cerrado ? "cerrado" : "abierto"}`}>
+      <rect x={x - 6} y={y - 30} width="72" height="48" fill="transparent" stroke="none" />
+      <circle className="t" cx={x} cy={y} r="4" /><circle className="t" cx={x + 60} cy={y} r="4" />
+      <line x1={x + 4} y1={y} x2={cerrado ? x + 56 : x + 50} y2={cerrado ? y : y - 26} style={{ stroke: cerrado ? "var(--chy)" : undefined, strokeWidth: 3.5 }} />
+      <text x={x + 30} y={y + 24} textAnchor="middle" className={cerrado ? "y" : undefined}>{i ? "B" : "A"} = {cerrado ? 1 : 0}</text>
+    </g>
+  );
+  return (
+    <svg className="ch" viewBox="0 0 380 230" role="img" aria-label={serie ? "Dos interruptores en serie" : "Dos interruptores en paralelo"}>
+      <Bateria x={40} y={120} etiqueta="" />
+      {serie ? <>
+        <Hilo d="M40,105 V50 H110" I={I} />
+        {sw(110, 50, e[0], 0)}
+        <Hilo d="M170,50 H200" I={I} />
+        {sw(200, 50, e[1], 1)}
+        <Hilo d="M260,50 H320 V95" I={I} />
+        <Hilo d="M320,150 V200 H40 V135" I={I} />
+      </> : <>
+        <Hilo d="M40,105 V40 H100" I={I} />
+        <Hilo d="M100,40 H140" I={I} on={!!(pasa && e[0])} />
+        <Hilo d="M200,40 H240" I={I} on={!!(pasa && e[0])} />
+        <Hilo d="M100,40 V100 H140" I={I} on={!!(pasa && e[1])} />
+        <Hilo d="M200,100 H240 V40" I={I} on={!!(pasa && e[1])} />
+        {sw(140, 40, e[0], 0)}
+        {sw(140, 100, e[1], 1)}
+        <Hilo d="M240,40 H320 V95" I={I} />
+        <Hilo d="M320,150 V200 H40 V135" I={I} />
+      </>}
+      <g transform="translate(292,94)" dangerouslySetInnerHTML={{ __html: iconoSalida("Luz y bocina", !!pasa, 56) }} />
+      <text x="320" y="170" textAnchor="middle" className={pasa ? "y" : "d"}>{pasa ? "¡Encendida!" : "Apagada"}</text>
+      <text x="190" y="225" textAnchor="middle" className="b">{serie ? "En serie = AND" : "En paralelo = OR"}</text>
+    </svg>
+  );
+};
+
+// ---- Clase de compuertas en el aula ----
+const metaCompuerta = (tipo, quiere = true) => (v) => {
+  const e = v.e || [];
+  const sal = tipo === "NOT" ? FN_COMPUERTA.NOT(!!e[0]) : FN_COMPUERTA[tipo](!!e[0], !!e[1]);
+  return !!sal === quiere;
+};
+const AULA_COMPUERTAS = {
+  titulo: "Compuertas lógicas", corto: "Compuertas lógicas", marca: "Entrenamiento A&D · Lógica",
+  intro: "El profesor le explica en la pizarra cómo piensa un panel contra incendio: AND, OR, NOT, NAND, NOR y circuitos reales. Toque los dibujos y resuelva los ejercicios. Suba el volumen.",
+  pronuncia: PRON_COMPUERTAS,
+  textoDirecto: "Ir a armar circuitos",
+  etiquetaPuntos: "Práctica de compuertas (aula)",
+  despedida: "¡Felicidades, {nombre}! Terminó la clase de compuertas lógicas. Ya sabe cómo funcionan AND, OR, NOT, NAND y NOR, y cómo se combinan en un circuito. Ahora vaya a la práctica: ahí usted arrastra las compuertas, conecta los cables y gana sus puntos.",
+  resumen: ["Cada señal vale 0 (normal) o 1 (activa)", "AND: todas en 1 · OR: con una basta · NOT: invierte", "NAND = AND invertida · NOR = OR invertida", "Los circuitos reales combinan varias compuertas"],
+  temas: [
+    { tab: "Inicio", pasos: [
+      { titulo: "Bienvenida", visual: { tipo: "senales", inicio: { alarma: false } }, beats: [
+        { t: "¡Hola, {nombre}! Bienvenido a la clase de compuertas lógicas. Póngase cómodo, que vamos con calma, paso a paso.", add: [["h", "Compuertas lógicas"]] },
+        { t: "Las compuertas son la base de cómo piensa un panel contra incendio: con ellas decide cuándo sonar las sirenas, cuándo llamar el elevador o cuándo cortar el gas.", add: [["n", "Así decide el panel qué activar"]] },
+        { t: "En cada tema le explico la idea en la pizarra y después usted hace un ejercicio cortito. Si se equivoca, no pasa nada: lo intentamos otra vez.", add: [["n", "Explicación → ejercicio → siguiente tema"]] },
+      ] },
+      { titulo: "Encendido o apagado: 0 y 1", visual: { tipo: "senales", inicio: { alarma: false } }, beats: [
+        { t: "Primero, una idea clave. En un sistema contra incendio casi todo se puede ver como encendido o apagado.", add: [["h", "Dos estados"]] },
+        { t: "Un detector en reposo vale cero.", add: [["n", "Detector en reposo → 0"]], hl: ["reposo"] },
+        { t: "Y si detecta humo y pasa a alarma, vale uno.", add: [["n", "Detector en alarma → 1"]], hl: ["alarma"], set: { alarma: true } },
+        { t: "Lo mismo pasa con una estación manual, un sensor de flujo o un interruptor de válvula: normal es cero, activo es uno. Toque el detector de prueba para verlo cambiar.", add: [["f", "0 = normal   ·   1 = activo"]], set: { alarma: false } },
+      ], ejercicio: { tipo: "opcion", t: "Una pregunta rápida. Si un detector de humo pasa a alarma, ¿qué valor tiene su señal?", pregunta: "Un detector pasa a alarma. ¿Qué valor tiene su señal?", opciones: ["1 (activo)", "0 (normal)"], correcta: 0,
+        bien: "Cuando el detector está en alarma, su señal vale uno.", pista: "Recuerde: uno es activo y cero es normal." } },
+      { titulo: "¿Qué es una compuerta?", visual: { tipo: "cmp", compuerta: "AND", fija: true, inicio: { e: [1, 0] } }, beats: [
+        { t: "Ahora sí: ¿qué es una compuerta lógica? Es como un pequeño juez.", add: [["h", "La compuerta: un juez"]] },
+        { t: "Mira sus entradas, que llegan por la izquierda, y siguiendo una regla fija decide si su salida, a la derecha, se enciende o no.", add: [["n", "Entradas (izquierda) → regla → salida (derecha)"]] },
+        { t: "Cada compuerta tiene su propia regla y su propio dibujo. Vamos a conocerlas una por una, empezando por la AND.", add: [["r", "Una regla fija para cada compuerta"]] },
+      ] },
+    ] },
+    { tab: "AND", pasos: [
+      { titulo: "AND: todos tienen que estar", visual: { tipo: "interruptores", modo: "serie", inicio: { e: [0, 0] } }, beats: [
+        { t: "Empecemos con la compuerta AND, que en español quiere decir y.", add: [["h", "AND (y)"]] },
+        { t: "Su regla es: la salida se enciende solo si todas sus entradas están activas al mismo tiempo.", add: [["f", "Salida = 1 solo si A = 1 y B = 1"]] },
+        { t: "Mire el dibujo: son dos interruptores en serie. Si solo cierro A, la corriente no llega a la luz.", set: { e: [1, 0] }, hl: ["s0"] },
+        { t: "Pero si cierro A y también B, la corriente pasa completa y la luz se enciende.", set: { e: [1, 1] }, add: [["r", "En serie: tienen que cerrarse los dos"]] },
+        { t: "Pruebe usted tocando los interruptores.", set: { e: [0, 0] } },
+      ] },
+      { titulo: "Símbolo y tabla de la verdad", visual: { tipo: "cmp", compuerta: "AND", tabla: true, inicio: { e: [0, 0] } }, beats: [
+        { t: "Este es el símbolo de la AND: parece una letra D. A la derecha está su tabla de la verdad, que muestra todas las combinaciones.", add: [["h", "Tabla de la AND"]] },
+        { t: "Cero y cero: apagada.", set: { e: [0, 0] }, add: [["n", "0 · 0 → 0"]] },
+        { t: "Cero y uno: apagada.", set: { e: [0, 1] }, add: [["n", "0 · 1 → 0"]] },
+        { t: "Uno y cero: también apagada.", set: { e: [1, 0] }, add: [["n", "1 · 0 → 0"]] },
+        { t: "Y solo con uno y uno, se enciende.", set: { e: [1, 1] }, add: [["r", "1 · 1 → 1   (única que enciende)"]] },
+        { t: "En un panel se usa, por ejemplo, para el agente limpio: solo descarga si hay dos detectores en alarma a la vez. A eso se le llama zona cruzada.", add: [["n", "Uso: zona cruzada del agente limpio"]], set: { e: [0, 0] } },
+      ] },
+      { titulo: "Ejercicio AND", visual: { tipo: "cmp", compuerta: "AND", tabla: true, inicio: { e: [0, 0] } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Ahora le toca a usted, {nombre}. Toque las entradas A y B hasta que se encienda la salida de la AND.", pregunta: "Encienda la salida de la AND.", indicacion: "Toque A y B en la lámina.",
+          revisar: (v) => (metaCompuerta("AND")(v) ? true : (v.e || []).some(Boolean) ? "Bien, ya tiene una. La AND necesita las dos." : null), bien: "Las dos entradas activas: así se enciende una AND." } },
+      { titulo: "Pregunta AND", visual: { tipo: "cmp", compuerta: "AND", fija: true, inicio: { e: [1, 0] } }, beats: [],
+        ejercicio: { tipo: "opcion", t: "Una más. En una AND, si A está en uno y B está en cero, ¿cómo queda la salida?", pregunta: "AND con A = 1 y B = 0. ¿Cómo queda la salida?", opciones: ["0 (apagada)", "1 (encendida)"], correcta: 0,
+          bien: "Como B está en cero, la AND se queda apagada.", pista: "La AND necesita que todas sus entradas estén en uno." } },
+    ] },
+    { tab: "OR", pasos: [
+      { titulo: "OR: con uno basta", visual: { tipo: "interruptores", modo: "paralelo", inicio: { e: [0, 0] } }, beats: [
+        { t: "Sigue la compuerta OR, que quiere decir o.", add: [["h", "OR (o)"]] },
+        { t: "Aquí basta con que una sola entrada esté activa para que la salida se encienda.", add: [["f", "Salida = 1 si A = 1 o B = 1"]] },
+        { t: "Es como dos interruptores en paralelo. Si cierro solo A, la luz ya enciende.", set: { e: [1, 0] } },
+        { t: "Si cierro solo B, también.", set: { e: [0, 1] } },
+        { t: "Y con los dos, por supuesto, también enciende. Solo se apaga cuando los dos están abiertos.", set: { e: [1, 1] }, add: [["r", "En paralelo: con cualquiera pasa la corriente"]] },
+      ] },
+      { titulo: "Tabla de la OR", visual: { tipo: "cmp", compuerta: "OR", tabla: true, inicio: { e: [0, 0] } }, beats: [
+        { t: "Este es el símbolo de la OR, con la punta como un escudo. Veamos su tabla.", add: [["h", "Tabla de la OR"]] },
+        { t: "Cero y cero: apagada. Es la única combinación que la apaga.", set: { e: [0, 0] }, add: [["n", "0 · 0 → 0   (única apagada)"]] },
+        { t: "Cero y uno, uno y cero, uno y uno: encendida.", set: { e: [1, 1] }, add: [["r", "Las demás → 1"]] },
+        { t: "En un panel, la OR junta muchos dispositivos: cualquier detector o cualquier estación manual activa la alarma general.", add: [["n", "Uso: cualquier dispositivo → alarma general"]], set: { e: [0, 0] } },
+      ] },
+      { titulo: "Ejercicio OR", visual: { tipo: "cmp", compuerta: "OR", tabla: true, inicio: { e: [0, 0] } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Vamos a buscar todas las formas de encender la OR. Son tres combinaciones distintas. Encuéntrelas tocando las entradas.", pregunta: "Encuentre las 3 combinaciones que encienden la OR.", indicacion: "Cambie A y B; cada combinación que encienda cuenta una vez.",
+          revisar: (v, mem) => {
+            if (!metaCompuerta("OR")(v)) return null;
+            const k = (v.e || []).join("");
+            mem.vistas = mem.vistas || [];
+            if (!mem.vistas.includes(k)) mem.vistas.push(k);
+            return mem.vistas.length >= 3 ? true : `¡Bien, esa es una! Lleva ${mem.vistas.length} de 3.`;
+          }, bien: "Encontró las tres: con A, con B o con las dos, la OR se enciende." } },
+      { titulo: "Caso real: la sirena", visual: { tipo: "senales", inicio: { alarma: true } }, beats: [],
+        ejercicio: { tipo: "opcion", t: "Pensemos en un panel. La sirena debe sonar si hay humo, o si alguien activa la estación manual. ¿Qué compuerta usaría?", pregunta: "La sirena suena si hay humo O si activan la estación manual. ¿Qué compuerta usa?", opciones: ["OR", "AND", "NOT"], correcta: 0,
+          bien: "Con cualquiera de las dos señales tiene que sonar, por eso es una OR.", pista: "Fíjese: con una sola de las dos señales ya debe sonar.", pistas: { 1: "Con AND tendrían que estar las dos a la vez, y la sirena no puede esperar." } } },
+    ] },
+    { tab: "NOT", pasos: [
+      { titulo: "NOT: el inversor", visual: { tipo: "cmp", compuerta: "NOT", tabla: true, inicio: { e: [0] } }, beats: [
+        { t: "La compuerta NOT, o inversor, tiene una sola entrada y hace lo contrario de lo que recibe.", add: [["h", "NOT (inversor)"]] },
+        { t: "Si le llega un cero, entrega un uno.", set: { e: [0] }, add: [["n", "0 → 1"]] },
+        { t: "Si le llega un uno, entrega un cero. Fíjese en la bolita de la salida: esa bolita siempre significa invertir.", set: { e: [1] }, add: [["n", "1 → 0"], ["f", "La bolita = invertir"]] },
+        { t: "Se usa, por ejemplo, para apagar un ventilador de inyección de aire cuando hay humo: con humo, el ventilador se detiene para no alimentar el fuego.", add: [["n", "Uso: humo = 1 → ventilador = 0"]], set: { e: [0] } },
+      ] },
+      { titulo: "Ejercicio NOT", visual: { tipo: "cmp", compuerta: "NOT", tabla: true, inicio: { e: [0] } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Fíjese que la salida del inversor está encendida. Haga que se apague.", pregunta: "Apague la salida del inversor.", indicacion: "Toque la entrada A.",
+          revisar: metaCompuerta("NOT", false), bien: "Al activar la entrada, el inversor apaga su salida." } },
+    ] },
+    { tab: "NAND y NOR", pasos: [
+      { titulo: "Compuertas invertidas", visual: { tipo: "cmpPar" }, beats: [
+        { t: "Hay dos compuertas más que salen de combinar las anteriores con la bolita del inversor.", add: [["h", "NAND y NOR"]] },
+        { t: "La NAND es una AND con la salida invertida: se enciende siempre, menos cuando todas sus entradas están activas.", add: [["f", "NAND = NOT (A AND B)"], ["n", "Apagada solo con todas en 1"]] },
+        { t: "Y la NOR es una OR invertida: solo se enciende cuando ninguna entrada está activa.", add: [["f", "NOR = NOT (A OR B)"], ["n", "Encendida solo con todas en 0"]] },
+        { t: "Un truco: piense primero qué haría la AND o la OR, y después dele vuelta al resultado.", add: [["r", "Calcule la normal y luego inviértala"]] },
+      ] },
+      { titulo: "Ejercicio NOR", visual: { tipo: "cmp", compuerta: "NOR", tabla: true, inicio: { e: [1, 1] } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Esta NOR tiene las dos entradas activas y la salida está apagada. Encienda la salida.", pregunta: "Encienda la salida de la NOR.", indicacion: "Toque A y B.",
+          revisar: (v) => (metaCompuerta("NOR")(v) ? true : (v.e || []).filter(Boolean).length === 1 ? "Va bien. La NOR necesita que ninguna esté activa." : null), bien: "La NOR solo se enciende cuando ninguna entrada está activa." } },
+      { titulo: "Pregunta NAND", visual: { tipo: "cmp", compuerta: "NAND", fija: true, tabla: true, inicio: { e: [1, 1] } }, beats: [],
+        ejercicio: { tipo: "opcion", t: "En una NAND con las dos entradas activas, ¿qué pasa con la salida?", pregunta: "NAND con A = 1 y B = 1. ¿Qué pasa con la salida?", opciones: ["Se apaga (0)", "Se enciende (1)"], correcta: 0,
+          bien: "Es el único caso en que la NAND se apaga.", pista: "La AND daría uno; la NAND lo invierte." } },
+    ] },
+    { tab: "Circuitos", pasos: [
+      { titulo: "Reto: agente limpio", visual: { tipo: "cmp", compuerta: "AND", fija: true, inicio: { e: [1, 1] } }, beats: [],
+        ejercicio: { tipo: "opcion", t: "Ahora un reto, {nombre}. El agente limpio solo debe liberarse si hay humo y además temperatura alta, para no descargar por una falsa alarma. ¿Qué compuerta usa?", pregunta: "Liberar el agente solo si hay humo Y temperatura alta. ¿Qué compuerta usa?", opciones: ["AND", "OR", "NOR"], correcta: 0,
+          bien: "Necesita las dos señales a la vez, por eso es una AND.", pista: "Aquí no basta con una sola señal: tienen que estar las dos." } },
+      { titulo: "Circuito de varias compuertas", visual: { tipo: "diluvio", inicio: { e: [0, 0, 0, 0] } }, beats: [
+        { t: "Ahora juntemos todo. En un sistema real casi nunca se usa una compuerta sola. Mire este circuito de un sistema de diluvio.", add: [["h", "Sistema de diluvio"]] },
+        { t: "Primero, una OR junta los tres detectores: humo, flama y estación manual. Con que uno solo detecte, la OR se enciende.", set: { e: [0, 1, 0, 0] }, add: [["n", "OR: humo, flama o manual"]] },
+        { t: "Después, una AND revisa dos cosas a la vez: que haya detección y que el sensor de flujo confirme que hay agua.", set: { e: [0, 1, 0, 1] }, add: [["n", "AND: detección y flujo"]] },
+        { t: "Solo si las dos se cumplen, se dispara el diluvio. Siga la señal con la vista, de izquierda a derecha.", add: [["f", "Diluvio = (Humo OR Flama OR Manual) AND Flujo"]] },
+        { t: "Ahora pruebe usted: toque las entradas y mire cómo corre la señal.", set: { e: [0, 0, 0, 0] } },
+      ] },
+      { titulo: "Ejercicio: dispare el diluvio", visual: { tipo: "diluvio", inicio: { e: [0, 0, 0, 0] } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Su turno. Active las entradas necesarias para que se dispare el diluvio.", pregunta: "Dispare el diluvio.", indicacion: "Toque los dispositivos de la izquierda.",
+          revisar: (v) => { const e = v.e || []; if (salidaDiluvio(e)) return true; if ((e[0] || e[1] || e[2]) && !e[3]) return "Bien, la OR ya detecta. Pero la AND también necesita algo más."; if (e[3]) return "Hay flujo, pero falta que algún detector dispare la OR."; return null; },
+          bien: "Un detector enciende la OR, y con el flujo confirmado la AND deja pasar la señal al diluvio." } },
+      { titulo: "Pregunta del circuito", visual: { tipo: "diluvio", fija: true, inicio: { e: [1, 0, 0, 1] } }, beats: [],
+        ejercicio: { tipo: "opcion", t: "Última pregunta del circuito. El diluvio está disparado por humo y hay flujo. Si de pronto se pierde el flujo de agua, ¿qué pasa con el diluvio?", pregunta: "Con Humo = 1 y Flujo = 1 el diluvio está activo. Si se pierde el flujo, ¿qué pasa?", opciones: ["Se apaga", "Sigue encendido"], correcta: 0,
+          bien: "La AND necesita las dos condiciones: sin flujo, aunque haya humo, la salida se apaga.", pista: "Fíjese en la AND del final: necesita detección y flujo al mismo tiempo." } },
+    ] },
+    { tab: "Práctica", practica: {
+      intro: "Ahora practique, {nombre}. Le doy compuertas con entradas al azar y usted dice cómo queda la salida.",
+      extra: "Ir a armar circuitos con puntos",
+      generar: () => {
+        const tipo = elegir(["AND", "OR", "NOT", "NAND", "NOR", "AND", "OR"]);
+        const e = tipo === "NOT" ? [Math.round(Math.random())] : [Math.round(Math.random()), Math.round(Math.random())];
+        const sal = tipo === "NOT" ? FN_COMPUERTA.NOT(!!e[0]) : FN_COMPUERTA[tipo](!!e[0], !!e[1]);
+        const regla = { AND: "La AND solo da 1 si todas están en 1.", OR: "La OR da 1 si alguna está en 1.", NOT: "La NOT invierte la entrada.", NAND: "La NAND es la AND invertida: solo da 0 si todas están en 1.", NOR: "La NOR es la OR invertida: solo da 1 si todas están en 0." }[tipo];
+        const ent = tipo === "NOT" ? `A = ${e[0]}` : `A = ${e[0]}, B = ${e[1]}`;
+        return {
+          visual: { tipo: "cmp", compuerta: tipo, fija: true, inicio: { e } },
+          lineas: [["h", `Compuerta ${tipo}`], ["n", ent]],
+          voz: `Compuerta ${tipo}, con ${tipo === "NOT" ? `la entrada en ${e[0] ? "uno" : "cero"}` : `A en ${e[0] ? "uno" : "cero"} y B en ${e[1] ? "uno" : "cero"}`}. ¿Cómo queda la salida?`,
+          opciones: ["0 (apagada)", "1 (encendida)"], correcta: sal ? 1 : 0,
+          pista: regla,
+          solucion: [["n", regla], ["r", `Salida = ${sal ? 1 : 0}`]], vozSolucion: `${regla} Por eso la salida queda en ${sal ? "uno" : "cero"}.`,
+        };
+      } } },
+  ],
+};
+
+
+// ---- Dibujos interactivos de Electrónica Básica (tiza) ----
+const hot = (hl, k) => (hl.includes(k) ? "hot" : undefined);
+
+// Analogía del agua: tanque (voltaje), tubo angosto (resistencia), caudal (corriente)
+AULA_VISUALES.agua = function VisAgua({ p, valor, setValor, hl }) {
+  const V = valor.V ?? 12, R = valor.R ?? 100, I = V / R;
+  const nivel = Math.max(12, Math.min(150, (V / 48) * 150));
+  const ancho = Math.max(1.5, Math.min(10, 2 + 8 * (1 - Math.log10(R / 10) / Math.log10(500))));
+  const dur = durCorriente(I);
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 360 225" role="img" aria-label="Analogía del agua">
+        <g className={hot(hl, "V")}>
+          <path d="M20,22 V190 H110 V22" />
+          <rect x="22" y={190 - nivel} width="86" height={nivel} fill="rgba(159,208,240,.35)" stroke="none" />
+          <text x="65" y={182 - nivel} textAnchor="middle" className="b">altura</text>
+          <text x="65" y="214" textAnchor="middle" className="y">Voltaje = {fmtV(V)}</text>
+        </g>
+        <path d={`M110,170 H190 L200,${180 - ancho} H250 L260,170 H345`} />
+        <path d={`M110,186 H190 L200,${176 + ancho} H250 L260,186 H345`} />
+        <g className={hot(hl, "R")}><path d={`M200,${180 - ancho} H250 M200,${176 + ancho} H250`} style={{ strokeWidth: 3.5 }} /><text x="225" y="150" textAnchor="middle" className="p">tubo angosto = R</text><text x="225" y="208" textAnchor="middle">{fmtR(R)}</text></g>
+        {dur && <path className="cor" d="M112,178 H345" style={{ animationDuration: dur, stroke: "var(--chb)", strokeWidth: Math.max(2, ancho * 0.9) }} />}
+        <g className={hot(hl, "I")}><text x="310" y="122" textAnchor="middle" className="b">caudal = I</text><text x="300" y="208" textAnchor="middle" className="y">{fmtA(I)}</text></g>
+      </svg>
+      {!p.fija && <div className="perillas">
+        <Perilla etiqueta="Altura del tanque (V)" valor={V} min={1} max={48} onCambio={(x) => setValor({ V: x })} fmt={fmtV} />
+        <Perilla etiqueta="Tubo angosto (R)" valor={R} min={10} max={2000} paso={10} onCambio={(x) => setValor({ R: x })} fmt={fmtR} />
+      </div>}
+    </>
+  );
+};
+
+// Circuito de la Ley de Ohm con perillas
+AULA_VISUALES.ohm = function VisOhm({ p, valor, setValor, hl }) {
+  const V = valor.V ?? 12, R = valor.R ?? 100, I = V / R;
+  const oculta = p.ocultar || [];
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 340 225" role="img" aria-label={`Circuito: ${fmtV(V)} y ${fmtR(R)}`}>
+        <Hilo d="M50,105 V40 H120" I={I} />
+        <g className={hot(hl, "R")}><path d={zigzagH(120, 40, 80)} /><text x="160" y="24" textAnchor="middle" className="y">R = {oculta.includes("R") ? "?" : fmtR(R)}</text></g>
+        <Hilo d="M200,40 H290 V97" I={I} />
+        <g className={hot(hl, "I")}><circle className="t" cx="290" cy="120" r="22" /><text x="290" y="127" textAnchor="middle" style={{ fontSize: 20 }}>A</text></g>
+        <Hilo d="M290,143 V200 H50 V135" I={I} />
+        <g className={hot(hl, "V")}><Bateria x={50} y={120} /><text x="78" y="125" className="y">{oculta.includes("V") ? "V = ?" : fmtV(V)}</text></g>
+        <text x="190" y="118" textAnchor="middle" className="y" style={{ fontSize: 22 }}>I = {oculta.includes("I") ? "?" : fmtA(I)}</text>
+        <text x="190" y="146" textAnchor="middle" className="d">{oculta.length ? "" : `I = V ÷ R = ${redondeo(V)} ÷ ${redondeo(R)}`}</text>
+        <text x="170" y="222" textAnchor="middle" className="d">la corriente sale del + y vuelve al −</text>
+      </svg>
+      {!p.fija && <div className="perillas">
+        {!p.fijaV && <Perilla etiqueta="Voltaje V" valor={V} min={1} max={48} onCambio={(x) => setValor({ V: x })} fmt={fmtV} />}
+        <Perilla etiqueta="Resistencia R" valor={R} min={10} max={5000} paso={10} onCambio={(x) => setValor({ R: x })} fmt={fmtR} />
+      </div>}
+    </>
+  );
+};
+
+// Triángulo de la Ley de Ohm: se tapa la letra que se busca
+AULA_VISUALES.triangulo = function VisTriangulo({ valor, setValor, hl }) {
+  const tapa = valor.tapa || null;
+  const formula = { V: "V = I × R", I: "I = V ÷ R", R: "R = V ÷ I" }[tapa] || "Toque la letra que busca";
+  const letra = (k, x, y) => (
+    <g className={"toca " + (hot(hl, k) || "")} onClick={() => setValor({ tapa: tapa === k ? null : k })} role="button" aria-label={`Tapar ${k}`}>
+      <circle cx={x} cy={y - 12} r="30" fill={tapa === k ? "rgba(243,220,107,.85)" : "transparent"} stroke="none" />
+      <text x={x} y={y} textAnchor="middle" style={{ fontSize: 40, fontWeight: 700, fill: tapa === k ? "var(--ink)" : undefined }}>{k}</text>
+    </g>
+  );
+  return (
+    <svg className="ch" viewBox="0 0 300 235" role="img" aria-label="Triángulo de la ley de Ohm">
+      <path d="M150,14 L30,190 L270,190 Z" />
+      <line x1="80" y1="118" x2="220" y2="118" />
+      <line x1="150" y1="118" x2="150" y2="190" />
+      {letra("V", 150, 95)}{letra("I", 102, 170)}{letra("R", 198, 170)}
+      <text x="150" y="152" textAnchor="middle" className="d">×</text>
+      <text x="150" y="224" textAnchor="middle" className="y" style={{ fontSize: 20 }}>{formula}</text>
+    </svg>
+  );
+};
+
+// Resistencia con código de colores: cada banda se toca para cambiar
+const COLORES_RES = [["Negro", "#1a1a1a"], ["Café", "#7a4a1f"], ["Rojo", "#d62828"], ["Naranja", "#f77f00"], ["Amarillo", "#fcc419"], ["Verde", "#2f9e44"], ["Azul", "#1c7ed6"], ["Violeta", "#7048e8"], ["Gris", "#868e96"], ["Blanco", "#f8f9fa"]];
+const TOLERANCIAS_RES = [["Oro", "#d4af37", "±5%"], ["Plata", "#c0c0c0", "±10%"], ["Café", "#7a4a1f", "±1%"]];
+const valorBandas = (b) => (b[0] * 10 + b[1]) * Math.pow(10, b[2]);
+AULA_VISUALES.resistor = function VisResistor({ p, valor, setValor, hl }) {
+  const b = valor.b || [1, 0, 2, 0];
+  const cambiar = (i) => { if (p.fija) return; const n = b.slice(); n[i] = i === 3 ? (n[i] + 1) % 3 : i === 2 ? (n[i] + 1) % 7 : (n[i] + 1) % 10; if (i === 0 && n[0] === 0) n[0] = 1; setValor({ b: n }); };
+  const xs = [118, 150, 182, 236];
+  const nombres = ["1.ª cifra", "2.ª cifra", "× multiplicador", "tolerancia"];
+  return (
+    <svg className="ch" viewBox="0 0 360 235" role="img" aria-label={`Resistencia de ${fmtR(valorBandas(b))}`}>
+      <line x1="20" y1="90" x2="90" y2="90" style={{ strokeWidth: 3.5, stroke: "#c0c0c0" }} />
+      <line x1="270" y1="90" x2="340" y2="90" style={{ strokeWidth: 3.5, stroke: "#c0c0c0" }} />
+      <path d="M90,62 Q90,52 104,52 H122 Q132,60 142,60 H218 Q228,60 238,52 H256 Q270,52 270,62 V118 Q270,128 256,128 H238 Q228,120 218,120 H142 Q132,120 122,128 H104 Q90,128 90,118 Z" fill="#e9d8a6" stroke="#b08d57" strokeWidth="2" />
+      {xs.map((x, i) => {
+        const col = i === 3 ? TOLERANCIAS_RES[b[3]][1] : COLORES_RES[b[i]][1];
+        return (
+          <g key={i} className={"toca " + (hot(hl, "b" + i) || "")} onClick={() => cambiar(i)} role="button" aria-label={`Banda ${i + 1}: ${i === 3 ? TOLERANCIAS_RES[b[3]][0] : COLORES_RES[b[i]][0]}`}>
+            <rect x={x - 9} y={i === 0 || i === 3 ? 53 : 61} width="18" height={i === 0 || i === 3 ? 74 : 58} fill={col} stroke={hl.includes("b" + i) ? "#f3dc6b" : "rgba(0,0,0,.25)"} strokeWidth={hl.includes("b" + i) ? 3 : 1} />
+            <text x={x} y={150 + (i % 2) * 16} textAnchor="middle" className={hl.includes("b" + i) ? "y" : "d"}>{i === 3 ? TOLERANCIAS_RES[b[3]][0] : COLORES_RES[b[i]][0]}</text>
+            <text x={x} y={40 - (i % 2) * 14} textAnchor="middle" className="b" style={{ fontSize: 12 }}>{nombres[i]}</text>
+          </g>
+        );
+      })}
+      <text x="180" y="200" textAnchor="middle" className="y" style={{ fontSize: 22 }}>{p.ocultar ? "¿Cuánto vale?" : `${b[0]}${b[1]} × ${Math.pow(10, b[2]).toLocaleString("en-US")} = ${fmtR(valorBandas(b))} ${TOLERANCIAS_RES[b[3]][2]}`}</text>
+      <g>{COLORES_RES.map(([n, c], k) => <g key={k}><rect x={30 + k * 30} y="210" width="26" height="14" fill={c} stroke="rgba(255,255,255,.3)" /><text x={43 + k * 30} y="234" textAnchor="middle" className="d" style={{ fontSize: 11 }}>{k}</text></g>)}</g>
+      {!p.fija && <text x="350" y="20" textAnchor="end" className="d">☝ toque las bandas</text>}
+    </svg>
+  );
+};
+
+// Osciloscopio: corriente directa contra alterna
+AULA_VISUALES.dcac = function VisDcAc({ p, valor, setValor, hl }) {
+  const ac = valor.modo === "ac";
+  let seno = "M20,95";
+  for (let x = 0; x <= 420; x += 6) seno += ` L${20 + x},${95 - 55 * Math.sin((x / 120) * 2 * Math.PI)}`;
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 340 225" role="img" aria-label={ac ? "Corriente alterna" : "Corriente directa"}>
+        <defs><clipPath id="aulaPantalla"><rect x="20" y="20" width="300" height="150" /></clipPath></defs>
+        <rect className="t" x="20" y="20" width="300" height="150" rx="6" />
+        {[50, 80, 110, 140].map((y) => <line key={y} x1="20" y1={y} x2="320" y2={y} style={{ stroke: "var(--chd)", strokeWidth: 0.8 }} />)}
+        {[80, 140, 200, 260].map((x) => <line key={x} x1={x} y1="20" x2={x} y2="170" style={{ stroke: "var(--chd)", strokeWidth: 0.8 }} />)}
+        <line x1="20" y1="95" x2="320" y2="95" style={{ stroke: "var(--chd)", strokeWidth: 1.4 }} />
+        <text x="26" y="91" className="d">0 V</text>
+        <g clipPath="url(#aulaPantalla)" className={hot(hl, "onda")}>
+          {ac ? <g style={{ animation: "aulaOnda 2s linear infinite" }}><path d={seno} style={{ stroke: "var(--chy)", strokeWidth: 3 }} /></g>
+            : <path d="M20,55 H320" style={{ stroke: "var(--chy)", strokeWidth: 3 }} />}
+        </g>
+        <text x="314" y={ac ? 36 : 48} textAnchor="end" className="y">{ac ? "120 V~ · 60 Hz" : "+24 V⎓ fijo"}</text>
+        {ac && <text x="314" y="162" textAnchor="end" className="b">cambia de + a − 60 veces por segundo</text>}
+        <path d="M30,200 H310" />
+        {ac ? <g style={{ animation: "aulaVaiven .9s ease-in-out infinite" }}>{[80, 140, 200, 260].map((x) => <circle key={x} cx={x} cy="200" r="5" fill="var(--chy)" />)}</g>
+          : <path className="cor" d="M30,200 H310" style={{ animationDuration: "1s" }} />}
+        <text x="170" y="222" textAnchor="middle" className="d">{ac ? "los electrones van y vienen" : "los electrones van siempre en un sentido"}</text>
+      </svg>
+      {!p.fija && <div className="botones">
+        <button type="button" className="chip" aria-pressed={!ac} onClick={() => setValor({ modo: "dc" })}>DC · directa (batería)</button>
+        <button type="button" className="chip" aria-pressed={ac} onClick={() => setValor({ modo: "ac" })}>AC · alterna (red eléctrica)</button>
+      </div>}
+    </>
+  );
+};
+
+// Diodo y LED: solo deja pasar la corriente en un sentido
+AULA_VISUALES.diodo = function VisDiodo({ p, valor, setValor, hl }) {
+  const directo = valor.directo !== false;
+  const I = directo ? 0.02 : 0;
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 340 225" role="img" aria-label={directo ? "Diodo en directa: el LED enciende" : "Diodo en inversa: no pasa corriente"}>
+        <Hilo d="M50,105 V40 H110" I={I} />
+        <path d={zigzagH(110, 40, 60)} /><text x="140" y="26" textAnchor="middle" className="d">resistencia</text>
+        <Hilo d="M170,40 H290 V86" I={I} />
+        {directo && <circle cx="290" cy="101" r="26" fill="rgba(255,90,90,.45)" stroke="none" style={{ animation: "aulaBrillo 1.2s ease-in-out infinite" }} />}
+        <g className={hot(hl, "led")}>
+          <path d="M276,88 H304 L290,112 Z" style={{ fill: directo ? "#ff6b6b" : "transparent" }} />
+          <line x1="276" y1="112" x2="304" y2="112" />
+          <path d="M308,92 l14,-10 M316,100 l14,-10" style={{ stroke: directo ? "var(--chy)" : "var(--chd)" }} />
+        </g>
+        <text x="262" y="92" textAnchor="end" className={hot(hl, "anodo") ? "y" : "b"}>ánodo +</text>
+        <text x="262" y="122" textAnchor="end" className={hot(hl, "catodo") ? "y" : "b"}>cátodo −</text>
+        <Hilo d="M290,112 V200 H50 V135" I={I} />
+        <Bateria x={50} y={120} inv={!directo} />
+        <text x="170" y="130" textAnchor="middle" className={directo ? "y" : "p"} style={{ fontSize: 19 }}>{directo ? "Directa: pasa → LED encendido" : "Inversa: bloquea → apagado"}</text>
+        {!directo && <path d="M280,140 l20,20 M300,140 l-20,20" style={{ stroke: "var(--chp)", strokeWidth: 3 }} />}
+      </svg>
+      {!p.fija && <div className="botones"><button type="button" className="chip" onClick={() => setValor((v) => ({ ...v, directo: v.directo === false }))}>↕ Invertir la batería</button></div>}
+    </>
+  );
+};
+
+// Resistencias en serie (y Ley de voltajes de Kirchhoff)
+AULA_VISUALES.serie = function VisSerie({ p, valor, setValor, hl }) {
+  const V = valor.V ?? 24, R = [valor.R1 ?? 100, valor.R2 ?? 220, valor.R3 ?? 330];
+  const abierto = !!valor.abierto;
+  const Rt = R[0] + R[1] + R[2];
+  const I = abierto ? 0 : V / Rt;
+  const caida = R.map((r) => I * r);
+  const oc = p.ocultar || [];
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 360 240" role="img" aria-label="Tres resistencias en serie">
+        <Hilo d="M40,115 V40 H80" I={I} />
+        <g className={hot(hl, "R1")}><path d={zigzagH(80, 40, 70)} /><text x="115" y="22" textAnchor="middle">R₁ {oc.includes("R") ? "" : fmtR(R[0])}</text>{!oc.includes("Vn") && <text x="115" y="70" textAnchor="middle" className="y">{fmtV(caida[0])}</text>}</g>
+        <Hilo d="M150,40 H190" I={I} />
+        <g className={hot(hl, "R2")}>
+          {abierto ? <><path d="M190,40 H205 M245,40 H260" /><path d="M205,40 L238,22" style={{ stroke: "var(--chp)" }} /><text x="225" y="70" textAnchor="middle" className="p">abierta</text></> : <path d={zigzagH(190, 40, 70)} />}
+          <text x="225" y="22" textAnchor="middle">R₂ {oc.includes("R") ? "" : fmtR(R[1])}</text>{!abierto && !oc.includes("Vn") && <text x="225" y="70" textAnchor="middle" className="y">{fmtV(caida[1])}</text>}
+        </g>
+        <Hilo d="M260,40 H310 V90" I={I} />
+        <g className={hot(hl, "R3")}><path d={zigzagV(310, 90, 70)} /><text x="300" y="112" textAnchor="end">R₃</text><text x="300" y="130" textAnchor="end">{oc.includes("R") ? "" : fmtR(R[2])}</text>{!oc.includes("Vn") && <text x="300" y="150" textAnchor="end" className="y">{fmtV(caida[2])}</text>}</g>
+        <Hilo d="M310,160 V215 H40 V145" I={I} />
+        <g className={hot(hl, "V")}><Bateria x={40} y={130} /><text x="66" y="135" className="y">{fmtV(V)}</text></g>
+        <g className={hot(hl, "I")}><text x="175" y="120" textAnchor="middle" className="y" style={{ fontSize: 20 }}>I = {oc.includes("I") ? "?" : fmtA(I)}</text><text x="175" y="142" textAnchor="middle" className="d">la misma en todo el circuito</text></g>
+        <g className={hot(hl, "Rt")}><text x="175" y="170" textAnchor="middle" className="b">Rₜ = {oc.includes("Rt") ? "?" : `${redondeo(R[0])} + ${redondeo(R[1])} + ${redondeo(R[2])} = ${fmtR(Rt)}`}</text></g>
+        {p.malla && <text x="180" y="236" textAnchor="middle" className="g">{`${redondeo(V)} − ${redondeo(caida[0])} − ${redondeo(caida[1])} − ${redondeo(caida[2])} = 0`}</text>}
+      </svg>
+      {!p.fija && <><div className="perillas">
+        <Perilla etiqueta="V" valor={V} min={1} max={48} onCambio={(x) => setValor({ V: x })} fmt={fmtV} />
+        <Perilla etiqueta="R₁" valor={R[0]} min={10} max={1000} paso={10} onCambio={(x) => setValor({ R1: x })} fmt={fmtR} />
+        <Perilla etiqueta="R₂" valor={R[1]} min={10} max={1000} paso={10} onCambio={(x) => setValor({ R2: x })} fmt={fmtR} />
+        <Perilla etiqueta="R₃" valor={R[2]} min={10} max={1000} paso={10} onCambio={(x) => setValor({ R3: x })} fmt={fmtR} />
+      </div>
+      <div className="botones"><button type="button" className="chip" aria-pressed={abierto} onClick={() => setValor((v) => ({ ...v, abierto: !v.abierto }))}>{abierto ? "Volver a poner R₂" : "Quitar R₂ (abrir)"}</button></div></>}
+    </>
+  );
+};
+
+// Resistencias en paralelo (y Ley de corrientes de Kirchhoff)
+AULA_VISUALES.paralelo = function VisParalelo({ p, valor, setValor, hl }) {
+  const V = valor.V ?? 24, R = [valor.R1 ?? 100, valor.R2 ?? 200, valor.R3 ?? 300];
+  const on = valor.on || [1, 1, 1];
+  const Ir = R.map((r, k) => (on[k] ? V / r : 0));
+  const It = Ir[0] + Ir[1] + Ir[2];
+  const g = on.reduce((s, x, k) => s + (x ? 1 / R[k] : 0), 0);
+  const Rt = g ? 1 / g : Infinity;
+  const xs = [130, 210, 290];
+  const oc = p.ocultar || [];
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 360 240" role="img" aria-label="Tres resistencias en paralelo">
+        <Hilo d="M40,115 V40 H130" I={It} />
+        <Hilo d="M130,40 H210" I={Ir[1] + Ir[2]} />
+        <Hilo d="M210,40 H290" I={Ir[2]} />
+        <Hilo d="M290,215 H210" I={Ir[2]} />
+        <Hilo d="M210,215 H130" I={Ir[1] + Ir[2]} />
+        <Hilo d="M130,215 H40 V145" I={It} />
+        {xs.map((x, k) => (
+          <g key={k} className={"toca " + (hot(hl, "R" + (k + 1)) || "")} onClick={() => !p.fija && setValor((v) => { const o = (v.on || [1, 1, 1]).slice(); o[k] = o[k] ? 0 : 1; return { ...v, on: o }; })} role="button" aria-label={`Rama ${k + 1} ${on[k] ? "conectada" : "abierta"}`}>
+            <rect x={x - 26} y="60" width="52" height="120" fill="transparent" stroke="none" />
+            <Hilo d={`M${x},40 V95`} I={Ir[k]} />
+            {on[k] ? <path d={zigzagV(x, 95, 60)} /> : <><path d={`M${x},95 V105 M${x},145 V155`} /><path d={`M${x},105 L${x + 18},138`} style={{ stroke: "var(--chp)" }} /></>}
+            <Hilo d={`M${x},155 V215`} I={Ir[k]} />
+            <text x={x - 12} y="122" textAnchor="end" style={{ fontSize: 13 }}>R{"₁₂₃"[k]}</text>
+            <text x={x - 12} y="138" textAnchor="end" className="d">{oc.includes("R") ? "" : fmtR(R[k])}</text>
+            <text x={x + 12} y="196" className="y" style={{ fontSize: 13 }}>{oc.includes("In") ? "" : on[k] ? fmtA(Ir[k]) : "0"}</text>
+          </g>
+        ))}
+        <g className={hot(hl, "V")}><Bateria x={40} y={130} /><text x="20" y="175" className="y">{fmtV(V)}</text></g>
+        {p.nodo && <g className="hot"><circle className="t" cx="130" cy="40" r="9" /><text x="130" y="18" textAnchor="middle" className="g">nodo: Iₜ = I₁ + I₂ + I₃</text></g>}
+        <g className={hot(hl, "It")}><text x="70" y="235" className="y">Iₜ = {oc.includes("It") ? "?" : fmtA(It)}</text></g>
+        <g className={hot(hl, "Rt")}><text x="350" y="235" textAnchor="end" className="b">Rₜ = {oc.includes("Rt") ? "?" : fmtR(Rt)}</text></g>
+      </svg>
+      {!p.fija && <><div className="perillas">
+        <Perilla etiqueta="V (igual en todas)" valor={V} min={1} max={48} onCambio={(x) => setValor({ V: x })} fmt={fmtV} />
+        <Perilla etiqueta="R₁" valor={R[0]} min={10} max={1000} paso={10} onCambio={(x) => setValor({ R1: x })} fmt={fmtR} />
+        <Perilla etiqueta="R₂" valor={R[1]} min={10} max={1000} paso={10} onCambio={(x) => setValor({ R2: x })} fmt={fmtR} />
+        <Perilla etiqueta="R₃" valor={R[2]} min={10} max={1000} paso={10} onCambio={(x) => setValor({ R3: x })} fmt={fmtR} />
+      </div><div style={{ textAlign: "center", fontFamily: "var(--tiza)", color: "var(--chd)", fontSize: ".9rem" }}>☝ toque una resistencia para abrir o cerrar su rama</div></>}
+    </>
+  );
+};
+
+// Potencia en un circuito NAC: sirenas con luz en paralelo y la capacidad del panel
+AULA_VISUALES.potencia = function VisPotencia({ p, valor, setValor, hl }) {
+  const n = valor.n ?? 4, i = valor.i ?? 0.15, V = 24, cap = p.cap || 2;
+  const I = n * i, P = V * I, pasa = I > cap + 1e-9;
+  const vis = Math.min(n, 8);
+  const xs = Array.from({ length: vis }, (_, k) => 120 + k * (215 / Math.max(vis, 1)));
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 360 235" role="img" aria-label={`${n} sirenas en un circuito NAC`}>
+        <g className={hot(hl, "panel")}>
+          <rect x="8" y="50" width="86" height="120" rx="6" fill="rgba(0,0,0,.18)" stroke="var(--ch)" strokeWidth="2.4" />
+          <text x="51" y="76" textAnchor="middle" className="b">Panel</text>
+          <text x="51" y="100" textAnchor="middle" style={{ fontSize: 13 }}>NAC 24 V⎓</text>
+          <text x="51" y="122" textAnchor="middle" className={pasa ? "p" : "d"}>máx {redondeo(cap)} A</text>
+          <circle cx="51" cy="148" r="7" fill={pasa ? "#ff6b6b" : "#69db7c"} stroke="none" style={pasa ? { animation: "aulaBrillo .6s infinite" } : undefined} />
+        </g>
+        <Hilo d="M94,80 H345" I={pasa ? 0 : I} />
+        <Hilo d="M345,150 H94" I={pasa ? 0 : I} />
+        <g><path d={zigzagV(345, 92, 46)} /><text x="340" y="182" textAnchor="end" className="d">RFL</text></g>
+        {xs.map((x, k) => <g key={k}><line x1={x + 14} y1="80" x2={x + 14} y2="96" /><line x1={x + 14} y1="128" x2={x + 14} y2="150" /><g transform={`translate(${x},96)`} dangerouslySetInnerHTML={{ __html: iconoSalida("Luz y bocina", !pasa, 30) }} /></g>)}
+        {n > 8 && <text x="330" y="70" textAnchor="end" className="b">+ {n - 8} más</text>}
+        <g className={hot(hl, "I")}><text x="180" y="192" textAnchor="middle" className="y">I = {n} × {fmtA(i)} = {fmtA(I)}</text></g>
+        <g className={hot(hl, "P")}><text x="180" y="214" textAnchor="middle" className="b">P = V × I = 24 × {redondeo(I)} = {fmtW(P)}</text></g>
+        {pasa && <text x="180" y="40" textAnchor="middle" className="p" style={{ fontSize: 17 }}>¡Sobrecarga! El panel corta el circuito</text>}
+      </svg>
+      {!p.fija && <div className="perillas">
+        <Perilla etiqueta="Cantidad de sirenas" valor={n} min={1} max={20} onCambio={(x) => setValor({ n: x })} />
+        {!p.fijaI && <Perilla etiqueta="Corriente de cada una" valor={i} min={0.05} max={0.5} paso={0.01} onCambio={(x) => setValor({ i: x })} fmt={fmtA} />}
+      </div>}
+    </>
+  );
+};
+
+// Multímetro: selector, puntas en paralelo o en serie, con o sin energía
+const MODOS_MULTI = [["off", "OFF", -90], ["vdc", "V⎓", -35], ["vac", "V~", -145], ["ohm", "Ω", 35], ["adc", "A⎓", 145]];
+const lecturaMultimetro = (v) => {
+  const { modo = "off", con = null, energia = true } = v;
+  if (modo === "off") return { lcd: "", nota: "Gire el selector" };
+  if (!con) return { lcd: modo === "ohm" ? "OL" : "0.00", nota: "Conecte las puntas" };
+  if (energia) {
+    if (modo === "vdc") return con === "paralelo" ? { lcd: "24.00", u: "V", ok: "v" } : { lcd: "24.00", u: "V", nota: "En serie el voltímetro corta el circuito: se mide en paralelo." };
+    if (modo === "vac") return { lcd: "0.00", u: "V~", nota: "Es corriente directa: use V⎓." };
+    if (modo === "ohm") return { lcd: "Err", nota: "¡Nunca mida ohmios con el circuito energizado!", malo: true };
+    if (modo === "adc") return con === "serie" ? { lcd: "24.0", u: "mA", ok: "a" } : { lcd: "FUSE", nota: "¡En paralelo es un cortocircuito! Se quema el fusible.", malo: true };
+  } else {
+    if (modo === "ohm") return con === "paralelo" ? { lcd: "1.000", u: "kΩ", ok: "r" } : { lcd: "OL", nota: "Para medir la resistencia, póngala entre las puntas (en paralelo)." };
+    return { lcd: "0.00", u: modo === "adc" ? "mA" : "V", nota: "Sin energía no hay voltaje ni corriente." };
+  }
+  return { lcd: "" };
+};
+AULA_VISUALES.multimetro = function VisMultimetro({ p, valor, setValor, hl }) {
+  const v = { modo: "off", con: null, energia: true, ...valor };
+  const L = lecturaMultimetro(v);
+  const ang = (MODOS_MULTI.find((m) => m[0] === v.modo) || MODOS_MULTI[0])[2] * Math.PI / 180;
+  // la corriente circula si hay energía y el lazo está cerrado (en serie, solo el amperímetro lo cierra)
+  const Ic = v.energia && !(v.con === "serie" && v.modo !== "adc") ? 0.024 : 0;
+  // puntas: en paralelo van a la batería (o a la resistencia si no hay energía); en serie van al corte del cable derecho
+  const tRojo = v.con === "paralelo" ? (v.energia ? [212, 104] : [240, 40]) : v.con === "serie" ? [340, 104] : null;
+  const tNegro = v.con === "paralelo" ? (v.energia ? [212, 138] : [300, 40]) : v.con === "serie" ? [340, 140] : null;
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 360 250" role="img" aria-label={`Multímetro en ${v.modo}`}>
+        <g className={hot(hl, "multi")}>
+          <rect x="8" y="8" width="150" height="232" rx="16" fill="#f59f00" stroke="#c77700" strokeWidth="2" />
+          <rect x="20" y="20" width="126" height="56" rx="6" fill="#c3d9b0" stroke="#5c6b4e" strokeWidth="2" />
+          <text x="138" y="58" textAnchor="end" style={{ fill: "#1b2321", fontFamily: "'Courier New',monospace", fontSize: 28, fontWeight: 700 }}>{L.lcd}</text>
+          <text x="138" y="72" textAnchor="end" style={{ fill: "#1b2321", fontSize: 11, fontFamily: "Arial" }}>{L.u || ""}</text>
+          <circle cx="83" cy="145" r="44" fill="#343a40" stroke="#212529" strokeWidth="3" />
+          <line x1="83" y1="145" x2={83 + 34 * Math.cos(ang)} y2={145 + 34 * Math.sin(ang)} style={{ stroke: "#f8f9fa", strokeWidth: 6 }} />
+          {MODOS_MULTI.map(([k, t, a]) => {
+            const r = a * Math.PI / 180, x = 83 + 62 * Math.cos(r), y = 150 + 58 * Math.sin(r);
+            return <g key={k} className="toca" onClick={() => !p.fija && setValor({ modo: k })} role="button" aria-label={`Selector en ${t}`}>
+              <circle cx={x} cy={y - 5} r="14" fill={v.modo === k ? "#1b2321" : "rgba(255,255,255,.35)"} stroke="none" />
+              <text x={x} y={y} textAnchor="middle" style={{ fill: v.modo === k ? "#f3dc6b" : "#1b2321", fontFamily: "Arial", fontWeight: 700, fontSize: 12 }}>{t}</text>
+            </g>;
+          })}
+          {[["COM", 40, "#1b2321"], ["VΩ", 83, "#e03131"], ["A", 126, "#e03131"]].map(([t, x, c]) => <g key={t}><circle cx={x} cy="222" r="7" fill={c} stroke="#212529" /><text x={x} y="210" textAnchor="middle" style={{ fill: "#1b2321", fontSize: 10, fontFamily: "Arial", fontWeight: 700 }}>{t}</text></g>)}
+        </g>
+        {/* circuito */}
+        <Hilo d="M212,104 V40 H240" I={Ic} />
+        <path d={zigzagH(240, 40, 60)} /><text x="270" y="26" textAnchor="middle" className="d">1 kΩ</text>
+        {v.con === "serie" ? <><Hilo d="M300,40 H340 V104" I={Ic} /><Hilo d="M340,140 V205 H212 V140" I={Ic} /></> : <><Hilo d="M300,40 H340 V205 H212 V140" I={Ic} /></>}
+        {v.energia ? <g className={hot(hl, "bat")}><Bateria x={212} y={122} /><text x="234" y="128" className="y">24 V</text></g>
+          : <><path d="M196,117 h32 M204,127 h16" style={{ stroke: "var(--chd)", strokeDasharray: "4 4" }} /><text x="236" y="128" className="d">sin batería</text></>}
+        {tRojo && <path d={`M${tRojo[0]},${tRojo[1]} C${tRojo[0] - 30},${tRojo[1] + 70} 150,${235} ${v.modo === "adc" ? 126 : 83},222`} style={{ stroke: "#ff6b6b", strokeWidth: 3 }} />}
+        {tNegro && <path d={`M${tNegro[0]},${tNegro[1]} C${tNegro[0] - 40},${tNegro[1] + 90} 120,${248} 40,222`} style={{ stroke: "#adb5bd", strokeWidth: 3 }} />}
+        {L.nota && <text x="262" y="236" textAnchor="middle" className={L.malo ? "p" : "b"} style={{ fontSize: 12 }}>{L.nota.length > 44 ? L.nota.slice(0, 44) + "…" : L.nota}</text>}
+      </svg>
+      {L.nota && L.nota.length > 44 && <div style={{ textAlign: "center", fontFamily: "var(--tiza)", color: L.malo ? "var(--chp)" : "var(--chb)", fontSize: ".95rem", lineHeight: 1.2 }}>{L.nota}</div>}
+      {!p.fija && <div className="botones">
+        <button type="button" className="chip" aria-pressed={v.con === "paralelo"} onClick={() => setValor({ con: "paralelo" })}>Puntas en paralelo</button>
+        <button type="button" className="chip" aria-pressed={v.con === "serie"} onClick={() => setValor({ con: "serie" })}>Puntas en serie</button>
+        <button type="button" className="chip" aria-pressed={!v.energia} onClick={() => setValor((x) => ({ ...x, energia: x.energia === false }))}>{v.energia ? "⚡ Quitar la energía" : "⚡ Poner la energía"}</button>
+      </div>}
+    </>
+  );
+};
+
+// Thevenin y Norton: el mismo circuito visto de tres formas
+AULA_VISUALES.thevenin = function VisThevenin({ p, valor, setValor, hl }) {
+  const V = valor.V ?? 24, R1 = valor.R1 ?? 1000, R2 = valor.R2 ?? 1000, RL = valor.RL ?? 1000;
+  const vista = valor.vista || "original";
+  const Vth = V * R2 / (R1 + R2), Rth = R1 * R2 / (R1 + R2), In = Vth / Rth;
+  const IL = Vth / (Rth + RL), VL = IL * RL;
+  const oc = p.ocultar || [];
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 360 235" role="img" aria-label={`Circuito ${vista}`}>
+        {vista === "original" && <>
+          <Bateria x={40} y={120} /><text x="64" y="125" className="y">{fmtV(V)}</text>
+          <Hilo d="M40,105 V40 H80" I={V / (R1 + R2 * RL / (R2 + RL))} />
+          <g className={hot(hl, "R1")}><path d={zigzagH(80, 40, 70)} /><text x="115" y="24" textAnchor="middle">R₁ {fmtR(R1)}</text></g>
+          <Hilo d="M150,40 H220" I={V / (R1 + R2 * RL / (R2 + RL))} />
+          <Hilo d="M220,40 V80" I={VL / R2} />
+          <g className={hot(hl, "R2")}><path d={zigzagV(220, 80, 60)} /><text x="210" y="105" textAnchor="end">R₂</text><text x="210" y="121" textAnchor="end" className="d">{fmtR(R2)}</text></g>
+          <Hilo d="M220,140 V200" I={VL / R2} />
+          <Hilo d="M220,40 H300 V80" I={IL} />
+          <Hilo d="M300,140 V200 H40 V135" I={IL} />
+        </>}
+        {vista === "thevenin" && <>
+          <g className="hot"><Bateria x={40} y={120} /></g><text x="64" y="118" className="y">Vth</text><text x="64" y="136" className="y">{oc.includes("Vth") ? "?" : fmtV(Vth)}</text>
+          <Hilo d="M40,105 V40 H120" I={IL} />
+          <g className="hot"><path d={zigzagH(120, 40, 70)} /><text x="155" y="24" textAnchor="middle">Rth {oc.includes("Rth") ? "?" : fmtR(Rth)}</text></g>
+          <Hilo d="M190,40 H300 V80" I={IL} />
+          <Hilo d="M300,140 V200 H40 V135" I={IL} />
+          <text x="170" y="110" textAnchor="middle" className="b">Vth = V · R₂ ÷ (R₁ + R₂)</text>
+          <text x="170" y="132" textAnchor="middle" className="b">Rth = R₁ ∥ R₂ (fuente en corto)</text>
+        </>}
+        {vista === "norton" && <>
+          <g className="hot"><circle className="t" cx="60" cy="120" r="22" /><path d="M60,134 V104 M52,112 L60,102 L68,112" /></g>
+          <text x="60" y="160" textAnchor="middle" className="y">In {fmtA(In)}</text>
+          <Hilo d="M60,98 V40 H300 V80" I={In} />
+          <Hilo d="M160,40 V80" I={In - IL} />
+          <g className="hot"><path d={zigzagV(160, 80, 60)} /><text x="172" y="112">Rn</text><text x="172" y="128" className="d">{fmtR(Rth)}</text></g>
+          <Hilo d="M160,140 V200" I={In - IL} />
+          <Hilo d="M300,140 V200 H60 V142" I={In} />
+          <text x="230" y="230" textAnchor="middle" className="b">In = Vth ÷ Rth</text>
+        </>}
+        <g className={hot(hl, "RL")}><path d={zigzagV(300, 80, 60)} /><text x="312" y="105">RL</text><text x="312" y="121" className="d">{fmtR(RL)}</text></g>
+        <text x="300" y="34" textAnchor="middle" className="b">a</text><text x="300" y="218" textAnchor="middle" className="b">b</text>
+        <text x="350" y="160" textAnchor="end" className="y">{oc.includes("VL") ? "" : `VL ${fmtV(VL)}`}</text>
+        <text x="350" y="178" textAnchor="end" className="y">{oc.includes("VL") ? "" : `IL ${fmtA(IL)}`}</text>
+      </svg>
+      {!p.fija && <><div className="botones">
+        {[["original", "Circuito original"], ["thevenin", "Equivalente Thevenin"], ["norton", "Equivalente Norton"]].map(([k, t]) => <button key={k} type="button" className="chip" aria-pressed={vista === k} onClick={() => setValor({ vista: k })}>{t}</button>)}
+      </div>
+      <div className="perillas"><Perilla etiqueta="Carga RL" valor={RL} min={100} max={5000} paso={100} onCambio={(x) => setValor({ RL: x })} fmt={fmtR} /></div></>}
+    </>
+  );
+};
+
+// Superposición: dos fuentes, se analiza una a la vez
+AULA_VISUALES.superposicion = function VisSuper({ p, valor, setValor, hl }) {
+  const V1 = valor.V1 ?? 12, V2 = valor.V2 ?? 6, R1 = 100, R2 = 100, R3 = 100;
+  const act = valor.activa || "ambas";
+  const vn = (a, b) => (a / R1 + b / R2) / (1 / R1 + 1 / R2 + 1 / R3);
+  const I3a = vn(V1, 0) / R3, I3b = vn(0, V2) / R3;
+  const e1 = act !== "v2", e2 = act !== "v1";
+  const I3 = (e1 ? I3a : 0) + (e2 ? I3b : 0);
+  const Vn = I3 * R3;
+  const I1 = e1 || e2 ? ((e1 ? V1 : 0) - Vn) / R1 : 0, I2 = ((e2 ? V2 : 0) - Vn) / R2;
+  const fuente = (x, on, et, k) => on ? <g className={hot(hl, k)}><Bateria x={x} y={120} /><text x={x + (x < 180 ? 30 : -30)} y="125" textAnchor={x < 180 ? "start" : "end"} className="y">{et}</text></g>
+    : <g><line x1={x} y1="105" x2={x} y2="135" style={{ stroke: "var(--chb)", strokeDasharray: "5 4" }} /><text x={x + (x < 180 ? 10 : -10)} y="160" textAnchor={x < 180 ? "start" : "end"} className="b">en corto</text></g>;
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 360 235" role="img" aria-label="Circuito con dos fuentes">
+        {fuente(40, e1, `V₁ ${redondeo(V1)} V`, "V1")}
+        {fuente(320, e2, `V₂ ${redondeo(V2)} V`, "V2")}
+        <Hilo d="M40,105 V40 H80" I={I1} inverso={I1 < 0} />
+        <path d={zigzagH(80, 40, 60)} /><text x="110" y="24" textAnchor="middle" className="d">R₁ 100 Ω</text>
+        <Hilo d="M140,40 H180" I={I1} inverso={I1 < 0} />
+        <Hilo d="M320,105 V40 H280" I={I2} inverso={I2 < 0} />
+        <path d={zigzagH(220, 40, 60)} /><text x="250" y="24" textAnchor="middle" className="d">R₂ 100 Ω</text>
+        <Hilo d="M220,40 H180" I={I2} inverso={I2 < 0} />
+        <Hilo d="M180,40 V85" I={I3} />
+        <g className={hot(hl, "R3")}><path d={zigzagV(180, 85, 55)} /><text x="192" y="112">R₃</text><text x="192" y="128" className="d">100 Ω</text></g>
+        <Hilo d="M180,140 V200" I={I3} />
+        <path d="M40,135 V200 H320 V135" />
+        <text x="180" y="222" textAnchor="middle" className="y">I₃ = {fmtA(I3)}</text>
+        <text x="80" y="176" className="b" style={{ fontSize: 12 }}>solo V₁: {fmtA(I3a)}</text>
+        <text x="280" y="176" textAnchor="end" className="b" style={{ fontSize: 12 }}>solo V₂: {fmtA(I3b)}</text>
+      </svg>
+      {!p.fija && <div className="botones">
+        {[["v1", "Solo V₁"], ["v2", "Solo V₂"], ["ambas", "Las dos (suma)"]].map(([k, t]) => <button key={k} type="button" className="chip" aria-pressed={act === k} onClick={() => setValor({ activa: k })}>{t}</button>)}
+      </div>}
+    </>
+  );
+};
+
+
+// ---- Clase de Electrónica Básica en el aula ----
+const PRON_ELECTRONICA = [
+  [/R₁/g, "R uno"], [/R₂/g, "R dos"], [/R₃/g, "R tres"], [/Rₜ/g, "R total"], [/Iₜ/g, "I total"], [/I₁/g, "I uno"], [/I₂/g, "I dos"], [/I₃/g, "I tres"], [/V₁/g, "V uno"], [/V₂/g, "V dos"], [/V₃/g, "V tres"],
+  [/(\d)\s*kΩ/g, "$1 kiloohmios"], [/(\d)\s*MΩ/g, "$1 megaohmios"], [/(\d)\s*Ω/g, "$1 ohmios"], [/(\d)\s*mA\b/g, "$1 miliamperios"], [/(\d)\s*A\b/g, "$1 amperios"],
+  [/(\d)\s*mW\b/g, "$1 milivatios"], [/(\d)\s*W\b/g, "$1 vatios"], [/(\d)\s*Ah\b/g, "$1 amperios hora"], [/(\d)\s*Hz\b/g, "$1 hercios"], [/(\d)\s*V\b/g, "$1 voltios"],
+  [/×/g, " por "], [/÷/g, " entre "], [/\bRFL\b/g, "resistencia de fin de línea"], [/\bDC\b/g, "de ce"], [/\bAC\b/g, "a ce"], [/\bLED\b/g, "led"], [/\bNAC\b/g, "nac"], [/\bIDC\b/g, "i de ce"], [/\bLKC\b/g, "ley de corrientes"], [/\bLKV\b/g, "ley de voltajes"],
+];
+const AULA_ELECTRONICA = {
+  titulo: "Electrónica básica", corto: "Electrónica básica", marca: "Entrenamiento A&D · Electrónica",
+  intro: "Clase con voz y simuladores: voltaje, corriente y resistencia, Ley de Ohm, código de colores, diodos, serie y paralelo, potencia, multímetro, Kirchhoff, Thevenin y Norton. Mueva las perillas y resuelva los ejercicios.",
+  pronuncia: PRON_ELECTRONICA,
+  textoDirecto: "Ir directo al examen",
+  etiquetaPuntos: "Práctica de electrónica (aula)",
+  despedida: "¡Felicidades, {nombre}! Terminó la clase de electrónica básica. Ahora puede practicar con problemas nuevos o ir al examen por niveles.",
+  resumen: ["V = I × R y sus despejes", "Código de colores y la RFL de 4.7 kΩ", "DC contra AC, diodos y LED", "Serie: misma corriente · Paralelo: mismo voltaje", "P = V × I y la capacidad de un NAC", "Cómo medir V, A y Ω con el multímetro", "Kirchhoff, superposición, Thevenin y Norton"],
+  temas: [
+    { tab: "Bases", pasos: [
+      { titulo: "Bienvenida", visual: { tipo: "agua", inicio: { V: 12, R: 100 } }, beats: [
+        { t: "¡Hola, {nombre}! Bienvenido a la clase de electrónica básica. Vamos con calma: le explico en la pizarra y usted juega con los simuladores.", add: [["h", "Electrónica básica"]] },
+        { t: "Todo lo que hacemos en un sistema de alarma depende de tres magnitudes: el voltaje, la corriente y la resistencia. Si entiende estas tres, entiende casi todo.", add: [["n", "Voltaje (V) · Corriente (I) · Resistencia (R)"]] },
+        { t: "Para imaginarlas, pensemos en agua que baja de un tanque por un tubo.", add: [["n", "Pensemos en agua…"]] },
+      ] },
+      { titulo: "Voltaje, corriente y resistencia", visual: { tipo: "agua", inicio: { V: 12, R: 100 } }, beats: [
+        { t: "El voltaje es como la altura del tanque: es la presión que empuja. Si subo el tanque, el agua sale con más fuerza.", add: [["n", "Voltaje = presión que empuja (voltios, V)"]], hl: ["V"], set: { V: 36 } },
+        { t: "La corriente es el caudal: cuánta agua pasa por el tubo cada segundo. Fíjese cómo corre más rápido.", add: [["n", "Corriente = caudal que pasa (amperios, A)"]], hl: ["I"] },
+        { t: "Y la resistencia es un tubo angosto: frena el paso. Si lo hago más angosto, pasa menos agua aunque la altura sea la misma.", add: [["n", "Resistencia = lo que frena (ohmios, Ω)"]], hl: ["R"], set: { R: 900 } },
+        { t: "Mueva usted las perillas: suba la altura y angoste el tubo, y mire el caudal.", add: [["r", "Más V → más I · Más R → menos I"]], set: { V: 12, R: 100 } },
+      ], ejercicio: { tipo: "opcion", t: "Pregunta: en la analogía del agua, ¿qué representa el caudal?", pregunta: "En la analogía, el caudal de agua representa…", opciones: ["La corriente", "El voltaje", "La resistencia"], correcta: 0,
+        bien: "El caudal es la corriente: cuánta carga pasa por segundo.", pista: "El voltaje es la altura y la resistencia el tubo angosto. ¿Qué queda?" } },
+      { titulo: "Unidades y prefijos", beats: [
+        { t: "Cada magnitud tiene su unidad. El voltaje se mide en voltios, la corriente en amperios y la resistencia en ohmios, con la letra griega omega.", add: [["h", "Unidades"], ["n", "V → voltios · I → amperios · R → ohmios (Ω)"]] },
+        { t: "En alarmas casi siempre trabajamos con corrientes pequeñas, en miliamperios. Un miliamperio es la milésima parte de un amperio.", add: [["f", "1 A = 1000 mA"], ["n", "0.02 A = 20 mA"]] },
+        { t: "Y las resistencias suelen venir en kiloohmios: un kiloohmio son mil ohmios. Por ejemplo, la resistencia de fin de línea de 4.7 kΩ son 4700 Ω.", add: [["f", "1 kΩ = 1000 Ω"], ["n", "4.7 kΩ = 4700 Ω"]] },
+        { t: "Un truco: para pasar de amperios a miliamperios, multiplique por mil. Para volver, divida entre mil.", add: [["r", "A × 1000 = mA   ·   mA ÷ 1000 = A"]] },
+      ], ejercicio: { tipo: "numero", t: "Ejercicio: ¿cuántos miliamperios son 0.15 A? Esa es la corriente típica de una sirena con luz.", pregunta: "0.15 A = ¿cuántos mA?", unidad: "mA", respuesta: 150, tol: 0.01,
+        unidadAlt: [0.001, "Ese número está en amperios. Páselo a miliamperios multiplicando por mil."], bien: "0.15 por mil da 150 miliamperios.", pista: "Multiplique 0.15 por mil." } },
+    ] },
+    { tab: "Ley de Ohm", pasos: [
+      { titulo: "La fórmula y el triángulo", visual: { tipo: "triangulo", inicio: { tapa: null } }, beats: [
+        { t: "Ahora la ley más importante de la electrónica: la Ley de Ohm. Dice que el voltaje es igual a la corriente por la resistencia.", add: [["h", "Ley de Ohm"], ["f", "V = I × R"]] },
+        { t: "Para no aprenderse tres fórmulas, use el triángulo. Tape con el dedo la letra que busca, y lo que queda le dice qué hacer.", add: [["n", "Tape la que busca"]] },
+        { t: "Si busca la corriente, tape la I: queda V sobre R. Entonces I es V entre R.", set: { tapa: "I" }, add: [["f", "I = V ÷ R"]] },
+        { t: "Si busca la resistencia, tape la R: queda V sobre I. R es V entre I.", set: { tapa: "R" }, add: [["f", "R = V ÷ I"]] },
+        { t: "Y si busca el voltaje, tape la V: quedan I y R una al lado de la otra, se multiplican.", set: { tapa: "V" }, add: [["r", "Una arriba de otra: se divide · lado a lado: se multiplica"]] },
+      ] },
+      { titulo: "Simulador de la Ley de Ohm", visual: { tipo: "ohm", inicio: { V: 12, R: 100 } }, beats: [
+        { t: "Este es un circuito sencillo: una batería, una resistencia y un amperímetro que mide la corriente.", add: [["h", "El circuito más simple"]], hl: ["V", "R", "I"] },
+        { t: "Con 12 V y 100 Ω, la corriente es 12 entre 100: 0.12 A, o sea 120 miliamperios.", add: [["n", "12 ÷ 100 = 0.12 A = 120 mA"]], hl: ["I"] },
+        { t: "Si duplico el voltaje a 24 V, la corriente también se duplica. Mire cómo corren más rápido los puntos.", set: { V: 24 }, add: [["n", "V × 2 → I × 2"]], hl: ["V", "I"] },
+        { t: "Pero si duplico la resistencia a 200 Ω, la corriente baja a la mitad otra vez.", set: { R: 200 }, add: [["n", "R × 2 → I ÷ 2"]], hl: ["R", "I"] },
+        { t: "Pruebe usted con las perillas. Fíjese que la corriente sube con el voltaje y baja con la resistencia.", set: { V: 12, R: 100 }, add: [["r", "La corriente sigue al voltaje y huye de la resistencia"]] },
+      ] },
+      { titulo: "Ejercicio: calcule la corriente", visual: { tipo: "ohm", fija: true, ocultar: ["I"], inicio: { V: 24, R: 1200 } }, beats: [],
+        ejercicio: { tipo: "numero", t: "Calcule: una fuente de 24 V alimenta una resistencia de 1200 Ω. ¿Cuántos miliamperios pasan?", pregunta: "24 V y 1200 Ω. ¿Cuánta corriente? (en mA)", unidad: "mA", respuesta: 20, tol: 0.02,
+          unidadAlt: [0.001, "Va bien, pero ese resultado está en amperios. Páselo a miliamperios."], bien: "24 entre 1200 da 0.02 amperios, que son 20 miliamperios.", pista: "Use I = V ÷ R: divida 24 entre 1200 y multiplique por mil." } },
+      { titulo: "Ejercicio: ajuste la resistencia", visual: { tipo: "ohm", fijaV: true, inicio: { V: 12, R: 1000 } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Ahora con el simulador. La fuente está fija en 12 V. Mueva la resistencia hasta que pasen exactamente 0.1 A, o sea 100 miliamperios.", pregunta: "Con 12 V, logre que pasen 100 mA.", indicacion: "Mueva la perilla de resistencia.",
+          revisar: (v) => { const I = v.V / v.R; if (Math.abs(I - 0.1) <= 0.003) return true; return I < 0.1 ? "Todavía pasa poca corriente: baje la resistencia." : "Se pasó: hay mucha corriente, suba un poco la resistencia."; },
+          bien: "R = V ÷ I = 12 ÷ 0.1 = 120 Ω." } },
+      { titulo: "Caso real: la resistencia de fin de línea", visual: { tipo: "ohm", fija: true, inicio: { V: 24, R: 4700 } }, beats: [
+        { t: "Veamos un caso real. En un circuito de detectores, el panel pone una resistencia al final de la línea, la RFL, por ejemplo de 4.7 kΩ.", add: [["h", "RFL: resistencia de fin de línea"]], hl: ["R"] },
+        { t: "Con 24 V, pasa una corriente pequeñita de unos 5 miliamperios. Esa corriente de supervisión le dice al panel que el cable está sano.", add: [["n", "24 ÷ 4700 ≈ 5 mA → cable sano"]], hl: ["I"] },
+        { t: "Si alguien corta el cable, la corriente baja a cero y el panel marca avería, que también se llama problema o trouble.", add: [["w", "Cable cortado → I = 0 → avería"]] },
+        { t: "Y si el cable hace corto, o un detector entra en alarma, la resistencia baja muchísimo y la corriente sube: el panel lo nota enseguida.", add: [["r", "La Ley de Ohm es la que supervisa sus circuitos"]] },
+      ], ejercicio: { tipo: "opcion", t: "Pregunta: si se corta el cable de una zona supervisada, ¿qué ve el panel?", pregunta: "Se corta el cable de la zona. ¿Qué ve el panel?", opciones: ["Corriente cero: avería", "Mucha corriente: alarma", "Nada cambia"], correcta: 0,
+        bien: "Sin camino, no hay corriente de supervisión y el panel indica avería.", pista: "Piense: si el cable se abre, ¿puede pasar corriente por la RFL?" } },
+    ] },
+    { tab: "Colores", pasos: [
+      { titulo: "Código de colores", visual: { tipo: "resistor", inicio: { b: [1, 0, 2, 0] } }, beats: [
+        { t: "Las resistencias son tan pequeñas que su valor no se escribe con números: se pinta con bandas de colores.", add: [["h", "Código de colores"]] },
+        { t: "Las dos primeras bandas son cifras. Café vale uno y negro vale cero: forman el número diez.", hl: ["b0", "b1"], add: [["n", "Café = 1 · Negro = 0 → 10"]] },
+        { t: "La tercera es el multiplicador: dice cuántos ceros agregar. Rojo vale dos, así que se agregan dos ceros: mil ohmios.", hl: ["b2"], add: [["f", "10 × 100 = 1000 Ω = 1 kΩ"]] },
+        { t: "La cuarta, dorada, es la tolerancia: el valor real puede variar un cinco por ciento.", hl: ["b3"], add: [["n", "Oro = ±5%"]] },
+        { t: "Ahora la famosa de fin de línea: amarillo, violeta, rojo. Amarillo cuatro, violeta siete, y dos ceros: 4700 ohmios.", set: { b: [4, 7, 2, 0] }, add: [["r", "Amarillo-Violeta-Rojo = 4.7 kΩ (RFL)"]] },
+        { t: "Abajo tiene la tabla de colores del cero al nueve. Toque las bandas para practicar.", add: [["n", "Negro 0 · Café 1 · Rojo 2 · Naranja 3 · Amarillo 4 · Verde 5 · Azul 6 · Violeta 7 · Gris 8 · Blanco 9"]] },
+      ] },
+      { titulo: "Ejercicio: lea la resistencia", visual: { tipo: "resistor", fija: true, ocultar: true, inicio: { b: [2, 2, 1, 0] } }, beats: [],
+        ejercicio: { tipo: "opcion", t: "¿Cuánto vale esta resistencia? Rojo, rojo, café y oro.", pregunta: "Rojo-Rojo-Café-Oro vale…", opciones: ["220 Ω", "22 Ω", "2.2 kΩ", "221 Ω"], correcta: 0,
+          bien: "Rojo dos, rojo dos, y café agrega un cero: 220 ohmios.", pista: "Las dos primeras forman el número; el café agrega un solo cero.", pistas: { 3: "El café de la tercera banda no es una cifra: es el multiplicador." } } },
+      { titulo: "Ejercicio: arme la RFL", visual: { tipo: "resistor", inicio: { b: [1, 0, 0, 0] } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Ahora arme usted una resistencia de 4.7 kΩ tocando las bandas.", pregunta: "Arme una resistencia de 4.7 kΩ.", indicacion: "Toque cada banda hasta el color correcto.",
+          revisar: (v) => { const b = v.b || []; if (b[0] === 4 && b[1] === 7 && b[2] === 2) return true; if (b[0] === 4 && b[1] === 7) return "¡Bien las cifras! Ahora el multiplicador: ¿cuántos ceros faltan?"; return null; },
+          bien: "Amarillo, violeta y rojo: 47 con dos ceros, 4700 ohmios." } },
+    ] },
+    { tab: "DC y AC", pasos: [
+      { titulo: "Corriente directa y alterna", visual: { tipo: "dcac", inicio: { modo: "dc" } }, beats: [
+        { t: "Hay dos tipos de corriente. La corriente directa, DC, siempre va en el mismo sentido y su voltaje es fijo, como el de una batería.", add: [["h", "DC y AC"], ["n", "DC: un solo sentido, voltaje fijo"]], hl: ["onda"] },
+        { t: "La corriente alterna, AC, cambia de sentido todo el tiempo. En Costa Rica cambia 60 veces por segundo: eso son 60 Hz.", set: { modo: "ac" }, add: [["n", "AC: va y viene · 60 Hz en Costa Rica"]], hl: ["onda"] },
+        { t: "Al panel de alarma le llega alterna de la red eléctrica, de 120 o 240 V. Su fuente interna la convierte en directa de 24 V, que es con lo que trabajan detectores y sirenas.", add: [["f", "Red 120 V~ → fuente → 24 V⎓"]] },
+        { t: "Y las baterías de respaldo son de corriente directa: guardan energía para cuando se va la luz.", set: { modo: "dc" }, add: [["r", "Baterías = DC · Red eléctrica = AC"]] },
+      ], ejercicio: { tipo: "opcion", t: "Pregunta: las baterías de respaldo del panel, ¿qué tipo de corriente entregan?", pregunta: "Las baterías de respaldo entregan…", opciones: ["Corriente directa (DC)", "Corriente alterna (AC)", "Las dos a la vez"], correcta: 0,
+        bien: "Las baterías siempre entregan corriente directa.", pista: "Recuerde: la batería tiene un positivo y un negativo que nunca cambian." } },
+    ] },
+    { tab: "Diodo y LED", pasos: [
+      { titulo: "El diodo: una válvula de un solo sentido", visual: { tipo: "diodo", inicio: { directo: true } }, beats: [
+        { t: "El diodo es una válvula de un solo sentido para la corriente: la deja pasar del ánodo al cátodo, y la bloquea al revés.", add: [["h", "Diodo"], ["n", "Pasa de ánodo (+) a cátodo (−)"]], hl: ["anodo", "catodo"] },
+        { t: "Este es un LED, un diodo que da luz. Conectado en directa, pasa la corriente y se enciende.", hl: ["led"], add: [["n", "LED = diodo que alumbra"]] },
+        { t: "Si invierto la batería, el diodo bloquea: no pasa corriente y el LED se apaga.", set: { directo: false }, add: [["w", "Al revés no conduce"]] },
+        { t: "Esto se usa mucho en alarmas. En reposo, el panel supervisa el circuito de sirenas con la polaridad invertida: los diodos internos de las sirenas bloquean, y solo la RFL deja pasar la corriente de supervisión.", add: [["n", "NAC en reposo: polaridad invertida → sirenas no suenan"]] },
+        { t: "En alarma, el panel pone la polaridad normal, los diodos conducen y todas las sirenas suenan. También se pone un diodo en las bobinas de los relés para protegerlos.", set: { directo: true }, add: [["r", "En alarma: polaridad normal → suenan"]] },
+      ] },
+      { titulo: "Ejercicio: encienda el LED", visual: { tipo: "diodo", inicio: { directo: false } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Este LED está apagado porque la batería quedó al revés. Haga que se encienda.", pregunta: "Encienda el LED.", indicacion: "Use el botón de invertir la batería.",
+          revisar: (v) => v.directo !== false, bien: "Con el positivo hacia el ánodo, el diodo conduce y el LED se enciende." } },
+      { titulo: "Pregunta de polaridad", visual: { tipo: "diodo", fija: true, inicio: { directo: false } }, beats: [],
+        ejercicio: { tipo: "opcion", t: "En supervisión, el panel invierte la polaridad del circuito de sirenas. ¿Por qué no suenan?", pregunta: "Con la polaridad invertida, las sirenas no suenan porque…", opciones: ["Sus diodos bloquean la corriente inversa", "El panel corta el cable", "La RFL se quema"], correcta: 0,
+          bien: "El diodo interno de cada sirena bloquea la corriente al revés; solo la RFL la deja pasar.", pista: "Piense en qué hace un diodo cuando lo conectan al revés." } },
+    ] },
+    { tab: "Serie", pasos: [
+      { titulo: "Resistencias en serie", visual: { tipo: "serie", inicio: { V: 24, R1: 100, R2: 220, R3: 330 } }, beats: [
+        { t: "En serie, las resistencias van una detrás de otra, en un solo camino.", add: [["h", "Serie"]], hl: ["R1", "R2", "R3"] },
+        { t: "Como hay un solo camino, la corriente es la misma en todas. Fíjese que los puntos corren igual en todo el circuito.", hl: ["I"], add: [["n", "Misma corriente en todas"]] },
+        { t: "La resistencia total es la suma: 100 más 220 más 330, 650 Ω.", hl: ["Rt"], add: [["f", "Rₜ = R₁ + R₂ + R₃"]] },
+        { t: "Y el voltaje se reparte: en la resistencia más grande cae más voltaje. Esos números amarillos son las caídas de voltaje.", add: [["n", "El voltaje se reparte: mayor R, mayor caída"]] },
+        { t: "Un detalle importante: si una se abre, se corta todo el camino y se apaga todo, como las luces de Navidad viejas.", set: { abierto: true }, add: [["w", "Una abierta → todo se apaga"]] },
+        { t: "Pruebe usted con las perillas y el botón.", set: { abierto: false } },
+      ] },
+      { titulo: "Ejercicio: resistencia total", visual: { tipo: "serie", fija: true, ocultar: ["Rt", "I", "Vn"], inicio: { V: 12, R1: 470, R2: 1000, R3: 330 } }, beats: [],
+        ejercicio: { tipo: "numero", t: "Calcule la resistencia total de 470, 1000 y 330 Ω en serie.", pregunta: "470 Ω + 1000 Ω + 330 Ω en serie. Rₜ =", unidad: "Ω", respuesta: 1800, tol: 0.005,
+          bien: "En serie se suman: 1800 ohmios.", pista: "En serie solo se suman." } },
+      { titulo: "Ley de voltajes de Kirchhoff", visual: { tipo: "serie", malla: true, inicio: { V: 24, R1: 100, R2: 220, R3: 330 } }, beats: [
+        { t: "Esto que vimos tiene nombre: la ley de voltajes de Kirchhoff, o LKV.", add: [["h", "Ley de voltajes (LKV)"]] },
+        { t: "Dice que, en un camino cerrado, el voltaje que da la fuente es igual a la suma de todas las caídas. Nada se pierde.", add: [["f", "V = V₁ + V₂ + V₃"]] },
+        { t: "Abajo, en verde, está la cuenta: la fuente menos todas las caídas da cero. Mueva las perillas y verá que siempre da cero.", add: [["r", "Fuente − caídas = 0"]] },
+      ], ejercicio: { tipo: "numero", t: "Ejercicio: una malla tiene una fuente de 24 V. En la primera resistencia caen 8 V y en la segunda 10 V. ¿Cuánto cae en la tercera?", pregunta: "V = 24 V, V₁ = 8 V, V₂ = 10 V. ¿V₃?", unidad: "V", respuesta: 6, tol: 0.01,
+        bien: "24 menos 8 menos 10 da 6 voltios.", pista: "Reste las caídas que ya conoce al voltaje de la fuente." } },
+    ] },
+    { tab: "Paralelo", pasos: [
+      { titulo: "Resistencias en paralelo", visual: { tipo: "paralelo", inicio: { V: 24, R1: 100, R2: 200, R3: 300, on: [1, 1, 1] } }, beats: [
+        { t: "En paralelo, las resistencias se conectan entre los mismos dos cables, cada una en su propio camino o rama.", add: [["h", "Paralelo"]], hl: ["R1", "R2", "R3"] },
+        { t: "Todas reciben el mismo voltaje: los 24 V de la fuente.", hl: ["V"], add: [["n", "Mismo voltaje en todas"]] },
+        { t: "La corriente se reparte: por la resistencia más pequeña pasa más corriente. Mire cómo corren más rápido los puntos en la rama de 100 Ω.", add: [["n", "Menor R → más corriente"]], hl: ["R1"] },
+        { t: "La resistencia total es menor que la más pequeña, porque cada rama nueva abre otro camino.", hl: ["Rt"], add: [["f", "1/Rₜ = 1/R₁ + 1/R₂ + 1/R₃"], ["n", "Dos iguales: Rₜ = R ÷ 2"]] },
+        { t: "Y si una rama se abre, las demás siguen funcionando. Por eso las sirenas de un circuito NAC se conectan en paralelo.", set: { on: [1, 0, 1] }, add: [["r", "Una abierta → las demás siguen"]] },
+        { t: "Toque las resistencias para abrir y cerrar ramas.", set: { on: [1, 1, 1] } },
+      ] },
+      { titulo: "Ejercicio: dos en paralelo", visual: { tipo: "paralelo", fija: true, ocultar: ["Rt", "It", "In"], inicio: { V: 24, R1: 1000, R2: 1000, R3: 1000, on: [1, 1, 0] } }, beats: [],
+        ejercicio: { tipo: "numero", t: "Calcule la resistencia total de dos resistencias de 1000 Ω en paralelo.", pregunta: "1000 Ω ∥ 1000 Ω. Rₜ =", unidad: "Ω", respuesta: 500, tol: 0.01,
+          bien: "Dos iguales en paralelo dan la mitad: 500 ohmios.", pista: "Use R₁ × R₂ ÷ (R₁ + R₂), o el truco de dos iguales." } },
+      { titulo: "Ley de corrientes de Kirchhoff", visual: { tipo: "paralelo", nodo: true, inicio: { V: 24, R1: 100, R2: 200, R3: 300, on: [1, 1, 1] } }, beats: [
+        { t: "En paralelo aparece la otra ley de Kirchhoff, la de corrientes, o LKC.", add: [["h", "Ley de corrientes (LKC)"]] },
+        { t: "Dice que en un nodo, que es un punto donde se unen cables, toda la corriente que entra es igual a la que sale.", add: [["f", "Iₜ = I₁ + I₂ + I₃"]], hl: ["It"] },
+        { t: "Aquí entran 0.44 A al nodo y se reparten: 0.24, 0.12 y 0.08. La suma da exacto. La corriente no se pierde ni aparece.", add: [["n", "0.24 + 0.12 + 0.08 = 0.44 A"]] },
+      ], ejercicio: { tipo: "numero", t: "Ejercicio: a un nodo entran 2 A. Por una rama salen 0.5 A y por otra 0.75 A. ¿Cuánto sale por la tercera rama?", pregunta: "Entran 2 A; salen 0.5 A y 0.75 A. ¿La tercera?", unidad: "A", respuesta: 0.75, tol: 0.01,
+        bien: "2 menos 0.5 menos 0.75 da 0.75 amperios.", pista: "Lo que entra es igual a lo que sale: reste las ramas conocidas." } },
+    ] },
+    { tab: "Potencia", pasos: [
+      { titulo: "Ley de Watt", visual: { tipo: "potencia", inicio: { n: 4, i: 0.15 } }, beats: [
+        { t: "La potencia dice cuánta energía consume algo cada segundo. Se mide en vatios, o watts, y se calcula multiplicando el voltaje por la corriente.", add: [["h", "Potencia (Ley de Watt)"], ["f", "P = V × I"]], hl: ["P"] },
+        { t: "Este es un circuito de notificación, un NAC, de 24 V. Cada sirena con luz consume unos 0.15 A.", hl: ["panel"], add: [["n", "Sirena con luz ≈ 0.15 A a 24 V"]] },
+        { t: "Como están en paralelo, sus corrientes se suman: cuatro sirenas son 0.6 A, y la potencia es 24 por 0.6, unos 14.4 W.", hl: ["I", "P"], add: [["n", "4 × 0.15 = 0.6 A → 14.4 W"]] },
+        { t: "Pero cada circuito NAC tiene un máximo, aquí 2 A. Si se pasa, el panel corta el circuito y marca avería. Agregue sirenas y mire qué pasa.", set: { n: 15 }, add: [["w", "Nunca pase la capacidad del NAC"]] },
+        { t: "También sirve para las baterías: con la corriente total se calcula cuántas horas aguanta el sistema.", set: { n: 4 }, add: [["n", "También: P = I² × R  ·  P = V² ÷ R"]] },
+      ] },
+      { titulo: "Ejercicio: calcule la potencia", visual: { tipo: "potencia", fija: true, inicio: { n: 2, i: 0.25 } }, beats: [],
+        ejercicio: { tipo: "numero", t: "Calcule: un dispositivo trabaja a 24 V y consume 0.5 A. ¿Cuántos watts consume?", pregunta: "24 V × 0.5 A = ¿cuántos W?", unidad: "W", respuesta: 12, tol: 0.01,
+          bien: "24 por 0.5 da 12 watts.", pista: "Multiplique el voltaje por la corriente." } },
+      { titulo: "Ejercicio: llene el NAC", visual: { tipo: "potencia", fijaI: true, cap: 2, inicio: { n: 1, i: 0.15 } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Un reto, {nombre}. Ponga la mayor cantidad de sirenas de 0.15 A que caben en este circuito de 2 A, sin pasarse.", pregunta: "Máximo de sirenas de 0.15 A en un NAC de 2 A.", indicacion: "Mueva la cantidad de sirenas.",
+          revisar: (v) => { const n = v.n; if (n === 13) return true; if (n * 0.15 > 2) return "Se pasó: con esa cantidad el panel corta el circuito."; return n >= 10 ? "Va cerca; todavía cabe alguna más." : null; },
+          bien: "2 entre 0.15 da 13.3: caben 13 sirenas. En la práctica se deja un margen del 20 por ciento." } },
+    ] },
+    { tab: "Multímetro", pasos: [
+      { titulo: "Cómo se usa el multímetro", visual: { tipo: "multimetro", inicio: { modo: "off", con: null, energia: true } }, beats: [
+        { t: "El multímetro es la herramienta principal del técnico. Con el selector se escoge qué medir: voltaje directo, voltaje alterno, resistencia o corriente.", add: [["h", "El multímetro"]], hl: ["multi"] },
+        { t: "El voltaje se mide en paralelo: las puntas tocan los dos lados de lo que quiere medir, sin abrir el circuito.", set: { modo: "vdc", con: "paralelo" }, add: [["n", "Voltaje → en paralelo"]] },
+        { t: "La corriente se mide en serie: hay que abrir el circuito y meter el multímetro en el camino, con la punta roja en el borne de amperios.", set: { modo: "adc", con: "serie" }, add: [["n", "Corriente → en serie, abriendo el circuito"]] },
+        { t: "Cuidado: si pone el amperímetro en paralelo, es un cortocircuito y se quema el fusible del multímetro.", set: { con: "paralelo" }, add: [["w", "Amperímetro en paralelo = corto"]] },
+        { t: "Y la resistencia se mide siempre sin energía. Con el circuito energizado, la lectura es falsa y puede dañar el equipo.", set: { modo: "ohm", con: "paralelo", energia: false }, add: [["n", "Resistencia → sin energía"], ["r", "V en paralelo · A en serie · Ω sin energía"]] },
+      ] },
+      { titulo: "Ejercicio: mida el voltaje", visual: { tipo: "multimetro", inicio: { modo: "off", con: null, energia: true } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Mida el voltaje de la batería. Escoja la escala correcta y conecte bien las puntas.", pregunta: "Mida el voltaje de la batería de 24 V.", indicacion: "Gire el selector y escoja cómo conectar las puntas.",
+          revisar: (v) => { if (!v.energia) return "Para medir voltaje el circuito debe tener energía."; if (v.modo === "vdc" && v.con === "paralelo") return true; if (v.modo === "vac") return "La batería es de corriente directa: use V⎓."; if (v.modo === "adc" && v.con === "paralelo") return { mal: "¡Cuidado! El amperímetro en paralelo hace un corto." }; if (v.modo === "vdc" && v.con === "serie") return "La escala está bien, pero el voltaje se mide en paralelo."; return null; },
+          bien: "Voltaje directo, con las puntas en paralelo: 24 voltios." } },
+      { titulo: "Ejercicio: mida la corriente", visual: { tipo: "multimetro", inicio: { modo: "off", con: null, energia: true } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Ahora mida la corriente que pasa por la resistencia.", pregunta: "Mida la corriente del circuito.", indicacion: "Escoja la escala y la conexión.",
+          revisar: (v) => { if (v.modo === "adc" && v.con === "serie" && v.energia) return true; if (v.modo === "adc" && v.con === "paralelo") return { mal: "¡Se quemó el fusible! La corriente se mide en serie." }; if (v.modo === "adc" && !v.energia) return "Sin energía no hay corriente que medir."; return null; },
+          bien: "En serie y en amperios: 24 miliamperios, justo lo que da la Ley de Ohm, 24 entre mil." } },
+      { titulo: "Ejercicio: mida la resistencia", visual: { tipo: "multimetro", inicio: { modo: "off", con: null, energia: true } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Por último, mida el valor de la resistencia de forma segura.", pregunta: "Mida la resistencia de forma segura.", indicacion: "Recuerde la regla de la resistencia.",
+          revisar: (v) => { if (v.modo === "ohm" && v.energia) return { mal: "¡Con energía no! Primero quite la batería." }; if (v.modo === "ohm" && !v.energia && v.con === "paralelo") return true; if (!v.energia && v.modo !== "ohm") return "Bien, ya no hay energía. Ahora gire el selector a ohmios."; return null; },
+          bien: "Sin energía y en ohmios: 1 kiloohmio. Así se mide también una RFL." } },
+    ] },
+    { tab: "Thevenin y Norton", pasos: [
+      { titulo: "Teorema de Thevenin", visual: { tipo: "thevenin", inicio: { V: 24, R1: 1000, R2: 1000, RL: 1000, vista: "original" } }, beats: [
+        { t: "Los teoremas de Thevenin y Norton sirven para simplificar un circuito complicado, visto desde dos puntos, a y b, donde se conecta una carga.", add: [["h", "Thevenin"]], hl: ["RL"] },
+        { t: "Thevenin dice que todo lo que hay a la izquierda se puede cambiar por una sola fuente, Vth, en serie con una sola resistencia, Rth.", set: { vista: "thevenin" }, add: [["n", "Todo el circuito = Vth en serie con Rth"]] },
+        { t: "Vth es el voltaje que hay entre a y b sin la carga. Aquí es un divisor: 24 por mil, entre dos mil: 12 V.", add: [["f", "Vth = V × R₂ ÷ (R₁ + R₂) = 12 V"]] },
+        { t: "Y Rth se calcula poniendo la fuente en corto: R₁ y R₂ quedan en paralelo, 500 Ω.", add: [["f", "Rth = R₁ ∥ R₂ = 500 Ω"]] },
+        { t: "Fíjese en la carga: en el circuito original y en el equivalente tiene exactamente el mismo voltaje y la misma corriente. Mueva la carga y compare.", set: { vista: "original" }, add: [["r", "Mismo VL e IL en los dos"]] },
+      ] },
+      { titulo: "Teorema de Norton", visual: { tipo: "thevenin", inicio: { V: 24, R1: 1000, R2: 1000, RL: 1000, vista: "norton" } }, beats: [
+        { t: "Norton es el hermano de Thevenin. En vez de fuente de voltaje, usa una fuente de corriente, In, en paralelo con una resistencia Rn.", add: [["h", "Norton"], ["n", "Fuente de corriente In en paralelo con Rn"]] },
+        { t: "Rn es igual a Rth, y la corriente In es Vth entre Rth: 12 entre 500, 24 miliamperios.", add: [["f", "In = Vth ÷ Rth = 24 mA · Rn = Rth"]] },
+        { t: "Los tres circuitos son equivalentes para la carga. Cambie de vista con los botones y verá los mismos valores en RL.", add: [["r", "Thevenin y Norton se convierten uno en otro"]] },
+      ] },
+      { titulo: "Ejercicio: Thevenin", visual: { tipo: "thevenin", fija: true, ocultar: ["VL"], inicio: { V: 30, R1: 2000, R2: 1000, RL: 1000, vista: "original" } }, beats: [],
+        ejercicio: { tipo: "numero", t: "Calcule el voltaje de Thevenin: la fuente es de 30 V, R₁ es de 2000 Ω y R₂ de 1000 Ω.", pregunta: "V = 30 V, R₁ = 2 kΩ, R₂ = 1 kΩ. Vth =", unidad: "V", respuesta: 10, tol: 0.01,
+          bien: "30 por mil, entre tres mil: 10 voltios.", pista: "Vth = V × R₂ ÷ (R₁ + R₂)." } },
+      { titulo: "Superposición", visual: { tipo: "superposicion", inicio: { activa: "v1" } }, beats: [
+        { t: "Un último teorema: superposición. Sirve cuando hay más de una fuente.", add: [["h", "Superposición"]] },
+        { t: "Se analiza con una sola fuente a la vez: las otras fuentes de voltaje se ponen en corto. Aquí trabaja solo V₁.", add: [["n", "Una fuente a la vez; las demás en corto"]], hl: ["V1"] },
+        { t: "Después, solo V₂.", set: { activa: "v2" }, hl: ["V2"] },
+        { t: "Y al final se suman los resultados. La corriente en R₃ con las dos fuentes es la suma de las dos partes.", set: { activa: "ambas" }, add: [["f", "I₃ = I₃ (solo V₁) + I₃ (solo V₂)"]], hl: ["R3"] },
+      ], ejercicio: { tipo: "opcion", t: "Pregunta: en superposición, ¿qué se hace con las fuentes de voltaje que no se están analizando?", pregunta: "Las fuentes de voltaje que no se analizan se…", opciones: ["Ponen en corto", "Dejan abiertas", "Duplican"], correcta: 0,
+        bien: "Las de voltaje se ponen en corto; las de corriente se dejan abiertas.", pista: "Una fuente de voltaje apagada se comporta como un cable." } },
+    ] },
+    { tab: "Práctica", practica: {
+      intro: "Ahora practique, {nombre}. Cada problema es nuevo: Ley de Ohm, serie, paralelo, potencia y código de colores. Escriba el resultado y toque Revisar.",
+      generar: () => {
+        const tipo = elegir(["ohmI", "ohmV", "ohmR", "serie", "paralelo", "potencia", "colores", "thevenin"]);
+        const Rs = [100, 150, 220, 330, 470, 560, 680, 1000, 1200, 1500, 2200, 3300, 4700];
+        if (tipo === "ohmI") { const V = elegir([5, 9, 12, 24, 48]), R = elegir(Rs); const I = V / R;
+          return { visual: { tipo: "ohm", fija: true, ocultar: ["I"], inicio: { V, R } }, lineas: [["h", "Ley de Ohm"], ["n", `V = ${V} V · R = ${fmtR(R)}`]], voz: `Calcule la corriente con ${V} V y ${fmtR(R)}. Escríbala en miliamperios.`,
+            campos: [{ id: "i", label: "I", unidad: "mA", r: I * 1000, tol: 0.03 }], pista: "I = V ÷ R, y luego multiplique por mil para pasar a miliamperios.", solucion: [["f", `I = ${V} ÷ ${R} = ${redondeo(I, 4)} A`], ["r", `${redondeo(I * 1000)} mA`]], vozSolucion: `I es V entre R: ${V} entre ${R} da ${redondeo(I * 1000)} miliamperios.` }; }
+        if (tipo === "ohmV") { const I = elegir([0.01, 0.02, 0.05, 0.1, 0.2]), R = elegir([100, 220, 470, 1000, 1200]); const V = I * R;
+          return { visual: { tipo: "ohm", fija: true, ocultar: ["V"], inicio: { V, R } }, lineas: [["h", "Ley de Ohm"], ["n", `I = ${fmtA(I)} · R = ${fmtR(R)}`]], voz: `Por una resistencia de ${fmtR(R)} pasan ${fmtA(I)}. ¿Cuánto voltaje tiene?`,
+            campos: [{ id: "v", label: "V", unidad: "V", r: V, tol: 0.02 }], pista: "V = I × R, con la corriente en amperios.", solucion: [["f", `V = ${I} × ${R}`], ["r", fmtV(V)]], vozSolucion: `V es I por R: ${I} por ${R} da ${redondeo(V)} voltios.` }; }
+        if (tipo === "ohmR") { const V = elegir([12, 24]), I = elegir([0.005, 0.01, 0.02, 0.04, 0.1]); const R = V / I;
+          return { visual: { tipo: "ohm", fija: true, ocultar: ["R"], inicio: { V, R } }, lineas: [["h", "Ley de Ohm"], ["n", `V = ${V} V · I = ${fmtA(I)}`]], voz: `Con ${V} V pasan ${fmtA(I)}. ¿Qué resistencia hay, en ohmios?`,
+            campos: [{ id: "r", label: "R", unidad: "Ω", r: R, tol: 0.02 }], pista: "R = V ÷ I, con la corriente en amperios.", solucion: [["f", `R = ${V} ÷ ${I}`], ["r", fmtR(R)]], vozSolucion: `R es V entre I: ${V} entre ${I} da ${redondeo(R)} ohmios.` }; }
+        if (tipo === "serie") { const V = elegir([12, 24]); const r = [elegir(Rs.slice(0, 8)), elegir(Rs.slice(0, 8)), elegir(Rs.slice(0, 8))]; const Rt = r[0] + r[1] + r[2];
+          return { visual: { tipo: "serie", fija: true, ocultar: ["Rt", "I", "Vn"], inicio: { V, R1: r[0], R2: r[1], R3: r[2] } }, lineas: [["h", "Serie"], ["n", `${r.join(" Ω, ")} Ω y ${V} V`]], voz: "Calcule la resistencia total y la corriente de este circuito en serie.",
+            campos: [{ id: "rt", label: "Rₜ", unidad: "Ω", r: Rt, tol: 0.01 }, { id: "i", label: "I", unidad: "mA", r: (V / Rt) * 1000, tol: 0.03 }], pista: "En serie se suman las resistencias; después I = V ÷ Rₜ.",
+            solucion: [["f", `Rₜ = ${r.join(" + ")} = ${Rt} Ω`], ["f", `I = ${V} ÷ ${Rt} = ${redondeo(V / Rt, 4)} A`], ["r", `${redondeo((V / Rt) * 1000)} mA`]], vozSolucion: `Se suman: ${Rt} ohmios. Y la corriente es ${V} entre ${Rt}: ${redondeo((V / Rt) * 1000)} miliamperios.` }; }
+        if (tipo === "paralelo") { const a = elegir(Rs.slice(0, 9)), b = elegir(Rs.slice(0, 9)); const Rt = (a * b) / (a + b); const V = 24;
+          return { visual: { tipo: "paralelo", fija: true, ocultar: ["Rt", "It", "In"], inicio: { V, R1: a, R2: b, R3: 1000, on: [1, 1, 0] } }, lineas: [["h", "Paralelo"], ["n", `${fmtR(a)} ∥ ${fmtR(b)}`]], voz: `Calcule la resistencia total de ${fmtR(a)} y ${fmtR(b)} en paralelo.`,
+            campos: [{ id: "rt", label: "Rₜ", unidad: "Ω", r: Rt, tol: 0.02 }], pista: "Para dos: R₁ × R₂ ÷ (R₁ + R₂).", solucion: [["f", `Rₜ = ${a} × ${b} ÷ (${a} + ${b})`], ["r", `${redondeo(Rt)} Ω`]], vozSolucion: `${a} por ${b}, entre la suma ${a + b}, da ${redondeo(Rt)} ohmios.` }; }
+        if (tipo === "potencia") { const n = 2 + Math.floor(Math.random() * 9), i = elegir([0.1, 0.12, 0.15, 0.2, 0.25]); const I = n * i, P = 24 * I;
+          return { visual: { tipo: "potencia", fija: true, cap: 3, inicio: { n, i } }, lineas: [["h", "Potencia en un NAC"], ["n", `${n} sirenas de ${fmtA(i)} a 24 V`]], voz: `Un circuito tiene ${n} sirenas de ${fmtA(i)} cada una, a 24 V. Calcule la corriente total y la potencia.`,
+            campos: [{ id: "i", label: "I total", unidad: "A", r: I, tol: 0.02 }, { id: "p", label: "P", unidad: "W", r: P, tol: 0.02 }], pista: "En paralelo las corrientes se suman; después P = V × I.",
+            solucion: [["f", `I = ${n} × ${i} = ${redondeo(I)} A`], ["f", `P = 24 × ${redondeo(I)} = ${redondeo(P)} W`]], vozSolucion: `La corriente total es ${n} por ${i}: ${redondeo(I)} amperios. Y la potencia, 24 por ${redondeo(I)}: ${redondeo(P)} vatios.` }; }
+        if (tipo === "colores") { const b = [1 + Math.floor(Math.random() * 9), Math.floor(Math.random() * 10), Math.floor(Math.random() * 4), 0]; const R = valorBandas(b);
+          return { visual: { tipo: "resistor", fija: true, ocultar: true, inicio: { b } }, lineas: [["h", "Código de colores"], ["n", `${COLORES_RES[b[0]][0]} · ${COLORES_RES[b[1]][0]} · ${COLORES_RES[b[2]][0]} · Oro`]], voz: `Lea esta resistencia: ${COLORES_RES[b[0]][0]}, ${COLORES_RES[b[1]][0]}, ${COLORES_RES[b[2]][0]} y oro. Escriba su valor en ohmios.`,
+            campos: [{ id: "r", label: "R", unidad: "Ω", r: R, tol: 0.001 }], pista: "Las dos primeras forman el número y la tercera dice cuántos ceros agregar.", solucion: [["f", `${b[0]}${b[1]} y ${b[2]} cero${b[2] === 1 ? "" : "s"}`], ["r", `${R} Ω = ${fmtR(R)}`]], vozSolucion: `${b[0]}${b[1]} con ${b[2]} ceros: ${R} ohmios.` }; }
+        const V = elegir([12, 24, 30]), R1 = elegir([1000, 2000, 3000]), R2 = elegir([1000, 2000, 3000]); const Vth = V * R2 / (R1 + R2), Rth = R1 * R2 / (R1 + R2);
+        return { visual: { tipo: "thevenin", fija: true, ocultar: ["VL"], inicio: { V, R1, R2, RL: 1000, vista: "original" } }, lineas: [["h", "Thevenin"], ["n", `V = ${V} V · R₁ = ${fmtR(R1)} · R₂ = ${fmtR(R2)}`]], voz: "Calcule el equivalente de Thevenin entre a y b: el voltaje y la resistencia.",
+          campos: [{ id: "v", label: "Vth", unidad: "V", r: Vth, tol: 0.02 }, { id: "r", label: "Rth", unidad: "Ω", r: Rth, tol: 0.02 }], pista: "Vth = V × R₂ ÷ (R₁ + R₂); Rth = R₁ ∥ R₂.",
+          solucion: [["f", `Vth = ${V} × ${R2} ÷ ${R1 + R2} = ${redondeo(Vth)} V`], ["f", `Rth = ${R1} × ${R2} ÷ ${R1 + R2} = ${redondeo(Rth)} Ω`]], vozSolucion: `Vth es ${redondeo(Vth)} voltios y Rth, ${redondeo(Rth)} ohmios.` };
+      } } },
+  ],
+};
+
+
+// ---- Examen de Electrónica: dibujos, lectura en voz y explicación de cada error ----
+const AULA_MINI_CSS = `.aula.aula-mini{position:relative;inset:auto;z-index:auto;display:block;padding:0;background:none;border-radius:10px;font-size:14px}
+.aula.aula-mini .board{border-width:6px;min-height:0}
+.aula.aula-mini .vis{padding:6px 10px;max-height:260px}
+.aula.aula-mini .vis>svg{max-height:220px}`;
+function PizarraMini({ v, alto = 230 }) {
+  const [valor, setValor] = useState(() => ({ ...(v.inicio || {}) }));
+  return (
+    <div className="aula aula-mini" style={{ marginBottom: 10 }}>
+      <div className="board"><div className="vis" style={{ height: alto }}><DibujoAula v={v} valor={valor} setValor={(f) => setValor((x) => (typeof f === "function" ? f(x) : { ...x, ...f }))} hl={[]} /></div></div>
+    </div>
+  );
+}
+// Dibujo y explicación de cada pregunta (por nivel y número de pregunta)
+const EXTRA_EXAMEN_ELECTRONICA = {
+  "Básico": [
+    { fig: { tipo: "triangulo", inicio: { tapa: "V" } }, exp: "En el triángulo, la V va arriba y la I y la R abajo, lado a lado: por eso V = I × R." },
+    { antes: true, fig: { tipo: "agua", fija: true, inicio: { V: 24, R: 900 } }, exp: "La resistencia es como un tubo angosto: se opone al paso de la corriente y la limita." },
+    { antes: true, fig: { tipo: "resistor", fija: true, ocultar: true, inicio: { b: [1, 0, 2, 0] } }, exp: "Café = 1 y negro = 0 forman 10; el rojo agrega dos ceros: 1000 Ω = 1 kΩ." },
+    { exp: "La tensión o diferencia de potencial se mide en voltios (V)." },
+    { exp: "La corriente se mide en amperios (A); en alarmas se usan mucho los miliamperios (mA)." },
+    { fig: { tipo: "diodo", fija: true, inicio: { directo: true } }, exp: "El diodo es una válvula de un solo sentido: deja pasar la corriente de ánodo a cátodo y la bloquea al revés." },
+    { fig: { tipo: "dcac", inicio: { modo: "dc" } }, exp: "Es falso: la corriente directa siempre va en el mismo sentido. La que cambia de polaridad es la alterna (60 Hz en Costa Rica)." },
+    { fig: { tipo: "multimetro", fija: true, inicio: { modo: "adc", con: "serie", energia: true } }, exp: "Para medir corriente se abre el circuito y el multímetro se pone en serie, en modo amperímetro." },
+  ],
+  "Intermedio": [
+    { fig: { tipo: "serie", fija: true, inicio: { V: 24, R1: 100, R2: 220, R3: 330 } }, exp: "En serie hay un solo camino: las resistencias se suman, Rt = R1 + R2 + R3." },
+    { fig: { tipo: "paralelo", fija: true, inicio: { V: 24, R1: 100, R2: 100, R3: 300, on: [1, 1, 0] } }, exp: "Para dos en paralelo: Rt = (R1 × R2) ÷ (R1 + R2). Siempre da menos que la más pequeña." },
+    { fig: { tipo: "multimetro", fija: true, inicio: { modo: "vdc", con: "paralelo", energia: true } }, exp: "El voltaje se mide en paralelo: las puntas tocan los dos lados, sin abrir el circuito." },
+    { exp: "La Ley de Watt dice que la potencia es voltaje por corriente: P = V × I." },
+    { exp: "P = V × I = 12 × 2 = 24 W." },
+    { antes: true, fig: { tipo: "ohm", fija: true, ocultar: ["I"], inicio: { V: 12, R: 100 } }, exp: "I = V ÷ R = 12 ÷ 100 = 0.12 A (120 mA)." },
+  ],
+  "Avanzado": [
+    { fig: { tipo: "paralelo", fija: true, nodo: true, inicio: { V: 24, R1: 100, R2: 200, R3: 300, on: [1, 1, 1] } }, exp: "En un nodo, todo lo que entra sale: It = I1 + I2 + I3. La corriente no se pierde." },
+    { fig: { tipo: "serie", fija: true, malla: true, inicio: { V: 24, R1: 100, R2: 220, R3: 330 } }, exp: "En una malla, la fuente menos todas las caídas da cero: el voltaje no se pierde." },
+    { fig: { tipo: "superposicion", inicio: { activa: "ambas" } }, exp: "Se analiza una fuente a la vez (las otras de voltaje en corto) y al final se suman los resultados." },
+    { fig: { tipo: "thevenin", inicio: { V: 24, R1: 1000, R2: 1000, RL: 1000, vista: "thevenin" } }, exp: "Thevenin: todo el circuito visto desde a-b es una fuente Vth en serie con una resistencia Rth." },
+    { fig: { tipo: "thevenin", inicio: { V: 24, R1: 1000, R2: 1000, RL: 1000, vista: "norton" } }, exp: "Norton: una fuente de corriente In en paralelo con Rn (Rn = Rth, In = Vth ÷ Rth)." },
+  ],
+};
 
 function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
   const contenedorRef = React.useRef(null);
@@ -16827,7 +18519,7 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
 
   if (mostrarIntro && verClase) {
     return (
-      <ClaseGuiada clase={CLASE_COMPUERTAS}
+      <AulaClase clase={AULA_COMPUERTAS} onGanarPuntos={onGanarPuntos} textoSalir="Ir a armar circuitos"
         onTerminar={() => { onGanarPuntos && onGanarPuntos("Clase guiada completada", 0); setMostrarIntro(false); }}
         onSalir={() => setMostrarIntro(false)}
         onGuia={() => setVerClase(false)} />
@@ -20209,6 +21901,9 @@ const PUNTOS_POR_PREGUNTA_ELECTRONICA = 10;
 
 function JuegoElectronicaBasica({ onGanarPuntos }) {
   const [mostrarIntro, setMostrarIntro] = useState(true);
+  const [verClase, setVerClase] = useState(true); // primero la clase en el aula
+  const Nex = useNarradora();
+  const [explicadas, setExplicadas] = useState({});
   const [nivel, setNivel] = useState("Básico");
   const [respuestas, setRespuestas] = useState({});
   const [resultado, setResultado] = useState(null);
@@ -20253,6 +21948,12 @@ function JuegoElectronicaBasica({ onGanarPuntos }) {
   };
   const reiniciarNivel = () => { setRespuestas({}); setResultado(null); };
 
+  if (mostrarIntro && verClase) {
+    return (
+      <AulaClase clase={AULA_ELECTRONICA} onGanarPuntos={onGanarPuntos} textoSalir="Ir al examen"
+        onTerminar={() => setMostrarIntro(false)} onSalir={() => setMostrarIntro(false)} onGuia={() => setVerClase(false)} />
+    );
+  }
   if (mostrarIntro) {
     const TEMAS_ELECTRONICA = [
       {
@@ -20456,11 +22157,18 @@ function JuegoElectronicaBasica({ onGanarPuntos }) {
     return <GuiaPorTemas temas={TEMAS_ELECTRONICA} onContinuar={() => setMostrarIntro(false)} tituloModulo="Electrónica Básica" />;
   }
 
+  const extras = EXTRA_EXAMEN_ELECTRONICA[nivel] || [];
+  const leerPregunta = (p) => Nex.hablar(`${p.texto} ${p.opciones.map((o, j) => `Opción ${String.fromCharCode(65 + j)}: ${o}.`).join(" ")}`.replace(/Ω/g, " ohmios").replace(/×/g, " por "));
   return (
     <Card
       title="Examen — Electrónica Básica"
-      action={<Btn small variant="ghost" onClick={() => setMostrarIntro(true)}>Ver la guía otra vez</Btn>}
+      action={<div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <Btn small variant="accent" onClick={() => { Nex.callar(); setVerClase(true); setMostrarIntro(true); }}>🎓 Clase interactiva</Btn>
+        <Btn small variant="ghost" onClick={() => { Nex.callar(); setVerClase(false); setMostrarIntro(true); }}>Guía escrita</Btn>
+      </div>}
     >
+      <style>{AULA_CSS + AULA_MINI_CSS}</style>
+      <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 10 }}>🔊 Toque el parlante para que el profesor le lea la pregunta. Al enviar, cada error trae su explicación.</div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         {Object.keys(NIVELES_ELECTRONICA).map((n) => (
           <Btn key={n} small variant={nivel === n ? "accent" : "ghost"} onClick={() => cambiarNivel(n)}>{n}</Btn>
@@ -20475,7 +22183,11 @@ function JuegoElectronicaBasica({ onGanarPuntos }) {
               border: `1px solid ${T.line}`, borderRadius: 10, padding: 14,
               background: correctaMostrada ? (esCorrecta ? T.greenSoft : T.redSoft) : T.graySoft,
             }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{i + 1}. {p.texto}</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 10 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{i + 1}. {p.texto}</div>
+                <button type="button" onClick={() => leerPregunta(p)} aria-label="Leer la pregunta en voz alta" style={{ border: `1px solid ${T.line}`, background: "#fff", borderRadius: 999, padding: "3px 9px", cursor: "pointer", fontSize: 14 }}>🔊</button>
+              </div>
+              {extras[i] && extras[i].fig && (extras[i].antes || correctaMostrada) && <PizarraMini key={nivel + i + (correctaMostrada ? "r" : "")} v={correctaMostrada && extras[i].antes && extras[i].fig.ocultar ? { ...extras[i].fig, ocultar: undefined } : extras[i].fig} />}
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {p.opciones.map((op, j) => (
                   <label key={j} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
@@ -20486,6 +22198,12 @@ function JuegoElectronicaBasica({ onGanarPuntos }) {
               </div>
               {correctaMostrada && !esCorrecta && (
                 <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>Respuesta correcta: {p.opciones[p.correcta]}</div>
+              )}
+              {correctaMostrada && !esCorrecta && extras[i] && extras[i].exp && (
+                <div style={{ marginTop: 8, background: "#fff", border: `1px solid ${T.line}`, borderRadius: 8, padding: "8px 10px", fontSize: 12.5, color: T.ink, display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <span style={{ flex: 1 }}>💡 {extras[i].exp}</span>
+                  <button type="button" onClick={() => { setExplicadas((x) => ({ ...x, [nivel + i]: true })); Nex.hablar(extras[i].exp.replace(/Ω/g, " ohmios").replace(/×/g, " por ").replace(/÷/g, " entre ")); }} style={{ border: `1px solid ${T.line}`, background: explicadas[nivel + i] ? T.graySoft : "#fff", borderRadius: 999, padding: "3px 9px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap" }}>🔊 Explicar</button>
+                </div>
               )}
             </div>
           );

@@ -15166,23 +15166,26 @@ function Entrenamiento() {
         onGanarPuntos={(ejercicio, puntos) => registrarPuntos("compuertas", ejercicio, puntos)}
         esAdmin={currentUser?.categoria === "admin"}
         onReiniciar={(borrarRanking) => reiniciarSegmento("compuertas", borrarRanking)}
+        onCerrar={() => setModulo(null)}
       />
     ) : modulo === "escalera" ? (
       <JuegoLogicaEscalera
         onGanarPuntos={(ejercicio, puntos) => registrarPuntos("escalera", ejercicio, puntos)}
         esAdmin={currentUser?.categoria === "admin"}
         onReiniciar={(borrarRanking) => reiniciarSegmento("escalera", borrarRanking)}
+        onCerrar={() => setModulo(null)}
       />
     ) : modulo === "tablas_verdad" ? (
       <JuegoTablasVerdad
         onGanarPuntos={(ejercicio, puntos) => registrarPuntos("tablas_verdad", ejercicio, puntos)}
         esAdmin={currentUser?.categoria === "admin"}
         onReiniciar={(borrarRanking) => reiniciarSegmento("tablas_verdad", borrarRanking)}
+        onCerrar={() => setModulo(null)}
       />
     ) : modulo === "nfpa72" ? (
-      <JuegoNFPA72 onGanarPuntos={(ejercicio, puntos) => registrarPuntos("nfpa72", ejercicio, puntos)} />
+      <JuegoNFPA72 onGanarPuntos={(ejercicio, puntos) => registrarPuntos("nfpa72", ejercicio, puntos)} onCerrar={() => setModulo(null)} />
     ) : modulo === "electronica" ? (
-      <JuegoElectronicaBasica onGanarPuntos={(ejercicio, puntos) => registrarPuntos("electronica", ejercicio, puntos)} />
+      <JuegoElectronicaBasica onGanarPuntos={(ejercicio, puntos) => registrarPuntos("electronica", ejercicio, puntos)} onCerrar={() => setModulo(null)} />
     ) : modulo === "simplex" ? (
       <JuegoSimplex
         onGanarPuntos={(ejercicio, puntos) => registrarPuntos("simplex", ejercicio, puntos)}
@@ -15765,8 +15768,10 @@ function useNarradora() {
   const fuenteRef = React.useRef("servidor"); // "servidor" | "dispositivo" | "ninguna"
   const finRef = React.useRef(null);
   const turnoRef = React.useRef(0);
+  const turnoDispRef = React.useRef(0);
   const [hablando, setHablando] = useState(false);
   const [pausado, setPausado] = useState(false);
+  const pausadoRef = React.useRef(false); pausadoRef.current = pausado;
   const [silencio, setSilencioRaw] = useState(() => { try { return localStorage.getItem("clase.silencio") === "1"; } catch (e) { return false; } });
   const [fuente, setFuente] = useState("servidor");
   const silencioRef = React.useRef(silencio);
@@ -15777,7 +15782,7 @@ function useNarradora() {
   const setSilencio = (v) => { silencioRef.current = v; setSilencioRaw(v); try { localStorage.setItem("clase.silencio", v ? "1" : "0"); } catch (e) { /* nada */ } if (v) callar(); };
   const terminar = () => { progRef.current.fin = true; setHablando(false); setPausado(false); const f = finRef.current; finRef.current = null; if (f) f(); };
   const callar = () => {
-    turnoRef.current++;
+    turnoRef.current++; turnoDispRef.current++;
     try { if (audioRef.current) { audioRef.current.onended = audioRef.current.onerror = null; audioRef.current.pause(); } } catch (e) { /* nada */ }
     try { window.speechSynthesis && window.speechSynthesis.cancel(); } catch (e) { /* nada */ }
     try { const pa = window.SalvavidasAndroid; if (pa && typeof pa.callar === "function") pa.callar(); } catch (e) { /* nada */ }
@@ -15785,11 +15790,24 @@ function useNarradora() {
   };
   // APK v5: voz del motor de Android (la pantalla interna de la APK no trae voz propia)
   const apkVoz = () => { try { const p = window.SalvavidasAndroid; return p && typeof p.hablar === "function" && (!p.vozDisponible || p.vozDisponible()) ? p : null; } catch (e) { return null; } };
+  // Parte el texto en frases cortas: Chrome corta las frases largas (más de ~15 s) y a veces no avisa que terminó
+  const partirTexto = (t) => {
+    const frases = String(t).match(/[^.!?¡¿]+[.!?]*|[¡¿][^.!?]*[.!?]*/g) || [String(t)];
+    const out = []; let cur = "";
+    frases.forEach((f) => { const x = f.trim(); if (!x) return; if ((cur + " " + x).length > 170 && cur) { out.push(cur); cur = x; } else cur = cur ? cur + " " + x : x; });
+    if (cur) out.push(cur);
+    return out.length ? out : [String(t)];
+  };
   const vozDispositivo = (texto) => {
+    const td = ++turnoDispRef.current;
     const pa = apkVoz();
     if (pa) {
-      window.__vozApkFin = () => terminar();
-      try { pa.hablar(texto); if (fuenteRef.current !== "dispositivo") { fuenteRef.current = "dispositivo"; setFuente("dispositivo"); } return; } catch (e) { /* sigue con la del navegador */ }
+      let listo = false;
+      const fin = () => { if (listo || td !== turnoDispRef.current) return; listo = true; terminar(); };
+      window.__vozApkFin = fin;
+      // si la APK no avisa que terminó, la clase sigue igual
+      const vigilar = () => setTimeout(() => { if (listo || td !== turnoDispRef.current) return; fin(); }, estimarMs(texto) * 2.2 + 5000);
+      try { pa.hablar(texto); vigilar(); if (fuenteRef.current !== "dispositivo") { fuenteRef.current = "dispositivo"; setFuente("dispositivo"); } return; } catch (e) { /* sigue con la del navegador */ }
     }
     const ss = typeof window !== "undefined" ? window.speechSynthesis : null;
     if (!ss || typeof SpeechSynthesisUtterance === "undefined") { fuenteRef.current = "ninguna"; setFuente("ninguna"); terminar(); return; }
@@ -15802,12 +15820,40 @@ function useNarradora() {
     const latam = (v) => /es[-_](CR|MX|US|419|CO|AR|CL|PE)/i.test(v.lang);
     const voz = esp.find((v) => hombre.test(v.name) && latam(v)) || esp.find((v) => hombre.test(v.name))
       || esp.find((v) => /es[-_]CR/i.test(v.lang)) || esp.find(latam) || esp[0] || null;
-    u.voice = voz;
-    u.lang = (voz && voz.lang) || "es-MX"; u.rate = velRef.current;
-    u.onboundary = (ev) => { if (ev && typeof ev.charIndex === "number" && texto.length) progRef.current.frac = ev.charIndex / texto.length; };
-    u.pitch = voz && hombre.test(voz.name) ? 1 : 0.8;
-    u.onend = u.onerror = () => terminar();
-    ss.cancel(); ss.speak(u);
+    const trozos = partirTexto(texto);
+    let k = 0, base = 0;
+    const android = /Android/i.test(navigator.userAgent || "");
+    const vivo = android ? null : setInterval(() => {
+      if (td !== turnoDispRef.current) { clearInterval(vivo); return; }
+      try { if (ss.speaking && !ss.paused) { ss.pause(); ss.resume(); } } catch (e) { /* nada */ }
+    }, 9000);
+    const decirTrozo = () => {
+      if (td !== turnoDispRef.current) return;
+      if (k >= trozos.length) { if (vivo) clearInterval(vivo); terminar(); return; }
+      const txt = trozos[k];
+      const u = new SpeechSynthesisUtterance(txt);
+      u.voice = voz;
+      u.lang = (voz && voz.lang) || "es-MX"; u.rate = velRef.current;
+      u.pitch = voz && hombre.test(voz.name) ? 1 : 0.8;
+      let ultimo = 0;
+      u.onboundary = (ev) => { ultimo = Date.now(); if (ev && typeof ev.charIndex === "number" && texto.length) progRef.current.frac = (base + ev.charIndex) / texto.length; };
+      let hecho = false;
+      const sigue = () => { if (hecho || td !== turnoDispRef.current) return; hecho = true; base += txt.length + 1; k++; decirTrozo(); };
+      u.onend = sigue;
+      u.onerror = (ev) => { if (ev && (ev.error === "interrupted" || ev.error === "canceled")) return; sigue(); };
+      // vigilante: si el navegador nunca avisa que terminó, se pasa a la siguiente frase
+      const t0 = Date.now(), tope = estimarMs(txt) * 1.8 + 3000;
+      const vigila = () => setTimeout(() => {
+        if (hecho || td !== turnoDispRef.current) return;
+        const trabado = ultimo && Date.now() - ultimo > 5000; // dejó de avanzar palabra por palabra
+        if (pausadoRef.current || (ss.speaking && !ss.paused && !trabado && Date.now() - t0 < tope)) { vigila(); return; }
+        try { ss.cancel(); } catch (e) { /* nada */ }
+        sigue();
+      }, 2000);
+      try { ss.speak(u); vigila(); } catch (e) { sigue(); }
+    };
+    try { ss.cancel(); } catch (e) { /* nada */ }
+    setTimeout(decirTrozo, 80); // Chrome a veces ignora una frase si se habla justo después de cancelar
     if (fuenteRef.current !== "dispositivo") { fuenteRef.current = "dispositivo"; setFuente("dispositivo"); }
   };
   // Devuelve una promesa que se cumple cuando termina de hablar
@@ -15825,6 +15871,13 @@ function useNarradora() {
     const fallo = () => { if (yaCambio || turno !== turnoRef.current) return; yaCambio = true; fuenteRef.current = "dispositivo"; setFuente("dispositivo"); vozDispositivo(texto); };
     a.onended = () => { if (turno === turnoRef.current) terminar(); };
     a.onerror = fallo;
+    // vigilante: si el audio se queda trabado (red lenta), se usa la voz del equipo
+    const vigila = (ms) => setTimeout(() => {
+      if (turno !== turnoRef.current || progRef.current.fin || yaCambio) return;
+      if (pausadoRef.current || (!a.paused && a.currentTime > 0 && !a.ended)) { vigila(3000); return; }
+      fallo();
+    }, ms);
+    vigila(estimarMs(texto) * 1.5 + 6000);
     a.src = urlVozClase(texto);
     try { a.defaultPlaybackRate = velRef.current; a.playbackRate = velRef.current; } catch (e) { /* nada */ }
     const p = a.play();
@@ -16533,7 +16586,7 @@ function DibujoAula({ v, valor, setValor, hl }) {
 
 const subtituloSpans = (t) => String(t || "").split(/\s+/).filter(Boolean).map((w, i) => <span key={i} className="w">{w} </span>);
 
-function AulaClase({ clase, onTerminar, onSalir, onGuia, onGanarPuntos, nombre: nombreProp, textoSalir = "Ir a la práctica", temaInicial = 0 }) {
+function AulaClase({ clase, onTerminar, onSalir, onGuia, onGanarPuntos, onCerrar, nombre: nombreProp, textoSalir = "Ir a la práctica", textoBarra, temaInicial = 0 }) {
   const usuarioClase = useContext(CurrentUserContext);
   const nombre = primerNombre(nombreProp || (usuarioClase && usuarioClase.name));
   const nb = (t) => conNombre(t, nombre);
@@ -16571,6 +16624,10 @@ function AulaClase({ clase, onTerminar, onSalir, onGuia, onGanarPuntos, nombre: 
   const raizRef = React.useRef(null);
   const autoRef = React.useRef(auto); autoRef.current = auto;
   const faseRef = React.useRef(fase); faseRef.current = fase;
+  // Dónde quedó (para continuar luego)
+  const claveProg = "aula.progreso." + (clase.clave || clase.titulo);
+  const [guardado] = useState(() => { try { const g = JSON.parse(localStorage.getItem(claveProg) || "null"); return g && temas[g.ti] && (g.ti > 0 || g.pi > 0) ? g : null; } catch (e) { return null; } });
+  useEffect(() => { if (!empezo) return; try { localStorage.setItem(claveProg, JSON.stringify({ ti, pi })); } catch (e) { /* nada */ } }, [ti, pi, empezo]);
   const tema = temas[ti] || temas[0];
   const esPractica = !!tema.practica;
   const pasos = tema.pasos || [];
@@ -16802,6 +16859,7 @@ function AulaClase({ clase, onTerminar, onSalir, onGuia, onGanarPuntos, nombre: 
 
   // ---- controles ----
   const comenzar = () => { setEmpezo(true); irA(ti, 0); };
+  const continuarGuardado = () => { setEmpezo(true); const t = guardado.ti, pp = temas[guardado.ti].practica ? 0 : Math.min(guardado.pi, temas[guardado.ti].pasos.length - 1); irA(t, pp); };
   const play = () => {
     if (N.hablando) { N.pausar(); pausaRef.current = !N.pausado; setPausa(!N.pausado); return; }
     if (relojRef.current) { pausaRef.current = !pausaRef.current; setPausa(pausaRef.current); return; }
@@ -16820,9 +16878,11 @@ function AulaClase({ clase, onTerminar, onSalir, onGuia, onGanarPuntos, nombre: 
     setFoco(ok ? true : !foco);
   };
   const salir = () => { runRef.current++; N.callar(); try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) { /* nada */ } onSalir && onSalir(); };
+  const cerrar = () => { runRef.current++; N.callar(); try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) { /* nada */ } (onCerrar || onSalir) && (onCerrar || onSalir)(); };
   const terminar = () => { runRef.current++; N.callar(); try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) { /* nada */ } onTerminar && onTerminar(); };
   useEffect(() => {
     const k = (e) => {
+      if (e.key === "Escape" && !document.fullscreenElement) { e.preventDefault(); cerrar(); return; }
       if (!empezo || /input|select|textarea/i.test((e.target && e.target.tagName) || "")) return;
       if (e.key === "ArrowRight") { e.preventDefault(); avanzar(); }
       else if (e.key === "ArrowLeft") { e.preventDefault(); atras(); }
@@ -16847,7 +16907,8 @@ function AulaClase({ clase, onTerminar, onSalir, onGuia, onGanarPuntos, nombre: 
           ))}
         </div>
         <button type="button" className="ib" onClick={pantalla} title="Pantalla completa">⛶<span className="tx"> {foco ? "Salir de pantalla" : "Pantalla completa"}</span></button>
-        <button type="button" className="ib" onClick={salir} title="Salir de la clase">✕<span className="tx"> Salir</span></button>
+        {onSalir && <button type="button" className="ib" onClick={salir} title={textoSalir}>➜<span className="tx"> {textoBarra || textoSalir}</span></button>}
+        <button type="button" className="ib" onClick={cerrar} title="Cerrar y continuar luego" aria-label="Cerrar la clase">✕<span className="tx"> Cerrar</span></button>
       </div>
 
       <section className="board" aria-label="Pizarra">
@@ -16952,12 +17013,17 @@ function AulaClase({ clase, onTerminar, onSalir, onGuia, onGanarPuntos, nombre: 
 
       {!empezo && (
         <div className="inicio">
+          <button type="button" className="ib" onClick={cerrar} aria-label="Cerrar" style={{ position: "absolute", top: 12, right: 12, fontSize: "1rem" }}>✕ Cerrar</button>
           <div className="card">
             <div style={{ fontSize: 46 }}>🎧</div>
             <h1>{clase.titulo}</h1>
             {nombre && <div style={{ fontFamily: "var(--tiza)", fontSize: "1.2rem", color: "var(--chy)" }}>Hola, {nombre}</div>}
             <p>{clase.intro || "Clase con voz, paso a paso, con ejercicios. Suba el volumen o use audífonos."}</p>
-            <button type="button" className="btn pri" onClick={comenzar}>▶ Comenzar la clase</button>
+            {guardado ? <>
+              <button type="button" className="btn pri" onClick={continuarGuardado}>▶ Continuar donde quedó</button>
+              <div style={{ fontSize: ".85rem", color: "var(--chd)", marginTop: -6 }}>{temas[guardado.ti].tab}{temas[guardado.ti].pasos && temas[guardado.ti].pasos[guardado.pi] ? " · " + temas[guardado.ti].pasos[guardado.pi].titulo : ""}</div>
+              <button type="button" className="btn" onClick={comenzar}>↺ Empezar desde el inicio</button>
+            </> : <button type="button" className="btn pri" onClick={comenzar}>▶ Comenzar la clase</button>}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
               {temas.some((t) => t.practica) && <button type="button" className="btn" onClick={() => { setEmpezo(true); irA(temas.findIndex((t) => t.practica), 0); }}>✎ Solo practicar</button>}
               {onGuia && <button type="button" className="btn" onClick={() => { N.callar(); onGuia(); }}>📖 Guía escrita</button>}
@@ -17077,7 +17143,7 @@ const metaCompuerta = (tipo, quiere = true) => (v) => {
   return !!sal === quiere;
 };
 const AULA_COMPUERTAS = {
-  titulo: "Compuertas lógicas", corto: "Compuertas lógicas", marca: "Entrenamiento A&D · Lógica",
+  titulo: "Compuertas lógicas", corto: "Compuertas lógicas", clave: "compuertas", marca: "Entrenamiento A&D · Lógica",
   intro: "El profesor le explica en la pizarra cómo piensa un panel contra incendio: AND, OR, NOT, NAND, NOR y circuitos reales. Toque los dibujos y resuelva los ejercicios. Suba el volumen.",
   pronuncia: PRON_COMPUERTAS,
   textoDirecto: "Ir a armar circuitos",
@@ -17671,7 +17737,7 @@ const PRON_ELECTRONICA = [
   [/×/g, " por "], [/÷/g, " entre "], [/\bRFL\b/g, "resistencia de fin de línea"], [/\bDC\b/g, "de ce"], [/\bAC\b/g, "a ce"], [/\bLED\b/g, "led"], [/\bNAC\b/g, "nac"], [/\bIDC\b/g, "i de ce"], [/\bLKC\b/g, "ley de corrientes"], [/\bLKV\b/g, "ley de voltajes"],
 ];
 const AULA_ELECTRONICA = {
-  titulo: "Electrónica básica", corto: "Electrónica básica", marca: "Entrenamiento A&D · Electrónica",
+  titulo: "Electrónica básica", corto: "Electrónica básica", clave: "electronica", marca: "Entrenamiento A&D · Electrónica",
   intro: "Clase con voz y simuladores: voltaje, corriente y resistencia, Ley de Ohm, código de colores, diodos, serie y paralelo, potencia, multímetro, Kirchhoff, Thevenin y Norton. Mueva las perillas y resuelva los ejercicios.",
   pronuncia: PRON_ELECTRONICA,
   textoDirecto: "Ir directo al examen",
@@ -17949,7 +18015,729 @@ const EXTRA_EXAMEN_ELECTRONICA = {
   ],
 };
 
-function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
+
+// ---- Clase de Tablas de la verdad en el aula ----
+const filasTabla = (n) => Array.from({ length: 1 << n }, (_, i) => Array.from({ length: n }, (_, b) => ((i >> (n - 1 - b)) & 1)));
+// Tabla de la verdad viva: dispositivos arriba, tabla abajo; se toca una fila para verla en el circuito.
+// Con p.llenar, el técnico toca la columna de salida para poner 0 o 1.
+AULA_VISUALES.tablaViva = function VisTablaViva({ p, valor, setValor, hl }) {
+  const vars = p.vars, n = vars.length, filas = filasTabla(n);
+  const fila = valor.fila ?? null;
+  const resp = valor.resp || {};
+  const inter = p.inter || [];
+  const mostrarInter = valor.inter ?? inter.length;
+  const sal = (f) => !!p.f(f.map(Boolean));
+  const actual = fila !== null ? filas[fila] : null;
+  const tocarSalida = (i) => setValor((v) => { const r = { ...(v.resp || {}) }; r[i] = r[i] === 1 ? 0 : r[i] === 0 ? undefined : 1; if (r[i] === undefined) delete r[i]; return { ...v, resp: r, fila: i }; });
+  const celda = { padding: "2px 8px", textAlign: "center", borderBottom: "1px dashed rgba(238,241,234,.25)", fontFamily: "var(--tiza)", fontSize: "1.05rem" };
+  const colHot = (k) => hl.includes(k) ? { color: "var(--chy)", background: "rgba(243,220,107,.12)" } : null;
+  const outAct = actual ? (p.llenar ? resp[fila] === 1 : sal(actual)) : false;
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, flexWrap: "wrap", flex: "0 0 auto" }}>
+        {vars.map((v, k) => {
+          const on = actual ? !!actual[k] : false;
+          return <div key={k} style={{ textAlign: "center", fontFamily: "var(--tiza)", lineHeight: 1.1, opacity: actual ? 1 : 0.7 }}>
+            <div style={{ display: "inline-block" }} dangerouslySetInnerHTML={{ __html: iconoEntrada(v.d || v.n, on, 36) }} />
+            <div style={{ fontSize: ".85rem" }}>{v.n}</div>
+            <div style={{ color: on ? "var(--chy)" : "var(--chd)", fontWeight: 700 }}>{actual ? (on ? 1 : 0) : "·"}</div>
+          </div>;
+        })}
+        <div style={{ fontSize: "1.6rem", color: "var(--chd)" }}>→</div>
+        <div style={{ textAlign: "center", fontFamily: "var(--tiza)", lineHeight: 1.1 }}>
+          <div style={{ display: "inline-block" }} dangerouslySetInnerHTML={{ __html: iconoSalida(p.salida || "Luz y bocina", outAct, 40) }} />
+          <div style={{ fontSize: ".85rem" }}>{p.salidaCorta || "Salida"}</div>
+          <div style={{ color: outAct ? "var(--chy)" : "var(--chd)", fontWeight: 700 }}>{actual ? (p.llenar ? (resp[fila] ?? "?") : outAct ? 1 : 0) : "·"}</div>
+        </div>
+      </div>
+      <div style={{ overflow: "auto", flex: "1 1 auto", minHeight: 0, display: "flex", justifyContent: "center" }}>
+        <table style={{ borderCollapse: "collapse", margin: "4px auto", color: "var(--ch)" }}>
+          <thead><tr>
+            {vars.map((v, k) => <th key={k} style={{ ...celda, color: "var(--chb)", fontSize: ".95rem", ...colHot("c" + k) }}>{v.n}</th>)}
+            {inter.slice(0, mostrarInter).map((c, k) => <th key={"i" + k} style={{ ...celda, color: "var(--chp)", fontSize: ".9rem", borderLeft: k === 0 ? "2px solid rgba(238,241,234,.35)" : undefined, ...colHot("i" + k) }}>{c.n}</th>)}
+            <th style={{ ...celda, color: "var(--chy)", fontSize: ".95rem", borderLeft: "2px solid rgba(238,241,234,.5)", ...colHot("sal") }}>{p.salidaCorta || "Salida"}</th>
+          </tr></thead>
+          <tbody>{filas.map((f, i) => {
+            const s = sal(f), r = resp[i];
+            const marca = p.llenar && valor.revisada ? (r === (s ? 1 : 0) ? "ok" : "mal") : null;
+            return (
+              <tr key={i} onClick={() => !p.llenar && setValor({ fila: fila === i ? null : i })} style={{ cursor: "pointer", background: fila === i ? "rgba(243,220,107,.18)" : "transparent" }}>
+                {f.map((x, k) => <td key={k} style={{ ...celda, color: x ? "var(--ch)" : "var(--chd)", ...colHot("c" + k) }}>{x}</td>)}
+                {inter.slice(0, mostrarInter).map((c, k) => <td key={"i" + k} style={{ ...celda, color: "var(--chp)", borderLeft: k === 0 ? "2px solid rgba(238,241,234,.35)" : undefined, ...colHot("i" + k) }}>{c.f(f.map(Boolean)) ? 1 : 0}</td>)}
+                <td style={{ ...celda, borderLeft: "2px solid rgba(238,241,234,.5)", fontWeight: 700, ...colHot("sal") }}
+                  onClick={(e) => { if (p.llenar) { e.stopPropagation(); tocarSalida(i); } }}>
+                  {p.llenar
+                    ? <span style={{ display: "inline-block", minWidth: 30, border: "2px dashed " + (marca === "ok" ? "var(--chg)" : marca === "mal" ? "var(--chp)" : "var(--chd)"), borderRadius: 8, color: r === 1 ? "var(--chy)" : "var(--ch)" }}>{r ?? "?"}</span>
+                    : p.ocultarSalida ? "?" : <span style={{ color: s ? "var(--chy)" : "var(--chd)" }}>{s ? 1 : 0}</span>}
+                </td>
+              </tr>
+            );
+          })}</tbody>
+        </table>
+      </div>
+      <div style={{ textAlign: "center", fontFamily: "var(--tiza)", color: "var(--chd)", fontSize: ".9rem", flex: "0 0 auto" }}>
+        {p.llenar ? "☝ toque cada casilla de la salida para poner 1 o 0" : "☝ toque una fila para verla en los dispositivos"}
+      </div>
+    </>
+  );
+};
+
+const revisarLlenado = (p) => (v, mem) => {
+  const filas = filasTabla(p.vars.length), r = v.resp || {};
+  const llenas = filas.filter((_, i) => r[i] === 0 || r[i] === 1).length;
+  if (llenas < filas.length) return llenas >= Math.ceil(filas.length / 2) && !mem.mitad ? (mem.mitad = true, `Va bien, lleva ${llenas} de ${filas.length}.`) : null;
+  const malas = filas.filter((f, i) => r[i] !== (p.f(f.map(Boolean)) ? 1 : 0)).length;
+  if (!malas) return true;
+  return { mal: `Hay ${malas} casilla${malas > 1 ? "s" : ""} con error. Revise fila por fila.` };
+};
+
+const T_HUMO = { n: "Humo", d: "Sensor de Humo" }, T_MANUAL = { n: "Manual", d: "Estación Manual" }, T_TEMP = { n: "Temp.", d: "Sensor de Temperatura" }, T_FLAMA = { n: "Flama", d: "Sensor de Flama" }, T_FALLA = { n: "Falla", d: "Falla del sistema" }, T_FLUJO = { n: "Flujo", d: "Sensor de Flujo" }, T_GAS = { n: "Gas", d: "Sensor de Gas LPG" };
+const TV_OR = { tipo: "tablaViva", vars: [T_HUMO, T_MANUAL], f: (v) => v[0] || v[1], salida: "Luz y bocina", salidaCorta: "Sirena" };
+const TV_COMP = { tipo: "tablaViva", vars: [T_FLAMA, T_TEMP, T_FALLA], f: (v) => (v[0] || v[1]) && !v[2], salida: "Luz y bocina", salidaCorta: "Visible",
+  inter: [{ n: "Flama OR Temp", f: (v) => v[0] || v[1] }, { n: "NOT Falla", f: (v) => !v[2] }] };
+
+const AULA_TABLAS = {
+  titulo: "Tablas de la verdad", corto: "Tablas de la verdad", clave: "tablas_verdad", marca: "Entrenamiento A&D · Lógica",
+  intro: "Aprenda a armar y leer la tabla de la verdad de cualquier lógica del panel: cuántas filas lleva, cómo se llenan las entradas y cómo se calcula la salida paso a paso.",
+  pronuncia: PRON_COMPUERTAS,
+  textoDirecto: "Ir directo a los ejercicios",
+  etiquetaPuntos: "Práctica de tablas (aula)",
+  despedida: "¡Felicidades, {nombre}! Ya sabe armar, llenar y leer tablas de la verdad. Ahora vaya a los ejercicios del módulo para ganar sus puntos.",
+  resumen: ["Una fila por cada combinación posible", "n entradas → 2ⁿ filas", "Entradas: se cuenta en binario", "Lógica compuesta: columnas intermedias", "La tabla dice qué compuerta es"],
+  temas: [
+    { tab: "¿Qué es?", pasos: [
+      { titulo: "Una fila por cada situación", visual: { ...TV_OR, inicio: { fila: null } }, beats: [
+        { t: "¡Hola, {nombre}! Hoy vamos a ver las tablas de la verdad, la herramienta para comprobar que una lógica del panel hace lo que tiene que hacer.", add: [["h", "Tablas de la verdad"]] },
+        { t: "Una tabla de la verdad tiene una fila por cada situación posible de las entradas, y en la última columna dice cómo queda la salida.", add: [["n", "Una fila = una situación"]] },
+        { t: "Este ejemplo es la sirena: suena si hay humo OR si activan la estación manual. Primera fila: nada activo, la sirena apagada.", set: { fila: 0 }, add: [["f", "Sirena = Humo OR Manual"]] },
+        { t: "Segunda fila: solo la estación manual. La sirena suena.", set: { fila: 1 } },
+        { t: "Tercera: solo humo. También suena.", set: { fila: 2 } },
+        { t: "Y la cuarta: los dos activos. Suena. Con la tabla vemos de un vistazo todas las situaciones, sin que se nos escape ninguna.", set: { fila: 3 }, add: [["r", "Ninguna situación queda sin revisar"]] },
+        { t: "Toque las filas para verlas en los dispositivos.", set: { fila: null } },
+      ] },
+      { titulo: "¿Cuántas filas lleva?", visual: { ...TV_COMP, inicio: { fila: null, inter: 0 } }, beats: [
+        { t: "¿Cuántas filas tiene una tabla? Depende de cuántas entradas hay. Cada entrada puede valer cero o uno, así que cada entrada nueva duplica las filas.", add: [["h", "¿Cuántas filas?"]] },
+        { t: "Con una entrada son dos filas. Con dos entradas, cuatro. Con tres, como esta, ocho filas.", add: [["n", "1 → 2 · 2 → 4 · 3 → 8 · 4 → 16"]] },
+        { t: "La regla es dos elevado a la cantidad de entradas.", add: [["f", "Filas = 2ⁿ   (n = entradas)"]] },
+      ], ejercicio: { tipo: "numero", t: "Ejercicio: el sistema de diluvio tiene cuatro entradas: humo, flama, manual y flujo. ¿Cuántas filas lleva su tabla?", pregunta: "4 entradas. ¿Cuántas filas?", unidad: "filas", respuesta: 16, tol: 0,
+        bien: "Dos a la cuatro: dieciséis filas.", pista: "Duplique por cada entrada: 2, 4, 8…" } },
+    ] },
+    { tab: "Las entradas", pasos: [
+      { titulo: "Cómo llenar las entradas", visual: { ...TV_COMP, inicio: { fila: null, inter: 0 } }, beats: [
+        { t: "Para no olvidar ninguna combinación, las entradas se llenan siempre con el mismo patrón: contando en binario.", add: [["h", "El patrón de las entradas"]] },
+        { t: "La primera columna lleva la mitad de ceros y la mitad de unos: cuatro y cuatro.", hl: ["c0"], add: [["n", "1.ª columna: 0000 1111"]] },
+        { t: "La segunda va de dos en dos: dos ceros, dos unos, y repite.", hl: ["c1"], add: [["n", "2.ª columna: 00 11 00 11"]] },
+        { t: "Y la última alterna de uno en uno: cero, uno, cero, uno.", hl: ["c2"], add: [["n", "Última: 0 1 0 1 0 1 0 1"]] },
+        { t: "Así, la primera fila es todo en cero y la última todo en uno. Si sigue este patrón, nunca le falta ni le sobra una fila.", add: [["r", "Empieza en 000 y termina en 111"]] },
+      ], ejercicio: { tipo: "opcion", t: "Pregunta: con tres entradas, ¿cuál es la quinta fila?", pregunta: "Con 3 entradas, la 5.ª fila es…", opciones: ["1 0 0", "0 1 1", "1 0 1", "0 1 0"], correcta: 0,
+        bien: "Contando en binario: cero, uno, diez, once, cien. La quinta es uno, cero, cero.", pista: "Cuente en binario desde 000: la quinta es la primera que empieza con 1." } },
+    ] },
+    { tab: "La salida", pasos: [
+      { titulo: "Calcular la salida fila por fila", visual: { ...TV_COMP, inicio: { fila: null, inter: 0 } }, beats: [
+        { t: "Ahora la salida. Tomemos la notificación visible: se activa si hay flama OR temperatura, AND que no haya falla del sistema.", add: [["h", "Lógica compuesta"], ["f", "Visible = (Flama OR Temp) AND NOT Falla"]] },
+        { t: "Cuando la fórmula tiene varias partes, el truco es agregar columnas intermedias. Primero calculamos el paréntesis: flama OR temperatura.", set: { inter: 1 }, hl: ["i0"], add: [["n", "Columna 1: Flama OR Temp"]] },
+        { t: "Después, NOT falla: es lo contrario de la columna de falla.", set: { inter: 2 }, hl: ["i1"], add: [["n", "Columna 2: NOT Falla"]] },
+        { t: "Y la salida es la AND de esas dos columnas intermedias: solo da uno donde las dos dan uno.", hl: ["sal"], add: [["r", "Salida = columna 1 AND columna 2"]] },
+        { t: "Toque cualquier fila y compruebe en los dispositivos. Por ejemplo, flama con falla: no se activa, porque el sistema en falla bloquea.", set: { fila: 5 } },
+      ] },
+      { titulo: "Ejercicio: llene una AND", visual: { tipo: "tablaViva", vars: [T_HUMO, T_TEMP], f: (v) => v[0] && v[1], salida: "Extractor de Humo", salidaCorta: "Extractor", llenar: true, inicio: { resp: {} } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Su turno, {nombre}. El extractor de humo se enciende con humo AND temperatura. Llene la columna de salida.", pregunta: "Extractor = Humo AND Temp. Llene la salida.", indicacion: "Toque cada casilla de la salida.",
+          revisar: revisarLlenado({ vars: [T_HUMO, T_TEMP], f: (v) => v[0] && v[1] }), bien: "La AND solo da uno en la última fila, con las dos entradas activas." } },
+      { titulo: "Ejercicio: llene una NOR", visual: { tipo: "tablaViva", vars: [T_GAS, T_FALLA], f: (v) => !(v[0] || v[1]), salida: "Sistema de Diluvio", salidaCorta: "Habilitado", llenar: true, inicio: { resp: {} } }, beats: [],
+        ejercicio: { tipo: "meta", t: "El diluvio solo se habilita si no hay gas ni falla: es una NOR. Llene la salida.", pregunta: "Habilitado = Gas NOR Falla. Llene la salida.", indicacion: "Toque cada casilla de la salida.",
+          revisar: revisarLlenado({ vars: [T_GAS, T_FALLA], f: (v) => !(v[0] || v[1]) }), bien: "La NOR solo da uno en la primera fila, cuando nada está activo." } },
+      { titulo: "Ejercicio: tres entradas", visual: { tipo: "tablaViva", vars: [T_FLAMA, T_TEMP, T_FALLA], f: (v) => (v[0] || v[1]) && !v[2], salida: "Luz y bocina", salidaCorta: "Visible", llenar: true, inicio: { resp: {} } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Ahora la compuesta, sin ayuda: notificación visible igual a flama OR temperatura, AND NOT falla. Llene las ocho filas.", pregunta: "Visible = (Flama OR Temp) AND NOT Falla", indicacion: "Calcule cada fila en su mente o en un papel.",
+          revisar: revisarLlenado({ vars: [T_FLAMA, T_TEMP, T_FALLA], f: (v) => (v[0] || v[1]) && !v[2] }), bien: "Se activa en tres filas: con flama, con temperatura o con las dos, siempre que no haya falla." } },
+    ] },
+    { tab: "Leer la tabla", pasos: [
+      { titulo: "La tabla dice qué compuerta es", visual: { tipo: "tablaViva", vars: [{ n: "A", d: "Estación Manual" }, { n: "B", d: "Sensor de Humo" }], f: (v) => !(v[0] && v[1]), salida: "Luz y bocina", inicio: { fila: null } }, beats: [
+        { t: "También se puede hacer al revés: mirar una tabla y saber qué compuerta es. Cada compuerta tiene su huella en la columna de salida.", add: [["h", "La huella de cada compuerta"]] },
+        { t: "Si solo hay un uno, abajo, es una AND. Si solo hay un cero, arriba, es una OR.", add: [["n", "0001 → AND  ·  0111 → OR"]] },
+        { t: "Si solo hay un cero, abajo, es una NAND. Y si solo hay un uno, arriba, es una NOR.", add: [["n", "1110 → NAND  ·  1000 → NOR"]] },
+        { t: "Esta tabla, por ejemplo, tiene la salida uno, uno, uno, cero: es una NAND.", hl: ["sal"], add: [["r", "Mire la columna de salida de arriba hacia abajo"]] },
+      ], ejercicio: { tipo: "opcion", t: "¿Qué compuerta tiene la salida cero, uno, uno, uno?", pregunta: "Salida 0 1 1 1 (de arriba hacia abajo). ¿Qué compuerta es?", opciones: ["OR", "AND", "NAND", "NOR"], correcta: 0,
+        bien: "Solo se apaga cuando todo está en cero: es una OR.", pista: "Piense: ¿qué compuerta se enciende con cualquier entrada activa?" } },
+    ] },
+    { tab: "Práctica", practica: {
+      intro: "Ahora practique, {nombre}. Le doy una lógica y una fila de la tabla; usted dice cómo queda la salida.",
+      extra: "Ir a los ejercicios con puntos",
+      generar: () => {
+        const casos = [
+          { f: "Sirena = Humo OR Manual", vars: [T_HUMO, T_MANUAL], ev: (v) => v[0] || v[1], sal: "Sirena" },
+          { f: "Extractor = Humo AND Temp", vars: [T_HUMO, T_TEMP], ev: (v) => v[0] && v[1], sal: "Extractor" },
+          { f: "Inyector = NOT Humo", vars: [T_HUMO], ev: (v) => !v[0], sal: "Inyector" },
+          { f: "Recall = Humo NAND Temp", vars: [T_HUMO, T_TEMP], ev: (v) => !(v[0] && v[1]), sal: "Recall" },
+          { f: "Diluvio = Gas NOR Falla", vars: [T_GAS, T_FALLA], ev: (v) => !(v[0] || v[1]), sal: "Diluvio" },
+          { f: "Visible = (Flama OR Temp) AND NOT Falla", vars: [T_FLAMA, T_TEMP, T_FALLA], ev: (v) => (v[0] || v[1]) && !v[2], sal: "Visible" },
+          { f: "Diluvio = (Humo OR Flama OR Manual) AND Flujo", vars: [T_HUMO, T_FLAMA, T_MANUAL, T_FLUJO], ev: (v) => (v[0] || v[1] || v[2]) && v[3], sal: "Diluvio" },
+          { f: "Agente = (Humo AND Temp AND Flama) OR Manual", vars: [T_HUMO, T_TEMP, T_FLAMA, T_MANUAL], ev: (v) => (v[0] && v[1] && v[2]) || v[3], sal: "Agente" },
+        ];
+        const c = elegir(casos);
+        const filas = filasTabla(c.vars.length);
+        if (Math.random() < 0.3) {
+          const cuantas = filas.filter((f) => c.ev(f.map(Boolean))).length;
+          return { visual: { tipo: "tablaViva", vars: c.vars, f: c.ev, salidaCorta: c.sal, ocultarSalida: true, inicio: { fila: null } }, lineas: [["h", c.f]], voz: `Para la lógica ${c.f.replace("=", "igual a")}, ¿en cuántas filas de la tabla se activa la salida?`,
+            campos: [{ id: "n", label: "Filas en 1", unidad: "", r: cuantas, tol: 0 }], pista: "Revise fila por fila y cuente los unos de la salida.",
+            solucion: [["r", `Se activa en ${cuantas} de ${filas.length} filas`]], vozSolucion: `La salida vale uno en ${cuantas} de las ${filas.length} filas.` };
+        }
+        const k = Math.floor(Math.random() * filas.length), f = filas[k], s = c.ev(f.map(Boolean));
+        const txt = c.vars.map((v, i) => `${v.n} = ${f[i]}`).join(", ");
+        return { visual: { tipo: "tablaViva", vars: c.vars, f: c.ev, salidaCorta: c.sal, ocultarSalida: true, inicio: { fila: k } }, lineas: [["h", c.f], ["n", txt]],
+          voz: `${c.f.replace("=", "igual a")}. Con ${c.vars.map((v, i) => `${v.n} en ${f[i] ? "uno" : "cero"}`).join(", ")}. ¿Cómo queda la salida?`,
+          opciones: ["0 (apagada)", "1 (activa)"], correcta: s ? 1 : 0, pista: "Ponga los valores en la fórmula y resuelva primero los paréntesis.",
+          solucion: [["r", `${c.sal} = ${s ? 1 : 0}`]], vozSolucion: `Al poner esos valores en la fórmula, la salida da ${s ? "uno" : "cero"}.` };
+      } } },
+  ],
+};
+
+
+// ---- Clase de Lógica en escalera (ladder) en el aula ----
+// rung: lista en serie de elementos { t: "NA" | "NC", i: entrada } o { t, k: true } (contacto de la propia bobina)
+// o { par: [[...], [...]] } (ramas en paralelo)
+const cerradoEsc = (el, e, K) => el.par ? el.par.some((b) => b.every((x) => cerradoEsc(x, e, K))) : (() => { const v = el.k ? !!K : !!e[el.i]; return el.t === "NC" ? !v : v; })();
+const conduceEsc = (rung, e, K) => rung.every((x) => cerradoEsc(x, e, K));
+const resolverSello = (rung, e, K) => { let k = !!K; for (let n = 0; n < 4; n++) k = conduceEsc(rung, e, k); return k; };
+const anchoEsc = (el) => el.par ? Math.max(...el.par.map((b) => b.reduce((s, x) => s + anchoEsc(x), 0))) : 78;
+const altoEsc = (el) => el.par ? el.par.reduce((s, b) => s + Math.max(1, ...b.map(altoEsc)), 0) : 1;
+
+AULA_VISUALES.escalera = function VisEscalera({ p, valor, setValor, hl }) {
+  const e = valor.e || p.ent.map(() => 0);
+  const K = p.sello ? !!valor.K : conduceEsc(p.rung, e, false);
+  const Y0 = 78, LANE = 68, XR = 352, XL = 14;
+  const partes = [];
+  let kk = 0;
+  const contacto = (el, x, y, pIn) => {
+    const cerr = cerradoEsc(el, e, K), pOut = pIn && cerr;
+    const nom = el.k ? p.bobina : p.ent[el.i].n;
+    const toca = el.k || p.fija ? undefined : () => setValor((v) => alternar(v, el.i));
+    partes.push(<g key={kk++} className={(toca ? "toca " : "") + (hl.includes(el.k ? "K" : "e" + el.i) ? "hot" : "")} onClick={toca} role={toca ? "button" : undefined} aria-label={toca ? `${nom}: ${e[el.i] ? "activo" : "normal"}` : undefined}>
+      <rect x={x} y={y - 26} width="78" height="52" fill="transparent" stroke="none" />
+      <Hilo d={`M${x},${y} H${x + 30}`} I={pIn ? 0.3 : 0} />
+      <line x1={x + 30} y1={y - 13} x2={x + 30} y2={y + 13} style={{ stroke: cerr ? "var(--chy)" : undefined, strokeWidth: 3.5 }} />
+      <line x1={x + 46} y1={y - 13} x2={x + 46} y2={y + 13} style={{ stroke: cerr ? "var(--chy)" : undefined, strokeWidth: 3.5 }} />
+      {el.t === "NC" && <line x1={x + 26} y1={y + 12} x2={x + 50} y2={y - 12} style={{ stroke: "var(--chp)" }} />}
+      {cerr && <line x1={x + 30} y1={y} x2={x + 46} y2={y} style={{ stroke: "var(--chy)", strokeWidth: 2 }} />}
+      <Hilo d={`M${x + 46},${y} H${x + 78}`} I={pOut ? 0.3 : 0} />
+      <text x={x + 38} y={y - 18} textAnchor="middle" className={el.k ? "b" : undefined} style={{ fontSize: 12.5 }}>{nom}</text>
+      <text x={x + 38} y={y + 27} textAnchor="middle" className="d" style={{ fontSize: 11 }}>{el.t === "NC" ? "NC (cerrado)" : "NA (abierto)"}</text>
+    </g>);
+    return pOut;
+  };
+  const serie = (lista, x, y, pIn) => { let p2 = pIn, xx = x; lista.forEach((el) => { p2 = elemento(el, xx, y, p2); xx += anchoEsc(el); }); return { x: xx, p: p2 }; };
+  const elemento = (el, x, y, pIn) => {
+    if (!el.par) return contacto(el, x, y, pIn);
+    const W = anchoEsc(el);
+    let yy = y, algun = false;
+    const fines = [];
+    el.par.forEach((b, bi) => {
+      const r = serie(b, x, yy, pIn);
+      if (r.x < x + W) partes.push(<Hilo key={kk++} d={`M${r.x},${yy} H${x + W}`} I={r.p ? 0.3 : 0} />);
+      if (bi > 0) { partes.push(<Hilo key={kk++} d={`M${x},${y} V${yy}`} I={pIn ? 0.3 : 0} />); fines.push([yy, r.p]); }
+      algun = algun || r.p;
+      yy += LANE * Math.max(1, ...b.map(altoEsc));
+    });
+    fines.forEach(([y2, pp]) => partes.push(<Hilo key={kk++} d={`M${x + W},${y2} V${y}`} I={pp ? 0.3 : 0} />));
+    return algun;
+  };
+  const r = serie(p.rung, XL + 14, Y0, true);
+  const xb = XR - 70;
+  const lanes = Math.max(...p.rung.map(altoEsc));
+  return (
+    <>
+      {!p.fija && <div className="botones">
+        {p.ent.map((d, i) => (
+          <button key={i} type="button" className="chip" aria-pressed={!!e[i]} onClick={() => setValor((v) => alternar(v, i))} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span dangerouslySetInnerHTML={{ __html: iconoEntrada(d.d || d.n, !!e[i], 22) }} />{d.n}: {e[i] ? 1 : 0}
+          </button>
+        ))}
+      </div>}
+      <svg className="ch" viewBox={`0 0 366 ${Y0 + LANE * lanes + 6}`} role="img" aria-label="Diagrama en escalera">
+        <line x1={XL} y1="10" x2={XL} y2={Y0 + LANE * lanes} style={{ strokeWidth: 4 }} />
+        <line x1={XR} y1="10" x2={XR} y2={Y0 + LANE * lanes} style={{ strokeWidth: 4 }} />
+        <text x={XL} y="8" textAnchor="middle" className="b" style={{ fontSize: 12 }}>L1 (+)</text>
+        <text x={XR} y="8" textAnchor="middle" className="b" style={{ fontSize: 12 }}>L2 (−)</text>
+        <Hilo d={`M${XL},${Y0} H${XL + 14}`} I={0.3} />
+        {partes}
+        <Hilo d={`M${r.x},${Y0} H${xb}`} I={r.p ? 0.3 : 0} />
+        <g className={hl.includes("K") ? "hot" : undefined}>
+          <path d={`M${xb + 10},${Y0 - 14} q-10,14 0,28 M${xb + 34},${Y0 - 14} q10,14 0,28`} style={{ stroke: K ? "var(--chy)" : undefined, strokeWidth: 3 }} />
+          <text x={xb + 22} y={Y0 + 5} textAnchor="middle" className={K ? "y" : undefined} style={{ fontSize: 13 }}>{p.bobinaCorta || "K"}</text>
+          <text x={xb + 22} y={Y0 + 32} textAnchor="middle" className={K ? "y" : "d"} style={{ fontSize: 11.5 }}>{p.bobina}</text>
+        </g>
+        <Hilo d={`M${xb + 44},${Y0} H${XR}`} I={r.p ? 0.3 : 0} />
+        <g transform={`translate(${xb + 2},${Y0 - 68})`} dangerouslySetInnerHTML={{ __html: iconoSalida(p.salida || "Luz y bocina", K, 40) }} />
+      </svg>
+      <div style={{ textAlign: "center", fontFamily: "var(--tiza)", color: K ? "var(--chy)" : "var(--chd)", fontSize: "1rem", flex: "0 0 auto" }}>
+        {K ? `⚡ Bobina energizada: ${p.bobina} activa` : `Bobina sin energía: ${p.bobina} apagada`}
+      </div>
+    </>
+  );
+  function alternar(v, i) {
+    const n = (v.e || p.ent.map(() => 0)).slice(); n[i] = n[i] ? 0 : 1;
+    return { ...v, e: n, K: p.sello ? resolverSello(p.rung, n, v.K) : undefined };
+  }
+};
+
+const E_HUMO = { n: "Humo", d: "Sensor de Humo" }, E_MANUAL = { n: "Manual", d: "Estación Manual" }, E_TEMP = { n: "Temp.", d: "Sensor de Temperatura" }, E_FLAMA = { n: "Flama", d: "Sensor de Flama" }, E_FLUJO = { n: "Flujo", d: "Sensor de Flujo" }, E_FALLA = { n: "Falla", d: "Falla del sistema" }, E_RESET = { n: "Reset", d: "Botón de reset" }, E_ABORTO = { n: "Aborto", d: "Botón de aborto" };
+const ESC_NA = { tipo: "escalera", ent: [E_HUMO], rung: [{ t: "NA", i: 0 }], bobina: "Sirena", bobinaCorta: "S" };
+const ESC_SERIE = { tipo: "escalera", ent: [E_HUMO, E_TEMP], rung: [{ t: "NA", i: 0 }, { t: "NA", i: 1 }], bobina: "Extractor", bobinaCorta: "EX", salida: "Extractor de Humo" };
+const ESC_PAR = { tipo: "escalera", ent: [E_HUMO, E_MANUAL], rung: [{ par: [[{ t: "NA", i: 0 }], [{ t: "NA", i: 1 }]] }], bobina: "Sirena", bobinaCorta: "S" };
+const ESC_DILUVIO = { tipo: "escalera", ent: [E_HUMO, E_FLAMA, E_MANUAL, E_FLUJO], rung: [{ par: [[{ t: "NA", i: 0 }], [{ t: "NA", i: 1 }], [{ t: "NA", i: 2 }]] }, { t: "NA", i: 3 }], bobina: "Diluvio", bobinaCorta: "D", salida: "Sistema de Diluvio" };
+const ESC_AGENTE = { tipo: "escalera", ent: [E_HUMO, E_TEMP, E_ABORTO], rung: [{ t: "NA", i: 0 }, { t: "NA", i: 1 }, { t: "NC", i: 2 }], bobina: "Agente", bobinaCorta: "AG", salida: "Agente Limpio" };
+const ESC_SELLO = { tipo: "escalera", sello: true, ent: [E_MANUAL, E_RESET], rung: [{ par: [[{ t: "NA", i: 0 }], [{ t: "NA", k: true }]] }, { t: "NC", i: 1 }], bobina: "Alarma", bobinaCorta: "K" };
+
+const AULA_ESCALERA = {
+  titulo: "Lógica en escalera", corto: "Lógica en escalera", clave: "escalera", marca: "Entrenamiento A&D · Lógica",
+  intro: "Aprenda a leer y armar diagramas en escalera: rieles, peldaños, contactos NA y NC, serie, paralelo y el circuito de enclavamiento. Toque los dispositivos y mire cómo corre la energía.",
+  pronuncia: [...PRON_COMPUERTAS, [/\bNA\b/g, "normalmente abierto"], [/\bNC\b/g, "normalmente cerrado"], [/\bL1\b/g, "ele uno"], [/\bL2\b/g, "ele dos"]],
+  textoDirecto: "Ir directo a armar escaleras",
+  etiquetaPuntos: "Práctica de escalera (aula)",
+  despedida: "¡Felicidades, {nombre}! Ya sabe leer diagramas en escalera: contactos NA y NC, serie, paralelo y enclavamiento. Ahora vaya a la práctica a armar sus escaleras y ganar puntos.",
+  resumen: ["La energía va de L1 a L2 por el peldaño", "NA cierra al activarse · NC abre al activarse", "Serie = AND · Paralelo = OR · NC = NOT", "El enclavamiento mantiene la bobina hasta el reset"],
+  temas: [
+    { tab: "¿Qué es?", pasos: [
+      { titulo: "Rieles y peldaños", visual: { ...ESC_NA, inicio: { e: [0] } }, beats: [
+        { t: "¡Hola, {nombre}! Hoy vamos a ver la lógica en escalera, la forma en que los electricistas dibujan el control: parece una escalera acostada.", add: [["h", "Diagrama en escalera"]] },
+        { t: "Las dos líneas verticales son los rieles: a la izquierda L1, el positivo, y a la derecha L2, el negativo.", add: [["n", "Rieles: L1 (+) y L2 (−)"]] },
+        { t: "Cada línea horizontal es un peldaño. A la izquierda van los contactos, que son las condiciones, y a la derecha la bobina, que es la salida.", add: [["n", "Peldaño: contactos → bobina"]], hl: ["K"] },
+        { t: "La regla es una sola: si la energía logra pasar de L1 a L2 por el peldaño, la bobina se energiza y la salida se activa. Active el detector de humo y mire.", set: { e: [1] }, hl: ["e0"], add: [["r", "Si hay camino de L1 a L2 → bobina energizada"]] },
+        { t: "Pruebe usted tocando el botón del detector.", set: { e: [0] } },
+      ] },
+    ] },
+    { tab: "NA y NC", pasos: [
+      { titulo: "Contacto normalmente abierto", visual: { ...ESC_NA, inicio: { e: [0] } }, beats: [
+        { t: "Hay dos tipos de contacto. El normalmente abierto, NA, se dibuja como dos rayitas separadas.", add: [["h", "Contacto NA"], ["n", "—| |—  abierto en reposo"]], hl: ["e0"] },
+        { t: "En reposo está abierto y no deja pasar. Cuando el dispositivo se activa, se cierra y deja pasar la energía.", set: { e: [1] }, add: [["r", "NA: se cierra al activarse (como un SÍ)"]] },
+      ] },
+      { titulo: "Contacto normalmente cerrado", visual: { tipo: "escalera", ent: [E_HUMO], rung: [{ t: "NC", i: 0 }], bobina: "Inyector", bobinaCorta: "IA", salida: "Inyector de aire (ventilador)", inicio: { e: [0] } }, beats: [
+        { t: "El normalmente cerrado, NC, lleva una raya diagonal. En reposo está cerrado y deja pasar.", add: [["h", "Contacto NC"], ["n", "—|/|—  cerrado en reposo"]], hl: ["e0"] },
+        { t: "Cuando el dispositivo se activa, se abre y corta la energía. Por eso funciona como un NOT: aquí el inyector de aire se apaga cuando hay humo.", set: { e: [1] }, add: [["r", "NC: se abre al activarse (NOT)"]] },
+        { t: "Pruebe usted.", set: { e: [0] } },
+      ], ejercicio: { tipo: "opcion", t: "Pregunta: un contacto NC de un sensor, ¿qué hace cuando el sensor se activa?", pregunta: "Un contacto NC, al activarse su sensor…", opciones: ["Se abre y corta la energía", "Se cierra y deja pasar", "No cambia"], correcta: 0,
+        bien: "El normalmente cerrado se abre al activarse: es la versión en escalera del NOT.", pista: "Recuerde la raya diagonal: en reposo deja pasar." } },
+    ] },
+    { tab: "Serie = AND", pasos: [
+      { titulo: "Contactos en serie", visual: { ...ESC_SERIE, inicio: { e: [0, 0] } }, beats: [
+        { t: "Si pongo dos contactos uno detrás de otro, en serie, la energía tiene que pasar por los dos.", add: [["h", "Serie = AND"]] },
+        { t: "Con solo humo, el primer contacto se cierra pero el segundo sigue abierto: la energía se queda a medio camino.", set: { e: [1, 0] }, hl: ["e0"] },
+        { t: "Con humo y temperatura, los dos se cierran y el extractor arranca. Esto es exactamente una AND.", set: { e: [1, 1] }, add: [["f", "Extractor = Humo AND Temp"]] },
+      ] },
+      { titulo: "Ejercicio: arranque el extractor", visual: { ...ESC_SERIE, inicio: { e: [0, 0] } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Su turno, {nombre}. Haga que arranque el extractor de humo.", pregunta: "Energice la bobina del extractor.", indicacion: "Toque los dispositivos de arriba.",
+          revisar: (v) => (conduceEsc(ESC_SERIE.rung, v.e || [], false) ? true : (v.e || []).some(Boolean) ? "Va bien: en serie tiene que cerrar los dos contactos." : null), bien: "En serie, con los dos contactos cerrados, la energía llega a la bobina." } },
+    ] },
+    { tab: "Paralelo = OR", pasos: [
+      { titulo: "Contactos en paralelo", visual: { ...ESC_PAR, inicio: { e: [0, 0] } }, beats: [
+        { t: "Ahora pongo los contactos en paralelo: dos caminos distintos para llegar a la bobina.", add: [["h", "Paralelo = OR"]] },
+        { t: "Con solo el humo, la energía pasa por el camino de arriba.", set: { e: [1, 0] } },
+        { t: "Con solo la estación manual, pasa por el de abajo. Con cualquiera de los dos, la sirena suena: es una OR.", set: { e: [0, 1] }, add: [["f", "Sirena = Humo OR Manual"]] },
+        { t: "Pruebe usted.", set: { e: [0, 0] } },
+      ] },
+      { titulo: "Combinado: el diluvio", visual: { ...ESC_DILUVIO, inicio: { e: [0, 0, 0, 0] } }, beats: [
+        { t: "Se pueden combinar. Este es el diluvio: tres contactos en paralelo, humo, flama y manual, y después en serie el de flujo.", add: [["h", "Paralelo + serie"], ["f", "Diluvio = (Humo OR Flama OR Manual) AND Flujo"]] },
+        { t: "Con flama, la energía pasa el grupo en paralelo, pero se detiene en el flujo.", set: { e: [0, 1, 0, 0] } },
+        { t: "Con flujo confirmado, llega a la bobina y se dispara el diluvio.", set: { e: [0, 1, 0, 1] }, add: [["r", "Paralelo = OR · luego en serie = AND"]] },
+      ] },
+      { titulo: "Ejercicio: agente limpio", visual: { ...ESC_AGENTE, inicio: { e: [0, 0, 1] } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Reto: el agente limpio necesita humo y temperatura, y el botón de aborto en NC lo bloquea. Ahora el aborto está presionado. Haga que se descargue.", pregunta: "Descargue el agente: Humo AND Temp AND NOT Aborto.", indicacion: "Toque los dispositivos de arriba.",
+          revisar: (v) => { const e = v.e || []; if (conduceEsc(ESC_AGENTE.rung, e, false)) return true; if (e[0] && e[1] && e[2]) return "Humo y temperatura listos, pero el aborto en NC sigue abierto."; return null; },
+          bien: "Con humo y temperatura, y el aborto suelto, el NC queda cerrado y el agente se descarga." } },
+    ] },
+    { tab: "Enclavamiento", pasos: [
+      { titulo: "El circuito que se recuerda", visual: { ...ESC_SELLO, inicio: { e: [0, 0], K: false } }, beats: [
+        { t: "Un circuito muy usado es el enclavamiento, o sello. Sirve para que la alarma siga activa aunque suelten el botón.", add: [["h", "Enclavamiento (sello)"]] },
+        { t: "En paralelo con la estación manual se pone un contacto de la misma bobina, K.", hl: ["K"], add: [["n", "Contacto K en paralelo con el botón"]] },
+        { t: "Al activar la manual, la bobina se energiza y su contacto K se cierra.", set: { e: [1, 0], K: true } },
+        { t: "Si sueltan la manual, la energía sigue pasando por el contacto K: la bobina se queda enclavada.", set: { e: [0, 0], K: true }, add: [["r", "Se mantiene sola"]] },
+        { t: "Solo el reset, que es un NC en serie, la apaga. Así funciona el enclavamiento de las alarmas en un panel.", set: { e: [0, 1], K: false }, add: [["n", "Reset NC en serie → la desenclava"]] },
+        { t: "Pruébelo usted.", set: { e: [0, 0], K: false } },
+      ] },
+      { titulo: "Ejercicio: enclave y resetee", visual: { ...ESC_SELLO, inicio: { e: [0, 0], K: false } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Active la alarma con la estación manual, suelte la manual y compruebe que sigue activa. Después, haga reset.", pregunta: "Enclave la alarma y luego resetéela.", indicacion: "Manual 1 → Manual 0 → Reset 1.",
+          revisar: (v, mem) => { const e = v.e || [];
+            if (v.K && !e[0] && !e[1]) { mem.enclavo = true; return "¡Eso es! Quedó enclavada. Ahora haga el reset."; }
+            if (mem.enclavo && !v.K && e[1]) return true;
+            if (v.K && e[0]) return "La alarma se activó. Ahora suelte la estación manual."; return null; },
+          bien: "El contacto K la mantuvo, y el reset en NC la desenclavó." } },
+    ] },
+    { tab: "Práctica", practica: {
+      intro: "Ahora practique, {nombre}. Le muestro una escalera con algunos dispositivos activos; usted dice si la bobina queda energizada.",
+      extra: "Ir a armar escaleras con puntos",
+      generar: () => {
+        const c = elegir([ESC_SERIE, ESC_PAR, ESC_DILUVIO, ESC_AGENTE, ESC_NA, { tipo: "escalera", ent: [E_FLAMA, E_TEMP, E_FALLA], rung: [{ par: [[{ t: "NA", i: 0 }], [{ t: "NA", i: 1 }]] }, { t: "NC", i: 2 }], bobina: "Visible", bobinaCorta: "V" }]);
+        const e = c.ent.map(() => (Math.random() < 0.5 ? 1 : 0));
+        const K = conduceEsc(c.rung, e, false);
+        const act = c.ent.filter((_, i) => e[i]).map((d) => d.n);
+        return { visual: { ...c, fija: true, inicio: { e } }, lineas: [["h", `Bobina: ${c.bobina}`], ["n", act.length ? `Activos: ${act.join(", ")}` : "Nada activo"]],
+          voz: `${act.length ? "Están activos: " + act.join(", ") : "No hay nada activo"}. ¿Queda energizada la bobina ${c.bobina}?`,
+          opciones: ["No, sin energía", "Sí, energizada"], correcta: K ? 1 : 0, pista: "Siga el camino desde L1: NA cerrado si está activo, NC abierto si está activo.",
+          solucion: [["r", K ? "Hay camino de L1 a L2 → energizada" : "El camino se corta → sin energía"]], vozSolucion: K ? "Hay un camino completo de L1 a L2, así que la bobina queda energizada." : "En algún punto el camino se corta, así que la bobina no tiene energía." };
+      } } },
+  ],
+};
+
+
+// ---- Clase de NFPA 72 en el aula: dibujos con medidas que se mueven ----
+const banda = (y1, y2, x1, x2, ok) => <rect x={x1} y={Math.min(y1, y2)} width={x2 - x1} height={Math.abs(y2 - y1)} fill={ok ? "rgba(166,227,161,.22)" : "rgba(243,220,107,.16)"} stroke="var(--chg)" strokeDasharray="5 4" strokeWidth="1.5" />;
+const cota = (x, y1, y2, txt, cls = "y") => <g><line x1={x} y1={y1} x2={x} y2={y2} style={{ strokeWidth: 1.4, stroke: "var(--chb)" }} /><line x1={x - 5} y1={y1} x2={x + 5} y2={y1} style={{ strokeWidth: 1.4, stroke: "var(--chb)" }} /><line x1={x - 5} y1={y2} x2={x + 5} y2={y2} style={{ strokeWidth: 1.4, stroke: "var(--chb)" }} /><text x={x + 8} y={(y1 + y2) / 2 + 4} className={cls} style={{ fontSize: 13 }}>{txt}</text></g>;
+const fm = (m) => `${Number(m).toFixed(2)} m`;
+
+// Vista de frente de una pared: estación manual o luz estroboscópica
+AULA_VISUALES.altura = function VisAltura({ p, valor, setValor, hl }) {
+  const modo = p.modo || "manual";
+  const piso = 215, esc = modo === "manual" ? 80 : 68; // px por metro
+  const yM = (m) => piso - m * esc;
+  if (modo === "manual") {
+    const h = valor.h ?? 1.5, d = valor.d ?? 2.5;
+    const okH = h >= 1.07 - 1e-9 && h <= 1.22 + 1e-9, okD = d <= 1.52 + 1e-9;
+    const xPuerta = 60, xEst = xPuerta + 28 + d * 70;
+    return (
+      <>
+        <svg className="ch" viewBox="0 0 360 240" role="img" aria-label="Estación manual en la pared">
+          <line x1="10" y1={piso} x2="350" y2={piso} style={{ strokeWidth: 3 }} />
+          <rect className="t" x={xPuerta - 30} y={yM(2.1)} width="58" height={2.1 * esc} />
+          <text x={xPuerta - 1} y={yM(1.0)} textAnchor="middle" className="d">puerta</text>
+          <circle cx={xPuerta + 18} cy={yM(1.0)} r="3" fill="var(--ch)" />
+          <g className={hot(hl, "banda")}>{banda(yM(1.07), yM(1.22), 150, 350, okH)}<text x="348" y={yM(1.22) - 4} textAnchor="end" className="g" style={{ fontSize: 12 }}>1.07 – 1.22 m</text></g>
+          <g className={hot(hl, "dist")}><line x1={xPuerta + 28} y1={piso + 12} x2={xPuerta + 28 + 1.52 * 70} y2={piso + 12} style={{ stroke: "var(--chg)", strokeDasharray: "5 4", strokeWidth: 2 }} /><text x={xPuerta + 28 + 0.76 * 70} y={piso + 25} textAnchor="middle" className="g" style={{ fontSize: 12 }}>máx 1.52 m de la puerta</text></g>
+          <g transform={`translate(${xEst - 16},${yM(h) - 16})`} dangerouslySetInnerHTML={{ __html: iconoEntrada("Estación Manual", false, 32) }} />
+          {cota(xEst + 24, piso, yM(h), fm(h), okH ? "g" : "p")}
+          <text x="180" y="20" textAnchor="middle" className={okH && okD ? "g" : "p"} style={{ fontSize: 15 }}>{okH && okD ? "✓ Bien ubicada" : !okH ? "Altura fuera de rango" : "Muy lejos de la puerta"}</text>
+        </svg>
+        {!p.fija && <div className="perillas">
+          <Perilla etiqueta="Altura de la palanca" valor={h} min={0.6} max={1.9} paso={0.01} onCambio={(x) => setValor({ h: x })} fmt={fm} />
+          <Perilla etiqueta="Distancia a la puerta" valor={d} min={0.2} max={3} paso={0.02} onCambio={(x) => setValor({ d: x })} fmt={fm} />
+        </div>}
+      </>
+    );
+  }
+  // estrobo
+  const h = valor.h ?? 1.8, techo = 2.9;
+  const ok = h >= 2.03 - 1e-9 && h <= 2.44 + 1e-9;
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 360 240" role="img" aria-label="Luz estroboscópica en la pared">
+        <line x1="10" y1={piso} x2="350" y2={piso} style={{ strokeWidth: 3 }} />
+        <line x1="10" y1={yM(techo)} x2="350" y2={yM(techo)} style={{ strokeWidth: 3 }} /><text x="14" y={yM(techo) + 14} className="d">techo</text>
+        <g className={hot(hl, "banda")}>{banda(yM(2.03), yM(2.44), 120, 350, ok)}<text x="348" y={yM(2.44) - 4} textAnchor="end" className="g" style={{ fontSize: 12 }}>2.03 – 2.44 m</text></g>
+        <g transform={`translate(${180},${yM(h) - 20})`} dangerouslySetInnerHTML={{ __html: iconoSalida("Luz y bocina", ok, 36) }} />
+        {cota(230, piso, yM(h), fm(h) + " (borde inferior del lente)", ok ? "g" : "p")}
+        <path d="M60,215 v-50 m-12,14 l12,-14 l12,14" style={{ strokeWidth: 2 }} /><circle cx="60" cy="150" r="8" className="t" /><text x="60" y="232" textAnchor="middle" className="d">persona</text>
+        <text x="180" y="20" textAnchor="middle" className={ok ? "g" : "p"} style={{ fontSize: 15 }}>{ok ? "✓ Altura correcta" : "Fuera del rango de la norma"}</text>
+      </svg>
+      {!p.fija && <div className="perillas"><Perilla etiqueta="Altura del estrobo" valor={h} min={1.2} max={2.8} paso={0.01} onCambio={(x) => setValor({ h: x })} fmt={fm} /></div>}
+    </>
+  );
+};
+
+// Esquina techo-pared ampliada: detector de humo en pared o de calor en techo
+AULA_VISUALES.esquina = function VisEsquina({ p, valor, setValor, hl }) {
+  const modo = p.modo || "humoPared";
+  const X0 = 60, Y0 = 40, esc = 4.2; // px por cm; pared en x=X0, techo en y=Y0
+  if (modo === "humoPared") {
+    const cm = valor.cm ?? 45, ok = cm <= 30;
+    return (
+      <>
+        <svg className="ch" viewBox="0 0 360 240" role="img" aria-label="Detector de humo en pared">
+          <line x1={X0} y1={Y0} x2="350" y2={Y0} style={{ strokeWidth: 4 }} /><line x1={X0} y1={Y0} x2={X0} y2="235" style={{ strokeWidth: 4 }} />
+          <text x="200" y={Y0 - 8} textAnchor="middle" className="d">techo</text><text x={X0 - 8} y="200" textAnchor="end" className="d">pared</text>
+          <g className={hot(hl, "banda")}>{banda(Y0, Y0 + 30 * esc, X0, X0 + 120, ok)}<text x={X0 + 124} y={Y0 + 15 * esc} className="g" style={{ fontSize: 12 }}>zona permitida: 0 a 30 cm</text></g>
+          <rect x={X0} y={Y0 + cm * esc - 12} width="12" height="24" rx="3" fill={ok ? "#f8f9fa" : "#ffc9c9"} stroke="#868e96" />
+          <g transform={`translate(${X0 + 14},${Y0 + cm * esc - 14})`} dangerouslySetInnerHTML={{ __html: iconoEntrada("Sensor de Humo", false, 28) }} />
+          {cota(X0 + 70, Y0, Y0 + cm * esc, `${Math.round(cm)} cm bajo el techo`, ok ? "g" : "p")}
+          <text x="200" y="232" textAnchor="middle" className={ok ? "g" : "p"} style={{ fontSize: 15 }}>{ok ? "✓ El humo lo alcanza" : "Muy bajo: el humo se acumula arriba"}</text>
+        </svg>
+        {!p.fija && <div className="perillas"><Perilla etiqueta="Distancia desde el techo" valor={cm} min={0} max={45} paso={1} onCambio={(x) => setValor({ cm: x })} fmt={(x) => `${x} cm`} /></div>}
+      </>
+    );
+  }
+  const cm = valor.cm ?? 4, ok = cm >= 10;
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 360 240" role="img" aria-label="Detector de calor en el techo">
+        <line x1={X0} y1={Y0} x2="350" y2={Y0} style={{ strokeWidth: 4 }} /><line x1={X0} y1={Y0} x2={X0} y2="235" style={{ strokeWidth: 4 }} />
+        <text x="200" y={Y0 - 8} textAnchor="middle" className="d">techo</text><text x={X0 - 8} y="200" textAnchor="end" className="d">pared</text>
+        <g className={hot(hl, "banda")}>{banda(Y0, Y0 + 10 * esc, X0, X0 + 10 * esc, false)}<text x={X0 + 4} y={Y0 + 10 * esc + 16} className="p" style={{ fontSize: 12 }}>aire muerto: no</text></g>
+        <path d={`M${X0 + 4},${Y0 + 30} q 20,-24 50,-26`} style={{ stroke: "var(--chb)", strokeDasharray: "4 5" }} />
+        <g transform={`translate(${X0 + cm * esc - 14},${Y0 + 2})`} dangerouslySetInnerHTML={{ __html: iconoEntrada("Sensor de Temperatura", false, 28) }} />
+        <line x1={X0} y1={Y0 + 50} x2={X0 + cm * esc} y2={Y0 + 50} style={{ stroke: ok ? "var(--chg)" : "var(--chp)", strokeWidth: 2 }} />
+        <text x={X0 + cm * esc + 8} y={Y0 + 55} className={ok ? "g" : "p"} style={{ fontSize: 13 }}>{`${Math.round(cm)} cm de la pared`}</text>
+        <text x="200" y="232" textAnchor="middle" className={ok ? "g" : "p"} style={{ fontSize: 15 }}>{ok ? "✓ Fuera del aire muerto" : "Muy pegado a la pared"}</text>
+      </svg>
+      {!p.fija && <div className="perillas"><Perilla etiqueta="Distancia a la pared" valor={cm} min={0} max={60} paso={1} onCambio={(x) => setValor({ cm: x })} fmt={(x) => `${x} cm`} /></div>}
+    </>
+  );
+};
+
+// Vista de planta: distancia horizontal a la cocina o a la salida de aire
+AULA_VISUALES.planta = function VisPlanta({ p, valor, setValor, hl }) {
+  const modo = p.modo || "cocina";
+  const X0 = 50, esc = modo === "cocina" ? 33 : 120; // px por metro
+  const d = valor.d ?? (modo === "cocina" ? 1.5 : 0.4);
+  const zonas = modo === "cocina" ? [[0, 3, "no", "#ff8787"], [3, 6.1, "sí (fotoeléctrico)", "#a6e3a1"], [6.1, 9, "sí", "#a6e3a1"]] : [[0, 0.9, "no", "#ff8787"], [0.9, 2.5, "sí", "#a6e3a1"]];
+  const ok = modo === "cocina" ? d >= 3 && d <= 6.1 : d >= 0.9;
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 360 230" role="img" aria-label={modo === "cocina" ? "Detector cerca de la cocina" : "Detector cerca de una salida de aire"}>
+        <text x="180" y="18" textAnchor="middle" className="d">vista desde arriba</text>
+        {zonas.map(([a, b, t, c], k) => <g key={k} className={hot(hl, "z" + k)}><rect x={X0 + a * esc} y="60" width={(Math.min(b, 9) - a) * esc} height="90" fill={c} opacity=".16" stroke="none" /><text x={X0 + ((a + Math.min(b, modo === "cocina" ? 9 : 2.5)) / 2) * esc} y="170" textAnchor="middle" style={{ fill: c, fontSize: 12 }}>{t}</text><line x1={X0 + a * esc} y1="55" x2={X0 + a * esc} y2="155" style={{ stroke: c, strokeDasharray: "4 4", strokeWidth: 1.5 }} /><text x={X0 + a * esc} y="50" textAnchor="middle" className="d" style={{ fontSize: 11 }}>{a ? a + " m" : ""}</text></g>)}
+        {modo === "cocina" ? <g><rect x={X0 - 40} y="80" width="40" height="50" rx="4" fill="#495057" stroke="#212529" />{[0, 1].map((k) => <circle key={k} cx={X0 - 28 + k * 16} cy="96" r="6" fill="none" stroke="#ff922b" strokeWidth="2" />)}<path d={`M${X0 - 28},74 q4,-8 0,-14 M${X0 - 12},74 q4,-8 0,-14`} style={{ stroke: "var(--chd)" }} /><text x={X0 - 20} y="148" textAnchor="middle" className="d" style={{ fontSize: 11 }}>cocina</text></g>
+          : <g><rect x={X0 - 22} y="83" width="44" height="44" fill="none" stroke="var(--ch)" strokeWidth="2" /><path d={`M${X0 - 22},83 l44,44 M${X0 + 22},83 l-44,44`} style={{ strokeWidth: 1 }} />{[0, 1, 2].map((k) => <path key={k} className="cor" d={`M${X0 + 24},${92 + k * 14} h70`} style={{ animationDuration: "1.2s", stroke: "var(--chb)" }} />)}<text x={X0} y="148" textAnchor="middle" className="d" style={{ fontSize: 11 }}>difusor</text></g>}
+        <g transform={`translate(${X0 + d * esc - 16},89)`} dangerouslySetInnerHTML={{ __html: iconoEntrada("Sensor de Humo", false, 32) }} />
+        <line x1={X0} y1="195" x2={X0 + d * esc} y2="195" style={{ stroke: ok ? "var(--chg)" : "var(--chp)", strokeWidth: 2.5 }} />
+        <text x={X0 + d * esc / 2} y="213" textAnchor="middle" className={ok ? "g" : "p"}>{fm(d)}</text>
+        <text x="350" y="40" textAnchor="end" className={ok ? "g" : "p"} style={{ fontSize: 14 }}>{ok ? "✓ Bien" : modo === "cocina" ? (d < 3 ? "Falsas alarmas al cocinar" : "Más lejos de lo necesario") : "El aire le sopla el humo"}</text>
+      </svg>
+      {!p.fija && <div className="perillas"><Perilla etiqueta={modo === "cocina" ? "Distancia a la cocina" : "Distancia al difusor"} valor={d} min={modo === "cocina" ? 0.5 : 0.1} max={modo === "cocina" ? 9 : 2.4} paso={modo === "cocina" ? 0.1 : 0.05} onCambio={(x) => setValor({ d: x })} fmt={fm} /></div>}
+    </>
+  );
+};
+
+// Pasillo: estrobos a lo largo de un corredor
+AULA_VISUALES.corredor = function VisCorredor({ p, valor, setValor, hl }) {
+  const L = 70, sep = valor.sep ?? 40, fin = 4.5;
+  const n = Math.max(2, Math.ceil((L - 2 * fin) / sep) + 1);
+  const real = (L - 2 * fin) / (n - 1);
+  const ok = real <= 30.5;
+  const esc = 320 / L;
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 360 200" role="img" aria-label="Estrobos en un corredor">
+        <rect className="t" x="20" y="60" width="320" height="60" />
+        <text x="180" y="52" textAnchor="middle" className="d">corredor de {L} m (menos de 6.1 m de ancho)</text>
+        {Array.from({ length: n }, (_, k) => { const x = 20 + (fin + k * real) * esc; return <g key={k} transform={`translate(${x - 12},78)`} dangerouslySetInnerHTML={{ __html: iconoSalida("Luz y bocina", ok, 24) }} />; })}
+        <g className={hot(hl, "fin")}>{cota(20, 140, 140, "")}<line x1="20" y1="140" x2={20 + fin * esc} y2="140" style={{ stroke: "var(--chg)", strokeWidth: 2 }} /><text x="22" y="156" className="g" style={{ fontSize: 11 }}>≤ 4.57 m del final</text></g>
+        <g className={hot(hl, "sep")}><line x1={20 + fin * esc} y1="170" x2={20 + (fin + real) * esc} y2="170" style={{ stroke: ok ? "var(--chg)" : "var(--chp)", strokeWidth: 2.5 }} /><text x={20 + (fin + real / 2) * esc} y="188" textAnchor="middle" className={ok ? "g" : "p"}>{redondeo(real)} m entre estrobos</text></g>
+        <text x="340" y="22" textAnchor="end" className={ok ? "g" : "p"} style={{ fontSize: 14 }}>{ok ? `✓ ${n} estrobos cumplen` : "Demasiado separados"}</text>
+      </svg>
+      {!p.fija && <div className="perillas"><Perilla etiqueta="Separación deseada" valor={sep} min={8} max={45} paso={0.5} onCambio={(x) => setValor({ sep: x })} fmt={(x) => `${x} m`} /></div>}
+    </>
+  );
+};
+
+// Estratificación: capa de aire caliente bajo el techo que frena el humo
+AULA_VISUALES.estratificacion = function VisEstrat({ p, valor, setValor, hl }) {
+  const capa = valor.capa ?? true;
+  const tope = capa ? 95 : 48;
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 360 230" role="img" aria-label="Estratificación del humo">
+        <path d="M20,210 V60 L180,20 L340,60 V210" /><line x1="10" y1="210" x2="350" y2="210" style={{ strokeWidth: 3 }} />
+        {capa && <g className={hot(hl, "capa")}><path d="M22,60 L180,22 L338,60 V100 H22 Z" fill="rgba(255,146,43,.18)" stroke="none" /><text x="180" y="80" textAnchor="middle" style={{ fill: "#ffa94d", fontSize: 13 }}>capa de aire caliente (techo al sol)</text></g>}
+        <g transform="translate(166,22)" dangerouslySetInnerHTML={{ __html: iconoEntrada("Sensor de Humo", !capa, 28) }} />
+        <text x="200" y="40" className={capa ? "p" : "g"} style={{ fontSize: 12 }}>{capa ? "no lo ve" : "¡alarma!"}</text>
+        <path d="M150,200 h40 l-6,-14 h-28 z" fill="#868e96" stroke="none" /><path d="M162,186 q6,-12 0,-20 q10,8 6,20" fill="#ff922b" stroke="none" />
+        {[0, 1, 2, 3, 4, 5].map((k) => <circle key={k} cx={170 + (k % 2 ? 8 : -8)} cy={170 - k * ((170 - tope) / 6)} r={8 + k * 2} fill="rgba(200,200,200,.35)" stroke="none" style={{ animation: `aulaBrillo ${1.4 + k * 0.2}s ease-in-out infinite` }} />)}
+        <g fill="rgba(200,200,200,.3)" stroke="none">{[-1, 1].map((s) => [1, 2, 3].map((k) => <circle key={s + "" + k} cx={170 + s * k * 40} cy={tope + 4} r={14 - k * 2} />))}</g>
+        <text x="180" y="228" textAnchor="middle" className={capa ? "p" : "g"}>{capa ? "El humo se frena y se extiende por debajo de la capa" : "Sin capa caliente: el humo llega al techo"}</text>
+      </svg>
+      {!p.fija && <div className="botones"><button type="button" className="chip" aria-pressed={capa} onClick={() => setValor({ capa: !capa })}>{capa ? "☀ Día caluroso (con capa)" : "🌙 Sin capa caliente"}</button></div>}
+    </>
+  );
+};
+
+// Patrón Temporal 3 y bases de 520 Hz: se puede escuchar
+let audioCtxAula = null;
+const sonarPatron = (frec, onPaso) => {
+  try {
+    audioCtxAula = audioCtxAula || new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = audioCtxAula; if (ctx.state === "suspended") ctx.resume();
+    const g = ctx.createGain(); g.gain.value = 0.0001; g.connect(ctx.destination);
+    const o = ctx.createOscillator(); o.type = frec < 1000 ? "square" : "sine"; o.frequency.value = frec; o.connect(g); o.start();
+    const t0 = ctx.currentTime + 0.05;
+    const pasos = [0, 1, 2].map((k) => [k * 1.0, 0.5]); // 3 tonos de 0.5 s, separados 0.5 s; luego 1.5 s de silencio
+    pasos.forEach(([s, d], k) => { g.gain.setValueAtTime(0.18, t0 + s); g.gain.setValueAtTime(0.0001, t0 + s + d); setTimeout(() => onPaso && onPaso(k), (s + 0.05) * 1000); });
+    setTimeout(() => onPaso && onPaso(-1), 2600);
+    o.stop(t0 + 4);
+  } catch (e) { /* sin audio */ }
+};
+AULA_VISUALES.temporal = function VisTemporal({ p, valor, setValor, hl }) {
+  const [paso, setPaso] = useState(-1);
+  const frec = valor.f ?? 3000;
+  const barras = [[0, 0.5], [1, 0.5], [2, 0.5]];
+  const esc = 80;
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 360 200" role="img" aria-label="Patrón Temporal 3">
+        <text x="180" y="22" textAnchor="middle" className="b">Patrón Temporal 3 (evacuación)</text>
+        <line x1="20" y1="140" x2="350" y2="140" />
+        {barras.map(([s, d], k) => <rect key={k} x={20 + s * esc} y="80" width={d * esc} height="60" fill={paso === k ? "#f3dc6b" : "rgba(243,220,107,.35)"} stroke="var(--chy)" />)}
+        <rect x={20 + 2.5 * esc} y="130" width={1.5 * esc} height="10" fill="rgba(238,241,234,.12)" stroke="none" />
+        {[0, 0.5, 1, 1.5, 2, 2.5, 4].map((t) => <text key={t} x={20 + t * esc} y="158" textAnchor="middle" className="d" style={{ fontSize: 10 }}>{t}s</text>)}
+        <text x={20 + 3.25 * esc} y="120" textAnchor="middle" className="d" style={{ fontSize: 11 }}>1.5 s silencio</text>
+        <text x="180" y="186" textAnchor="middle" className="y">3 tonos de 0.5 s · pausa 1.5 s · repite</text>
+      </svg>
+      <div className="botones">
+        <button type="button" className="chip" aria-pressed={frec === 3000} onClick={() => setValor({ f: 3000 })}>Sirena común ~3 kHz</button>
+        <button type="button" className="chip" aria-pressed={frec === 520} onClick={() => setValor({ f: 520 })}>Baja frecuencia 520 Hz</button>
+        <button type="button" className="chip" onClick={() => sonarPatron(frec, setPaso)}>🔊 Escuchar</button>
+      </div>
+    </>
+  );
+};
+
+// Clase A y Clase B: qué pasa cuando se corta el cable
+AULA_VISUALES.clases = function VisClases({ p, valor, setValor, hl }) {
+  const clase = valor.clase || "B", corte = !!valor.corte;
+  const xs = [110, 170, 230, 290];
+  const vivo = (k) => !corte || clase === "A" || k < 2;
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 360 210" role="img" aria-label={`Cableado clase ${clase}`}>
+        <rect x="10" y="60" width="62" height="90" rx="6" fill="rgba(0,0,0,.18)" stroke="var(--ch)" strokeWidth="2.4" />
+        <text x="41" y="84" textAnchor="middle" className="b">Panel</text>
+        <circle cx="30" cy="110" r="6" fill={corte ? "#fcc419" : "rgba(252,196,25,.2)"} stroke="none" style={corte ? { animation: "aulaBrillo .7s infinite" } : undefined} /><text x="40" y="114" style={{ fontSize: 11 }} className={corte ? "y" : "d"}>falla</text>
+        <circle cx="30" cy="132" r="6" fill="#69db7c" stroke="none" /><text x="40" y="136" style={{ fontSize: 11 }} className="d">AC</text>
+        <Hilo d={`M72,80 H${corte ? 195 : 330}`} I={0.02} />
+        {corte && <><path d="M195,72 l10,16 M205,72 l-10,16" style={{ stroke: "var(--chp)", strokeWidth: 3 }} /><path d="M205,80 H330" style={{ stroke: "var(--chd)" }} /></>}
+        {clase === "B" ? <><Hilo d={`M72,130 H330`} I={corte ? 0 : 0.02} /><path d={zigzagV(330, 85, 40)} /><text x="338" y="110" className="d" style={{ fontSize: 11 }}>RFL</text></>
+          : <><Hilo d={`M330,80 V180 H72`} I={corte ? 0.02 : 0} inverso /><Hilo d="M72,130 H330" I={0} on={false} /><text x="200" y="196" textAnchor="middle" className="b" style={{ fontSize: 12 }}>el cable regresa al panel</text></>}
+        {xs.map((x, k) => <g key={k} opacity={vivo(k) ? 1 : 0.3}><line x1={x} y1="80" x2={x} y2="94" /><line x1={x} y1="118" x2={x} y2="130" /><g transform={`translate(${x - 14},92)`} dangerouslySetInnerHTML={{ __html: iconoEntrada("Sensor de Humo", false, 28) }} /></g>)}
+        <g className="toca" onClick={() => !p.fija && setValor({ corte: !corte })} role="button" aria-label="Cortar el cable"><rect x="180" y="62" width="40" height="36" fill="transparent" stroke="none" /></g>
+        <text x="200" y="30" textAnchor="middle" className={corte ? (clase === "A" ? "g" : "p") : "y"} style={{ fontSize: 13 }}>{!corte ? `Clase ${clase}: todo normal` : clase === "A" ? "Clase A: falla, pero todos detectan" : "Clase B: falla y se pierden los de después"}</text>
+      </svg>
+      {!p.fija && <div className="botones">
+        <button type="button" className="chip" aria-pressed={clase === "B"} onClick={() => setValor({ clase: "B" })}>Clase B (con RFL)</button>
+        <button type="button" className="chip" aria-pressed={clase === "A"} onClick={() => setValor({ clase: "A" })}>Clase A (lazo de regreso)</button>
+        <button type="button" className="chip" aria-pressed={corte} onClick={() => setValor({ corte: !corte })}>✂ {corte ? "Reparar el cable" : "Cortar el cable"}</button>
+      </div>}
+    </>
+  );
+};
+
+// Tipos de señal en el panel
+const SENALES_PANEL = {
+  alarma: { color: "#ff6b6b", t: "ALARMA", d: "Emergencia que requiere acción inmediata (incendio).", e: "Detector de humo o estación manual", icono: ["Sensor de Humo", true] },
+  supervision: { color: "#fcc419", t: "SUPERVISIÓN", d: "Algo fuera de lo normal en un sistema que protege (válvula cerrada, bomba).", e: "Válvula de rociadores cerrada", icono: ["Interruptor de válvula", true] },
+  falla: { color: "#ffd43b", t: "FALLA", d: "Una condición adversa del propio sistema: cable cortado, tierra, batería baja.", e: "Cable cortado o batería baja", icono: ["Falla del sistema", true] },
+};
+AULA_VISUALES.senalesPanel = function VisSenalesPanel({ p, valor, setValor, hl }) {
+  const s = valor.s || null;
+  return (
+    <>
+      <svg className="ch" viewBox="0 0 360 200" role="img" aria-label="Señales del panel">
+        <rect x="90" y="16" width="180" height="168" rx="10" fill="#d0d4d9" stroke="#868e96" strokeWidth="2" />
+        <rect x="104" y="28" width="152" height="40" rx="4" fill="#1b2321" />
+        <text x="180" y="53" textAnchor="middle" style={{ fill: s ? SENALES_PANEL[s].color : "#69db7c", fontFamily: "'Courier New',monospace", fontSize: 14, fontWeight: 700 }}>{s ? SENALES_PANEL[s].t : "SISTEMA NORMAL"}</text>
+        {Object.entries(SENALES_PANEL).map(([k, v], i) => <g key={k} className={"toca " + (hot(hl, k) || "")} onClick={() => !p.fija && setValor({ s: s === k ? null : k })} role="button" aria-label={v.t}>
+          <circle cx="118" cy={90 + i * 30} r="8" fill={s === k ? v.color : "rgba(0,0,0,.25)"} stroke="#495057" style={s === k ? { animation: "aulaBrillo .8s infinite" } : undefined} />
+          <text x="134" y={95 + i * 30} style={{ fill: "#1b2321", fontFamily: "Arial", fontSize: 12, fontWeight: 700 }}>{v.t}</text>
+        </g>)}
+        <circle cx="118" cy="180" r="0" />
+      </svg>
+      <div style={{ fontFamily: "var(--tiza)", textAlign: "center", minHeight: "2.6em", color: s ? SENALES_PANEL[s].color : "var(--chd)", fontSize: "1rem", lineHeight: 1.25, flex: "0 0 auto" }}>
+        {s ? <>{SENALES_PANEL[s].d}<br /><span style={{ color: "var(--chb)" }}>Ejemplo: {SENALES_PANEL[s].e}</span></> : "☝ toque una luz del panel"}
+      </div>
+    </>
+  );
+};
+
+const AULA_NFPA72 = {
+  titulo: "NFPA 72 en la práctica", corto: "NFPA 72", clave: "nfpa72", marca: "Entrenamiento A&D · Normas",
+  intro: "Las medidas que más se usan de la NFPA 72, en dibujos que usted mueve: estaciones manuales, estrobos, detectores de humo y calor, cocinas, salidas de aire, corredores, señales del panel, clases de cableado y el patrón Temporal 3.",
+  pronuncia: [[/\bNFPA\b/g, "ene efe pe a"], [/\bADA\b/g, "a de a"], [/(\d)\s*m\b/g, "$1 metros"], [/(\d)\s*cm\b/g, "$1 centímetros"], [/(\d)\s*Hz\b/g, "$1 hercios"], [/(\d)\s*kHz\b/g, "$1 kilohercios"], [/(\d)\s*lb\b/g, "$1 libras"], [/\bRFL\b/g, "resistencia de fin de línea"], [/\bIDNAC\b/g, "i de nac"], [/\bNAC\b/g, "nac"]],
+  textoDirecto: "Ir directo al examen",
+  etiquetaPuntos: "Práctica NFPA 72 (aula)",
+  despedida: "¡Felicidades, {nombre}! Ya repasó las medidas clave de la NFPA 72. Ahora haga el examen para ganar sus puntos.",
+  resumen: ["Manual: 1.07–1.22 m de alto y ≤ 1.52 m de la puerta; recorrido ≤ 61 m", "Estrobo de pared: 2.03–2.44 m", "Humo en pared: hasta 30 cm bajo el techo · calor: ≥ 10 cm de la pared", "Cocina: 3 a 6.1 m · aire: ≥ 0.9 m", "Alarma, supervisión y falla", "Clase B lleva RFL · Temporal 3 · 520 Hz"],
+  temas: [
+    { tab: "Las normas", pasos: [
+      { titulo: "¿Qué norma dice qué?", visual: { tipo: "senalesPanel", inicio: { s: null } }, beats: [
+        { t: "¡Hola, {nombre}! Hoy repasamos la NFPA 72 con dibujos que usted puede mover. Primero, ¿qué norma dice qué?", add: [["h", "Las normas NFPA"]] },
+        { t: "La NFPA 101, el Código de Seguridad Humana, dice dónde se requiere detección y notificación según el tipo de edificio.", add: [["n", "NFPA 101 → dónde se requiere"]] },
+        { t: "La NFPA 72 dice cómo instalar, probar y mantener el sistema de alarma y detección.", add: [["n", "NFPA 72 → cómo instalar, probar y mantener"]] },
+        { t: "Y la NFPA 70, el código eléctrico, rige el cableado y la parte eléctrica.", add: [["n", "NFPA 70 → instalación eléctrica"], ["r", "101 dónde · 72 cómo · 70 electricidad"]] },
+      ] },
+      { titulo: "Las tres señales", visual: { tipo: "senalesPanel", inicio: { s: null } }, beats: [
+        { t: "La norma define tres tipos de señal. La señal de alarma indica una emergencia que requiere acción inmediata, como un incendio.", set: { s: "alarma" }, add: [["h", "Tipos de señal"], ["n", "Alarma: emergencia, acción inmediata"]] },
+        { t: "La señal de supervisión indica algo fuera de lo normal en un sistema que protege, como una válvula de rociadores cerrada.", set: { s: "supervision" }, add: [["n", "Supervisión: válvula cerrada, bomba, etc."]] },
+        { t: "Y la señal de falla indica una condición adversa del propio sistema: un cable cortado, una tierra o batería baja.", set: { s: "falla" }, add: [["n", "Falla: problema del propio sistema"]] },
+        { t: "Toque las luces del panel para repasarlas.", set: { s: null } },
+      ], ejercicio: { tipo: "opcion", t: "Pregunta: se corta el cable de un circuito de detectores. ¿Qué señal da el panel?", pregunta: "Se corta un cable de detectores. ¿Qué señal es?", opciones: ["Falla", "Alarma", "Supervisión"], correcta: 0,
+        bien: "Un cable cortado es una condición adversa del sistema: señal de falla.", pista: "No hay incendio ni válvula cerrada: el problema es del propio sistema." } },
+    ] },
+    { tab: "Estaciones manuales", pasos: [
+      { titulo: "Altura y ubicación", visual: { tipo: "altura", modo: "manual", inicio: { h: 1.5, d: 2.5 } }, beats: [
+        { t: "Empecemos con las estaciones manuales. La parte que se acciona debe quedar entre 1.07 y 1.22 m sobre el piso.", add: [["h", "Estación manual"], ["f", "Altura: 1.07 m a 1.22 m"]], hl: ["banda"] },
+        { t: "Así la alcanza cualquier persona, incluso en silla de ruedas.", set: { h: 1.15 } },
+        { t: "Además, debe estar a no más de 1.52 m de la puerta de cada salida, en cada piso.", hl: ["dist"], set: { d: 1.2 }, add: [["f", "≤ 1.52 m de la puerta de salida"]] },
+        { t: "Y si el piso es grande, se agregan más estaciones para que nadie camine más de 61 m hasta la más cercana. Por la ley ADA, la fuerza para accionarla no debe pasar de 5 lb.", add: [["n", "Recorrido máximo: 61 m"], ["n", "Fuerza máxima (ADA): 5 lb"]] },
+      ] },
+      { titulo: "Ejercicio: instale la estación", visual: { tipo: "altura", modo: "manual", inicio: { h: 1.6, d: 2.6 } }, beats: [],
+        ejercicio: { tipo: "meta", t: "Su turno, {nombre}. Instale esta estación manual cumpliendo la norma: altura y distancia a la puerta.", pregunta: "Ubique la estación manual según la NFPA 72.", indicacion: "Mueva las dos perillas.",
+          revisar: (v) => { const okH = v.h >= 1.07 && v.h <= 1.22, okD = v.d <= 1.52; if (okH && okD) return true; if (okH) return "La altura ya está bien. Ahora acérquela a la puerta."; if (okD) return "La distancia está bien. Ajuste la altura."; return null; },
+          bien: "Entre 1.07 y 1.22 m de alto y a menos de 1.52 m de la puerta." } },
+    ] },
+    { tab: "Estrobos y sonido", pasos: [
+      { titulo: "Altura del estrobo", visual: { tipo: "altura", modo: "estrobo", inicio: { h: 1.8 } }, beats: [
+        { t: "Las luces estroboscópicas de pared se montan con el borde inferior del lente entre 2.03 y 2.44 m sobre el piso.", add: [["h", "Estrobo de pared"], ["f", "2.03 m a 2.44 m"]], hl: ["banda"], set: { h: 2.2 } },
+        { t: "Más abajo, una persona o un mueble la tapan; más arriba, se pierde de vista. Si el techo es más bajo, se pone a 15 cm del techo.", add: [["n", "Techo bajo: a 15 cm del techo"]] },
+      ], ejercicio: { tipo: "meta", t: "Mueva el estrobo a una altura correcta.", pregunta: "Ponga el estrobo a la altura de la norma.", indicacion: "Mueva la perilla.", revisar: (v) => v.h >= 2.03 && v.h <= 2.44, bien: "Entre 2.03 y 2.44 metros: así se ve desde todo el cuarto." } },
+      { titulo: "Estrobos en un corredor", visual: { tipo: "corredor", inicio: { sep: 40 } }, beats: [
+        { t: "En un corredor de menos de 6.1 m de ancho, los estrobos van a no más de 4.57 m de cada extremo.", add: [["h", "Corredores"], ["n", "≤ 4.57 m de cada extremo"]], hl: ["fin"] },
+        { t: "Y entre uno y otro, la separación no debe pasar de 30.5 m. Mueva la separación y mire cuántos estrobos se necesitan.", hl: ["sep"], add: [["f", "Separación ≤ 30.5 m"]] },
+      ], ejercicio: { tipo: "meta", t: "Ajuste la separación para que el corredor cumpla.", pregunta: "Haga que el corredor cumpla con la separación.", indicacion: "Mueva la perilla.",
+        revisar: (v) => { const n = Math.max(2, Math.ceil((70 - 9) / v.sep) + 1); return (70 - 9) / (n - 1) <= 30.5; }, bien: "Con la separación a 30.5 m o menos, el corredor queda bien cubierto." } },
+      { titulo: "Temporal 3 y 520 Hz", visual: { tipo: "temporal", inicio: { f: 3000 } }, beats: [
+        { t: "La señal de evacuación usa el patrón Temporal 3: tres tonos de medio segundo, una pausa de un segundo y medio, y se repite. Toque escuchar.", add: [["h", "Señal de evacuación"], ["f", "Temporal 3: ▬ ▬ ▬ … pausa"]] },
+        { t: "En cuartos donde se duerme, la norma pide bases y sirenas de baja frecuencia, de 520 Hz, porque despiertan mejor, sobre todo a personas mayores o con problemas de audición.", set: { f: 520 }, add: [["n", "Dormitorios: 520 Hz (onda cuadrada)"]] },
+      ] },
+    ] },
+    { tab: "Detectores", pasos: [
+      { titulo: "Detector de humo en pared", visual: { tipo: "esquina", modo: "humoPared", inicio: { cm: 45 } }, beats: [
+        { t: "El humo caliente sube y se junta bajo el techo. Por eso, un detector de humo de pared se monta desde el techo hasta 30 cm hacia abajo, como máximo.", add: [["h", "Humo en pared"], ["f", "0 a 30 cm bajo el techo"]], hl: ["banda"] },
+        { t: "Si queda más bajo, el humo puede acumularse arriba sin llegar a él.", set: { cm: 20 } },
+      ], ejercicio: { tipo: "meta", t: "Suba el detector a una altura correcta.", pregunta: "Ubique el detector de pared según la norma.", indicacion: "Mueva la perilla.", revisar: (v) => v.cm <= 30, bien: "A 30 centímetros o menos del techo, el detector ve el humo." } },
+      { titulo: "Detector de calor en el techo", visual: { tipo: "esquina", modo: "calorTecho", inicio: { cm: 4 } }, beats: [
+        { t: "En la esquina entre el techo y la pared queda un aire quieto, el aire muerto, al que el calor casi no llega.", add: [["h", "Calor en el techo"]], hl: ["banda"] },
+        { t: "Por eso, un detector de temperatura en el techo se separa al menos 10 cm de la pared.", set: { cm: 15 }, add: [["f", "≥ 10 cm de la pared"]] },
+      ], ejercicio: { tipo: "meta", t: "Separe el detector de la pared lo suficiente.", pregunta: "Saque el detector de calor del aire muerto.", indicacion: "Mueva la perilla.", revisar: (v) => v.cm >= 10, bien: "A 10 centímetros o más de la pared, fuera del aire muerto." } },
+      { titulo: "Cerca de la cocina", visual: { tipo: "planta", modo: "cocina", inicio: { d: 1.5 } }, beats: [
+        { t: "Cerca de una cocina hay que cuidar las falsas alarmas. A menos de 3 m del artefacto de cocina no se pone detector de humo.", add: [["h", "Cocinas"], ["w", "Menos de 3 m: no"]], hl: ["z0"] },
+        { t: "Si se necesita cobertura cerca, se puede ubicar entre 3 y 6.1 m, con un detector fotoeléctrico o con botón para silenciarlo.", hl: ["z1"], set: { d: 4.5 }, add: [["f", "Entre 3 m y 6.1 m"]] },
+      ], ejercicio: { tipo: "meta", t: "Ubique el detector en la zona permitida cerca de la cocina.", pregunta: "Ponga el detector entre 3 y 6.1 m de la cocina.", indicacion: "Mueva la perilla.", revisar: (v) => v.d >= 3 && v.d <= 6.1, bien: "Entre 3 y 6.1 metros, sin falsas alarmas por cocinar." } },
+      { titulo: "Salidas de aire", visual: { tipo: "planta", modo: "aire", inicio: { d: 0.4 } }, beats: [
+        { t: "El aire acondicionado puede soplar el humo lejos del detector. Por eso se separa al menos 0.9 m de cualquier difusor o salida de aire.", add: [["h", "Corrientes de aire"], ["f", "≥ 0.9 m del difusor"]], hl: ["z0"] },
+      ], ejercicio: { tipo: "meta", t: "Aleje el detector del difusor lo necesario.", pregunta: "Separe el detector del difusor.", indicacion: "Mueva la perilla.", revisar: (v) => v.d >= 0.9, bien: "A 0.9 metros o más, el aire ya no le sopla el humo." } },
+      { titulo: "Estratificación", visual: { tipo: "estratificacion", inicio: { capa: true } }, beats: [
+        { t: "Cuidado con un concepto que confunde: la estratificación. En una bodega alta con el techo al sol, se forma una capa de aire caliente bajo el techo.", add: [["h", "Estratificación"]], hl: ["capa"] },
+        { t: "El humo de un fuego pequeño sube, choca con esa capa, se frena y se extiende por debajo. Nunca llega a los detectores del techo.", add: [["w", "La estratificación impide que el humo llegue arriba"]] },
+        { t: "Sin la capa caliente, el humo sí llega y el detector da alarma. Por eso en bodegas altas se ponen detectores a diferentes alturas o de haz.", set: { capa: false }, add: [["n", "Solución: detectores a varias alturas o de haz"]] },
+      ], ejercicio: { tipo: "opcion", t: "Pregunta: la estratificación, ¿ayuda al humo a llegar a las partes altas de una bodega?", pregunta: "La estratificación ayuda al humo a llegar a lo alto de una bodega.", opciones: ["Falso", "Verdadero"], correcta: 0,
+        bien: "Es falso: la estratificación frena el humo antes de llegar al techo.", pista: "Mire el dibujo con la capa caliente: ¿llega el humo al detector?" } },
+    ] },
+    { tab: "Cableado", pasos: [
+      { titulo: "Clase B y clase A", visual: { tipo: "clases", inicio: { clase: "B", corte: false } }, beats: [
+        { t: "Ahora el cableado. En clase B, el circuito sale del panel y termina en el último dispositivo con la resistencia de fin de línea, la RFL.", add: [["h", "Clases de cableado"], ["n", "Clase B: termina en la RFL"]] },
+        { t: "Si se corta el cable, el panel da falla, y los detectores después del corte quedan perdidos.", set: { corte: true }, add: [["w", "Clase B cortada: se pierden los de después"]] },
+        { t: "En clase A, el cable regresa al panel. Si se corta, el panel da falla pero alimenta por los dos lados: todos siguen detectando.", set: { clase: "A" }, add: [["r", "Clase A: sigue funcionando con un corte"]] },
+        { t: "Un dato: los circuitos de sirenas direccionables, IDNAC, no llevan RFL, porque el panel supervisa cada dispositivo por su dirección.", set: { clase: "B", corte: false }, add: [["n", "IDNAC: sin RFL"]] },
+      ], ejercicio: { tipo: "opcion", t: "Pregunta: un circuito convencional clase B, ¿lleva resistencia de fin de línea en el último dispositivo?", pregunta: "Clase B convencional: ¿lleva RFL al final?", opciones: ["Verdadero", "Falso"], correcta: 0,
+        bien: "Sí: la RFL al final es la que permite supervisar el cable en clase B.", pista: "Mire el dibujo: ¿qué hay al final del circuito clase B?" } },
+    ] },
+    { tab: "Práctica", practica: {
+      intro: "Ahora practique, {nombre}. Le doy una situación de instalación y usted decide si cumple la NFPA 72.",
+      extra: "Ir al examen de NFPA 72",
+      generar: () => {
+        const r2 = (a, b) => Math.round(entre(a, b) * 100) / 100;
+        const casos = [
+          () => { const h = elegir([r2(0.9, 1.05), r2(1.08, 1.21), r2(1.25, 1.5)]), ok = h >= 1.07 && h <= 1.22; return { v: { tipo: "altura", modo: "manual", fija: true, inicio: { h, d: 1 } }, t: `Estación manual con la palanca a ${h} m del piso, a 1 m de la puerta.`, ok, sol: "Rango: 1.07 a 1.22 m." }; },
+          () => { const d = elegir([r2(0.5, 1.5), r2(1.6, 2.8)]), ok = d <= 1.52; return { v: { tipo: "altura", modo: "manual", fija: true, inicio: { h: 1.15, d } }, t: `Estación manual a 1.15 m de alto y a ${d} m de la puerta de salida.`, ok, sol: "Máximo 1.52 m de la puerta." }; },
+          () => { const h = elegir([r2(1.6, 2.0), r2(2.05, 2.4), r2(2.5, 2.75)]), ok = h >= 2.03 && h <= 2.44; return { v: { tipo: "altura", modo: "estrobo", fija: true, inicio: { h } }, t: `Estrobo de pared con el lente a ${h} m del piso.`, ok, sol: "Rango: 2.03 a 2.44 m." }; },
+          () => { const cm = elegir([5, 15, 25, 35, 40]), ok = cm <= 30; return { v: { tipo: "esquina", modo: "humoPared", fija: true, inicio: { cm } }, t: `Detector de humo de pared a ${cm} cm bajo el techo.`, ok, sol: "Máximo 30 cm bajo el techo." }; },
+          () => { const cm = elegir([3, 6, 12, 20]), ok = cm >= 10; return { v: { tipo: "esquina", modo: "calorTecho", fija: true, inicio: { cm } }, t: `Detector de calor en el techo a ${cm} cm de la pared.`, ok, sol: "Mínimo 10 cm de la pared." }; },
+          () => { const d = elegir([1.5, 2.5, 4, 5.5]), ok = d >= 3 && d <= 6.1; return { v: { tipo: "planta", modo: "cocina", fija: true, inicio: { d } }, t: `Detector de humo fotoeléctrico a ${d} m de la cocina.`, ok, sol: "Cerca de cocinas: entre 3 y 6.1 m." }; },
+          () => { const d = elegir([0.3, 0.6, 1.0, 1.5]), ok = d >= 0.9; return { v: { tipo: "planta", modo: "aire", fija: true, inicio: { d } }, t: `Detector de humo a ${d} m de un difusor de aire.`, ok, sol: "Mínimo 0.9 m de las salidas de aire." }; },
+        ];
+        const c = elegir(casos)();
+        return { visual: c.v, lineas: [["h", "¿Cumple la NFPA 72?"], ["n", c.t]], voz: `${c.t} ¿Cumple con la norma?`, opciones: ["No cumple", "Sí cumple"], correcta: c.ok ? 1 : 0,
+          pista: "Recuerde el rango de la norma para ese dispositivo.", solucion: [["r", c.sol]], vozSolucion: c.sol };
+      } } },
+  ],
+};
+
+function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar, onCerrar }) {
   const contenedorRef = React.useRef(null);
   const ganadosRef = React.useRef(new Set());
   const falladosRef = React.useRef(new Set());
@@ -18519,7 +19307,7 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
 
   if (mostrarIntro && verClase) {
     return (
-      <AulaClase clase={AULA_COMPUERTAS} onGanarPuntos={onGanarPuntos} textoSalir="Ir a armar circuitos"
+      <AulaClase clase={AULA_COMPUERTAS} onGanarPuntos={onGanarPuntos} textoSalir="Ir a armar circuitos" textoBarra="Práctica" onCerrar={onCerrar}
         onTerminar={() => { onGanarPuntos && onGanarPuntos("Clase guiada completada", 0); setMostrarIntro(false); }}
         onSalir={() => setMostrarIntro(false)}
         onGuia={() => setVerClase(false)} />
@@ -18626,7 +19414,7 @@ function JuegoCompuertasLogicas({ onGanarPuntos, esAdmin, onReiniciar }) {
 // arrastras contactos (OR/AND/NOT dibujados al estilo de riel: rayitas
 // ⊣⊢, NOT con raya diagonal) al lienzo y los conectas cableando a mano,
 // con verificación automática contra todas las combinaciones posibles.
-function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
+function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar, onCerrar }) {
   const contenedorRef = React.useRef(null);
   const ganadosRef = React.useRef(new Set());
   const falladosRef = React.useRef(new Set());
@@ -19166,6 +19954,7 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
     return <svg width="66" height="40" viewBox="-10 0 76 40" style={{ display: "block" }}>{shapes[tipo]}</svg>;
   };
 
+  if (mostrarIntro) return <AulaClase clase={AULA_ESCALERA} onGanarPuntos={onGanarPuntos} textoSalir="Ir a armar escaleras" textoBarra="Práctica" onCerrar={onCerrar} onTerminar={() => setMostrarIntro(false)} onSalir={() => setMostrarIntro(false)} />;
   if (mostrarIntro) {
     const TEMA_INTRO_ESCALERA = {
       id: "intro",
@@ -19240,7 +20029,7 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
           <div className="je-palette" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}></div>
           <span style={{ fontSize: 12, color: T.gray, marginLeft: 12 }}>Clic en la × para borrar un contacto, o en una línea para borrarla.</span>
           <button className="je-limpiar" style={{ padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Limpiar lienzo</button>
-          <button onClick={() => setMostrarIntro(true)} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>Ver la guía otra vez</button>
+          <button onClick={() => setMostrarIntro(true)} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, background: "transparent", color: T.steel, border: `1px solid ${T.line}`, cursor: "pointer" }}>🎓 Ver la clase</button>
         </div>
         <div className="je-wrapper" style={{ overflowX: "auto", borderRadius: 12, WebkitOverflowScrolling: "touch", touchAction: "pan-x" }}>
           <div className="je-canvas" style={{ position: "relative", height: 400, minWidth: 900, background: T.graySoft, borderRadius: 12, overflow: "hidden", border: `1px solid ${T.line}`, transition: "background 0.2s" }}>
@@ -19262,7 +20051,7 @@ function JuegoLogicaEscalera({ onGanarPuntos, esAdmin, onReiniciar }) {
 // salidas de sistemas de alarma contra incendio) y hay que llenar TODA la
 // tabla de verdad — una fila por cada combinación posible de entradas —
 // marcando 0 o 1 en la columna de salida.
-function JuegoTablasVerdad({ onGanarPuntos, esAdmin, onReiniciar }) {
+function JuegoTablasVerdad({ onGanarPuntos, esAdmin, onReiniciar, onCerrar }) {
   const [mostrarIntro, setMostrarIntro] = useState(true);
   const [nivel, setNivel] = useState("Básico");
   const [ejActual, setEjActual] = useState(0);
@@ -19369,6 +20158,7 @@ function JuegoTablasVerdad({ onGanarPuntos, esAdmin, onReiniciar }) {
     }
   };
 
+  if (mostrarIntro) return <AulaClase clase={AULA_TABLAS} onGanarPuntos={onGanarPuntos} textoSalir="Ir a los ejercicios" textoBarra="Práctica" onCerrar={onCerrar} onTerminar={() => setMostrarIntro(false)} onSalir={() => setMostrarIntro(false)} />;
   if (mostrarIntro) {
     const TEMAS_TABLAS = [
       {
@@ -19485,7 +20275,7 @@ function JuegoTablasVerdad({ onGanarPuntos, esAdmin, onReiniciar }) {
           <Btn small variant="ghost" onClick={() => cambiarEjercicio(-1)}>← Anterior</Btn>
           <Btn small variant="ghost" onClick={() => cambiarEjercicio(1)}>Siguiente →</Btn>
           <Btn small variant="ghost" onClick={limpiar}>Limpiar</Btn>
-          <Btn small variant="ghost" onClick={() => setMostrarIntro(true)}>Ver la guía otra vez</Btn>
+          <Btn small variant="ghost" onClick={() => setMostrarIntro(true)}>🎓 Ver la clase</Btn>
         </div>
       </div>
 
@@ -21164,7 +21954,33 @@ function JuegoEquiposMedicion({ onGanarPuntos, esAdmin, onReiniciar }) {
   );
 }
 
-function JuegoNFPA72({ onGanarPuntos }) {
+
+// Examen NFPA 72: dibujos a color en lugar de las figuras en blanco y negro, y explicación de cada error
+const EXTRA_EXAMEN_NFPA72 = [
+  { fig: { tipo: "altura", modo: "manual", fija: true, inicio: { h: 1.15, d: 1.2 } }, exp: "La estación manual va a no más de 1.52 m de la puerta de cada salida, en cada piso." },
+  { exp: "Se agregan estaciones para que nadie recorra más de 61 m (200 pies) en horizontal hasta la más cercana." },
+  { antes: true, fig: { tipo: "altura", modo: "manual", fija: true, inicio: { h: 1.15, d: 1.2 } }, exp: "La parte operable va entre 1.07 m y 1.22 m (42 a 48 pulgadas) sobre el piso." },
+  { fig: { tipo: "esquina", modo: "humoPared", fija: true, inicio: { cm: 25 } }, exp: "En pared, el detector de humo va desde el techo hasta 30 cm hacia abajo." },
+  { fig: { tipo: "planta", modo: "cocina", fija: true, inicio: { d: 4.5 } }, exp: "Cerca de un artefacto de cocina, el detector de humo va entre 3 m y 6.1 m (10 a 20 pies)." },
+  { fig: { tipo: "altura", modo: "estrobo", fija: true, inicio: { h: 2.2 } }, exp: "El lente del estrobo de pared va entre 2.03 m y 2.44 m (80 a 96 pulgadas) del piso." },
+  { fig: { tipo: "temporal", inicio: { f: 520 } }, exp: "Las bases audibles para dormitorios usan baja frecuencia: 520 Hz." },
+  { fig: { tipo: "senalesPanel", fija: true, inicio: { s: "alarma" } }, exp: "Señal de alarma: una emergencia (incendio) que requiere acción inmediata." },
+  { fig: { tipo: "senalesPanel", fija: true, inicio: { s: "falla" } }, exp: "Señal de falla: una condición adversa del propio sistema, como un cable cortado o batería baja." },
+  { fig: { tipo: "clases", fija: true, inicio: { clase: "B", corte: false } }, exp: "Verdadero: en clase B el último dispositivo lleva la resistencia de fin de línea para supervisar el cable." },
+  { exp: "Falso: en un circuito IDNAC cada dispositivo tiene dirección y el panel lo supervisa así; no lleva RFL." },
+  { exp: "La NFPA 101 (Código de Seguridad Humana) dice dónde se requieren detección y notificación; la NFPA 72 dice cómo instalarlas." },
+  { exp: "Según la ADA, la fuerza para accionar un dispositivo manual no debe pasar de 5 libras." },
+  { exp: "En techos altos, el calor llega más frío y diluido, por eso a partir de esa altura el espaciamiento de los detectores de calor se reduce con un factor menor que 1." },
+  { antes: true, fig: { tipo: "esquina", modo: "calorTecho", fija: true, inicio: { cm: 15 } }, exp: "En el techo, el detector de calor va al menos a 10 cm (4 pulgadas) de la pared, fuera del aire muerto." },
+  { fig: { tipo: "estratificacion", fija: true, inicio: { capa: true } }, exp: "Falso: la estratificación es una capa de aire caliente que FRENA el humo antes de que llegue al techo." },
+  { fig: { tipo: "planta", modo: "aire", fija: true, inicio: { d: 1.0 } }, exp: "Los detectores de humo van al menos a 0.9 m (3 pies) de difusores y salidas de aire." },
+  { exp: "En corredores, los estrobos van a no más de 4.57 m de cada extremo, y la separación entre ellos la define la norma según el ancho del corredor." },
+  { exp: "En Costa Rica, Salvavidas es distribuidor directo de Simplex." },
+  { exp: "La NFPA 72 es el Código Nacional de Alarmas de Incendio y Señalización: instalación, prueba y mantenimiento." },
+];
+function JuegoNFPA72({ onGanarPuntos, onCerrar }) {
+  const Nex = useNarradora();
+  const [explicadas, setExplicadas] = useState({});
   const [mostrarIntro, setMostrarIntro] = useState(true);
   const [respuestas, setRespuestas] = useState({});
   const [resultado, setResultado] = useState(null);
@@ -21205,6 +22021,7 @@ function JuegoNFPA72({ onGanarPuntos }) {
     });
   };
 
+  if (mostrarIntro) return <AulaClase clase={AULA_NFPA72} onGanarPuntos={onGanarPuntos} textoSalir="Ir al examen" textoBarra="Examen" onCerrar={onCerrar} onTerminar={() => setMostrarIntro(false)} onSalir={() => setMostrarIntro(false)} />;
   if (mostrarIntro) {
     const TEMAS_NFPA72 = [
       {
@@ -21304,8 +22121,10 @@ function JuegoNFPA72({ onGanarPuntos }) {
   return (
     <Card
       title="Examen Básico — NFPA 72"
-      action={<Btn small variant="ghost" onClick={() => setMostrarIntro(true)}>Ver la guía otra vez</Btn>}
+      action={<Btn small variant="accent" onClick={() => { Nex.callar(); setMostrarIntro(true); }}>🎓 Ver la clase</Btn>}
     >
+      <style>{AULA_CSS + AULA_MINI_CSS + CSS_DISPOSITIVOS}</style>
+      <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 10 }}>🔊 Toque el parlante para que el profesor le lea la pregunta. Al enviar, cada error trae su dibujo y su explicación.</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
         {PREGUNTAS_NFPA72.map((p, i) => {
           const correctaMostrada = resultado?.detalle;
@@ -21315,8 +22134,13 @@ function JuegoNFPA72({ onGanarPuntos }) {
               border: `1px solid ${T.line}`, borderRadius: 10, padding: 14,
               background: correctaMostrada ? (esCorrecta ? T.greenSoft : T.redSoft) : T.graySoft,
             }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{i + 1}. {p.texto}</div>
-              {p.imagen && <img src={p.imagen} alt="Figura de referencia" style={{ maxWidth: 220, borderRadius: 8, border: `1px solid ${T.line}`, marginBottom: 10, display: "block" }} />}
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 10 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{i + 1}. {p.texto}</div>
+                <button type="button" onClick={() => Nex.hablar(`${p.texto.replace(/_{3,}/g, " espacio en blanco ")} ${p.opciones.map((o, j) => `Opción ${String.fromCharCode(65 + j)}: ${o}.`).join(" ")}`)} aria-label="Leer la pregunta en voz alta" style={{ border: `1px solid ${T.line}`, background: "#fff", borderRadius: 999, padding: "3px 9px", cursor: "pointer", fontSize: 14 }}>🔊</button>
+              </div>
+              {EXTRA_EXAMEN_NFPA72[i] && EXTRA_EXAMEN_NFPA72[i].fig && (EXTRA_EXAMEN_NFPA72[i].antes || correctaMostrada)
+                ? <PizarraMini key={i + (correctaMostrada ? "r" : "")} v={EXTRA_EXAMEN_NFPA72[i].fig} />
+                : p.imagen && <img src={p.imagen} alt="Figura de referencia" style={{ maxWidth: 220, borderRadius: 8, border: `1px solid ${T.line}`, marginBottom: 10, display: "block" }} />}
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {p.opciones.map((op, j) => (
                   <label key={j} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
@@ -21327,6 +22151,12 @@ function JuegoNFPA72({ onGanarPuntos }) {
               </div>
               {correctaMostrada && !esCorrecta && (
                 <div style={{ fontSize: 11.5, color: T.red, marginTop: 8 }}>Respuesta correcta: {p.opciones[p.correcta]}</div>
+              )}
+              {correctaMostrada && !esCorrecta && EXTRA_EXAMEN_NFPA72[i] && (
+                <div style={{ marginTop: 8, background: "#fff", border: `1px solid ${T.line}`, borderRadius: 8, padding: "8px 10px", fontSize: 12.5, color: T.ink, display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <span style={{ flex: 1 }}>💡 {EXTRA_EXAMEN_NFPA72[i].exp}</span>
+                  <button type="button" onClick={() => { setExplicadas((x) => ({ ...x, [i]: true })); Nex.hablar(EXTRA_EXAMEN_NFPA72[i].exp.replace(/(\d)\s*m\b/g, "$1 metros").replace(/(\d)\s*cm\b/g, "$1 centímetros").replace(/\bNFPA\b/g, "ene efe pe a")); }} style={{ border: `1px solid ${T.line}`, background: explicadas[i] ? T.graySoft : "#fff", borderRadius: 999, padding: "3px 9px", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap" }}>🔊 Explicar</button>
+                </div>
               )}
             </div>
           );
@@ -21899,7 +22729,7 @@ const NIVELES_ELECTRONICA = {
 };
 const PUNTOS_POR_PREGUNTA_ELECTRONICA = 10;
 
-function JuegoElectronicaBasica({ onGanarPuntos }) {
+function JuegoElectronicaBasica({ onGanarPuntos, onCerrar }) {
   const [mostrarIntro, setMostrarIntro] = useState(true);
   const [verClase, setVerClase] = useState(true); // primero la clase en el aula
   const Nex = useNarradora();
@@ -21950,7 +22780,7 @@ function JuegoElectronicaBasica({ onGanarPuntos }) {
 
   if (mostrarIntro && verClase) {
     return (
-      <AulaClase clase={AULA_ELECTRONICA} onGanarPuntos={onGanarPuntos} textoSalir="Ir al examen"
+      <AulaClase clase={AULA_ELECTRONICA} onGanarPuntos={onGanarPuntos} textoSalir="Ir al examen" textoBarra="Examen" onCerrar={onCerrar}
         onTerminar={() => setMostrarIntro(false)} onSalir={() => setMostrarIntro(false)} onGuia={() => setVerClase(false)} />
     );
   }

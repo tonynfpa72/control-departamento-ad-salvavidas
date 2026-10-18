@@ -10890,7 +10890,8 @@ function RankingEntrenamiento() {
 
   const porPersona = {};
   puntajes.forEach((p) => {
-    if (!porPersona[p.personal_codigo]) porPersona[p.personal_codigo] = { codigo: p.personal_codigo, nombre: p.personal_nombre, total: 0, porSegmento: {}, repasos: 0 };
+    if (!porPersona[p.personal_codigo]) porPersona[p.personal_codigo] = { codigo: p.personal_codigo, nombre: p.personal_nombre, total: 0, porSegmento: {}, repasos: 0, aulas: 0 };
+    if (typeof p.ejercicio === "string" && p.ejercicio.startsWith("Aula completada: ")) porPersona[p.personal_codigo].aulas += 1;
     // El puntaje de Reto NUNCA se suma al total general — solo se
     // muestra en su propia columna (porSegmento.reto).
     if (p.segmento !== "reto") porPersona[p.personal_codigo].total += p.puntos;
@@ -10900,7 +10901,7 @@ function RankingEntrenamiento() {
   const filas = Object.values(porPersona).sort((a, b) => b.total - a.total);
   const medallas = ["🥇", "🥈", "🥉"];
   const coloresAvatar = ["#ff8787", "#74c0fc", "#63e6be", "#ffd43b", "#b197fc", "#ffa94d"];
-  const TOTAL_INSIGNIAS = 18;
+  const TOTAL_INSIGNIAS = 18 + AULAS_CON_INSIGNIA().length;
 
   const reiniciarPersona = async (codigo) => {
     const { error } = await supabase.from("entrenamiento_puntajes").delete().eq("personal_codigo", codigo);
@@ -10930,7 +10931,7 @@ function RankingEntrenamiento() {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
-              <th style={{ padding: "8px" }}>#</th><th>Persona</th><th>Rango</th><th>Puntaje total</th><th>Premios</th><th>Repasos</th>
+              <th style={{ padding: "8px" }}>#</th><th>Persona</th><th>Rango</th><th>Puntaje total</th><th>Premios</th><th>Repasos</th><th>Aulas</th>
               {SEGMENTOS_ENTRENAMIENTO.map((s) => <th key={s.id}>{s.label}</th>)}
             </tr>
           </thead>
@@ -10938,7 +10939,7 @@ function RankingEntrenamiento() {
             {filas.map((f, i) => {
               const rango = calcularRangoUsuario(f.total, f.porSegmento);
               const iniciales = f.nombre.split(" ").slice(0, 2).map((p) => p[0]).join("").toUpperCase();
-              const premios = contarInsigniasGanadas(f.total, f.porSegmento, f.repasos);
+              const premios = contarInsigniasGanadas(f.total, f.porSegmento, f.repasos, f.aulas);
               return (
                 <tr key={f.nombre} style={{
                   borderTop: `1px solid ${T.line}`,
@@ -10977,6 +10978,7 @@ function RankingEntrenamiento() {
                   <td style={{ color: T.inkSoft }}>
                     {f.repasos > 0 ? <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><Repeat size={11} color={T.turquoise} />{f.repasos}</span> : "—"}
                   </td>
+                  <td style={{ color: T.inkSoft, whiteSpace: "nowrap" }}>{(f.porSegmento.aula || 0) > 0 ? <>🎓 {f.porSegmento.aula} pts{f.aulas ? ` · 🏅${f.aulas}` : ""}</> : "—"}</td>
                   {SEGMENTOS_ENTRENAMIENTO.map((s) => <td key={s.id} style={{ color: T.inkSoft }}>{f.porSegmento[s.id] || 0} pts</td>)}
                 </tr>
               );
@@ -14781,8 +14783,12 @@ const MAX_PUNTOS_SEGMENTO = {
 // ANTERIOR (con contenido) esté aprobado (70%+) para poder abrirse. Los
 // módulos sin contenido todavía (ej. Notifier) no bloquean ni se
 // bloquean — se saltan en la cadena.
+// Todos los módulos quedan abiertos para todo el personal (ya no se exige aprobar el anterior).
+// Para volver a la cadena de desbloqueo, cambiar a false.
+const TODOS_LOS_MODULOS_ABIERTOS = true;
 function calcularModulosDesbloqueados(puntosPorSegmento) {
   const resultado = {};
+  if (TODOS_LOS_MODULOS_ABIERTOS) { SEGMENTOS_ENTRENAMIENTO.forEach((s) => { resultado[s.id] = true; }); return resultado; }
   let previoAprobado = true;
   const SIEMPRE_DESBLOQUEADOS = ["nicet", "fas_nivel1", "equipos_medicion"];
   SEGMENTOS_ENTRENAMIENTO.forEach((s) => {
@@ -14812,7 +14818,9 @@ function calcularRangoUsuario(puntosTotal, puntosPorSegmento) {
 // puntaje total, su puntaje por segmento, y su cantidad de repasos —
 // misma lista de criterios que las insignias que se muestran en
 // Entrenamiento, para poder mostrar el conteo también en el ranking.
-function contarInsigniasGanadas(puntosTotal, porSegmento, repasos) {
+// Aulas que dan insignia al completarse
+const AULAS_CON_INSIGNIA = () => [AULA_COMPUERTAS, AULA_TABLAS, AULA_ESCALERA, AULA_SIMPLEX, AULA_NOTIFIER, AULA_NFPA72, AULA_ELECTRONICA, AULA_NICET, AULA_FAS, AULA_EQUIPOS];
+function contarInsigniasGanadas(puntosTotal, porSegmento, repasos, aulas = 0) {
   const segmentosConContenido = SEGMENTOS_ENTRENAMIENTO.filter((s) => (MAX_PUNTOS_SEGMENTO[s.id] || 0) > 0);
   const modulosAprobados = segmentosConContenido.filter((s) => (porSegmento[s.id] || 0) >= 0.7 * MAX_PUNTOS_SEGMENTO[s.id]).length;
   const modulosAl100 = segmentosConContenido.filter((s) => (porSegmento[s.id] || 0) >= MAX_PUNTOS_SEGMENTO[s.id]).length;
@@ -14836,7 +14844,7 @@ function contarInsigniasGanadas(puntosTotal, porSegmento, repasos) {
   if ((porSegmento.escalera || 0) >= (MAX_PUNTOS_SEGMENTO.escalera || Infinity)) n++;
   if ((porSegmento.nicet || 0) >= 0.85 * (MAX_PUNTOS_SEGMENTO.nicet || Infinity)) n++;
   if (rango.tipo === "panel") n++;
-  return n;
+  return n + aulas;
 }
 
 // Calcula la racha diaria: días consecutivos con al menos una actividad
@@ -15131,6 +15139,8 @@ function Entrenamiento() {
     { id: "escalera_aprobada", nombre: "Certificado Escalera", desc: "Alcanza el 100% en Lógica en Escalera", Icono: HardHat, colorDesde: "#eebefa", colorHasta: "#9c36b5", cumplido: puntosDeSegmento("escalera") >= (MAX_PUNTOS_SEGMENTO.escalera || Infinity) },
     { id: "nicet", nombre: "NICET", desc: "Aprueba el examen NICET con 85% o más", imagenUrl: NICET_BADGE_B64, cumplido: puntosDeSegmento("nicet") >= 0.85 * (MAX_PUNTOS_SEGMENTO.nicet || Infinity) },
     { id: "senior", nombre: "Senior Experto", desc: "Alcanza el rango máximo (Panel) — 100% en todos los módulos", Icono: Crown, colorDesde: "#40c057", colorHasta: "#2b8a3e", cumplido: rangoActual.tipo === "panel" },
+    // Una insignia por cada aula completada
+    ...AULAS_CON_INSIGNIA().map((a) => ({ id: "aula_" + a.clave, nombre: "Aula " + a.corto, desc: `Completa todos los temas del aula de ${a.corto}`, Icono: GraduationCap, colorDesde: "#ffe066", colorHasta: "#e8590c", cumplido: puntajesConPendientes.some((p) => p.ejercicio === "Aula completada: " + a.corto) })),
   ];
 
   if (!jugadorCodigo) {
@@ -15232,7 +15242,8 @@ function Entrenamiento() {
       </Card>
     ) : null;
   // El profesor llama al técnico por el nombre del jugador elegido (no por el usuario que tiene la sesión)
-  const moduloActivo = moduloActivoBase ? <JugadorClaseContext.Provider value={(jugador && jugador.nombre) || ""}>{moduloActivoBase}</JugadorClaseContext.Provider> : null;
+  const ctxAula = { nombre: (jugador && jugador.nombre) || "", codigo: jugadorCodigo, filas: puntajesConPendientes, ganar: (ejercicio, puntos) => registrarPuntos("aula", ejercicio, puntos) };
+  const moduloActivo = moduloActivoBase ? <JugadorClaseContext.Provider value={ctxAula}>{moduloActivoBase}</JugadorClaseContext.Provider> : null;
 
   // ============================================================
   // VISTA CELULAR: se ve y se comporta como una app nativa — marco de
@@ -16506,6 +16517,7 @@ const AULA_CSS = `
 @media (prefers-reduced-motion:reduce){.aula .ln.nueva,.aula svg.ch path.cor,.aula .prof .parpado,.aula .btn.pulso,.aula .prof.habla .boca{animation:none}}
 `;
 
+const PUNTOS_TEMA_AULA = 10, PUNTOS_AULA_COMPLETA = 50;
 // Fuentes de tiza (una sola vez)
 function cargarFuentesAula() {
   try {
@@ -16614,8 +16626,12 @@ const subtituloSpans = (t) => String(t || "").split(/\s+/).filter(Boolean).map((
 
 function AulaClase({ clase, onTerminar, onSalir, onGuia, onGanarPuntos, onCerrar, nombre: nombreProp, textoSalir = "Ir a la práctica", textoBarra, temaInicial = 0 }) {
   const usuarioClase = useContext(CurrentUserContext);
-  const jugadorClase = useContext(JugadorClaseContext);
+  const ctxJ = useContext(JugadorClaseContext) || {};
+  const jugadorClase = typeof ctxJ === "string" ? ctxJ : ctxJ.nombre;
   const nombre = primerNombre(nombreProp || jugadorClase || (usuarioClase && usuarioClase.name));
+  // Los puntos del aula van a su propia cuenta ("aula"): suben el ranking sin tocar el avance de los exámenes
+  const ganarAula = (ctxJ && ctxJ.ganar) || onGanarPuntos;
+  const filasJ = (ctxJ && ctxJ.filas) || [];
   const nb = (t) => conNombre(t, nombre);
   const N = useNarradora();
   const temas = clase.temas;
@@ -16633,7 +16649,12 @@ function AulaClase({ clase, onTerminar, onSalir, onGuia, onGanarPuntos, onCerrar
   const [gesto, setGesto] = useState(false);
   const [foco, setFoco] = useState(false);
   const [final, setFinal] = useState(false);
-  const [hechos, setHechos] = useState({});
+  const claveHechos = "aula.hechos." + (clase.clave || clase.titulo) + "." + ((ctxJ && ctxJ.codigo) || "x");
+  const [hechos, setHechos] = useState(() => { try { return JSON.parse(localStorage.getItem(claveHechos) || "{}"); } catch (e) { return {}; } });
+  useEffect(() => { try { localStorage.setItem(claveHechos, JSON.stringify(hechos)); } catch (e) { /* nada */ } }, [hechos]);
+  const [celebra, setCelebra] = useState(null); // { titulo, texto, pts, insignia }
+  const [confirmaSalir, setConfirmaSalir] = useState(null); // "cerrar" | "salir"
+  const ganadosSesion = React.useRef(new Set());
   const [pausa, setPausa] = useState(false);
   const [relojOn, setRelojOn] = useState(false);
   // práctica
@@ -16844,12 +16865,35 @@ function AulaClase({ clase, onTerminar, onSalir, onGuia, onGanarPuntos, onCerrar
     const tok = ++runRef.current;
     (async () => { const ok = await decir(temas[t].practica.intro || "Ahora practique con problemas nuevos. Cada uno es distinto.", tok); if (ok) await decir(pr.voz || "", tok); })();
   };
+  const etiquetaTema = (t) => `Aula ${clase.corto || clase.titulo}: ${t.tab}`;
+  const etiquetaAula = `Aula completada: ${clase.corto || clase.titulo}`;
+  const yaGanado = (et) => ganadosSesion.current.has(et) || filasJ.some((f) => f.ejercicio === et);
+  const temasContenido = temas.map((t, k) => [t, k]).filter(([t]) => !t.practica);
+  const temaHecho = (k) => (temas[k].pasos || []).every((_, j) => hechos[k + "." + j]);
+  const temasHechos = temasContenido.filter(([, k]) => temaHecho(k)).length;
+  const ptsAulaGanados = filasJ.filter((f) => typeof f.ejercicio === "string" && (f.ejercicio.startsWith(`Aula ${clase.corto || clase.titulo}:`) || f.ejercicio === etiquetaAula || f.ejercicio === (clase.etiquetaPuntos || "Práctica de la clase"))).reduce((s2, f) => s2 + (Number(f.puntos) || 0), 0);
+  useEffect(() => {
+    if (!ganarAula) return;
+    let nuevo = null;
+    temasContenido.forEach(([t, k]) => {
+      const et = etiquetaTema(t);
+      if (temaHecho(k) && !yaGanado(et)) { ganadosSesion.current.add(et); ganarAula(et, PUNTOS_TEMA_AULA); const sig = temasContenido.find(([, k2]) => k2 > k && !temaHecho(k2)); nuevo = { titulo: `¡Tema "${t.tab}" completado!`, texto: sig ? `Siguiente: ${sig[0].tab}. ¡Siga sumando!` : "", pts: PUNTOS_TEMA_AULA }; }
+    });
+    if (temasContenido.every(([, k]) => temaHecho(k)) && !yaGanado(etiquetaAula)) {
+      ganadosSesion.current.add(etiquetaAula); ganarAula(etiquetaAula, PUNTOS_AULA_COMPLETA);
+      nuevo = { titulo: "¡Aula completada!", texto: `Ganó la insignia "Aula ${clase.corto || clase.titulo}".`, pts: PUNTOS_AULA_COMPLETA, insignia: true };
+    }
+    if (nuevo) { setCelebra(nuevo); bip(180); setTimeout(() => bip(260), 220); setTimeout(() => setCelebra((c) => (c === nuevo ? null : c)), 4200); }
+  }, [hechos]);
   const marcadorRef = React.useRef(marcador);
   const sumarPunto = (bien) => {
     const m = marcadorRef.current;
-    const tope = clase.topePuntos || 50;
-    const dar = bien && m.puntos + 5 <= tope ? 5 : 0;
-    if (dar && onGanarPuntos) onGanarPuntos(clase.etiquetaPuntos || "Práctica de la clase", dar);
+    const tope = clase.topePuntos || 50; // por día
+    const et = clase.etiquetaPuntos || "Práctica de la clase";
+    const hoy = todayISO();
+    const yaHoy = filasJ.filter((f) => f.ejercicio === et && String(f.fecha || "").slice(0, 10) === hoy).reduce((s2, f) => s2 + (Number(f.puntos) || 0), 0);
+    const dar = bien && Math.max(yaHoy, m.puntos) + 5 <= tope ? 5 : 0;
+    if (dar && ganarAula) ganarAula(et, dar);
     const n = { bien: m.bien + (bien ? 1 : 0), total: m.total + 1, puntos: m.puntos + dar };
     marcadorRef.current = n; setMarcador(n);
     return dar;
@@ -16904,12 +16948,14 @@ function AulaClase({ clase, onTerminar, onSalir, onGuia, onGanarPuntos, onCerrar
     try { if (el && el.requestFullscreen) { el.requestFullscreen().catch(() => {}); ok = true; } } catch (e) { /* nada */ }
     setFoco(ok ? true : !foco);
   };
+  const faltaTema = () => { if (final || esPractica || !ganarAula) return null; const t = temas[ti]; if (!t || temaHecho(ti) || yaGanado(etiquetaTema(t))) return null; const faltan = (t.pasos || []).filter((_, j) => !hechos[ti + "." + j]).length; return { t, faltan }; };
+  const pedirSalir = (modo) => { if (empezo && faltaTema()) { N.callar(); runRef.current++; setConfirmaSalir(modo); } else if (modo === "cerrar") cerrar(); else salir(); };
   const salir = () => { runRef.current++; N.callar(); try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) { /* nada */ } onSalir && onSalir(); };
   const cerrar = () => { runRef.current++; N.callar(); try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) { /* nada */ } (onCerrar || onSalir) && (onCerrar || onSalir)(); };
   const terminar = () => { runRef.current++; N.callar(); try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) { /* nada */ } onTerminar && onTerminar(); };
   useEffect(() => {
     const k = (e) => {
-      if (e.key === "Escape" && !document.fullscreenElement) { e.preventDefault(); cerrar(); return; }
+      if (e.key === "Escape" && !document.fullscreenElement) { e.preventDefault(); pedirSalir("cerrar"); return; }
       if (!empezo || /input|select|textarea/i.test((e.target && e.target.tagName) || "")) return;
       if (e.key === "ArrowRight") { e.preventDefault(); avanzar(); }
       else if (e.key === "ArrowLeft") { e.preventDefault(); atras(); }
@@ -16934,8 +16980,9 @@ function AulaClase({ clase, onTerminar, onSalir, onGuia, onGanarPuntos, onCerrar
           ))}
         </div>
         <button type="button" className="ib" onClick={pantalla} title="Pantalla completa">⛶<span className="tx"> {foco ? "Salir de pantalla" : "Pantalla completa"}</span></button>
-        {onSalir && <button type="button" className="ib" onClick={salir} title={textoSalir}>➜<span className="tx"> {textoBarra || textoSalir}</span></button>}
-        <button type="button" className="ib" onClick={cerrar} title="Cerrar y continuar luego" aria-label="Cerrar la clase">✕<span className="tx"> Cerrar</span></button>
+        {ganarAula && <span className="ib" title="Temas completados y puntos ganados en esta aula" style={{ cursor: "default", borderColor: "var(--chy)", color: "var(--chy)" }}>⭐ {temasHechos}/{temasContenido.length}<span className="tx"> · {ptsAulaGanados} pts</span></span>}
+        {onSalir && <button type="button" className="ib" onClick={() => pedirSalir("salir")} title={textoSalir}>➜<span className="tx"> {textoBarra || textoSalir}</span></button>}
+        <button type="button" className="ib" onClick={() => pedirSalir("cerrar")} title="Cerrar y continuar luego" aria-label="Cerrar la clase">✕<span className="tx"> Cerrar</span></button>
       </div>
 
       <section className="board" aria-label="Pizarra">
@@ -17038,6 +17085,26 @@ function AulaClase({ clase, onTerminar, onSalir, onGuia, onGanarPuntos, onCerrar
         </nav>
       </div>
 
+      {celebra && (
+        <div role="status" style={{ position: "fixed", left: "50%", top: 70, transform: "translateX(-50%)", zIndex: 100002, background: "linear-gradient(135deg,#ffd43b,#ff922b)", color: "#1b2321", borderRadius: 18, padding: "14px 22px", boxShadow: "0 12px 30px rgba(0,0,0,.45)", textAlign: "center", maxWidth: "92vw", animation: "aulaPulso 1.2s ease-in-out 2" }}>
+          <div style={{ fontSize: 30, lineHeight: 1 }}>{celebra.insignia ? "🏅" : "🎉"}</div>
+          <div style={{ fontWeight: 800, fontSize: "1.05rem" }}>{celebra.titulo}</div>
+          <div style={{ fontFamily: "var(--tiza)", fontSize: "1.6rem", fontWeight: 700 }}>+{celebra.pts} puntos</div>
+          {celebra.texto && <div style={{ fontSize: ".9rem" }}>{celebra.texto}</div>}
+        </div>
+      )}
+      {confirmaSalir && (() => { const f = faltaTema(); return (
+        <div className="inicio" style={{ zIndex: 100003 }}>
+          <div className="card">
+            <div style={{ fontSize: 46 }}>⭐</div>
+            <h1 style={{ fontSize: "1.6rem" }}>¡No se vaya todavía{nombre ? ", " + nombre : ""}!</h1>
+            <p>{f ? <>Le {f.faltan === 1 ? "falta 1 paso" : `faltan ${f.faltan} pasos`} de <b style={{ color: "var(--chy)" }}>{f.t.tab}</b> para ganar <b style={{ color: "var(--chy)" }}>+{PUNTOS_TEMA_AULA} puntos</b>. Al completar todos los temas gana +{PUNTOS_AULA_COMPLETA} puntos y la insignia del aula.</> : "Va muy bien."}</p>
+            <div style={{ fontSize: ".9rem", color: "var(--chd)" }}>Lleva {temasHechos} de {temasContenido.length} temas · {ptsAulaGanados} puntos en esta aula</div>
+            <button type="button" className="btn pri" onClick={() => { setConfirmaSalir(null); reproducir(ti, pi, 0); }}>▶ Seguir aprendiendo</button>
+            <button type="button" className="btn" onClick={() => { const m = confirmaSalir; setConfirmaSalir(null); if (m === "cerrar") cerrar(); else salir(); }}>Salir y continuar luego</button>
+          </div>
+        </div>
+      ); })()}
       {!empezo && (
         <div className="inicio">
           <button type="button" className="ib" onClick={cerrar} aria-label="Cerrar" style={{ position: "absolute", top: 12, right: 12, fontSize: "1rem" }}>✕ Cerrar</button>
@@ -17046,6 +17113,7 @@ function AulaClase({ clase, onTerminar, onSalir, onGuia, onGanarPuntos, onCerrar
             <h1>{clase.titulo}</h1>
             {nombre && <div style={{ fontFamily: "var(--tiza)", fontSize: "1.2rem", color: "var(--chy)" }}>Hola, {nombre}</div>}
             <p>{clase.intro || "Clase con voz, paso a paso, con ejercicios. Suba el volumen o use audífonos."}</p>
+            {ganarAula && <div style={{ fontSize: ".92rem", color: "var(--chy)", fontFamily: "var(--tiza)" }}>⭐ +{PUNTOS_TEMA_AULA} puntos por cada tema · +{PUNTOS_AULA_COMPLETA} y una insignia al completar el aula · práctica hasta {clase.topePuntos || 50} pts por día{temasHechos ? ` — lleva ${temasHechos} de ${temasContenido.length} temas` : ""}</div>}
             {guardado ? <>
               <button type="button" className="btn pri" onClick={continuarGuardado}>▶ Continuar donde quedó</button>
               <div style={{ fontSize: ".85rem", color: "var(--chd)", marginTop: -6 }}>{temas[guardado.ti].tab}{temas[guardado.ti].pasos && temas[guardado.ti].pasos[guardado.pi] ? " · " + temas[guardado.ti].pasos[guardado.pi].titulo : ""}</div>

@@ -3825,6 +3825,60 @@ function FacturacionIpmCard() {
   );
 }
 
+// OD Correctivos de IPM: en cuanto un trabajo queda "Completado" y sigue
+// "Sin facturar", aparece aquí para que no se olvide facturarlo. Al marcarlo
+// facturado sale de la lista (y en OD Correctivos queda como "Facturado").
+function FacturacionCorrectivosCard() {
+  const [rows, setRows] = useClientesArea("inspecciones");
+  const currentUser = useContext(CurrentUserContext);
+  const confirmar = useContext(ConfirmContext);
+  const puedeMarcar = currentUser?.categoria === "admin" || currentUser?.categoria === "asistente";
+  const [busqueda, setBusqueda] = useState("");
+  const porFacturar = rows
+    .filter((r) => (r.tipoOD || "Normal") === "Correctivo" && (r.progreso || "Pendiente") === "Completado" && (r.facturado || "Sin facturar") !== "Facturado")
+    .sort((a, b) => String(a.fechaAprobacion || a.created_at || "").localeCompare(String(b.fechaAprobacion || b.created_at || "")) || (a.od || "").localeCompare(b.od || ""));
+  const q = busqueda.trim().toLowerCase();
+  const lista = q ? porFacturar.filter((r) => [r.od, r.cliente, r.tecnico, r.equiposCorrectivo].some((x) => String(x || "").toLowerCase().includes(q))) : porFacturar;
+  const marcarFacturado = async (r) => {
+    if (!(await confirmar(`¿Confirmas que ya facturaste el correctivo ${r.od}?`, { confirmLabel: "Sí, ya facturé", variant: "accent" }))) return;
+    setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, facturado: "Facturado" } : x)));
+    supabase.from("ordenes_trabajo").update({ facturado: "Facturado" }).eq("id", r.id).then();
+  };
+  return (
+    <Card title="Correctivos IPM completados por facturar" action={porFacturar.length > 0 ? <Badge color={T.red} soft={T.redSoft}>{porFacturar.length}</Badge> : null}>
+      {porFacturar.length > 0 && (
+        <div style={{ position: "relative", marginBottom: 10 }}>
+          <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T.gray }} />
+          <input style={{ ...inputStyle, paddingLeft: 30, fontSize: 12.5 }} placeholder="Buscar por OD, cliente, técnico o equipo..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
+        </div>
+      )}
+      {porFacturar.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 13 }}>No hay correctivos completados pendientes de facturar.</div>
+      ) : lista.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 13 }}>Ningún resultado para "{busqueda}".</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {lista.map((r) => (
+            <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: T.bg, borderRadius: 8, gap: 8, flexWrap: "wrap" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 13 }}>{r.od} — {r.cliente}</div>
+                <div style={{ fontSize: 12, color: T.inkSoft }}>
+                  {r.fechaAprobacion ? `Aprobado: ${r.fechaAprobacion}` : "Correctivo"}{r.tecnico ? ` · ${r.tecnico}` : ""}{r.equiposCorrectivo ? ` · ${r.equiposCorrectivo}` : ""}
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Badge color={T.green} soft={T.greenSoft}><Dot color={T.green} />Completado</Badge>
+                <Badge color={T.red} soft={T.redSoft}>Sin facturar</Badge>
+                {puedeMarcar && <Btn small variant="ghost" onClick={() => marcarFacturado(r)}><Check size={13} /> Marcar facturado</Btn>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 // ===== Tipo de cambio del día (colones por dólar, venta) =====
 // Tipo de cambio de REFERENCIA del Banco Central de Costa Rica (venta).
 // Se toma una vez al día de /api/tc (Vercel → servicio web del BCCR; respaldo:
@@ -11425,6 +11479,7 @@ function FacturacionPublica() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <FacturacionIpmCard />
+      <FacturacionCorrectivosCard />
       <Card
         title="Facturación mensual vs. punto de equilibrio ($120,000)"
         action={facturasAnioActual.length > 0 && (
@@ -14052,6 +14107,146 @@ function GastosTarjeta() {
 
 const ALERTA_KM_MANTENIMIENTO = 300;
 
+// ---- Gráficos de equipos por estado (histogramas) ----
+// Colores por estado en orden fijo (paleta validada para daltonismo); los números van siempre escritos.
+const COLOR_ESTADO_EQUIPO = { "Abierto": "#2a78d6", "En importación": "#eb6834", "Cerrado": "#1baf7a", "Completado": "#eda100" };
+const ESTADOS_GRAFICO = ["Abierto", "En importación", "Cerrado", "Completado"];
+const BINS_SEMANAS = [[0, 2, "0–2"], [2, 4, "2–4"], [4, 6, "4–6"], [6, 8, "6–8"], [8, 12, "8–12"], [12, 26, "12–26"], [26, Infinity, "26+"]];
+function TooltipEquipos({ active, payload, label, sufijo = "" }) {
+  if (!active || !payload || !payload.length) return null;
+  const tot = payload.reduce((a, x) => a + (Number(x.value) || 0), 0);
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${T.line}`, borderRadius: 8, padding: "8px 10px", fontSize: 12, boxShadow: "0 4px 12px rgba(0,0,0,.08)" }}>
+      <div style={{ fontWeight: 800, color: T.ink, marginBottom: 4 }}>{label}{sufijo}</div>
+      {payload.filter((x) => x.value).map((x) => <div key={x.dataKey} style={{ display: "flex", gap: 6, alignItems: "center", color: T.ink }}><span style={{ width: 9, height: 9, borderRadius: 2, background: x.color }} />{x.dataKey}: <b>{x.value}</b></div>)}
+      {payload.length > 1 && <div style={{ color: T.inkSoft, marginTop: 4 }}>Total: <b>{tot}</b></div>}
+    </div>
+  );
+}
+function EquiposEstadisticas() {
+  const [insp] = useClientesArea("inspecciones");
+  const [proy] = useClientesArea("proyectos");
+  const [area, setArea] = useEstadoRecordado("equipos-graf-area", "ambas");
+  const [tipo, setTipo] = useEstadoRecordado("equipos-graf-tipo", "Correctivo");
+  const [verTabla, setVerTabla] = useState(false);
+  const base = (area === "inspecciones" ? insp : area === "proyectos" ? proy : [...insp, ...proy])
+    .filter((r) => (tipo === "todos" || (r.tipoOD || "Normal") === tipo));
+  const sinEquipos = base.filter((r) => r.estatusEquipo === "No lleva equipos").length;
+  const conEquipos = base.filter((r) => r.estatusEquipo !== "No lleva equipos").map((r) => ({ ...r, est: ESTADOS_GRAFICO.includes(r.estatusEquipo) ? r.estatusEquipo : "Abierto" }));
+  const hoy = new Date(todayISO());
+  const semanasPo = (r) => (r.fechaPo ? (hoy - new Date(r.fechaPo)) / (1000 * 60 * 60 * 24 * 7) : null);
+  const pendientes = conEquipos.filter((r) => r.est !== "Completado");
+  const conPo = pendientes.filter((r) => semanasPo(r) !== null);
+  const mas8 = conPo.filter((r) => semanasPo(r) >= 8).length;
+  const promedio = conPo.length ? conPo.reduce((a, r) => a + semanasPo(r), 0) / conPo.length : 0;
+  // 1) cuántos hay en cada estado
+  const porEstado = ESTADOS_GRAFICO.map((e) => ({ estado: e, cantidad: conEquipos.filter((r) => r.est === e).length }));
+  // 2) histograma de antigüedad desde la Fecha PO (pendientes), apilado por estado
+  const estPend = ["Abierto", "En importación", "Cerrado"];
+  const histo = BINS_SEMANAS.map(([a, b, et]) => { const fila = { rango: et }; estPend.forEach((e) => { fila[e] = conPo.filter((r) => r.est === e && semanasPo(r) >= a && semanasPo(r) < b).length; }); return fila; });
+  const sinPo = pendientes.length - conPo.length;
+  // 3) por mes de la Fecha PO (últimos 12 meses), apilado por estado
+  const meses = [];
+  for (let k = 11; k >= 0; k--) { const d = new Date(hoy.getFullYear(), hoy.getMonth() - k, 1); meses.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); }
+  const porMes = meses.map((m) => { const fila = { mes: formatMesAno(m) }; ESTADOS_GRAFICO.forEach((e) => { fila[e] = conEquipos.filter((r) => r.est === e && String(r.fechaPo || "").slice(0, 7) === m).length; }); return fila; });
+  const tile = (titulo, valor, nota, color) => (
+    <div style={{ flex: "1 1 150px", background: "#fff", border: `1px solid ${T.line}`, borderRadius: 12, padding: "12px 14px" }}>
+      <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>{titulo}</div>
+      <div style={{ fontSize: 26, fontWeight: 800, color: color || T.ink, lineHeight: 1.2 }}>{valor}</div>
+      {nota && <div style={{ fontSize: 11.5, color: T.inkSoft }}>{nota}</div>}
+    </div>
+  );
+  const leyenda = (lista) => (
+    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12, color: T.ink, marginBottom: 6 }}>
+      {lista.map((e) => <span key={e} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: COLOR_ESTADO_EQUIPO[e] }} />{e}</span>)}
+    </div>
+  );
+  const ejes = { tick: { fontSize: 11, fill: T.inkSoft }, axisLine: { stroke: T.line }, tickLine: false };
+  const barrasApiladas = (lista) => lista.map((e, k) => <Bar key={e} dataKey={e} stackId="a" fill={COLOR_ESTADO_EQUIPO[e]} stroke="#fff" strokeWidth={2} radius={k === lista.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]} isAnimationActive={false} />);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ fontSize: 12, color: T.inkSoft, fontWeight: 700 }}>Área:</span>
+        {[["ambas", "Ambas"], ["inspecciones", "Inspecciones"], ["proyectos", "Proyectos"]].map(([k, t]) => <Btn key={k} small variant={area === k ? "accent" : "ghost"} onClick={() => setArea(k)}>{t}</Btn>)}
+        <span style={{ width: 1, height: 20, background: T.line, margin: "0 6px" }} />
+        <span style={{ fontSize: 12, color: T.inkSoft, fontWeight: 700 }}>Tipo de OD:</span>
+        {[["Correctivo", "Correctivos"], ["Normal", "OD normales"], ["todos", "Todas"]].map(([k, t]) => <Btn key={k} small variant={tipo === k ? "accent" : "ghost"} onClick={() => setTipo(k)}>{t}</Btn>)}
+        <div style={{ flex: 1 }} />
+        <Btn small variant="ghost" onClick={() => setVerTabla(!verTabla)}>{verTabla ? "Ver gráficos" : "Ver como tabla"}</Btn>
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        {tile("OD con equipos", conEquipos.length, sinEquipos ? `${sinEquipos} sin equipos (no se grafican)` : "")}
+        {tile("Pendientes", pendientes.length, "Abierto, En importación o Cerrado")}
+        {tile("Completados", conEquipos.length - pendientes.length, conEquipos.length ? `${Math.round(((conEquipos.length - pendientes.length) / conEquipos.length) * 100)} % del total` : "")}
+        {tile("Pendientes 8+ semanas", mas8, conPo.length ? `Promedio: ${promedio.toFixed(1)} semanas desde la Fecha PO` : "Sin Fecha PO registrada", mas8 ? T.red : T.ink)}
+      </div>
+      {conEquipos.length === 0 ? (
+        <Card><div style={{ color: T.gray, fontSize: 13 }}>No hay OD con equipos para este filtro.</div></Card>
+      ) : verTabla ? (
+        <Card title="Datos por estado">
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead><tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase" }}><th style={{ padding: 6 }}>Semanas desde la Fecha PO</th>{estPend.map((e) => <th key={e}>{e}</th>)}<th>Total</th></tr></thead>
+              <tbody>
+                {histo.map((h) => <tr key={h.rango} style={{ borderTop: `1px solid ${T.line}` }}><td style={{ padding: 6, fontWeight: 700 }}>{h.rango}</td>{estPend.map((e) => <td key={e}>{h[e]}</td>)}<td style={{ fontWeight: 700 }}>{estPend.reduce((a, e) => a + h[e], 0)}</td></tr>)}
+                <tr style={{ borderTop: `1px solid ${T.line}` }}><td style={{ padding: 6, fontWeight: 700 }}>Sin Fecha PO</td><td colSpan={3} /><td style={{ fontWeight: 700 }}>{sinPo}</td></tr>
+              </tbody>
+            </table>
+            <div style={{ height: 14 }} />
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead><tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase" }}><th style={{ padding: 6 }}>Estado</th><th>Cantidad</th></tr></thead>
+              <tbody>{porEstado.map((x) => <tr key={x.estado} style={{ borderTop: `1px solid ${T.line}` }}><td style={{ padding: 6 }}>{x.estado}</td><td style={{ fontWeight: 700 }}>{x.cantidad}</td></tr>)}</tbody>
+            </table>
+          </div>
+        </Card>
+      ) : (
+        <>
+          <Card title="Equipos por estado">
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={porEstado} margin={{ top: 22, right: 10, left: -10, bottom: 0 }}>
+                <CartesianGrid vertical={false} stroke="#eef1f4" />
+                <XAxis dataKey="estado" {...ejes} />
+                <YAxis allowDecimals={false} {...ejes} />
+                <Tooltip cursor={{ fill: "rgba(0,0,0,.04)" }} content={<TooltipEquipos />} />
+                <Bar dataKey="cantidad" radius={[4, 4, 0, 0]} maxBarSize={70} isAnimationActive={false}>
+                  {porEstado.map((x) => <Cell key={x.estado} fill={COLOR_ESTADO_EQUIPO[x.estado]} />)}
+                  <LabelList dataKey="cantidad" position="top" style={{ fontSize: 12, fontWeight: 700, fill: T.ink }} />
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </Card>
+          <Card title="Histograma: semanas desde la Fecha PO (pendientes)">
+            {leyenda(estPend)}
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={histo} margin={{ top: 22, right: 10, left: -10, bottom: 0 }} barCategoryGap={4}>
+                <CartesianGrid vertical={false} stroke="#eef1f4" />
+                <XAxis dataKey="rango" {...ejes} />
+                <YAxis allowDecimals={false} {...ejes} />
+                <Tooltip cursor={{ fill: "rgba(0,0,0,.04)" }} content={<TooltipEquipos sufijo=" semanas" />} />
+                <ReferenceLine x="6–8" stroke={T.amber} strokeDasharray="4 4" label={{ value: "6 sem", position: "top", fontSize: 10, fill: T.inkSoft }} />
+                <ReferenceLine x="8–12" stroke={T.red} strokeDasharray="4 4" label={{ value: "8 sem", position: "top", fontSize: 10, fill: T.inkSoft }} />
+                {barrasApiladas(estPend)}
+              </BarChart>
+            </ResponsiveContainer>
+            <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 4 }}>A partir de 6 semanas la tarjeta se pone amarilla y a partir de 8, roja.{sinPo ? ` ${sinPo} pendiente${sinPo > 1 ? "s" : ""} sin Fecha PO no aparece${sinPo > 1 ? "n" : ""} aquí.` : ""}</div>
+          </Card>
+          <Card title="Por mes de la Fecha PO (últimos 12 meses)">
+            {leyenda(ESTADOS_GRAFICO)}
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={porMes} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                <CartesianGrid vertical={false} stroke="#eef1f4" />
+                <XAxis dataKey="mes" {...ejes} />
+                <YAxis allowDecimals={false} {...ejes} />
+                <Tooltip cursor={{ fill: "rgba(0,0,0,.04)" }} content={<TooltipEquipos />} />
+                {barrasApiladas(ESTADOS_GRAFICO)}
+              </BarChart>
+            </ResponsiveContainer>
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}
 const ESTATUS_EQUIPO_OPCIONES = ["Abierto", "En importación", "Cerrado", "Completado", "No lleva equipos"];
 
 function EquiposCorrectivos({ irInicial, onIrConsumido }) {
@@ -14135,21 +14330,31 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
     return { fondo: T.greenSoft, borde: T.green };
   };
 
+  const barraTabs = (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Btn variant={areaActiva === "inspecciones" ? "accent" : "ghost"} onClick={() => { setAreaActiva("inspecciones"); setTipoOdActivo("Correctivo"); }}>Correctivos Inspecciones</Btn>
+          <Btn variant={areaActiva === "proyectos" ? "accent" : "ghost"} onClick={() => setAreaActiva("proyectos")}>Correctivos Proyectos</Btn>
+          {areaActiva === "proyectos" && (
+            <>
+              <div style={{ width: 1, background: T.line, margin: "0 4px" }} />
+              <Btn variant={tipoOdActivo === "Normal" ? "accent" : "ghost"} onClick={() => setTipoOdActivo(tipoOdActivo === "Normal" ? "Correctivo" : "Normal")}>OD Proyectos</Btn>
+            </>
+          )}
+          <div style={{ width: 1, background: T.line, margin: "0 4px" }} />
+          <Btn variant={subTab === "pendientes" ? "accent" : "ghost"} onClick={() => setSubTab("pendientes")}>Pendientes ({pendientes.length})</Btn>
+          <Btn variant={subTab === "completados" ? "accent" : "ghost"} onClick={() => setSubTab("completados")}>Completados ({completados.length})</Btn>
+          <Btn variant={subTab === "graficos" ? "accent" : "ghost"} onClick={() => setSubTab("graficos")}>📊 Gráficos por estado</Btn>
+        </div>
+  );
+  if (subTab === "graficos") return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {barraTabs}
+      <EquiposEstadisticas />
+    </div>
+  );
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <Btn variant={areaActiva === "inspecciones" ? "accent" : "ghost"} onClick={() => { setAreaActiva("inspecciones"); setTipoOdActivo("Correctivo"); }}>Correctivos Inspecciones</Btn>
-        <Btn variant={areaActiva === "proyectos" ? "accent" : "ghost"} onClick={() => setAreaActiva("proyectos")}>Correctivos Proyectos</Btn>
-        {areaActiva === "proyectos" && (
-          <>
-            <div style={{ width: 1, background: T.line, margin: "0 4px" }} />
-            <Btn variant={tipoOdActivo === "Normal" ? "accent" : "ghost"} onClick={() => setTipoOdActivo(tipoOdActivo === "Normal" ? "Correctivo" : "Normal")}>OD Proyectos</Btn>
-          </>
-        )}
-        <div style={{ width: 1, background: T.line, margin: "0 4px" }} />
-        <Btn variant={subTab === "pendientes" ? "accent" : "ghost"} onClick={() => setSubTab("pendientes")}>Pendientes ({pendientes.length})</Btn>
-        <Btn variant={subTab === "completados" ? "accent" : "ghost"} onClick={() => setSubTab("completados")}>Completados ({completados.length})</Btn>
-      </div>
+      {barraTabs}
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <input style={{ ...inputStyle, width: 150 }} value={filtroOd} onChange={(e) => setFiltroOd(e.target.value)} placeholder="Filtrar por OD..." />

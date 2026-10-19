@@ -1988,6 +1988,7 @@ function cotRowFromDb(r) {
     fechaEnvio: r.fecha_envio || "",
     moneda: r.moneda || "USD",
     tipoCambio: r.tipo_cambio || null,
+    realizadoPor: r.realizado_por || "",
   };
 }
 
@@ -6507,8 +6508,16 @@ function unificarCotizaciones(sols, hist, proc, tcHoy) {
   const hPorSol = {}, pPorSol = {};
   hist.forEach((h) => { if (h.solicitud_id) hPorSol[String(h.solicitud_id)] = h; });
   proc.forEach((p) => { if (p.solicitud_id) pPorSol[String(p.solicitud_id)] = p; });
+  // Historial sin enlace a su solicitud: se enlaza por el número de cotización (así se sabe qué perfil la hizo)
+  const idsSol0 = new Set(sols.map((x) => String(x.id)));
+  const normNum = (v) => String(v || '').trim().toUpperCase().replace(/\s+/g, '');
+  const hPorNum = {};
+  hist.forEach((h) => { const k = normNum(h.numero); if (k && (!h.solicitud_id || !idsSol0.has(String(h.solicitud_id))) && !hPorNum[k]) hPorNum[k] = h; });
+  const hUsados = new Set();
   sols.forEach((s) => {
-    const h = hPorSol[String(s.id)], p = pPorSol[String(s.id)];
+    let h = hPorSol[String(s.id)]; const p = pPorSol[String(s.id)];
+    if (!h && normNum(s.numCot) && hPorNum[normNum(s.numCot)] && !hUsados.has(hPorNum[normNum(s.numCot)].id)) h = hPorNum[normNum(s.numCot)];
+    if (h && !hPorSol[String(s.id)]) hUsados.add(h.id);
     const carga = (h && fechaLocal(h.fecha_carga)) || fechaLocal(s.creado) || (p && fechaLocal(p.fecha_carga)) || '';
     const envio = fechaLocal(s.fechaEnvio) || (h && fechaLocal(h.fecha_envio)) || '';
     let etapa;
@@ -6522,10 +6531,11 @@ function unificarCotizaciones(sols, hist, proc, tcHoy) {
       responsable: (p && p.usuario_nombre) || (h && h.presupuestista) || s.solicitante || '', monto: aUSD(s.monto, s.moneda, s.tipoCambio, tcHoy) || n(h && h.total_oferta) || n(p && p.total), moneda: s.moneda || 'USD',
       carga, envio, etapa, sinFechaEnvio: etapa === 'enviada' && !envio, compra: s.actividad === 'Con OC',
       hecha: etapa === 'lista' || etapa === 'enviada' ? ((h && (fechaLocal(h.fecha) || fechaLocal(h.creado_en))) || envio || '') : '',
-      hizo: (h && (h.presupuestista || h.creado_por_nombre)) || (p && p.usuario_nombre) || '' });
+      hizo: (h && (h.presupuestista || h.creado_por_nombre)) || s.realizadoPor || (p && p.usuario_nombre) || (/Creada desde el Cotizador/i.test(s.observaciones || '') ? s.solicitante : '') || '',
+      solId: s.id });
   });
   const solIds = new Set(sols.map((x) => String(x.id)));
-  hist.filter((h) => !h.solicitud_id || !solIds.has(String(h.solicitud_id))).forEach((h) => {
+  hist.filter((h) => (!h.solicitud_id || !solIds.has(String(h.solicitud_id))) && !hUsados.has(h.id)).forEach((h) => {
     const envio = fechaLocal(h.fecha_envio);
     items.push({ key: 'h' + h.id, numero: h.numero || '—', cliente: h.cliente || '', proyecto: h.proyecto || '', area: h.area || '', origen: h.origen || ORIGEN_DEF,
       responsable: h.presupuestista || h.creado_por_nombre || '', monto: n(h.total_oferta), carga: fechaLocal(h.fecha_carga) || fechaLocal(h.creado_en), envio, etapa: envio ? 'enviada' : 'lista',
@@ -6543,7 +6553,9 @@ const COLORES_PERSONA = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', 
 const lunesDe = (iso) => { const d = new Date(iso + 'T00:00:00'); const dia = (d.getDay() + 6) % 7; d.setDate(d.getDate() - dia); return d.toLocaleDateString('en-CA'); };
 const sumarDias = (iso, k) => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + k); return d.toLocaleDateString('en-CA'); };
 const diasHabiles = (desde, hasta) => { let c = 0; for (let d = desde; d <= hasta; d = sumarDias(d, 1)) { const w = new Date(d + 'T00:00:00').getDay(); if (w !== 0 && w !== 6) c++; } return c; };
-function ProductividadPresupuestistas({ items }) {
+function ProductividadPresupuestistas({ items, onAsignar }) {
+  const [verSin, setVerSin] = useState(false);
+  const [asignando, setAsignando] = useState('');
   const [modo, setModo] = useState(() => lsGet('cotAD.prodModo') || 'hechas');
   const [vista, setVista] = useState(() => lsGet('cotAD.prodVista') || 'semana');
   const [verTabla, setVerTabla] = useState(false);
@@ -6670,6 +6682,42 @@ function ProductividadPresupuestistas({ items }) {
               <tr className="subt"><td>Total del equipo</td><td className="r">{T0.hoy}</td><td className="r">{T0.semana}</td><td className="r">{T0.mes}</td><td className="r">{(Math.round(promDiaEquipo * 10) / 10).toLocaleString('es-CR')}</td><td className="r">{T0.mesPasado}</td><td className="r">{usd(T0.montoMes)}</td><td className="r">{T0.total}</td></tr>
             </tbody>
           </table></div>
+          {(() => {
+            const sin = validos.filter((x) => !String(quien(x)).trim()).sort((a, b) => (fechaDe(a) < fechaDe(b) ? 1 : -1));
+            if (!sin.length) return null;
+            const conocidos = Object.keys(nombres).filter((k) => k !== '(sin asignar)').map((k) => nombres[k]).sort((a, b) => a.localeCompare(b, 'es'));
+            const asignar = async (x, v) => {
+              let nom = v;
+              if (v === '__otro') nom = (window.prompt('Nombre del presupuestista que hizo la cotización ' + x.numero + ':') || '').trim();
+              if (!nom || !onAsignar) return;
+              setAsignando(x.key); const ok = await onAsignar(x.solId, nom); setAsignando('');
+              if (!ok) window.alert('No se pudo guardar. Corra en Supabase el SQL «SQL_cotizaciones_realizado_por.sql» y vuelva a intentar.');
+            };
+            return (
+              <div style={{ marginTop: 12, border: '1px solid #F2C9A8', background: '#FFF7F0', borderRadius: 10, padding: '10px 12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <b style={{ fontSize: 13 }}>{sin.length} cotizaciones sin presupuestista</b>
+                  <span style={{ fontSize: 12, color: '#5B6572' }}>Se marcaron como realizadas o enviadas en la lista de solicitudes, sin pasar por el Cotizador, y el sistema no guardó quién las hizo. Asigne a cada una el perfil que la hizo.</span>
+                  <button type="button" className="btn btn-line" style={{ minHeight: 30, padding: '5px 11px', fontSize: 12.5, marginLeft: 'auto' }} onClick={() => setVerSin((v) => !v)}>{verSin ? 'Ocultar' : 'Asignar'}</button>
+                </div>
+                {verSin && (
+                  <div style={{ overflowX: 'auto', marginTop: 8 }}><table>
+                    <thead><tr><th>Cotización</th><th>Cliente</th><th>Fecha</th><th className="r">Monto</th><th>Hecha por</th></tr></thead>
+                    <tbody>{sin.map((x) => (
+                      <tr key={x.key}>
+                        <td className="strong">{x.numero}</td><td>{x.cliente}</td><td>{fechaDe(x)}</td><td className="r">{usd(x.monto)}</td>
+                        <td>{x.solId ? (
+                          <select className="txt" disabled={asignando === x.key} value="" onChange={(e) => asignar(x, e.target.value)} style={{ minHeight: 30, fontSize: 12.5 }}>
+                            <option value="">{asignando === x.key ? 'Guardando…' : 'Elegir…'}</option>
+                            {conocidos.map((nm) => <option key={nm} value={nm}>{nm}</option>)}
+                            <option value="__otro">Otro…</option>
+                          </select>) : '—'}</td>
+                      </tr>))}</tbody>
+                  </table></div>
+                )}
+              </div>
+            );
+          })()}
           <div style={{ fontSize: 11.5, color: '#5B6572', marginTop: 8 }}>
             {modo === 'enviadas' ? 'Cuenta cada cotización el día en que se envió al cliente.' : 'Cuenta cada cotización REALIZADA por el presupuestista, en la fecha de la cotización (si no tiene, el día en que la terminó en el Cotizador). No importa cuándo se cargó la solicitud.'} El promedio por día usa los días hábiles (lunes a viernes) del mes en curso. Las canceladas no cuentan.{sinFecha ? ` ${sinFecha} cotización${sinFecha > 1 ? 'es' : ''} sin fecha no aparece${sinFecha > 1 ? 'n' : ''}.` : ''}
           </div>
@@ -6885,7 +6933,12 @@ function ControlCotizaciones({ supabase, usuarioId }) {
         </div>
       </div>
 
-      <ProductividadPresupuestistas items={todos.filter((x) => (f.origen === '__vend' ? x.origen === ORIGEN_DEF : (!f.origen || x.origen === f.origen)) && (!f.area || String(x.area).includes(f.area)))} />
+      <ProductividadPresupuestistas onAsignar={async (id, nom) => {
+        const { error } = await supabase.from('cotizaciones').update({ realizado_por: nom }).eq('id', id);
+        if (error) return false;
+        setSols((l) => l.map((x) => (String(x.id) === String(id) ? { ...x, realizadoPor: nom } : x)));
+        return true;
+      }} items={todos.filter((x) => (f.origen === '__vend' ? x.origen === ORIGEN_DEF : (!f.origen || x.origen === f.origen)) && (!f.area || String(x.area).includes(f.area)))} />
 
       <div className="card" style={{ marginTop: 12 }}>
         <h2 className="ctitle">Ofertas: solicitadas → enviadas → compradas</h2>
@@ -7046,6 +7099,11 @@ function Cotizaciones() {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado, ...(fe ? { fechaEnvio: fe } : {}) } : r));
     supabase.from("cotizaciones").update({ estado }).eq("id", id).then();
     if (fe) supabase.from("cotizaciones").update({ fecha_envio: fe }).eq("id", id).then();
+    // Queda registrado qué perfil hizo la cotización (para la productividad por presupuestista)
+    if (["Realizado", "Enviado", "Comparado"].includes(estado) && fila && !fila.realizadoPor && currentUser?.name) {
+      setRows((prev) => prev.map((r) => r.id === id ? { ...r, realizadoPor: currentUser.name } : r));
+      supabase.from("cotizaciones").update({ realizado_por: currentUser.name }).eq("id", id).then(() => {}, () => {});
+    }
   };
   const setActividad = (id, actividad) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, actividad } : r));
@@ -7143,7 +7201,8 @@ function Cotizaciones() {
                 if (fila) setRows((prev) => prev.map((r) => r.id === id ? cotRowFromDb(fila) : r));
                 return false;
               }
-              setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado: "En proceso" } : r));
+              setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado: "En proceso", realizadoPor: currentUser?.name || r.realizadoPor } : r));
+              if (currentUser?.name) supabase.from("cotizaciones").update({ realizado_por: currentUser.name }).eq("id", id).then(() => {}, () => {});
               return true;
             }}
             onPasarMonto={(id, monto, numCot, moneda, tcv) => { setMonto(id, monto); if (numCot) setNumCot(id, numCot); setMoneda(id, moneda || "USD", tcv); }}

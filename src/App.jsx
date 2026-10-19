@@ -6520,13 +6520,15 @@ function unificarCotizaciones(sols, hist, proc, tcHoy) {
     items.push({ key: 's' + s.id, numero: s.numCot || (h && h.numero) || '#' + s.consecutivo, consecutivo: s.consecutivo, cliente: s.cliente || (h && h.cliente) || '',
       proyecto: s.descripcion || (h && h.proyecto) || '', area: s.tipo || (h && h.area) || '', origen: (h && h.origen) || (p && p.origen) || ORIGEN_DEF,
       responsable: (p && p.usuario_nombre) || (h && h.presupuestista) || s.solicitante || '', monto: aUSD(s.monto, s.moneda, s.tipoCambio, tcHoy) || n(h && h.total_oferta) || n(p && p.total), moneda: s.moneda || 'USD',
-      carga, envio, etapa, sinFechaEnvio: etapa === 'enviada' && !envio, compra: s.actividad === 'Con OC' });
+      carga, envio, etapa, sinFechaEnvio: etapa === 'enviada' && !envio, compra: s.actividad === 'Con OC',
+      hecha: etapa === 'lista' || etapa === 'enviada' ? ((h && fechaLocal(h.fecha_carga)) || envio || '') : '' });
   });
   const solIds = new Set(sols.map((x) => String(x.id)));
   hist.filter((h) => !h.solicitud_id || !solIds.has(String(h.solicitud_id))).forEach((h) => {
     const envio = fechaLocal(h.fecha_envio);
     items.push({ key: 'h' + h.id, numero: h.numero || '—', cliente: h.cliente || '', proyecto: h.proyecto || '', area: h.area || '', origen: h.origen || ORIGEN_DEF,
-      responsable: h.presupuestista || h.creado_por_nombre || '', monto: n(h.total_oferta), carga: fechaLocal(h.fecha_carga) || fechaLocal(h.creado_en), envio, etapa: envio ? 'enviada' : 'lista' });
+      responsable: h.presupuestista || h.creado_por_nombre || '', monto: n(h.total_oferta), carga: fechaLocal(h.fecha_carga) || fechaLocal(h.creado_en), envio, etapa: envio ? 'enviada' : 'lista',
+      hecha: fechaLocal(h.fecha_carga) || fechaLocal(h.creado_en) || envio || '' });
   });
   proc.filter((p) => (!p.solicitud_id || !solIds.has(String(p.solicitud_id))) && !p.hist_id).forEach((p) => {
     items.push({ key: 'p' + p.usuario_id, numero: p.numero || '(sin número)', cliente: p.cliente || '', proyecto: p.proyecto || '', area: p.area || '', origen: p.origen || ORIGEN_DEF,
@@ -6535,6 +6537,145 @@ function unificarCotizaciones(sols, hist, proc, tcHoy) {
   return items;
 }
 
+// ---- Productividad por presupuestista: cuántas cotizaciones hace cada uno por día, semana y mes ----
+const COLORES_PERSONA = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
+const lunesDe = (iso) => { const d = new Date(iso + 'T00:00:00'); const dia = (d.getDay() + 6) % 7; d.setDate(d.getDate() - dia); return d.toLocaleDateString('en-CA'); };
+const sumarDias = (iso, k) => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + k); return d.toLocaleDateString('en-CA'); };
+const diasHabiles = (desde, hasta) => { let c = 0; for (let d = desde; d <= hasta; d = sumarDias(d, 1)) { const w = new Date(d + 'T00:00:00').getDay(); if (w !== 0 && w !== 6) c++; } return c; };
+function ProductividadPresupuestistas({ items }) {
+  const [modo, setModo] = useState(() => lsGet('cotAD.prodModo') || 'hechas');
+  const [vista, setVista] = useState(() => lsGet('cotAD.prodVista') || 'semana');
+  const [verTabla, setVerTabla] = useState(false);
+  const cambiar = (k, v) => { if (k === 'modo') { setModo(v); lsSet('cotAD.prodModo', v); } else { setVista(v); lsSet('cotAD.prodVista', v); } };
+  const hoy = hoyISO();
+  const fechaDe = (x) => (modo === 'enviadas' ? x.envio : x.hecha) || '';
+  const validos = items.filter((x) => x.etapa !== 'cancelada' && fechaDe(x));
+  const sinFecha = items.filter((x) => x.etapa !== 'cancelada' && (modo === 'enviadas' ? x.etapa === 'enviada' : (x.etapa === 'lista' || x.etapa === 'enviada')) && !fechaDe(x)).length;
+  // personas (se agrupan sin importar mayúsculas o espacios)
+  const clave = (x) => String(x.responsable || '').trim().toLowerCase().replace(/\s+/g, ' ') || '(sin asignar)';
+  const nombres = {};
+  validos.forEach((x) => { const k = clave(x); if (!nombres[k]) nombres[k] = String(x.responsable || '').trim() || 'Sin asignar'; });
+  const totalesPorPersona = {};
+  validos.forEach((x) => { const k = clave(x); totalesPorPersona[k] = (totalesPorPersona[k] || 0) + 1; });
+  // colores fijos por nombre (orden alfabético), máximo 8; el resto va a «Otros»
+  const alfabetico = Object.keys(nombres).sort((a, b) => nombres[a].localeCompare(nombres[b], 'es'));
+  const top = [...alfabetico].sort((a, b) => totalesPorPersona[b] - totalesPorPersona[a]).slice(0, alfabetico.length > 8 ? 7 : 8);
+  const series = alfabetico.filter((k) => top.includes(k));
+  const hayOtros = alfabetico.length > series.length;
+  const serieDe = (k) => (series.includes(k) ? k : '__otros');
+  const etiquetaSerie = (k) => (k === '__otros' ? 'Otros' : nombres[k]);
+  const colorSerie = (k) => (k === '__otros' ? '#868e96' : COLORES_PERSONA[series.indexOf(k) % 8]);
+  const todasSeries = [...series, ...(hayOtros ? ['__otros'] : [])];
+  // periodos del gráfico
+  const periodos = [];
+  if (vista === 'dia') { for (let k = 29; k >= 0; k--) { const d = sumarDias(hoy, -k); periodos.push({ k: d, t: d.slice(8, 10) + '/' + d.slice(5, 7), desde: d, hasta: d }); } }
+  else if (vista === 'semana') { const l0 = lunesDe(hoy); for (let k = 11; k >= 0; k--) { const l = sumarDias(l0, -7 * k); periodos.push({ k: l, t: 'Sem ' + l.slice(8, 10) + '/' + l.slice(5, 7), desde: l, hasta: sumarDias(l, 6) }); } }
+  else { const d0 = new Date(hoy + 'T00:00:00'); for (let k = 11; k >= 0; k--) { const d = new Date(d0.getFullYear(), d0.getMonth() - k, 1); const m = d.toLocaleDateString('en-CA').slice(0, 7); const fin = new Date(d.getFullYear(), d.getMonth() + 1, 0).toLocaleDateString('en-CA'); periodos.push({ k: m, t: MESES[d.getMonth()] + ' ' + String(d.getFullYear()).slice(2), desde: m + '-01', hasta: fin }); } }
+  const datos = periodos.map((pp) => {
+    const fila = { t: pp.t, total: 0 };
+    todasSeries.forEach((sk) => { fila[sk] = 0; });
+    validos.forEach((x) => { const f = fechaDe(x); if (f >= pp.desde && f <= pp.hasta) { fila[serieDe(clave(x))]++; fila.total++; } });
+    return fila;
+  });
+  // tabla por persona
+  const lunes = lunesDe(hoy), mes = hoy.slice(0, 7);
+  const dmPasado = new Date(new Date(hoy + 'T00:00:00').getFullYear(), new Date(hoy + 'T00:00:00').getMonth() - 1, 1);
+  const mesPasado = dmPasado.toLocaleDateString('en-CA').slice(0, 7);
+  const habMes = Math.max(1, diasHabiles(mes + '-01', hoy));
+  const tabla = alfabetico.map((k) => {
+    const mias = validos.filter((x) => clave(x) === k), f = (x) => fechaDe(x);
+    const esteMes = mias.filter((x) => f(x).slice(0, 7) === mes);
+    return { k, nombre: nombres[k], hoy: mias.filter((x) => f(x) === hoy).length, semana: mias.filter((x) => f(x) >= lunes && f(x) <= hoy).length,
+      mes: esteMes.length, montoMes: esteMes.reduce((a, x) => a + n(x.monto), 0), mesPasado: mias.filter((x) => f(x).slice(0, 7) === mesPasado).length,
+      porDia: esteMes.length / habMes, total: mias.length };
+  }).sort((a, b) => b.mes - a.mes || b.total - a.total);
+  const T0 = tabla.reduce((a, r) => ({ hoy: a.hoy + r.hoy, semana: a.semana + r.semana, mes: a.mes + r.mes, montoMes: a.montoMes + r.montoMes, mesPasado: a.mesPasado + r.mesPasado, total: a.total + r.total }), { hoy: 0, semana: 0, mes: 0, montoMes: 0, mesPasado: 0, total: 0 });
+  const verbo = modo === 'enviadas' ? 'enviadas' : 'hechas';
+  const ejeTick = { fontSize: 11, fill: '#5B6572' };
+  const kpi = (t, v, sub, color) => (<div className="kpi"><div className="kpi-t">{t}</div><div className="kpi-v" style={color ? { color } : null}>{v}</div>{sub && <div className="kpi-s">{sub}</div>}</div>);
+  const btn = (activo, txt, on) => <button type="button" className={'btn ' + (activo ? 'btn-dark' : 'btn-line')} aria-pressed={activo} style={{ minHeight: 30, padding: '5px 11px', fontSize: 12.5 }} onClick={on}>{txt}</button>;
+  const Tip = ({ active, payload, label }) => {
+    if (!active || !payload || !payload.length) return null;
+    const filas = payload.filter((x) => x.value);
+    return (<div style={{ background: '#fff', border: '1px solid #E1E6EB', borderRadius: 8, padding: '8px 10px', fontSize: 12 }}>
+      <div style={{ fontWeight: 800, marginBottom: 4 }}>{label}</div>
+      {filas.map((x) => <div key={x.dataKey} style={{ display: 'flex', gap: 6, alignItems: 'center' }}><span style={{ width: 9, height: 9, borderRadius: 2, background: x.color }} />{etiquetaSerie(x.dataKey)}: <b>{x.value}</b></div>)}
+      <div style={{ color: '#5B6572', marginTop: 4 }}>Total: <b>{filas.reduce((a, x) => a + x.value, 0)}</b> cotizaciones {verbo}</div>
+    </div>);
+  };
+  const ultimo = todasSeries[todasSeries.length - 1];
+  const promDiaEquipo = T0.mes / habMes;
+  const lider = tabla[0];
+  return (
+    <div className="card" style={{ marginTop: 12 }}>
+      <h2 className="ctitle">Cotizaciones por presupuestista</h2>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+        <span style={{ fontSize: 12, color: '#5B6572', fontWeight: 700 }}>Contar:</span>
+        {btn(modo === 'hechas', 'Hechas', () => cambiar('modo', 'hechas'))}
+        {btn(modo === 'enviadas', 'Enviadas al cliente', () => cambiar('modo', 'enviadas'))}
+        <span style={{ width: 1, height: 22, background: '#E1E6EB', margin: '0 6px' }} />
+        <span style={{ fontSize: 12, color: '#5B6572', fontWeight: 700 }}>Gráfico:</span>
+        {btn(vista === 'dia', 'Por día', () => cambiar('vista', 'dia'))}
+        {btn(vista === 'semana', 'Por semana', () => cambiar('vista', 'semana'))}
+        {btn(vista === 'mes', 'Por mes', () => cambiar('vista', 'mes'))}
+        <div style={{ flex: 1 }} />
+        {btn(verTabla, verTabla ? 'Ver gráfico' : 'Ver datos del gráfico', () => setVerTabla(!verTabla))}
+      </div>
+      <div className="kpis">
+        {kpi('Este mes', T0.mes, 'cotizaciones ' + verbo + ' · ' + usd(T0.montoMes))}
+        {kpi('Mes pasado', T0.mesPasado, T0.mesPasado ? (T0.mes >= T0.mesPasado ? '▲ ' : '▼ ') + Math.round(((T0.mes - T0.mesPasado) / T0.mesPasado) * 100) + ' % este mes (va en curso)' : '')}
+        {kpi('Esta semana', T0.semana, 'desde el lunes')}
+        {kpi('Hoy', T0.hoy, 'cotizaciones ' + verbo)}
+        {kpi('Promedio diario del equipo', (Math.round(promDiaEquipo * 10) / 10).toLocaleString('es-CR'), 'por día hábil este mes (' + habMes + ' días)')}
+        {kpi('Más ' + verbo + ' este mes', lider && lider.mes ? lider.nombre : '—', lider && lider.mes ? lider.mes + ' cotizaciones' : '')}
+      </div>
+      {!validos.length ? <div className="chart-vacio" style={{ marginTop: 10 }}>Todavía no hay cotizaciones {verbo} con fecha.</div> : (
+        <>
+          <div className="chartbox" style={{ marginTop: 12 }}>
+            <div className="chart-t">Cotizaciones {verbo} {vista === 'dia' ? 'por día (últimos 30 días)' : vista === 'semana' ? 'por semana (últimas 12, de lunes a domingo)' : 'por mes (últimos 12)'}</div>
+            <div className="chart-ley" style={{ marginTop: 0, marginBottom: 6 }}>{todasSeries.map((sk) => <span key={sk}><i style={{ background: colorSerie(sk) }} />{etiquetaSerie(sk)}</span>)}</div>
+            {verTabla ? (
+              <div style={{ overflowX: 'auto' }}><table>
+                <thead><tr><th>Periodo</th>{todasSeries.map((sk) => <th key={sk} className="r">{etiquetaSerie(sk)}</th>)}<th className="r">Total</th></tr></thead>
+                <tbody>{datos.map((d) => <tr key={d.t}><td className="strong">{d.t}</td>{todasSeries.map((sk) => <td key={sk} className="r">{d[sk] || ''}</td>)}<td className="r strong">{d.total}</td></tr>)}</tbody>
+              </table></div>
+            ) : (
+              <ResponsiveContainer width="100%" height={260}>
+                <BarChart data={datos} margin={{ top: 18, right: 6, left: -18, bottom: 0 }}>
+                  <CartesianGrid vertical={false} stroke="#EDEFF2" />
+                  <XAxis dataKey="t" tick={ejeTick} axisLine={false} tickLine={false} interval={vista === 'dia' ? 2 : 0} />
+                  <YAxis allowDecimals={false} tick={ejeTick} axisLine={false} tickLine={false} />
+                  <Tooltip content={<Tip />} cursor={{ fill: 'rgba(31,58,95,.06)' }} />
+                  {todasSeries.map((sk) => (
+                    <Bar key={sk} dataKey={sk} stackId="p" fill={colorSerie(sk)} stroke="#fff" strokeWidth={1.5} maxBarSize={vista === 'dia' ? 22 : 44} radius={sk === ultimo ? [4, 4, 0, 0] : [0, 0, 0, 0]} isAnimationActive={false}>
+                      {sk === ultimo && <LabelList dataKey="total" position="top" style={{ fontSize: 11, fill: '#101826', fontWeight: 700 }} formatter={(v) => (v ? v : '')} />}
+                    </Bar>
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+          <div style={{ overflowX: 'auto', marginTop: 12 }}><table>
+            <thead><tr><th>Presupuestista</th><th className="r">Hoy</th><th className="r">Esta semana</th><th className="r">Este mes</th><th className="r">Promedio por día</th><th className="r">Mes pasado</th><th className="r">Monto este mes</th><th className="r">Total</th></tr></thead>
+            <tbody>
+              {tabla.map((r) => (
+                <tr key={r.k}>
+                  <td className="strong"><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: colorSerie(serieDe(r.k)), marginRight: 6 }} />{r.nombre}</td>
+                  <td className="r">{r.hoy || '—'}</td><td className="r">{r.semana || '—'}</td><td className="r strong">{r.mes}</td>
+                  <td className="r">{(Math.round(r.porDia * 10) / 10).toLocaleString('es-CR')}</td><td className="r">{r.mesPasado}</td><td className="r">{usd(r.montoMes)}</td><td className="r">{r.total}</td>
+                </tr>
+              ))}
+              <tr className="subt"><td>Total del equipo</td><td className="r">{T0.hoy}</td><td className="r">{T0.semana}</td><td className="r">{T0.mes}</td><td className="r">{(Math.round(promDiaEquipo * 10) / 10).toLocaleString('es-CR')}</td><td className="r">{T0.mesPasado}</td><td className="r">{usd(T0.montoMes)}</td><td className="r">{T0.total}</td></tr>
+            </tbody>
+          </table></div>
+          <div style={{ fontSize: 11.5, color: '#5B6572', marginTop: 8 }}>
+            {modo === 'enviadas' ? 'Cuenta cada cotización el día en que se envió al cliente.' : 'Cuenta cada cotización el día en que el presupuestista la terminó y la cargó al historial.'} El promedio por día usa los días hábiles (lunes a viernes) del mes en curso. Las canceladas no cuentan.{sinFecha ? ` ${sinFecha} cotización${sinFecha > 1 ? 'es' : ''} sin fecha no aparece${sinFecha > 1 ? 'n' : ''}.` : ''}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 function ControlCotizaciones({ supabase, usuarioId }) {
   const [sols, setSols] = useState([]); const [hist, setHist] = useState([]); const [proc, setProc] = useState([]);
   const [cargando, setCargando] = useState(true); const [avisos, setAvisos] = useState([]);
@@ -6741,6 +6882,8 @@ function ControlCotizaciones({ supabase, usuarioId }) {
           </div>
         </div>
       </div>
+
+      <ProductividadPresupuestistas items={todos.filter((x) => (f.origen === '__vend' ? x.origen === ORIGEN_DEF : (!f.origen || x.origen === f.origen)) && (!f.area || String(x.area).includes(f.area)))} />
 
       <div className="card" style={{ marginTop: 12 }}>
         <h2 className="ctitle">Ofertas: solicitadas → enviadas → compradas</h2>

@@ -6521,14 +6521,15 @@ function unificarCotizaciones(sols, hist, proc, tcHoy) {
       proyecto: s.descripcion || (h && h.proyecto) || '', area: s.tipo || (h && h.area) || '', origen: (h && h.origen) || (p && p.origen) || ORIGEN_DEF,
       responsable: (p && p.usuario_nombre) || (h && h.presupuestista) || s.solicitante || '', monto: aUSD(s.monto, s.moneda, s.tipoCambio, tcHoy) || n(h && h.total_oferta) || n(p && p.total), moneda: s.moneda || 'USD',
       carga, envio, etapa, sinFechaEnvio: etapa === 'enviada' && !envio, compra: s.actividad === 'Con OC',
-      hecha: etapa === 'lista' || etapa === 'enviada' ? ((h && fechaLocal(h.fecha_carga)) || envio || '') : '' });
+      hecha: etapa === 'lista' || etapa === 'enviada' ? ((h && (fechaLocal(h.fecha) || fechaLocal(h.creado_en))) || envio || '') : '',
+      hizo: (h && (h.presupuestista || h.creado_por_nombre)) || (p && p.usuario_nombre) || '' });
   });
   const solIds = new Set(sols.map((x) => String(x.id)));
   hist.filter((h) => !h.solicitud_id || !solIds.has(String(h.solicitud_id))).forEach((h) => {
     const envio = fechaLocal(h.fecha_envio);
     items.push({ key: 'h' + h.id, numero: h.numero || '—', cliente: h.cliente || '', proyecto: h.proyecto || '', area: h.area || '', origen: h.origen || ORIGEN_DEF,
       responsable: h.presupuestista || h.creado_por_nombre || '', monto: n(h.total_oferta), carga: fechaLocal(h.fecha_carga) || fechaLocal(h.creado_en), envio, etapa: envio ? 'enviada' : 'lista',
-      hecha: fechaLocal(h.fecha_carga) || fechaLocal(h.creado_en) || envio || '' });
+      hecha: fechaLocal(h.fecha) || fechaLocal(h.creado_en) || envio || '', hizo: h.presupuestista || h.creado_por_nombre || '' });
   });
   proc.filter((p) => (!p.solicitud_id || !solIds.has(String(p.solicitud_id))) && !p.hist_id).forEach((p) => {
     items.push({ key: 'p' + p.usuario_id, numero: p.numero || '(sin número)', cliente: p.cliente || '', proyecto: p.proyecto || '', area: p.area || '', origen: p.origen || ORIGEN_DEF,
@@ -6552,9 +6553,10 @@ function ProductividadPresupuestistas({ items }) {
   const validos = items.filter((x) => x.etapa !== 'cancelada' && fechaDe(x));
   const sinFecha = items.filter((x) => x.etapa !== 'cancelada' && (modo === 'enviadas' ? x.etapa === 'enviada' : (x.etapa === 'lista' || x.etapa === 'enviada')) && !fechaDe(x)).length;
   // personas (se agrupan sin importar mayúsculas o espacios)
-  const clave = (x) => String(x.responsable || '').trim().toLowerCase().replace(/\s+/g, ' ') || '(sin asignar)';
+  const quien = (x) => (x.hizo !== undefined ? x.hizo : x.responsable) || '';
+  const clave = (x) => String(quien(x)).trim().toLowerCase().replace(/\s+/g, ' ') || '(sin asignar)';
   const nombres = {};
-  validos.forEach((x) => { const k = clave(x); if (!nombres[k]) nombres[k] = String(x.responsable || '').trim() || 'Sin asignar'; });
+  validos.forEach((x) => { const k = clave(x); if (!nombres[k]) nombres[k] = String(quien(x)).trim() || 'Sin asignar'; });
   const totalesPorPersona = {};
   validos.forEach((x) => { const k = clave(x); totalesPorPersona[k] = (totalesPorPersona[k] || 0) + 1; });
   // colores fijos por nombre (orden alfabético), máximo 8; el resto va a «Otros»
@@ -6590,7 +6592,7 @@ function ProductividadPresupuestistas({ items }) {
       porDia: esteMes.length / habMes, total: mias.length };
   }).sort((a, b) => b.mes - a.mes || b.total - a.total);
   const T0 = tabla.reduce((a, r) => ({ hoy: a.hoy + r.hoy, semana: a.semana + r.semana, mes: a.mes + r.mes, montoMes: a.montoMes + r.montoMes, mesPasado: a.mesPasado + r.mesPasado, total: a.total + r.total }), { hoy: 0, semana: 0, mes: 0, montoMes: 0, mesPasado: 0, total: 0 });
-  const verbo = modo === 'enviadas' ? 'enviadas' : 'hechas';
+  const verbo = modo === 'enviadas' ? 'enviadas' : 'realizadas';
   const ejeTick = { fontSize: 11, fill: '#5B6572' };
   const kpi = (t, v, sub, color) => (<div className="kpi"><div className="kpi-t">{t}</div><div className="kpi-v" style={color ? { color } : null}>{v}</div>{sub && <div className="kpi-s">{sub}</div>}</div>);
   const btn = (activo, txt, on) => <button type="button" className={'btn ' + (activo ? 'btn-dark' : 'btn-line')} aria-pressed={activo} style={{ minHeight: 30, padding: '5px 11px', fontSize: 12.5 }} onClick={on}>{txt}</button>;
@@ -6611,7 +6613,7 @@ function ProductividadPresupuestistas({ items }) {
       <h2 className="ctitle">Cotizaciones por presupuestista</h2>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
         <span style={{ fontSize: 12, color: '#5B6572', fontWeight: 700 }}>Contar:</span>
-        {btn(modo === 'hechas', 'Hechas', () => cambiar('modo', 'hechas'))}
+        {btn(modo === 'hechas', 'Realizadas', () => cambiar('modo', 'hechas'))}
         {btn(modo === 'enviadas', 'Enviadas al cliente', () => cambiar('modo', 'enviadas'))}
         <span style={{ width: 1, height: 22, background: '#E1E6EB', margin: '0 6px' }} />
         <span style={{ fontSize: 12, color: '#5B6572', fontWeight: 700 }}>Gráfico:</span>
@@ -6669,7 +6671,7 @@ function ProductividadPresupuestistas({ items }) {
             </tbody>
           </table></div>
           <div style={{ fontSize: 11.5, color: '#5B6572', marginTop: 8 }}>
-            {modo === 'enviadas' ? 'Cuenta cada cotización el día en que se envió al cliente.' : 'Cuenta cada cotización el día en que el presupuestista la terminó y la cargó al historial.'} El promedio por día usa los días hábiles (lunes a viernes) del mes en curso. Las canceladas no cuentan.{sinFecha ? ` ${sinFecha} cotización${sinFecha > 1 ? 'es' : ''} sin fecha no aparece${sinFecha > 1 ? 'n' : ''}.` : ''}
+            {modo === 'enviadas' ? 'Cuenta cada cotización el día en que se envió al cliente.' : 'Cuenta cada cotización REALIZADA por el presupuestista, en la fecha de la cotización (si no tiene, el día en que la terminó en el Cotizador). No importa cuándo se cargó la solicitud.'} El promedio por día usa los días hábiles (lunes a viernes) del mes en curso. Las canceladas no cuentan.{sinFecha ? ` ${sinFecha} cotización${sinFecha > 1 ? 'es' : ''} sin fecha no aparece${sinFecha > 1 ? 'n' : ''}.` : ''}
           </div>
         </>
       )}

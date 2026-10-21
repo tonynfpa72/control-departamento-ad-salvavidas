@@ -3783,6 +3783,10 @@ function VisitasIpmMes({ color }) {
   const [busqueda, setBusqueda] = useState("");
   const [soloPend, setSoloPend] = useEstadoRecordado("ipm-visitas-solo-pend", false);
   const [guardando, setGuardando] = useState("");
+  // Técnicos con la lista oculta (se toca el nombre para mostrar u ocultar)
+  const [ocultos, setOcultos] = useEstadoRecordado("ipm-visitas-ocultos", []);
+  const estaOculto = (t) => Array.isArray(ocultos) && ocultos.includes(t);
+  const alternarTec = (t) => setOcultos((l) => { const a = Array.isArray(l) ? l : []; return a.includes(t) ? a.filter((x) => x !== t) : [...a, t]; });
 
   const activas = rows.filter((r) => (r.tipoOD || "Normal") === "Normal" && r.estado === "Activo");
   const tocaEn = (r, m) => mesesValidosOrdenados(r.mesesVisita).includes(m);
@@ -3801,6 +3805,9 @@ function VisitasIpmMes({ color }) {
   const nComp = delMes.filter((r) => completada(r, mes)).length;
   const nFact = delMes.filter((r) => visitaFacturadaIpm(r, mes, facturados)).length;
   const pasado = mes < mesActual;
+  const todosTecnicos = [...new Set(delMes.map((r) => (r.tecnico || "").trim() || "Sin técnico asignado"))];
+  const normTec = (t) => String(t || "").trim().toLowerCase();
+  const miGrupo = todosTecnicos.find((t) => currentUser?.name && normTec(t) === normTec(currentUser.name));
 
   const guardarVisitas = async (r, nuevas) => {
     setGuardando(r.id);
@@ -3861,6 +3868,11 @@ function VisitasIpmMes({ color }) {
             <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T.gray }} />
             <input style={{ ...inputStyle, paddingLeft: 30, fontSize: 12.5 }} placeholder="Buscar por OD, cliente o técnico..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
           </div>
+          {todosTecnicos.length > 1 && (<>
+            {miGrupo && <Btn small variant="ghost" onClick={() => setOcultos(todosTecnicos.filter((t) => t !== miGrupo))}>Ver solo los míos</Btn>}
+            <Btn small variant="ghost" onClick={() => setOcultos([])}>Mostrar todos</Btn>
+            <Btn small variant="ghost" onClick={() => setOcultos(todosTecnicos)}>Ocultar todos</Btn>
+          </>)}
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
             <input type="checkbox" checked={soloPend} onChange={(e) => setSoloPend(e.target.checked)} /> Solo pendientes
           </label>
@@ -3877,8 +3889,14 @@ function VisitasIpmMes({ color }) {
         const hechos = todosTec.filter((r) => completada(r, mes)).length;
         const pct = todosTec.length ? hechos / todosTec.length : 0;
         return (
-          <Card key={tec} title={<span style={{ display: "flex", alignItems: "center", gap: 8 }}><HardHat size={16} color={color || T.steel} /> {tec}</span>}
+          <Card key={tec} style={estaOculto(tec) ? { paddingBottom: 6 } : undefined}
+            title={<button type="button" onClick={() => alternarTec(tec)} aria-expanded={!estaOculto(tec)} title={estaOculto(tec) ? "Mostrar la lista" : "Ocultar la lista"}
+              style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit", color: "inherit", fontWeight: 700 }}>
+              {estaOculto(tec) ? <ChevronRight size={16} /> : <ChevronDown size={16} />}<HardHat size={16} color={color || T.steel} /> {tec}
+              <span style={{ fontSize: 12, fontWeight: 500, color: T.inkSoft }}>{estaOculto(tec) ? "· mostrar" : "· ocultar"}</span>
+            </button>}
             action={<Badge color={hechos === todosTec.length ? T.green : T.amber} soft={hechos === todosTec.length ? T.greenSoft : T.amberSoft}>{hechos} / {todosTec.length} completadas</Badge>}>
+            {!estaOculto(tec) && (<>
             <div style={{ height: 6, background: T.graySoft, borderRadius: 4, overflow: "hidden", marginBottom: 12 }}>
               <div style={{ width: `${pct * 100}%`, height: "100%", background: hechos === todosTec.length ? T.green : (color || T.steel), transition: "width .3s" }} />
             </div>
@@ -3903,6 +3921,7 @@ function VisitasIpmMes({ color }) {
                 );
               })}
             </div>
+            </>)}
           </Card>
         );
       })}

@@ -1946,6 +1946,7 @@ function odRowFromDb(r) {
     proximaFacturaIpm: r.proxima_factura_ipm || "",
     ultimaFacturaIpm: r.ultima_factura_ipm || "",
     mesesVisita: r.meses_visita || [],
+    visitasCompletadas: (r.visitas_completadas && typeof r.visitas_completadas === "object") ? r.visitas_completadas : {},
     area: r.area,
     created_at: r.created_at,
   };
@@ -1954,7 +1955,7 @@ const ODFIELD_TO_DB = {
   fechaInicio: "fecha_inicio", fechaEntrega: "fecha_entrega", fechaAprobacion: "fecha_aprobacion",
   equiposCorrectivo: "equipos_correctivo", tipoOD: "tipo_od",
   poNumero: "po_numero", fechaPo: "fecha_po", sapNumero: "sap_numero", estatusEquipo: "estatus_equipo",
-  proximaFacturaIpm: "proxima_factura_ipm", ultimaFacturaIpm: "ultima_factura_ipm", mesesVisita: "meses_visita",
+  proximaFacturaIpm: "proxima_factura_ipm", ultimaFacturaIpm: "ultima_factura_ipm", mesesVisita: "meses_visita", visitasCompletadas: "visitas_completadas",
 };
 function odPatchToDb(patch) {
   const out = {};
@@ -3735,87 +3736,244 @@ function CotizacionPrintView({ r, onClose }) {
 // cada mes (se basa en la fecha de hoy, no en una lista fija), y en cuanto
 // se marca "Facturado" la fila desaparece de aquí porque su próxima fecha
 // pasa a caer en un mes futuro.
+// ---- Visitas IPM del mes: lista por técnico con check de «Completado» ----
+// Al completar una visita, esa OD (y ese mes) pasa sola a Facturación; al
+// marcarla facturada sale de Facturación. Se guarda en ordenes_trabajo.visitas_completadas:
+// { "2026-10": { fecha: "2026-10-21", por: "Nombre", facturada: "2026-10-25" } }
+const hoyLocalIpm = () => new Date().toLocaleDateString("en-CA");
+const mesAnteriorIpm = (clave) => { const [a, m] = clave.split("-").map(Number); const d = new Date(a, m - 2, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
+const fechaCortaIpm = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}` : "");
+// Meses ya facturados de cada OD (tabla facturas_ipm + última factura de la OD)
+function useMesesFacturadosIpm() {
+  const [mapa, setMapa] = useState({});
+  useEffect(() => {
+    let cancelado = false;
+    (async () => {
+      const m = {};
+      for (let desde = 0; desde < 50000; desde += 1000) {
+        const { data, error } = await supabase.from("facturas_ipm").select("od_id, fecha_facturada").range(desde, desde + 999);
+        if (error || !data) break;
+        data.forEach((f) => { if (f.fecha_facturada) (m[f.od_id] = m[f.od_id] || new Set()).add(String(f.fecha_facturada).slice(0, 7)); });
+        if (data.length < 1000) break;
+      }
+      if (!cancelado) setMapa(m);
+    })();
+    return () => { cancelado = true; };
+  }, []);
+  const agregar = (odId, mes) => setMapa((prev) => ({ ...prev, [odId]: new Set([...(prev[odId] || []), mes]) }));
+  return [mapa, agregar];
+}
+function visitaFacturadaIpm(r, mes, facturados) {
+  const v = (r.visitasCompletadas || {})[mes];
+  if (v && v.facturada) return true;
+  if (facturados[r.id] && facturados[r.id].has(mes)) return true;
+  return !!r.ultimaFacturaIpm && r.ultimaFacturaIpm.slice(0, 7) === mes;
+}
+
+function VisitasIpmMes({ color }) {
+  const [rows, setRows] = useClientesArea("inspecciones");
+  const currentUser = useContext(CurrentUserContext);
+  const confirmar = useContext(ConfirmContext);
+  const cat = currentUser?.categoria;
+  const puedeMarcar = cat === "admin" || cat === "asistente" || cat === "tecnico";
+  const [facturados] = useMesesFacturadosIpm();
+  const hoy = hoyLocalIpm();
+  const mesActual = hoy.slice(0, 7);
+  const [mes, setMes] = useState(mesActual);
+  const [busqueda, setBusqueda] = useState("");
+  const [soloPend, setSoloPend] = useEstadoRecordado("ipm-visitas-solo-pend", false);
+  const [guardando, setGuardando] = useState("");
+
+  const activas = rows.filter((r) => (r.tipoOD || "Normal") === "Normal" && r.estado === "Activo");
+  const tocaEn = (r, m) => mesesValidosOrdenados(r.mesesVisita).includes(m);
+  const completada = (r, m) => !!(r.visitasCompletadas || {})[m];
+  const delMes = activas.filter((r) => tocaEn(r, mes));
+  // visitas de los 3 meses anteriores que quedaron sin completar
+  const atrasadasPrevias = [];
+  for (let k = 1, m = mesAnteriorIpm(mesActual); k <= 3; k++, m = mesAnteriorIpm(m)) {
+    activas.forEach((r) => { if (tocaEn(r, m) && !completada(r, m) && !visitaFacturadaIpm(r, m, facturados)) atrasadasPrevias.push({ r, m }); });
+  }
+  const q = busqueda.trim().toLowerCase();
+  const visibles = delMes.filter((r) => (!q || `${r.od} ${r.cliente} ${r.tecnico}`.toLowerCase().includes(q)) && (!soloPend || !completada(r, mes)));
+  const grupos = {};
+  visibles.forEach((r) => { const t = (r.tecnico || "").trim() || "Sin técnico asignado"; (grupos[t] = grupos[t] || []).push(r); });
+  const nombresGrupo = Object.keys(grupos).sort((a, b) => (a === "Sin técnico asignado") - (b === "Sin técnico asignado") || a.localeCompare(b, "es"));
+  const nComp = delMes.filter((r) => completada(r, mes)).length;
+  const nFact = delMes.filter((r) => visitaFacturadaIpm(r, mes, facturados)).length;
+  const pasado = mes < mesActual;
+
+  const guardarVisitas = async (r, nuevas) => {
+    setGuardando(r.id);
+    const { error } = await supabase.from("ordenes_trabajo").update({ visitas_completadas: nuevas }).eq("id", r.id);
+    setGuardando("");
+    if (error) { await confirmar(`No se pudo guardar: ${error.message}. Corra en Supabase el SQL «SQL_visitas_ipm.sql».`, { confirmLabel: "Entendido", soloAviso: true }); return false; }
+    setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, visitasCompletadas: nuevas } : x)));
+    return true;
+  };
+  const alternar = async (r) => {
+    if (!puedeMarcar || guardando) return;
+    const actuales = { ...(r.visitasCompletadas || {}) };
+    if (actuales[mes]) {
+      if (visitaFacturadaIpm(r, mes, facturados)) { await confirmar(`La visita de ${formatMesAno(mes)} de la OD ${r.od} ya está facturada; no se puede desmarcar.`, { confirmLabel: "Entendido", soloAviso: true }); return; }
+      if (!(await confirmar(`¿Quitar «Completado» de la OD ${r.od} (${formatMesAno(mes)})? Saldrá de la lista de Facturación.`, { confirmLabel: "Sí, quitar", variant: "danger" }))) return;
+      delete actuales[mes];
+    } else {
+      actuales[mes] = { fecha: hoy, por: currentUser?.name || "" };
+    }
+    await guardarVisitas(r, actuales);
+  };
+
+  const kpi = (t, v, sub, col) => (
+    <div style={{ flex: "1 1 150px", background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "10px 14px" }}>
+      <div style={{ fontSize: 12, color: T.inkSoft, fontWeight: 600 }}>{t}</div>
+      <div style={{ fontSize: 24, fontWeight: 800, color: col || T.ink }}>{v}</div>
+      {sub && <div style={{ fontSize: 11.5, color: T.inkSoft }}>{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <Card title={`Visitas IPM — ${formatMesAno(mes)}`} action={
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <Btn small variant="ghost" onClick={() => setMes(mesAnteriorIpm(mes))}><ChevronLeft size={14} /></Btn>
+          {mes !== mesActual && <Btn small variant="ghost" onClick={() => setMes(mesActual)}>Mes actual</Btn>}
+          <Btn small variant="ghost" onClick={() => setMes(claveMesSiguiente(mes))}><ChevronRight size={14} /></Btn>
+        </div>}>
+        <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 12 }}>
+          Clientes que tienen visita en {formatMesAno(mes)} según su agenda (columna «Acción» de OD IPM), agrupados por técnico. Al marcar <b>Completado</b>, la visita pasa sola a la lista de <b>Facturación</b>; cuando se factura, sale de esa lista.
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+          {kpi("Visitas del mes", delMes.length, "clientes en agenda")}
+          {kpi("Completadas", nComp, delMes.length ? `${Math.round((nComp / delMes.length) * 100)} % del mes` : "", T.green)}
+          {kpi("Pendientes", delMes.length - nComp, pasado && delMes.length - nComp ? "mes ya cerrado" : "", delMes.length - nComp ? (pasado ? T.red : T.amber) : T.ink)}
+          {kpi("Facturadas", nFact, nComp - nFact > 0 ? `${nComp - nFact} esperando factura` : "", T.steel)}
+        </div>
+        {mes === mesActual && atrasadasPrevias.length > 0 && (
+          <div style={{ background: T.redSoft, color: T.red, borderRadius: 10, padding: "8px 12px", fontSize: 12.5, marginBottom: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <AlertTriangle size={14} /> {atrasadasPrevias.length} visita(s) de meses anteriores sin completar:
+            {[...new Set(atrasadasPrevias.map((x) => x.m))].map((m) => (
+              <Btn key={m} small variant="ghost" onClick={() => setMes(m)}>{formatMesAno(m)} ({atrasadasPrevias.filter((x) => x.m === m).length})</Btn>
+            ))}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ position: "relative", flex: "1 1 240px" }}>
+            <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T.gray }} />
+            <input style={{ ...inputStyle, paddingLeft: 30, fontSize: 12.5 }} placeholder="Buscar por OD, cliente o técnico..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
+            <input type="checkbox" checked={soloPend} onChange={(e) => setSoloPend(e.target.checked)} /> Solo pendientes
+          </label>
+        </div>
+      </Card>
+
+      {delMes.length === 0 ? (
+        <Card><div style={{ color: T.gray, fontSize: 13 }}>Ninguna OD IPM tiene visita en {formatMesAno(mes)}. La agenda de meses se marca en la columna «Acción» de OD IPM.</div></Card>
+      ) : visibles.length === 0 ? (
+        <Card><div style={{ color: T.gray, fontSize: 13 }}>{soloPend ? "¡Todas las visitas de este mes están completadas!" : `Ningún resultado para "${busqueda}".`}</div></Card>
+      ) : nombresGrupo.map((tec) => {
+        const lista = [...grupos[tec]].sort((a, b) => completada(a, mes) - completada(b, mes) || (a.cliente || "").localeCompare(b.cliente || "", "es"));
+        const todosTec = delMes.filter((r) => ((r.tecnico || "").trim() || "Sin técnico asignado") === tec);
+        const hechos = todosTec.filter((r) => completada(r, mes)).length;
+        const pct = todosTec.length ? hechos / todosTec.length : 0;
+        return (
+          <Card key={tec} title={<span style={{ display: "flex", alignItems: "center", gap: 8 }}><HardHat size={16} color={color || T.steel} /> {tec}</span>}
+            action={<Badge color={hechos === todosTec.length ? T.green : T.amber} soft={hechos === todosTec.length ? T.greenSoft : T.amberSoft}>{hechos} / {todosTec.length} completadas</Badge>}>
+            <div style={{ height: 6, background: T.graySoft, borderRadius: 4, overflow: "hidden", marginBottom: 12 }}>
+              <div style={{ width: `${pct * 100}%`, height: "100%", background: hechos === todosTec.length ? T.green : (color || T.steel), transition: "width .3s" }} />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {lista.map((r) => {
+                const v = (r.visitasCompletadas || {})[mes];
+                const fact = visitaFacturadaIpm(r, mes, facturados);
+                const ok = !!v;
+                return (
+                  <label key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "9px 12px", borderRadius: 10, cursor: puedeMarcar ? "pointer" : "default",
+                    background: ok ? T.greenSoft : T.bg, border: `1px solid ${ok ? "transparent" : T.line}`, opacity: guardando === r.id ? 0.6 : 1 }}>
+                    <input type="checkbox" checked={ok} disabled={!puedeMarcar || guardando === r.id} onChange={() => alternar(r)}
+                      style={{ width: 22, height: 22, accentColor: T.green, flexShrink: 0, cursor: puedeMarcar ? "pointer" : "default" }} aria-label={`Completado ${r.od}`} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13.5, color: T.ink, textDecoration: ok ? "line-through" : "none", textDecorationColor: "rgba(0,0,0,.25)" }}>{r.cliente || "(sin cliente)"}</div>
+                      <div style={{ fontSize: 12, color: T.inkSoft }}>OD {r.od}{r.frecuencia ? ` · ${r.frecuencia}` : ""}{ok ? ` · Completada el ${fechaCortaIpm(v.fecha)}${v.por ? " por " + v.por : ""}` : ""}</div>
+                    </div>
+                    {fact ? <Badge color={T.steel} soft={T.graySoft}><Check size={12} /> Facturada</Badge>
+                      : ok ? <Badge color={T.green} soft="#fff"><Dot color={T.green} /> En facturación</Badge>
+                      : <Badge color={pasado ? T.red : T.amber} soft={pasado ? T.redSoft : T.amberSoft}><Dot color={pasado ? T.red : T.amber} /> {pasado ? "Atrasada" : "Pendiente"}</Badge>}
+                  </label>
+                );
+              })}
+            </div>
+          </Card>
+        );
+      })}
+      {!puedeMarcar && <div style={{ fontSize: 12, color: T.inkSoft }}>Solo técnicos, asistentes y administradores pueden marcar visitas como completadas.</div>}
+    </div>
+  );
+}
+
 function FacturacionIpmCard() {
   const [rows, setRows] = useClientesArea("inspecciones");
   const currentUser = useContext(CurrentUserContext);
   const confirmar = useContext(ConfirmContext);
   const puedeMarcar = currentUser?.categoria === "admin" || currentUser?.categoria === "asistente";
   const [busqueda, setBusqueda] = useState("");
-  const hoy = todayISO();
-  const pendientesDelMes = rows
-    .filter((r) => (r.tipoOD || "Normal") === "Normal" && r.estado === "Activo")
-    .filter((r) => {
-      // Solo entran a "este mes" las OD que tienen agenda de meses de visita
-      // (marcada en "Acción") y ese mes en curso está en su agenda y aún no
-      // se marcó facturado. Las que no tienen agenda quedan fuera de esta
-      // lista hasta que se les configure, en vez de aparecer todos los
-      // meses como "Sin programar".
-      const usaAgenda = Array.isArray(r.mesesVisita) && r.mesesVisita.length > 0;
-      if (!usaAgenda) return false;
-      return estadoFacturacionIpm(r, hoy).pendiente;
-    })
-    .sort((a, b) => {
-      // De la más próxima (atrasadas y el mes actual, arriba) a la más
-      // lejana. Se recalcula en cada render, así se reacomoda sola en
-      // cuanto cambia el mes o se marca algo facturado.
-      const claveA = claveOrdenamientoIpm(a, hoy);
-      const claveB = claveOrdenamientoIpm(b, hoy);
-      if (claveA !== claveB) return claveA.localeCompare(claveB);
-      return (a.od || "").localeCompare(b.od || "");
+  const [facturados, agregarFacturado] = useMesesFacturadosIpm();
+  const hoy = hoyLocalIpm();
+  const mesActual = hoy.slice(0, 7);
+  // Solo entran las visitas que el técnico marcó «Completado» en IPM → Visitas del mes
+  // y que todavía no se facturan. Al facturarlas salen de la lista.
+  const porFacturar = [];
+  rows.filter((r) => (r.tipoOD || "Normal") === "Normal").forEach((r) => {
+    Object.entries(r.visitasCompletadas || {}).forEach(([mes, v]) => {
+      if (esClaveMesAnoValida(mes) && v && !visitaFacturadaIpm(r, mes, facturados)) porFacturar.push({ r, mes, v });
     });
-  const atrasadas = pendientesDelMes.filter((r) => r.proximaFacturaIpm && r.proximaFacturaIpm < hoy);
+  });
+  porFacturar.sort((a, b) => a.mes.localeCompare(b.mes) || String(a.v.fecha || "").localeCompare(String(b.v.fecha || "")) || (a.r.od || "").localeCompare(b.r.od || ""));
+  const anteriores = porFacturar.filter((x) => x.mes < mesActual);
   const q = busqueda.trim().toLowerCase();
-  const pendientes = q
-    ? pendientesDelMes.filter((r) => (r.od || "").toLowerCase().includes(q) || (r.cliente || "").toLowerCase().includes(q) || (r.tecnico || "").toLowerCase().includes(q))
-    : pendientesDelMes;
+  const visibles = q ? porFacturar.filter((x) => `${x.r.od} ${x.r.cliente} ${x.r.tecnico}`.toLowerCase().includes(q)) : porFacturar;
 
-  const marcarFacturado = async (r) => {
-    if (!(await confirmar(`¿Confirmas que ya facturaste la OD ${r.od}?`, { confirmLabel: "Sí, ya facturé", variant: "accent" }))) return;
-    const usaAgenda = Array.isArray(r.mesesVisita) && r.mesesVisita.length > 0;
-    const proxima = usaAgenda ? r.proximaFacturaIpm : sumarIntervaloFrecuencia(hoy, r.frecuencia);
-    setRows((prev) => prev.map((x) => x.id === r.id ? { ...x, ultimaFacturaIpm: hoy, proximaFacturaIpm: proxima } : x));
-    supabase.from("ordenes_trabajo").update(odPatchToDb({ ultimaFacturaIpm: hoy, proximaFacturaIpm: proxima })).eq("id", r.id).then();
-    supabase.from("facturas_ipm").insert({ od_id: r.id, fecha_facturada: hoy }).then();
+  const marcarFacturado = async ({ r, mes }) => {
+    if (!(await confirmar(`¿Confirmas que ya facturaste la OD ${r.od} (visita de ${formatMesAno(mes)})?`, { confirmLabel: "Sí, ya facturé", variant: "accent" }))) return;
+    const fecha = mes === mesActual ? hoy : `${mes}-01`;
+    const visitas = { ...(r.visitasCompletadas || {}), [mes]: { ...((r.visitasCompletadas || {})[mes] || {}), facturada: hoy, facturadaPor: currentUser?.name || "" } };
+    const ultima = !r.ultimaFacturaIpm || fecha > r.ultimaFacturaIpm ? fecha : r.ultimaFacturaIpm;
+    const { error } = await supabase.from("ordenes_trabajo").update({ visitas_completadas: visitas, ultima_factura_ipm: ultima }).eq("id", r.id);
+    if (error) { await confirmar(`No se pudo guardar: ${error.message}`, { confirmLabel: "Entendido", soloAviso: true }); return; }
+    setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, visitasCompletadas: visitas, ultimaFacturaIpm: ultima } : x)));
+    supabase.from("facturas_ipm").insert({ od_id: r.id, fecha_facturada: fecha }).then(() => {}, () => {});
+    agregarFacturado(r.id, mes);
   };
 
   return (
-    <Card title="IPM a facturar este mes" action={pendientesDelMes.length > 0 ? <Badge color={atrasadas.length ? T.red : T.amber} soft={atrasadas.length ? T.redSoft : T.amberSoft}>{pendientesDelMes.length}</Badge> : null}>
-      {pendientesDelMes.length > 0 && (
+    <Card title="IPM a facturar (visitas completadas)" action={porFacturar.length > 0 ? <Badge color={anteriores.length ? T.red : T.amber} soft={anteriores.length ? T.redSoft : T.amberSoft}>{porFacturar.length}</Badge> : null}>
+      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 10 }}>Aparecen aquí cuando el técnico marca la visita como <b>Completado</b> en IPM → Visitas del mes. Al marcarla facturada sale de la lista.</div>
+      {porFacturar.length > 0 && (
         <div style={{ position: "relative", marginBottom: 10 }}>
           <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T.gray }} />
-          <input
-            style={{ ...inputStyle, paddingLeft: 30, fontSize: 12.5 }}
-            placeholder="Buscar por OD, cliente o técnico..."
-            value={busqueda}
-            onChange={(e) => setBusqueda(e.target.value)}
-          />
+          <input style={{ ...inputStyle, paddingLeft: 30, fontSize: 12.5 }} placeholder="Buscar por OD, cliente o técnico..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
         </div>
       )}
-      {pendientesDelMes.length === 0 ? (
-        <div style={{ color: T.gray, fontSize: 13 }}>No hay IPM pendientes de facturar este mes.</div>
-      ) : pendientes.length === 0 ? (
+      {porFacturar.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 13 }}>No hay visitas completadas pendientes de facturar.</div>
+      ) : visibles.length === 0 ? (
         <div style={{ color: T.gray, fontSize: 13 }}>Ningún resultado para "{busqueda}".</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {pendientes.map((r) => {
-            const usaAgenda = Array.isArray(r.mesesVisita) && r.mesesVisita.length > 0;
-            const estado = estadoFacturacionIpm(r, hoy);
+          {visibles.map((x) => {
+            const { r, mes, v } = x;
+            const viejo = mes < mesActual;
             return (
-              <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: T.bg, borderRadius: 8, gap: 8 }}>
-                <div>
+              <div key={r.id + mes} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: T.bg, borderRadius: 8, gap: 8, flexWrap: "wrap" }}>
+                <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 13 }}>{r.od} — {r.cliente}</div>
                   <div style={{ fontSize: 12, color: T.inkSoft }}>
-                    {usaAgenda ? `Mes a facturar: ${formatMesAno(hoy.slice(0, 7))}` : `Frecuencia: ${r.frecuencia || "—"}`}{r.tecnico ? ` · ${r.tecnico}` : ""}
+                    Visita de {formatMesAno(mes)} · completada el {fechaCortaIpm(v.fecha)}{v.por ? ` por ${v.por}` : ""}{r.tecnico ? ` · Técnico: ${r.tecnico}` : ""}
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <Badge color={estado.colorTxt} soft={estado.colorFondo}>
-                    <Dot color={estado.colorTxt} />
-                    {estado.etiqueta}
-                  </Badge>
-                  {puedeMarcar && (
-                    <Btn small variant="ghost" onClick={() => marcarFacturado(r)}><Check size={13} /> Marcar facturado</Btn>
-                  )}
+                  <Badge color={viejo ? T.red : T.green} soft={viejo ? T.redSoft : T.greenSoft}><Dot color={viejo ? T.red : T.green} />{viejo ? "De un mes anterior" : "Completada"}</Badge>
+                  {puedeMarcar && <Btn small variant="ghost" onClick={() => marcarFacturado(x)}><Check size={13} /> Marcar facturado</Btn>}
                 </div>
               </div>
             );
@@ -8333,6 +8491,7 @@ function AreaOperativa({ area, color }) {
     { id: "horas_quincenales", label: "Estadística de Horas Extras", icon: LayoutDashboard },
     { id: "od", label: area === "inspecciones" ? "OD IPM" : "OD Proyectos", icon: ClipboardList },
     { id: "od_correctivos", label: "OD Correctivos", icon: AlertCircle },
+    ...(area === "inspecciones" ? [{ id: "visitas_mes", label: "Visitas del mes", icon: Check }] : []),
     { id: "calendario", label: "Calendario", icon: CalendarDays },
     { id: "porpersona", label: `Por ${tecnicoLabel}`, icon: LayoutDashboard },
   ];
@@ -8349,6 +8508,7 @@ function AreaOperativa({ area, color }) {
       {tab === "horas_quincenales" && <HorasExtrasQuincenales area={area} color={color} />}
       {tab === "od" && <OrdenesTrabajo area={area} color={color} tipoOD="Normal" />}
       {tab === "od_correctivos" && <OrdenesTrabajo area={area} color={T.amber} tipoOD="Correctivo" />}
+      {tab === "visitas_mes" && area === "inspecciones" && <VisitasIpmMes color={color} />}
       {tab === "calendario" && <Calendario area={area} color={color} />}
       {tab === "porpersona" && <ClientesPorPersona area={area} color={color} />}
     </div>

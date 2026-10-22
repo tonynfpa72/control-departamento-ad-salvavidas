@@ -1730,7 +1730,14 @@ function reporte2SetCeldaXML(xml, addr, { texto, numero }) {
 async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSemana, lunes, empleadosPorCodigo) {
   const { default: JSZip } = await import("jszip");
   const zip = await JSZip.loadAsync(plantillaBuffer);
-  let xml = await zip.file(REPORTE2_HOJA).async("string");
+  const xml = reporte2LlenarHojaXML(await zip.file(REPORTE2_HOJA).async("string"), od, cliente, entradasSemana, lunes, empleadosPorCodigo);
+  zip.file(REPORTE2_HOJA, xml);
+  await reporte2ForzarRecalculo(zip);
+  return zip.generateAsync({ type: "arraybuffer" });
+}
+
+// Llena el XML de UNA hoja (una semana de un OD) a partir del XML de la plantilla.
+function reporte2LlenarHojaXML(xml, od, cliente, entradasSemana, lunes, empleadosPorCodigo) {
 
   xml = reporte2SetCeldaXML(xml, "E14", { texto: "" });
   xml = reporte2SetCeldaXML(xml, "E15", { numero: reporte2FechaASerial(new Date()) });
@@ -1747,7 +1754,8 @@ async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSem
   // que filas, se toman solo las primeras 8 (limitación conocida).
   entradasSemana.slice(0, REPORTE2_MAX_FILAS).forEach((s, idx) => {
     const filaActual = 26 + idx;
-    const emp = empleadosPorCodigo[s.personal_codigos?.[0]];
+    const cod = s.personal_codigos?.[0];
+    const emp = cod ? empleadosPorCodigo[cod] : null;
     xml = reporte2SetCeldaXML(xml, `C${filaActual}`, { texto: emp?.nombre || s.personal || "" });
     xml = reporte2SetCeldaXML(xml, `E${filaActual}`, { texto: emp?.puesto || "" });
     xml = reporte2SetCeldaXML(xml, `F${filaActual}`, { texto: s.hora_inicio || "" });
@@ -1761,9 +1769,10 @@ async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSem
 
   const personasUnicas = new Set(entradasSemana.map((s) => s.personal_codigos?.[0] || s.personal));
   xml = reporte2SetCeldaXML(xml, "E35", { numero: personasUnicas.size });
+  return xml;
+}
 
-  zip.file(REPORTE2_HOJA, xml);
-
+async function reporte2ForzarRecalculo(zip) {
   // Fuerza a Excel a recalcular TODAS las fórmulas al abrir el archivo
   // (por defecto, Excel confía en el valor guardado en caché de cada
   // fórmula, y como aquí solo cambiamos los valores de entrada por fuera
@@ -1778,7 +1787,84 @@ async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSem
     }
     zip.file(REPORTE2_WORKBOOK, wbXml);
   }
+}
 
+// Arma UN solo .xlsx con una pestaña por hoja (cada pestaña es una copia
+// completa de la plantilla: formato, logo, fórmulas y casillas de verificación).
+// hojas: [{ nombre, xml }] con el XML de la hoja ya llenado.
+async function reporte2CombinarHojas(plantillaBuffer, hojas) {
+  const { default: JSZip } = await import("jszip");
+  const zip = await JSZip.loadAsync(plantillaBuffer);
+  const leer = async (ruta) => (zip.file(ruta) ? zip.file(ruta).async("string") : "");
+  const relsHoja = await leer("xl/worksheets/_rels/sheet1.xml.rels");
+  const drawing = await leer("xl/drawings/drawing1.xml");
+  const drawingRels = await leer("xl/drawings/_rels/drawing1.xml.rels");
+  const vml = await leer("xl/drawings/vmlDrawing1.vml");
+  const ctrlRutas = Object.keys(zip.files).filter((f) => /^xl\/ctrlProps\/ctrlProp\d+\.xml$/.test(f)).sort((a, b) => Number(a.match(/(\d+)\.xml$/)[1]) - Number(b.match(/(\d+)\.xml$/)[1]));
+  const ctrlXml = await Promise.all(ctrlRutas.map((r) => zip.file(r).async("string")));
+  let tipos = await leer("[Content_Types].xml");
+  let wbXml = await leer(REPORTE2_WORKBOOK);
+  let wbRels = await leer("xl/_rels/workbook.xml.rels");
+  // La cadena de cálculo de la plantilla solo conoce la hoja 1: se quita y Excel la rehace.
+  zip.remove("xl/calcChain.xml");
+  tipos = tipos.replace(/<Override PartName="\/xl\/calcChain\.xml"[^>]*\/>/, "");
+  wbRels = wbRels.replace(/<Relationship [^>]*Target="calcChain\.xml"[^>]*\/>/, "");
+  // Nombres de pestaña válidos para Excel (máx. 31, sin : \ / ? * [ ] y sin repetir)
+  const usados = new Set();
+  const nombres = hojas.map((h) => {
+    let base = String(h.nombre || "Hoja").replace(/[:\\/?*\[\]]/g, "-").replace(/^'+|'+$/g, "").slice(0, 31) || "Hoja";
+    let nom = base, i = 2;
+    while (usados.has(nom.toLowerCase())) { const suf = ` (${i++})`; nom = base.slice(0, 31 - suf.length) + suf; }
+    usados.add(nom.toLowerCase());
+    return nom;
+  });
+  const esc = (t) => reporte2EscaparXML(t).replace(/"/g, "&quot;");
+  let hojasXml = "";
+  hojas.forEach((h, idx) => {
+    const k = idx + 1;
+    const desp = 1024 * idx; // las casillas de cada hoja necesitan ids de forma propios
+    let xml = h.xml.replace(/shapeId="(\d+)"/g, (m, n) => `shapeId="${Number(n) + desp}"`);
+    if (k > 1) {
+      xml = xml.replace(/\stabSelected="1"/, "");
+      // identificadores internos propios para cada copia (Excel no acepta repetidos)
+      const guid = () => "xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx".replace(/x/g, () => "0123456789ABCDEF"[Math.floor(Math.random() * 16)]);
+      xml = xml.replace(/xr:uid="\{[0-9A-Fa-f-]+\}"/g, () => `xr:uid="{${guid()}}"`);
+    }
+    zip.file(`xl/worksheets/sheet${k}.xml`, xml);
+    if (k > 1) {
+      // Copia de dibujo (logo + casillas), VML y propiedades de las casillas para esta hoja
+      let rels = relsHoja.replace(/drawings\/drawing1\.xml/, `drawings/drawing${k}.xml`).replace(/drawings\/vmlDrawing1\.vml/, `drawings/vmlDrawing${k}.vml`);
+      ctrlRutas.forEach((ruta, j) => {
+        const nuevo = idx * ctrlRutas.length + j + 1;
+        const nombre = ruta.split("/").pop();
+        rels = rels.replace(new RegExp(`ctrlProps/${nombre.replace(".", "\\.")}"`), `ctrlProps/__ctrl${nuevo}.xml"`);
+        zip.file(`xl/ctrlProps/ctrlProp${nuevo}.xml`, ctrlXml[j]);
+        tipos = tipos.replace("</Types>", `<Override PartName="/xl/ctrlProps/ctrlProp${nuevo}.xml" ContentType="application/vnd.ms-excel.controlproperties+xml"/></Types>`);
+      });
+      rels = rels.replace(/__ctrl(\d+)\.xml/g, "ctrlProp$1.xml");
+      zip.file(`xl/worksheets/_rels/sheet${k}.xml.rels`, rels);
+      if (drawing) {
+        zip.file(`xl/drawings/drawing${k}.xml`, drawing.replace(/<xdr:cNvPr id="(\d+)"/g, (m, n) => (Number(n) >= 1024 ? `<xdr:cNvPr id="${Number(n) + desp}"` : m)));
+        if (drawingRels) zip.file(`xl/drawings/_rels/drawing${k}.xml.rels`, drawingRels);
+        tipos = tipos.replace("</Types>", `<Override PartName="/xl/drawings/drawing${k}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>`);
+      }
+      if (vml) zip.file(`xl/drawings/vmlDrawing${k}.vml`, vml.replace(/(idmap[^>]*data=")(\d+)"/, (m, a, n) => `${a}${Number(n) + idx}"`).replace(/_x0000_s(\d+)/g, (m, n) => `_x0000_s${Number(n) + desp}`));
+      tipos = tipos.replace("</Types>", `<Override PartName="/xl/worksheets/sheet${k}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`);
+      wbRels = wbRels.replace("</Relationships>", `<Relationship Id="rIdHoja${k}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${k}.xml"/></Relationships>`);
+    }
+    hojasXml += `<sheet name="${esc(nombres[idx])}" sheetId="${100 + k}" r:id="${k === 1 ? "rId1" : "rIdHoja" + k}"/>`;
+  });
+  wbXml = wbXml.replace(/<sheets>[\s\S]*?<\/sheets>/, `<sheets>${hojasXml}</sheets>`);
+  zip.file(REPORTE2_WORKBOOK, wbXml);
+  zip.file("xl/_rels/workbook.xml.rels", wbRels);
+  zip.file("[Content_Types].xml", tipos);
+  const app = await leer("docProps/app.xml");
+  if (app) {
+    zip.file("docProps/app.xml", app
+      .replace(/(<vt:lpstr>Hojas de cálculo<\/vt:lpstr><\/vt:variant><vt:variant><vt:i4>)\d+/, `$1${hojas.length}`)
+      .replace(/<TitlesOfParts>[\s\S]*?<\/TitlesOfParts>/, `<TitlesOfParts><vt:vector size="${hojas.length}" baseType="lpstr">${nombres.map((n) => `<vt:lpstr>${reporte2EscaparXML(n)}</vt:lpstr>`).join("")}</vt:vector></TitlesOfParts>`));
+  }
+  await reporte2ForzarRecalculo(zip);
   return zip.generateAsync({ type: "arraybuffer" });
 }
 
@@ -1837,29 +1923,27 @@ async function reporte2Descargar(area) {
   }
 
   try {
-    let totalGenerados = 0;
+    // Un solo Excel: una pestaña por OD + quincena (y por semana si la quincena cae en dos semanas)
+    const { default: JSZip } = await import("jszip");
+    const hojaBase = await (await JSZip.loadAsync(plantillaBuffer)).file(REPORTE2_HOJA).async("string");
+    const piezas = [];
     for (const od of odsConDatos) {
       for (const quincena of Object.keys(grupos[od])) {
         const semanas = Object.keys(grupos[od][quincena]).sort();
-        for (const lunesISO of semanas) {
-          const entradasSemana = grupos[od][quincena][lunesISO];
-          const buffer = await reporte2LlenarPlantilla(
-            plantillaBuffer, od, clientePorOd[od], entradasSemana, new Date(lunesISO + "T00:00:00"), empleadosPorCodigo
-          );
-          const sufijoSemana = semanas.length > 1 ? `_semana-${lunesISO}` : "";
-          const nombreOd = String(od).replace(/[^a-zA-Z0-9-]/g, "");
-          const nombreArchivo = `SolicitudHoras_${nombreArea}_${nombreOd}_${reporte2NombreQuincena(quincena)}${sufijoSemana}.xlsx`;
-          reporte2Descargar_disparar(buffer, nombreArchivo);
-          totalGenerados++;
-          // Los navegadores bloquean/ignoran descargas disparadas muy rápido
-          // seguidas; una pequeña pausa entre cada una evita que se pierdan.
-          await new Promise((resolve) => setTimeout(resolve, 400));
-        }
+        for (const lunesISO of semanas) piezas.push({ od, quincena, lunesISO, variasSemanas: semanas.length > 1 });
       }
     }
-    if (totalGenerados > 5) {
-      alert(`Se generaron ${totalGenerados} reportes. Si tu navegador preguntó "¿Permitir varias descargas?", asegúrate de darle clic a "Permitir" para recibirlos todos.`);
-    }
+    piezas.sort((a, b) => a.quincena.localeCompare(b.quincena) || String(a.od).localeCompare(String(b.od)) || a.lunesISO.localeCompare(b.lunesISO));
+    const hojas = piezas.map(({ od, quincena, lunesISO, variasSemanas }) => {
+      const [, mes, q] = quincena.split("-");
+      const mesTxt = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"][Number(mes) - 1];
+      const nombre = `${od} ${q === "Q1" ? "1-15" : "16-fin"} ${mesTxt}${variasSemanas ? " sem " + lunesISO.slice(8, 10) + "-" + lunesISO.slice(5, 7) : ""}`;
+      return { nombre, xml: reporte2LlenarHojaXML(hojaBase, od, clientePorOd[od], grupos[od][quincena][lunesISO], new Date(lunesISO + "T00:00:00"), empleadosPorCodigo) };
+    });
+    const buffer = await reporte2CombinarHojas(plantillaBuffer, hojas);
+    const quincenas = [...new Set(piezas.map((x) => x.quincena))].sort();
+    const rango = quincenas.length === 1 ? reporte2NombreQuincena(quincenas[0]) : `${reporte2NombreQuincena(quincenas[0])}_a_${reporte2NombreQuincena(quincenas[quincenas.length - 1])}`;
+    reporte2Descargar_disparar(buffer, `SolicitudHoras_${nombreArea}_${rango}.xlsx`);
   } catch (err) {
     alert("No se pudo generar el Reporte: " + (err.message || "error desconocido al armar el Excel."));
   }
@@ -25433,6 +25517,7 @@ function Planilla() {
               <Btn variant="accent" onClick={() => reporte2Descargar("inspecciones")}><Download size={14} /> Descargar Inspecciones</Btn>
               <Btn variant="accent" onClick={() => reporte2Descargar("proyectos")}><Download size={14} /> Descargar Proyectos</Btn>
             </div>
+            <div style={{ fontSize: 12.5, color: T.inkSoft }}>Se descarga <b>un solo Excel</b> con una pestaña por OD y quincena (si la quincena cae en dos semanas, una pestaña por semana).</div>
           </div>
         </Card>
       )}

@@ -2047,6 +2047,26 @@ function odPatchToDb(patch) {
   return out;
 }
 
+// Atraso de una solicitud de cotización según su fecha estimada de entrega.
+// Se considera entregada cuando ya se envió al cliente (Enviado / Comparado) o se canceló.
+function atrasoCotizacion(r, hoy = new Date().toLocaleDateString("en-CA")) {
+  const fe = String(r.fechaEstimada || "").slice(0, 10);
+  if (!fe) return { estado: "sin" };
+  const dias = (a, b) => Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 86400000);
+  const entregada = r.estado === "Enviado" || r.estado === "Comparado";
+  if (r.actividad === "Cancelado") return { estado: "cancelada" };
+  if (entregada) {
+    const env = String(r.fechaEnvio || "").slice(0, 10);
+    const tarde = env ? dias(fe, env) : 0;
+    return { estado: "entregada", tarde: tarde > 0 ? tarde : 0 };
+  }
+  const d = dias(hoy, fe);
+  if (d < 0) return { estado: "atrasada", dias: -d };
+  if (d === 0) return { estado: "hoy" };
+  if (d <= 2) return { estado: "pronto", dias: d };
+  return { estado: "atiempo", dias: d };
+}
+
 function cotRowFromDb(r) {
   return {
     id: r.id,
@@ -2074,6 +2094,7 @@ function cotRowFromDb(r) {
     moneda: r.moneda || "USD",
     tipoCambio: r.tipo_cambio || null,
     realizadoPor: r.realizado_por || "",
+    fechaEstimada: r.fecha_estimada || "",
   };
 }
 
@@ -7311,7 +7332,7 @@ function Cotizaciones() {
   const [form, setForm] = useState({
     solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "",
     dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Solicitud",
-    actividad: "Seguimiento", tipo: "Inspecciones", frecuencia: "", observaciones: "", monto: "",
+    actividad: "Seguimiento", tipo: "Inspecciones", frecuencia: "", observaciones: "", monto: "", fechaEstimada: "",
   });
 
   useEffect(() => {
@@ -7344,13 +7365,16 @@ function Cotizaciones() {
       num_cot: form.numCot, estado: form.estado, actividad: form.actividad, tipo: form.tipo,
       frecuencia: form.frecuencia, observaciones: form.observaciones, monto: Number(form.monto) || 0,
     };
-    setForm({ solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "", dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Solicitud", actividad: "Seguimiento", tipo: "Inspecciones", frecuencia: "", observaciones: "", monto: "" });
+    setForm({ solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "", dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Solicitud", actividad: "Seguimiento", tipo: "Inspecciones", frecuencia: "", observaciones: "", monto: "", fechaEstimada: "" });
     setOpen(false);
     const monedaForm = form.moneda || "USD";
+    const fechaEst = form.fechaEstimada || "";
     const { data, error } = await supabase.from("cotizaciones").insert(payload).select().single();
     if (!error && data) {
-      setRows((prev) => [cotRowFromDb(data), ...prev]);
+      setRows((prev) => [{ ...cotRowFromDb(data), fechaEstimada: fechaEst }, ...prev]);
       if (monedaForm === "CRC") setMoneda(data.id, "CRC");
+      // Se guarda aparte: si falta la columna en Supabase, la solicitud igual se crea
+      if (fechaEst) supabase.from("cotizaciones").update({ fecha_estimada: fechaEst }).eq("id", data.id).then(() => {}, () => {});
     }
   };
   const setEstado = (id, estado, fechaEnvio) => {
@@ -7382,6 +7406,12 @@ function Cotizaciones() {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, observaciones } : r));
     supabase.from("cotizaciones").update({ observaciones }).eq("id", id).then();
   };
+  const setFechaEstimada = (id, fechaEstimada) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, fechaEstimada } : r));
+    supabase.from("cotizaciones").update({ fecha_estimada: fechaEstimada || null }).eq("id", id).then(({ error } = {}) => {
+      if (error) window.alert("No se pudo guardar la fecha estimada. Corra en Supabase el SQL «SQL_cotizaciones_fecha_estimada.sql».");
+    }, () => {});
+  };
   const tcHoy = useTipoCambio();
   // Moneda de la solicitud; si es en colones se guarda el tipo de cambio del día
   const setMoneda = (id, moneda, tcUsar) => {
@@ -7405,7 +7435,7 @@ function Cotizaciones() {
   const TIPO_OFERTA_OPCIONES = ["Inspecciones", "Proyectos", "Inspecciones y Proyectos"];
 
   const rowsFiltradas = rows.filter((r) => {
-    const matchTab = subTab === "Todas" || r.estado === subTab;
+    const matchTab = subTab === "Todas" || (subTab === "__atrasadas" ? atrasoCotizacion(r).estado === "atrasada" : r.estado === subTab);
     const matchSolicitante = !filtroSolicitante.trim() || (r.solicitante || "").toLowerCase().includes(filtroSolicitante.trim().toLowerCase());
     const matchCliente = !filtroCliente.trim() || (r.cliente || "").toLowerCase().includes(filtroCliente.trim().toLowerCase());
     const matchProvincia = !filtroProvincia.trim() || (r.provincia || "").toLowerCase().includes(filtroProvincia.trim().toLowerCase());
@@ -7523,6 +7553,7 @@ function Cotizaciones() {
             <Field label="Equipos de elevación (cant./tipo/marca/modelo)"><input style={inputStyle} value={form.equipos} onChange={(e) => setForm({ ...form, equipos: e.target.value })} placeholder="1x Grúa / Terex / AC55" /></Field>
             <Field label="Lista de dispositivos"><input style={inputStyle} value={form.dispositivos} onChange={(e) => setForm({ ...form, dispositivos: e.target.value })} placeholder="Materiales y/o equipos..." /></Field>
             <Field label="N° de cotización (si aplica)"><input style={inputStyle} value={form.numCot} onChange={(e) => setForm({ ...form, numCot: e.target.value })} /></Field>
+            <Field label="Fecha estimada de entrega"><input style={inputStyle} type="date" min={new Date().toLocaleDateString("en-CA")} value={form.fechaEstimada || ""} onChange={(e) => setForm({ ...form, fechaEstimada: e.target.value })} /></Field>
             <Field label="Tipo de oferta">
               <select style={inputStyle} value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
                 {TIPO_OFERTA_OPCIONES.map((t) => <option key={t}>{t}</option>)}
@@ -7549,6 +7580,10 @@ function Cotizaciones() {
           {ESTADOS_COT.map((e) => (
             <Btn key={e} small variant={subTab === e ? "accent" : "ghost"} onClick={() => setSubTab(e)}>{e} ({rows.filter((r) => r.estado === e).length})</Btn>
           ))}
+          {(() => { const n = rows.filter((r) => atrasoCotizacion(r).estado === "atrasada").length; return (
+            <Btn small variant={subTab === "__atrasadas" ? "danger" : "ghost"} onClick={() => setSubTab("__atrasadas")} style={n && subTab !== "__atrasadas" ? { color: T.red, borderColor: T.red } : undefined}>
+              <AlertTriangle size={12} /> Atrasadas ({n})
+            </Btn>); })()}
         </div>
 
 
@@ -7575,12 +7610,12 @@ function Cotizaciones() {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
-              <th style={{ padding: "6px 8px" }}>#</th><th>Solicitante</th><th>Cliente</th><th>Provincia</th><th>Días</th><th style={{ minWidth: 150 }}>N° Cotización</th><th>Tipo</th><th>Monto</th><th>Estado</th><th>Actividad</th><th style={{ minWidth: 180 }}>Observaciones</th><th></th><th></th>
+              <th style={{ padding: "6px 8px" }}>#</th><th>Solicitante</th><th>Cliente</th><th>Provincia</th><th>Días</th><th style={{ minWidth: 150 }}>N° Cotización</th><th style={{ minWidth: 150 }}>Entrega estimada</th><th>Tipo</th><th>Monto</th><th>Estado</th><th>Actividad</th><th style={{ minWidth: 180 }}>Observaciones</th><th></th><th></th>
             </tr>
           </thead>
           <tbody>
-            {rowsFiltradas.map((r) => (
-              <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
+            {rowsFiltradas.map((r) => { const at = atrasoCotizacion(r); const fondoAt = at.estado === "atrasada" ? T.redSoft : at.estado === "hoy" || at.estado === "pronto" ? T.amberSoft : undefined; return (
+              <tr key={r.id} style={{ borderTop: `1px solid ${T.line}`, background: fondoAt, boxShadow: at.estado === "atrasada" ? `inset 4px 0 0 ${T.red}` : at.estado === "hoy" || at.estado === "pronto" ? `inset 4px 0 0 ${T.amber}` : undefined }}>
                 <td style={{ padding: "9px 8px", fontWeight: 700 }}>{r.consecutivo}</td>
                 <td>{r.solicitante}</td>
                 <td>{r.cliente}</td>
@@ -7590,6 +7625,14 @@ function Cotizaciones() {
                   {canEditEstadoCot ? (
                     <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }} value={r.numCot} onChange={(e) => setNumCot(r.id, e.target.value)} placeholder="COT-000" />
                   ) : (r.numCot || "—")}
+                </td>
+                <td>
+                  {canEditEstadoCot ? (
+                    <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: 140, ...(at.estado === "atrasada" ? { borderColor: T.red, color: T.red, fontWeight: 700 } : {}) }} value={r.fechaEstimada || ""} onChange={(e) => setFechaEstimada(r.id, e.target.value)} title="Fecha estimada de entrega" />
+                  ) : (r.fechaEstimada ? <span style={{ fontWeight: at.estado === "atrasada" ? 700 : 500, color: at.estado === "atrasada" ? T.red : T.ink }}>{String(r.fechaEstimada).slice(0, 10).split("-").reverse().join("/")}</span> : "—")}
+                  <div style={{ fontSize: 11, marginTop: 2, fontWeight: 700, color: at.estado === "atrasada" ? T.red : at.estado === "hoy" || at.estado === "pronto" ? T.amber : at.estado === "atiempo" ? T.green : T.inkSoft }}>
+                    {at.estado === "atrasada" ? `Atrasada ${at.dias} día${at.dias === 1 ? "" : "s"}` : at.estado === "hoy" ? "Vence hoy" : at.estado === "pronto" ? `Vence en ${at.dias} día${at.dias === 1 ? "" : "s"}` : at.estado === "atiempo" ? `Faltan ${at.dias} días` : at.estado === "entregada" ? (at.tarde ? `Enviada ${at.tarde} día${at.tarde === 1 ? "" : "s"} tarde` : "Enviada a tiempo") : ""}
+                  </div>
                 </td>
                 <td>
                   {isAdmin ? (
@@ -7641,7 +7684,7 @@ function Cotizaciones() {
                   {isAdmin && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}
                 </td>
               </tr>
-            ))}
+            ); })}
           </tbody>
         </table>
       </Card>

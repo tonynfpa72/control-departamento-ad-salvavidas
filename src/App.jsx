@@ -2012,6 +2012,7 @@ function odRowFromDb(r) {
     cliente: r.cliente || "",
     estado: r.estado || "Activo",
     tecnico: r.tecnico || "",
+    tecnicoCodigo: r.tecnico_codigo || "",
     vencimiento: r.vencimiento || "",
     frecuencia: r.frecuencia || "",
     fechaInicio: r.fecha_inicio || "",
@@ -2040,6 +2041,7 @@ const ODFIELD_TO_DB = {
   equiposCorrectivo: "equipos_correctivo", tipoOD: "tipo_od",
   poNumero: "po_numero", fechaPo: "fecha_po", sapNumero: "sap_numero", estatusEquipo: "estatus_equipo",
   proximaFacturaIpm: "proxima_factura_ipm", ultimaFacturaIpm: "ultima_factura_ipm", mesesVisita: "meses_visita", visitasCompletadas: "visitas_completadas",
+  tecnicoCodigo: "tecnico_codigo",
 };
 function odPatchToDb(patch) {
   const out = {};
@@ -2573,6 +2575,153 @@ function useClientesArea(area) {
   return [rows, setRows];
 }
 
+// ---- Técnico de cada OD tomado de la lista de empleados (Planilla) ----
+// La columna «tecnico» sigue guardando el nombre (todo lo que agrupa o filtra por
+// nombre sigue funcionando) y «tecnico_codigo» guarda el código del empleado.
+function normNombreEmp(s) {
+  return String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+}
+// Sugiere el empleado que más se parece a un nombre escrito a mano ("J. Solano" -> "Juan Solano Pérez").
+function sugerirEmpleado(texto, empleados) {
+  const t = normNombreEmp(texto).split(" ").filter(Boolean);
+  if (!t.length) return null;
+  const exacto = empleados.find((e) => normNombreEmp(e.nombre) === t.join(" "));
+  if (exacto) return exacto;
+  let mejor = null, mejorPts = 0, empate = false;
+  empleados.forEach((e) => {
+    const et = normNombreEmp(e.nombre).split(" ").filter(Boolean);
+    let pts = 0;
+    t.forEach((w) => {
+      if (et.includes(w)) pts += w.length >= 3 ? 2 : 1;
+      else if (w.length <= 2 && et.some((x) => x.startsWith(w))) pts += 0.6;
+      else if (w.length >= 4 && et.some((x) => x.startsWith(w) || w.startsWith(x) && x.length >= 4)) pts += 1.2;
+    });
+    if (pts > mejorPts) { mejor = e; mejorPts = pts; empate = false; } else if (pts === mejorPts && pts > 0) empate = true;
+  });
+  return mejorPts >= 2 && !empate ? mejor : null;
+}
+function valorEmpleadoOD(r, empleados) {
+  if (r.tecnicoCodigo && empleados.some((e) => String(e.codigo) === String(r.tecnicoCodigo))) return String(r.tecnicoCodigo);
+  if (!r.tecnicoCodigo) {
+    const porNombre = empleados.find((e) => normNombreEmp(e.nombre) === normNombreEmp(r.tecnico));
+    if (porNombre) return String(porNombre.codigo);
+  }
+  return (r.tecnico || "").trim() ? "__anterior__" : "";
+}
+function SelectorEmpleadoOD({ r, empleados, onElegir, style }) {
+  const valor = valorEmpleadoOD(r, empleados);
+  const anterior = valor === "__anterior__";
+  return (
+    <select
+      style={{ ...style, ...(anterior ? { borderColor: T.amber, background: T.amberSoft } : {}) }}
+      value={valor}
+      title={anterior ? `«${r.tecnico}» se escribió a mano y todavía no está vinculado a un empleado. Elija el empleado correcto.` : ""}
+      onChange={(e) => { if (e.target.value !== "__anterior__") onElegir(e.target.value); }}
+    >
+      <option value="">— Sin asignar —</option>
+      {anterior && <option value="__anterior__">⚠ {r.tecnico}{r.tecnicoCodigo ? " (inactivo)" : " (sin vincular)"}</option>}
+      {empleados.map((e) => <option key={e.codigo} value={String(e.codigo)}>{e.nombre}</option>)}
+    </select>
+  );
+}
+// Panel para pasar los nombres escritos a mano a empleados de la lista, sin perder nada:
+// agrupa por el texto actual, sugiere el empleado y actualiza todas las OD de ese texto.
+function HomologarTecnicosOD({ area, rowsTodas, setRows, empleados }) {
+  const confirmar = useContext(ConfirmContext);
+  const [abierto, setAbierto] = useState(false);
+  const [eleccion, setEleccion] = useState({});
+  const [trabajando, setTrabajando] = useState("");
+  const [error, setError] = useState("");
+  const grupos = useMemo(() => {
+    const m = {};
+    rowsTodas.forEach((r) => {
+      const t = (r.tecnico || "").trim();
+      if (!t || valorEmpleadoOD(r, empleados) !== "__anterior__") return;
+      (m[r.tecnico] = m[r.tecnico] || []).push(r.id);
+    });
+    return Object.entries(m).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0], "es"));
+  }, [rowsTodas, empleados]);
+  const yaVinculablesPorNombre = useMemo(() => rowsTodas.filter((r) => !r.tecnicoCodigo && (r.tecnico || "").trim() && valorEmpleadoOD(r, empleados) !== "__anterior__" && valorEmpleadoOD(r, empleados) !== ""), [rowsTodas, empleados]);
+  const elegido = (texto) => eleccion[texto] !== undefined ? eleccion[texto] : (sugerirEmpleado(texto, empleados)?.codigo ?? "");
+  const nOd = grupos.reduce((a, [, ids]) => a + ids.length, 0);
+
+  const actualizar = async (ids, emp) => {
+    for (let i = 0; i < ids.length; i += 150) {
+      const lote = ids.slice(i, i + 150);
+      const { error: e } = await supabase.from("ordenes_trabajo").update({ tecnico: emp.nombre, tecnico_codigo: String(emp.codigo) }).in("id", lote);
+      if (e) return e;
+    }
+    setRows((prev) => prev.map((r) => ids.includes(r.id) ? { ...r, tecnico: emp.nombre, tecnicoCodigo: String(emp.codigo) } : r));
+    return null;
+  };
+  const aplicar = async (lista) => {
+    setError("");
+    const tareas = lista.map(([texto, ids]) => ({ texto, ids, emp: empleados.find((e) => String(e.codigo) === String(elegido(texto))) })).filter((x) => x.emp);
+    if (!tareas.length) return;
+    const total = tareas.reduce((a, x) => a + x.ids.length, 0);
+    const detalle = tareas.length === 1 ? `«${tareas[0].texto}» → ${tareas[0].emp.nombre}` : `${tareas.length} nombres`;
+    if (!(await confirmar(`¿Vincular ${detalle}? Se actualizan ${total} OD. El texto anterior queda respaldado en Supabase (tabla ordenes_trabajo_respaldo_tecnico).`, { confirmLabel: "Sí, vincular", variant: "accent" }))) return;
+    for (const x of tareas) {
+      setTrabajando(x.texto);
+      const e = await actualizar(x.ids, x.emp);
+      if (e) { setError(`${e.message}. Corra primero en Supabase el SQL «SQL_tecnicos_ipm_empleados.sql».`); break; }
+    }
+    setTrabajando("");
+  };
+  const vincularExactos = async () => {
+    setError(""); setTrabajando("__exactos__");
+    const porEmp = {};
+    yaVinculablesPorNombre.forEach((r) => { const c = valorEmpleadoOD(r, empleados); (porEmp[c] = porEmp[c] || []).push(r.id); });
+    for (const [c, ids] of Object.entries(porEmp)) {
+      const e = await actualizar(ids, empleados.find((x) => String(x.codigo) === c));
+      if (e) { setError(`${e.message}. Corra primero en Supabase el SQL «SQL_tecnicos_ipm_empleados.sql».`); break; }
+    }
+    setTrabajando("");
+  };
+
+  if (!empleados.length || (!grupos.length && !yaVinculablesPorNombre.length)) return null;
+  return (
+    <div style={{ background: T.amberSoft, border: `1px solid ${T.amber}`, borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 220, fontSize: 12.8 }}>
+          {grupos.length > 0
+            ? <><b>{grupos.length} nombre(s) escritos a mano</b> en {nOd} OD todavía no están vinculados a la lista de empleados.</>
+            : <><b>{yaVinculablesPorNombre.length} OD</b> ya coinciden con un empleado por nombre; falta guardar el vínculo.</>}
+        </div>
+        {yaVinculablesPorNombre.length > 0 && <Btn small variant="ghost" onClick={vincularExactos} disabled={!!trabajando}>{trabajando === "__exactos__" ? "Guardando…" : `Guardar vínculo de ${yaVinculablesPorNombre.length} coincidencias exactas`}</Btn>}
+        {grupos.length > 0 && <Btn small variant="accent" onClick={() => setAbierto(!abierto)}>{abierto ? "Cerrar" : "Vincular técnicos"}</Btn>}
+      </div>
+      {error && <div style={{ color: T.red, fontSize: 12.5, marginTop: 8 }}>{error}</div>}
+      {abierto && grupos.length > 0 && (
+        <div style={{ marginTop: 10, background: T.panel, borderRadius: 9, padding: 10, overflowX: "auto" }}>
+          <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 8 }}>Elija el empleado de cada nombre. La sugerencia sale sola cuando el nombre se parece; revísela antes de aplicar. Lo que deje en «— No cambiar —» queda igual que ahora.</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.8 }}>
+            <thead><tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5 }}><th style={{ padding: "4px 6px" }}>Escrito actualmente</th><th>OD</th><th>Empleado de la lista</th><th></th></tr></thead>
+            <tbody>
+              {grupos.map(([texto, ids]) => (
+                <tr key={texto} style={{ borderTop: `1px solid ${T.line}` }}>
+                  <td style={{ padding: "6px", fontWeight: 600 }}>{texto}</td>
+                  <td>{ids.length}</td>
+                  <td>
+                    <select style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", minWidth: 200 }} value={String(elegido(texto))} onChange={(e) => setEleccion((p) => ({ ...p, [texto]: e.target.value }))}>
+                      <option value="">— No cambiar —</option>
+                      {empleados.map((e) => <option key={e.codigo} value={String(e.codigo)}>{e.nombre}</option>)}
+                    </select>
+                  </td>
+                  <td style={{ textAlign: "right" }}><Btn small variant="ghost" disabled={!elegido(texto) || !!trabajando} onClick={() => aplicar([[texto, ids]])}>{trabajando === texto ? "…" : "Aplicar"}</Btn></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+            <Btn small variant="accent" disabled={!!trabajando || !grupos.some(([t]) => elegido(t))} onClick={() => aplicar(grupos)}>Aplicar todos los elegidos</Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
@@ -2631,8 +2780,13 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const add = async () => {
     if (!form.od || !form.cliente) return;
     const payload = { area, od: form.od, cliente: form.cliente, estado: "Activo", tecnico: form.tecnico, accion: "", tipo_od: tipoOD, progreso: "Pendiente", facturado: "Sin facturar" };
+    if (form.tecnicoCodigo) payload.tecnico_codigo = String(form.tecnicoCodigo);
     setForm({ od: "", cliente: "", tecnico: "" });
-    const { data, error } = await supabase.from("ordenes_trabajo").insert(payload).select().single();
+    let { data, error } = await supabase.from("ordenes_trabajo").insert(payload).select().single();
+    if (error && payload.tecnico_codigo) {
+      delete payload.tecnico_codigo;
+      ({ data, error } = await supabase.from("ordenes_trabajo").insert(payload).select().single());
+    }
     if (!error && data) setRows((prev) => [odRowFromDb(data), ...prev]);
   };
   const setProgreso = (id, progreso) => {
@@ -2672,6 +2826,27 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const setTecnico = (id, tecnico) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, tecnico } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ tecnico })).eq("id", id).then();
+  };
+  // IPM: el técnico se elige de la lista de empleados activos (Planilla)
+  const usaListaEmpleados = isInspecciones;
+  const [empleadosLista, setEmpleadosLista] = useState([]);
+  const [avisoTecnico, setAvisoTecnico] = useState("");
+  useEffect(() => {
+    if (!usaListaEmpleados) return;
+    supabase.from("empleados").select("codigo, nombre, puesto, area, activo").eq("activo", true).order("nombre", { ascending: true })
+      .then(({ data }) => { if (data) setEmpleadosLista(data.filter((e) => e.codigo != null && e.nombre)); });
+  }, [usaListaEmpleados]);
+  const asignarTecnico = async (id, codigo) => {
+    const emp = empleadosLista.find((e) => String(e.codigo) === String(codigo));
+    const nombre = emp ? emp.nombre : "";
+    const cod = emp ? String(emp.codigo) : "";
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, tecnico: nombre, tecnicoCodigo: cod } : r));
+    const { error } = await supabase.from("ordenes_trabajo").update({ tecnico: nombre || null, tecnico_codigo: cod || null }).eq("id", id);
+    if (error) {
+      // sin la columna nueva todavía: guarda al menos el nombre
+      await supabase.from("ordenes_trabajo").update({ tecnico: nombre || null }).eq("id", id);
+      setAvisoTecnico("Falta correr en Supabase el SQL «SQL_tecnicos_ipm_empleados.sql»; por ahora se guardó solo el nombre.");
+    }
   };
   const setOD = (id, od) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, od } : r));
@@ -2939,6 +3114,8 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
               <Btn small variant={subTabCorrectivo === "Completados" ? "accent" : "ghost"} onClick={() => setSubTabCorrectivo("Completados")}>Completados ({completadosCorrectivoCount})</Btn>
             </div>
           )}
+          {usaListaEmpleados && canEditEstado && <HomologarTecnicosOD area={area} rowsTodas={rowsTodas} setRows={setRows} empleados={empleadosLista} />}
+          {avisoTecnico && <div style={{ background: T.redSoft, color: T.red, borderRadius: 9, padding: "8px 12px", fontSize: 12.5, marginBottom: 10 }}>{avisoTecnico}</div>}
           {!esCorrectivo && isInspecciones && (
             <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
               <Btn small variant={subTabIpmEstado === "Activos" ? "accent" : "ghost"} onClick={() => setSubTabIpmEstado("Activos")}>Activos ({activosIpmCount})</Btn>
@@ -3033,7 +3210,9 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                     )}
                   </td>
                   <td>
-                    {canEditEstado ? (
+                    {canEditEstado && usaListaEmpleados && empleadosLista.length ? (
+                      <SelectorEmpleadoOD r={r} empleados={empleadosLista} onElegir={(c) => asignarTecnico(r.id, c)} style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 150 }} />
+                    ) : canEditEstado ? (
                       <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 110 }} value={r.tecnico} onChange={(e) => setTecnico(r.id, e.target.value)} />
                     ) : (r.tecnico || "—")}
                   </td>
@@ -3180,7 +3359,14 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
           <div style={{ display: "flex", gap: 10 }}>
             <input style={inputStyle} placeholder="OD" value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })} />
             <input style={{ ...inputStyle, flex: 1 }} placeholder="Cliente" value={form.cliente} onChange={(e) => setForm({ ...form, cliente: e.target.value })} />
-            <input style={inputStyle} placeholder={tecnicoLabel} value={form.tecnico} onChange={(e) => setForm({ ...form, tecnico: e.target.value })} />
+            {usaListaEmpleados && empleadosLista.length ? (
+              <select style={inputStyle} value={form.tecnicoCodigo || ""} onChange={(e) => { const emp = empleadosLista.find((x) => String(x.codigo) === e.target.value); setForm({ ...form, tecnicoCodigo: e.target.value, tecnico: emp ? emp.nombre : "" }); }}>
+                <option value="">— {tecnicoLabel} —</option>
+                {empleadosLista.map((e) => <option key={e.codigo} value={String(e.codigo)}>{e.nombre}</option>)}
+              </select>
+            ) : (
+              <input style={inputStyle} placeholder={tecnicoLabel} value={form.tecnico} onChange={(e) => setForm({ ...form, tecnico: e.target.value })} />
+            )}
             <Btn variant="accent" onClick={add}><Plus size={14} /></Btn>
           </div>
         </Card>

@@ -2346,6 +2346,12 @@ function HorasExtras({ area, color }) {
   const [filtroPersonalHoras, setFiltroPersonalHoras] = useState("");
   const [filtroOdHoras, setFiltroOdHoras] = useState("");
   const [filtroFechaEjecHoras, setFiltroFechaEjecHoras] = useState("");
+  // Cada solicitud cae en el período (corte de planilla) de su fecha de
+  // ejecución; si no tiene, en el de la fecha en que se pidió.
+  const [filtroPeriodoHoras, setFiltroPeriodoHoras] = useState("");
+  const fechaDePeriodo = (r) => r.fecha_ejecucion || r.fecha || "";
+  const periodoDe = (r) => { const f = fechaDePeriodo(r); return f ? etiquetaPeriodo(f, fechasCorte) : "Sin fecha"; };
+  const periodoActual = etiquetaPeriodo(todayISO(), fechasCorte);
 
   const rowsSolicitud = ordenarPorOrdenManual(rows.filter((r) => r.estado === "Pendiente" || r.estado === "Aprobada"));
   const rowsDenegadas = ordenarPorOrdenManual(rows.filter((r) => r.estado === "Rechazada"));
@@ -2354,8 +2360,32 @@ function HorasExtras({ area, color }) {
     const matchPersonal = !filtroPersonalHoras.trim() || (r.personal || "").toLowerCase().includes(filtroPersonalHoras.trim().toLowerCase());
     const matchOd = !filtroOdHoras.trim() || (r.od || "").toLowerCase().includes(filtroOdHoras.trim().toLowerCase());
     const matchFecha = !filtroFechaEjecHoras || r.fecha_ejecucion === filtroFechaEjecHoras;
-    return matchPersonal && matchOd && matchFecha;
+    const matchPeriodo = !filtroPeriodoHoras || periodoDe(r) === filtroPeriodoHoras;
+    return matchPersonal && matchOd && matchFecha && matchPeriodo;
   });
+
+  // Agrupa una lista por período, del más reciente al más viejo ("Sin fecha" al final).
+  const agruparPorPeriodo = (lista) => {
+    const mapa = new Map();
+    lista.forEach((r) => {
+      const et = periodoDe(r);
+      if (!mapa.has(et)) mapa.set(et, { etiqueta: et, filas: [], fechaMax: "" });
+      const g = mapa.get(et);
+      g.filas.push(r);
+      const f = fechaDePeriodo(r);
+      if (f > g.fechaMax) g.fechaMax = f;
+    });
+    return [...mapa.values()].sort((a, b) => (b.fechaMax || "").localeCompare(a.fechaMax || ""));
+  };
+  const sumaHoras = (lista) => lista.reduce((s, r) => s + Number(r.horas || 0), 0);
+  const periodosDePestana = agruparPorPeriodo(subTab === "solicitud" ? rowsSolicitud : subTab === "denegadas" ? rowsDenegadas : rowsCerradas);
+  const gruposMostrados = agruparPorPeriodo(rowsMostradas);
+  const aprobarPeriodo = async (grupo) => {
+    const pendientes = grupo.filas.filter((r) => r.estado === "Pendiente");
+    if (pendientes.length === 0) return;
+    if (!(await confirmar(`¿Aprobar las ${pendientes.length} solicitudes pendientes del período ${grupo.etiqueta} (${sumaHoras(pendientes)}h)?`))) return;
+    pendientes.forEach((r) => setEstado(r.id, "Aprobada"));
+  };
 
   // Sube o baja una fila dentro de la lista que se está viendo ahora
   // mismo (respeta los filtros activos), intercambiando su "orden" con
@@ -2367,8 +2397,12 @@ function HorasExtras({ area, color }) {
   // sea siempre consistente aunque haya un filtro activo.
   const moverFila = (id, direccion) => {
     const idx = bucketActual.findIndex((r) => r.id === id);
-    const idxVecino = idx + direccion;
-    if (idx === -1 || idxVecino < 0 || idxVecino >= bucketActual.length) return;
+    if (idx === -1) return;
+    // Solo se intercambia con la fila vecina del MISMO período.
+    const per = periodoDe(bucketActual[idx]);
+    let idxVecino = idx + direccion;
+    while (idxVecino >= 0 && idxVecino < bucketActual.length && periodoDe(bucketActual[idxVecino]) !== per) idxVecino += direccion;
+    if (idxVecino < 0 || idxVecino >= bucketActual.length) return;
     const idsEnOrden = bucketActual.map((r) => r.id);
     [idsEnOrden[idx], idsEnOrden[idxVecino]] = [idsEnOrden[idxVecino], idsEnOrden[idx]];
     const nuevoOrdenPorId = {};
@@ -2464,6 +2498,24 @@ function HorasExtras({ area, color }) {
             <Btn small variant="ghost" onClick={() => { setFiltroPersonalHoras(""); setFiltroOdHoras(""); setFiltroFechaEjecHoras(""); }}>Limpiar filtros</Btn>
           )}
         </div>
+        {periodosDePestana.length > 0 && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ fontSize: 11.5, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginRight: 2 }}>Período:</span>
+            <button type="button" onClick={() => setFiltroPeriodoHoras("")} style={{ border: `1px solid ${!filtroPeriodoHoras ? color : T.line}`, background: !filtroPeriodoHoras ? color : "#fff", color: !filtroPeriodoHoras ? "#fff" : T.ink, borderRadius: 999, padding: "4px 11px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Todos</button>
+            {periodosDePestana.map((g) => {
+              const activo = filtroPeriodoHoras === g.etiqueta;
+              const pend = g.filas.filter((r) => r.estado === "Pendiente").length;
+              return (
+                <button key={g.etiqueta} type="button" onClick={() => setFiltroPeriodoHoras(activo ? "" : g.etiqueta)} title={`${g.filas.length} solicitudes · ${sumaHoras(g.filas)}h`}
+                  style={{ border: `1px solid ${activo ? color : T.line}`, background: activo ? color : "#fff", color: activo ? "#fff" : T.ink, borderRadius: 999, padding: "4px 11px", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "inline-flex", gap: 6, alignItems: "center" }}>
+                  {g.etiqueta}{g.etiqueta === periodoActual ? " (actual)" : ""}
+                  <span style={{ opacity: 0.75, fontWeight: 500 }}>{sumaHoras(g.filas)}h</span>
+                  {subTab === "solicitud" && pend > 0 && <span style={{ background: activo ? "rgba(255,255,255,.25)" : T.amberSoft, color: activo ? "#fff" : T.amber, borderRadius: 999, padding: "0 6px", fontSize: 11 }}>{pend} pend.</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
@@ -2471,14 +2523,35 @@ function HorasExtras({ area, color }) {
             </tr>
           </thead>
           <tbody>
-            {rowsMostradas.map((r, iMostrada) => (
+            {gruposMostrados.map((grupo) => (
+            <React.Fragment key={grupo.etiqueta}>
+              <tr style={{ background: T.graySoft }}>
+                <td colSpan={9} style={{ padding: "7px 10px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <strong style={{ fontSize: 12.5, color: T.ink }}>Período {grupo.etiqueta}{grupo.etiqueta === periodoActual ? " · actual" : ""}</strong>
+                    <span style={{ fontSize: 12, color: T.inkSoft }}>{grupo.filas.length} solicitud{grupo.filas.length === 1 ? "" : "es"} · {sumaHoras(grupo.filas)}h</span>
+                    {subTab === "solicitud" && (() => {
+                      const pend = grupo.filas.filter((r) => r.estado === "Pendiente");
+                      const apr = grupo.filas.filter((r) => r.estado === "Aprobada");
+                      return <>
+                        {pend.length > 0 && <span style={{ fontSize: 12, color: T.amber, fontWeight: 700 }}>{sumaHoras(pend)}h pendientes</span>}
+                        {apr.length > 0 && <span style={{ fontSize: 12, color: T.green, fontWeight: 700 }}>{sumaHoras(apr)}h aprobadas</span>}
+                        {puedeAdminAqui && pend.length > 0 && (
+                          <Btn small variant="success" onClick={() => aprobarPeriodo(grupo)} style={{ marginLeft: "auto" }}><Check size={12} /> Aprobar las {pend.length} pendientes</Btn>
+                        )}
+                      </>;
+                    })()}
+                  </div>
+                </td>
+              </tr>
+            {grupo.filas.map((r, iMostrada) => (
               <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
                 <td style={{ padding: "4px 4px 4px 8px" }}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
                     <button onClick={() => moverFila(r.id, -1)} disabled={iMostrada === 0} title="Subir" style={{ background: "transparent", border: "none", cursor: iMostrada === 0 ? "default" : "pointer", opacity: iMostrada === 0 ? 0.3 : 1, padding: 0, lineHeight: 1 }}>
                       <ChevronUp size={14} color={T.inkSoft} />
                     </button>
-                    <button onClick={() => moverFila(r.id, 1)} disabled={iMostrada === rowsMostradas.length - 1} title="Bajar" style={{ background: "transparent", border: "none", cursor: iMostrada === rowsMostradas.length - 1 ? "default" : "pointer", opacity: iMostrada === rowsMostradas.length - 1 ? 0.3 : 1, padding: 0, lineHeight: 1 }}>
+                    <button onClick={() => moverFila(r.id, 1)} disabled={iMostrada === grupo.filas.length - 1} title="Bajar" style={{ background: "transparent", border: "none", cursor: iMostrada === grupo.filas.length - 1 ? "default" : "pointer", opacity: iMostrada === grupo.filas.length - 1 ? 0.3 : 1, padding: 0, lineHeight: 1 }}>
                       <ChevronDown size={14} color={T.inkSoft} />
                     </button>
                   </div>
@@ -2539,10 +2612,12 @@ function HorasExtras({ area, color }) {
                 </td>
               </tr>
             ))}
+            </React.Fragment>
+            ))}
           </tbody>
         </table>
         <div style={{ marginTop: 10, fontSize: 12.5, color: T.inkSoft, textAlign: "right", fontWeight: 700 }}>
-          Total horas (esta pestaña): {rowsMostradas.reduce((s, r) => s + Number(r.horas || 0), 0)}h
+          Total horas ({filtroPeriodoHoras ? `período ${filtroPeriodoHoras}` : "esta pestaña"}): {rowsMostradas.reduce((s, r) => s + Number(r.horas || 0), 0)}h
         </div>
         {subTab === "solicitud" && (
           <div style={{ marginTop: 4, fontSize: 12, color: T.inkSoft, textAlign: "right" }}>

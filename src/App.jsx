@@ -13333,8 +13333,8 @@ function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
 
 // =========================================================
 // DOCUMENTACIÓN DEL GERENTE — archivos privados (zip del proyecto, App, INO, placa…)
-// Solo lo ve el usuario marcado como gerente. Todo pasa por /api/documentos, que
-// revisa la contraseña en el servidor; el navegador nunca toca la llave secreta.
+// Solo lo ve el usuario marcado como gerente (usuarios.es_gerente). Guarda directo
+// en Supabase Storage (carpeta documentos_gerente) y la lista en documentos_gerente.
 // =========================================================
 const DOC_CATEGORIAS = ["Proyecto completo", "App (web)", "Firmware (INO)", "Placa PCB", "Carcasa 3D", "Otros"];
 const docTamano = (b) => (b == null ? "" : b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
@@ -13352,8 +13352,6 @@ function adivinarCategoriaDoc(nombre) {
 function DocumentacionGerente() {
   const currentUser = useContext(CurrentUserContext);
   const confirmar = useContext(ConfirmContext);
-  const [pin, setPin] = useState("");          // solo en memoria; al salir se pide otra vez
-  const [pinEscrito, setPinEscrito] = useState("");
   const [docs, setDocs] = useState(null);
   const [maxBytes, setMaxBytes] = useState(50 * 1048576);
   const [error, setError] = useState("");
@@ -13368,22 +13366,47 @@ function DocumentacionGerente() {
   const [editando, setEditando] = useState(null);
   const inputRef = useRef(null);
 
-  const api = async (accion, extra = {}, clave = pin) => {
-    const r = await fetch("/api/documentos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accion, usuario_id: currentUser?.id, pin: clave, ...extra }) });
-    let j = {};
-    try { j = await r.json(); } catch { j = { error: r.status === 404 ? "No se encontró /api/documentos (¿se subió la carpeta api a GitHub?)." : `Error ${r.status}` }; }
-    if (!r.ok || j.error) throw new Error(j.error || `Error ${r.status}`);
-    return j;
+  const BUCKET_DOCS = "documentos_gerente";
+  const msgSql = (e) => (/docs_|function|bucket|not found|policy|row-level/i.test(e?.message || "") ? `${e.message} — corra en Supabase el SQL «SQL_documentacion_simple.sql».` : (e?.message || String(e)));
+  const api = async (accion, extra = {}) => {
+    const uid = currentUser?.id;
+    if (accion === "listar") {
+      const { data, error: e } = await supabase.rpc("docs_listar", { p_usuario: uid });
+      if (e) throw new Error(msgSql(e));
+      return { documentos: data || [] };
+    }
+    if (accion === "subir") {
+      const f = extra.archivo;
+      const d = new Date(), z = (n) => String(n).padStart(2, "0");
+      const limpio = f.name.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9._-]+/g, "_");
+      const carpeta = extra.categoria.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9]+/g, "_").toLowerCase();
+      const ruta = `${carpeta}/${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}_${limpio}`;
+      const { error: eUp } = await supabase.storage.from(BUCKET_DOCS).upload(ruta, f, { contentType: f.type || "application/octet-stream", upsert: false });
+      if (eUp) throw new Error(msgSql(eUp));
+      const { error: e } = await supabase.rpc("docs_guardar", { p_usuario: uid, p_id: null, p_ruta: ruta, p_nombre: f.name, p_tamano: f.size, p_categoria: extra.categoria, p_version: extra.version || "", p_descripcion: extra.descripcion || "" });
+      if (e) { await supabase.storage.from(BUCKET_DOCS).remove([ruta]); throw new Error(msgSql(e)); }
+      return {};
+    }
+    if (accion === "descargar") {
+      const doc = (docs || []).find((x) => x.id === extra.id);
+      const { data, error: e } = await supabase.storage.from(BUCKET_DOCS).createSignedUrl(doc.ruta, 300, { download: doc.nombre });
+      if (e) throw new Error(msgSql(e));
+      return { url: data.signedUrl };
+    }
+    if (accion === "editar") {
+      const { data, error: e } = await supabase.rpc("docs_guardar", { p_usuario: uid, p_id: extra.id, p_ruta: null, p_nombre: null, p_tamano: null, p_categoria: extra.categoria, p_version: extra.version || "", p_descripcion: extra.descripcion || "" });
+      if (e) throw new Error(msgSql(e));
+      return { documento: data };
+    }
+    if (accion === "borrar") {
+      const { data: ruta, error: e } = await supabase.rpc("docs_borrar", { p_usuario: uid, p_id: extra.id });
+      if (e) throw new Error(msgSql(e));
+      if (ruta) await supabase.storage.from(BUCKET_DOCS).remove([ruta]);
+      return {};
+    }
+    return {};
   };
-  const entrar = async () => {
-    if (!pinEscrito) return;
-    setCargando(true); setError("");
-    try {
-      const j = await api("listar", {}, pinEscrito);
-      setPin(pinEscrito); setDocs(j.documentos); if (j.maxBytes) setMaxBytes(j.maxBytes);
-    } catch (e) { setError(e.message); }
-    setCargando(false);
-  };
+  useEffect(() => { api("listar").then((j) => setDocs(j.documentos)).catch((e) => { setError(e.message); setDocs([]); }); }, []);
   const recargar = async () => { try { const j = await api("listar"); setDocs(j.documentos); } catch (e) { setError(e.message); } };
 
   const elegir = (lista) => {
@@ -13399,10 +13422,7 @@ function DocumentacionGerente() {
     for (const f of archivos) {
       try {
         setSubiendo(`Subiendo ${f.name} (${docTamano(f.size)})…`);
-        const prep = await api("preparar", { nombre: f.name, tamano: f.size, categoria });
-        const { error: eUp } = await supabase.storage.from("documentos_gerente").uploadToSignedUrl(prep.ruta, prep.token, f, { contentType: f.type || "application/octet-stream" });
-        if (eUp) throw new Error(eUp.message);
-        await api("registrar", { ruta: prep.ruta, nombre: f.name, tamano: f.size, categoria, version, descripcion });
+        await api("subir", { archivo: f, categoria, version, descripcion });
       } catch (e) { setError(`${f.name}: ${e.message}`); break; }
     }
     setSubiendo(""); setArchivos([]); setVersion(""); setDescripcion("");
@@ -13410,7 +13430,21 @@ function DocumentacionGerente() {
     recargar();
   };
   const descargar = async (d) => {
-    try { const j = await api("descargar", { id: d.id }); const a = document.createElement("a"); a.href = j.url; a.download = d.nombre; document.body.appendChild(a); a.click(); a.remove(); }
+    try {
+      const j = await api("descargar", { id: d.id });
+      if (EN_APK && puenteArchivos()) {
+        // En la APK se baja el archivo y la APK lo guarda en Descargas/Salvavidas
+        setSubiendo(`Descargando ${d.nombre}…`);
+        const r = await fetch(j.url);
+        if (!r.ok) throw new Error(`No se pudo descargar (${r.status})`);
+        const blob = await r.blob();
+        const ok = await guardarArchivoApk(blob, d.nombre, blob.type || "application/octet-stream");
+        setSubiendo("");
+        if (!ok) throw new Error("La app no pudo guardar el archivo en el celular.");
+        return;
+      }
+      const a = document.createElement("a"); a.href = j.url; a.download = d.nombre; document.body.appendChild(a); a.click(); a.remove();
+    }
     catch (e) { setError(e.message); }
   };
   const borrar = async (d) => {
@@ -13422,20 +13456,7 @@ function DocumentacionGerente() {
     catch (e) { setError(e.message); }
   };
 
-  if (docs === null) {
-    return (
-      <Card title={<span style={{ display: "flex", alignItems: "center", gap: 8 }}><FolderLock size={18} /> Documentación del Gerente</span>}>
-        <div style={{ maxWidth: 380 }}>
-          <div style={{ fontSize: 13, color: T.inkSoft, marginBottom: 12 }}>Área privada para guardar lo importante: el zip del proyecto completo, App, INO, placa y más. Confirme su contraseña para entrar.</div>
-          <form onSubmit={(e) => { e.preventDefault(); entrar(); }} style={{ display: "flex", gap: 8 }}>
-            <input type="password" autoFocus style={{ ...inputStyle, flex: 1 }} placeholder="Contraseña" value={pinEscrito} onChange={(e) => setPinEscrito(e.target.value)} />
-            <Btn variant="accent" disabled={cargando || !pinEscrito}>{cargando ? "…" : <><Lock size={14} /> Entrar</>}</Btn>
-          </form>
-          {error && <div style={{ color: T.red, fontSize: 12.5, marginTop: 10 }}>{error}</div>}
-        </div>
-      </Card>
-    );
-  }
+  if (docs === null) return <Card><div style={{ fontSize: 13, color: T.gray }}>Cargando documentos…</div></Card>;
 
   const q = busqueda.trim().toLowerCase();
   const visibles = docs.filter((d) => (filtroCat === "Todas" || d.categoria === filtroCat) && (!q || `${d.nombre} ${d.version || ""} ${d.descripcion || ""}`.toLowerCase().includes(q)));
@@ -13446,7 +13467,7 @@ function DocumentacionGerente() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <Card title={<span style={{ display: "flex", alignItems: "center", gap: 8 }}><FolderLock size={18} /> Documentación del Gerente</span>}
-        action={<Btn small variant="ghost" onClick={() => { setPin(""); setPinEscrito(""); setDocs(null); }}><Lock size={13} /> Cerrar</Btn>}>
+        action={null}>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
           {["Proyecto completo", "App (web)", "Firmware (INO)", "Placa PCB"].map((c) => {
             const u = ultimoDe(c);
@@ -13529,7 +13550,7 @@ function DocumentacionGerente() {
           </div>
         ))}
       </Card>
-      <div style={{ fontSize: 11.5, color: T.inkSoft, textAlign: "center" }}>Los archivos están en una carpeta privada de Supabase; los enlaces de descarga duran 5 minutos. · by Anthony Campos Medina</div>
+      <div style={{ fontSize: 11.5, color: T.inkSoft, textAlign: "center" }}>Los archivos se guardan en Supabase (carpeta documentos_gerente). · by Anthony Campos Medina</div>
     </div>
   );
 }
@@ -27374,7 +27395,7 @@ function AppInner() {
   // ¿Es el gerente? (solo admin en la web; se pregunta a Supabase, no se guarda en el navegador)
   const [esGerente, setEsGerente] = useState(false);
   useEffect(() => {
-    if (!user?.id || user.categoria !== "admin" || MODO_CLIENTE) { setEsGerente(false); return; }
+    if (!user?.id || user.categoria !== "admin") { setEsGerente(false); return; }
     let vivo = true;
     supabase.rpc("es_gerente", { p_usuario: user.id }).then(({ data }) => { if (vivo) setEsGerente(data === true); });
     return () => { vivo = false; };

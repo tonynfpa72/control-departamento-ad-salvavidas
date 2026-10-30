@@ -10,7 +10,7 @@ import {
   ChevronLeft, ChevronRight, ChevronUp, ChevronDown, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck, Package, GraduationCap, Award,
   Star, Trophy, Zap, Target, Medal, Rocket, Crown, Sparkles, ShieldCheck, Gem, Repeat, Lock, Search,
   AlertTriangle, Settings, Shield, HelpCircle, Trash2, Wrench, Wifi, TrendingUp, Volume2, VolumeX, Menu,
-  Calculator, Pencil,
+  Calculator, Pencil, FolderLock, UploadCloud, Bell, BellRing, Send, Inbox, CheckCheck, EyeOff, RotateCcw,
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import { supabase } from "./supabaseClient";
@@ -650,6 +650,9 @@ const AREAS = [
   { id: "entrenamiento", label: "Entrenamiento", icon: GraduationCap, color: T.turquoise },
   { id: "admin", label: "Administrativo", icon: LayoutDashboard, color: T.steelSoft },
 ];
+
+// Área privada: solo aparece para el usuario marcado como gerente (usuarios.es_gerente)
+const AREA_DOCUMENTACION = { id: "documentacion", label: "Documentación", icon: FolderLock, color: T.steel };
 
 // Categorías de usuario disponibles para Gestión de Usuarios (solo Admin las crea)
 const CATEGORIAS_USUARIO = [
@@ -4084,6 +4087,64 @@ function VisitasIpmMes({ color }) {
   const completada = (r, m) => !!(r.visitasCompletadas || {})[m];
   const delMes = activas.filter((r) => tocaEn(r, mes));
   // visitas de los 3 meses anteriores que quedaron sin completar
+  // Eventos de la Agenda del mes elegido, ligados a cada OD
+  const [agendaMes, setAgendaMes] = useState({ mes: "", eventos: [], equipos: {} });
+  useEffect(() => {
+    let cancelado = false;
+    (async () => {
+      const [a, m] = mes.split("-").map(Number);
+      const ini = `${mes}-01`;
+      const fin = fechaLocalISO(new Date(a, m, 0));
+      const { data } = await supabase.from("agenda_visitas").select("id, od_id, od, area, tipo, fecha_inicio, fecha_fin, equipo")
+        .lte("fecha_inicio", fin).gte("fecha_fin", ini).order("fecha_inicio", { ascending: true });
+      const { data: eqs } = await supabase.from("agenda_equipos").select("*");
+      const equipos = {};
+      (eqs || []).forEach((e) => { if (e.nombre) equipos[e.numero] = e.nombre; });
+      if (!cancelado) setAgendaMes({ mes, eventos: data || [], equipos });
+    })();
+    return () => { cancelado = true; };
+  }, [mes]);
+  const eventosDeOd = (r) => agendaMes.mes !== mes ? [] : agendaMes.eventos.filter((ev) =>
+    (ev.od_id && String(ev.od_id) === String(r.id)) || (!ev.od_id && ev.od && String(ev.od).trim() === String(r.od || "").trim()));
+  const DIAS_CORTOS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+  const MESES_CORTOS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "set", "oct", "nov", "dic"];
+  const diaTexto = (iso) => { const d = new Date(iso + "T00:00:00"); return `${DIAS_CORTOS[d.getDay()]} ${d.getDate()} ${MESES_CORTOS[d.getMonth()]}`; };
+  const rangoTexto = (ev) => {
+    const a = String(ev.fecha_inicio).slice(0, 10), b = String(ev.fecha_fin || ev.fecha_inicio).slice(0, 10);
+    if (a === b) return diaTexto(a);
+    const da = new Date(a + "T00:00:00"), db = new Date(b + "T00:00:00");
+    return da.getMonth() === db.getMonth() ? `${DIAS_CORTOS[da.getDay()]} ${da.getDate()} – ${diaTexto(b)}` : `${diaTexto(a)} – ${diaTexto(b)}`;
+  };
+  const equipoDe = (ev) => {
+    const k = indiceColor(ev.area === "proyectos" ? "proyectos" : "inspecciones", ev.equipo);
+    const n = agendaMes.equipos[k + 1];
+    return { nombre: n && n !== `Equipo ${k + 1}` ? n : nombreColorPorDefecto(k), color: AGENDA_COLORES[k] };
+  };
+  const nombreMesLargo = (clave) => ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "setiembre", "octubre", "noviembre", "diciembre"][Number(clave.slice(5, 7)) - 1] || "";
+  const LineaAgenda = ({ r, ok }) => {
+    const evs = eventosDeOd(r);
+    if (agendaMes.mes !== mes) return null;
+    if (!evs.length) {
+      if (ok) return null;
+      return <div style={{ marginTop: 4 }} onClick={(e) => e.preventDefault()}><span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.8, fontWeight: 600, borderRadius: 7, padding: "2px 8px", background: T.redSoft, color: T.red }}><AlertCircle size={12} /> Sin agendar en {nombreMesLargo(mes)}</span></div>;
+    }
+    return (
+      <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }} onClick={(e) => e.preventDefault()}>
+        {evs.map((ev) => {
+          const yaPaso = String(ev.fecha_fin || ev.fecha_inicio).slice(0, 10) < hoy;
+          const gris = ok || yaPaso;
+          const eq = equipoDe(ev);
+          return (
+            <span key={ev.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.8, fontWeight: 600, borderRadius: 7, padding: "2px 8px", background: gris ? T.graySoft : T.blueSoft, color: gris ? T.inkSoft : T.blue }}>
+              <CalendarDays size={12} /> {ok ? "Visitada" : yaPaso ? "Agendada (ya pasó)" : "Agendada"}: {rangoTexto(ev)}
+              <span style={{ width: 8, height: 8, borderRadius: 4, background: eq.color, display: "inline-block", marginLeft: 3 }} />{eq.nombre}
+            </span>
+          );
+        })}
+      </div>
+    );
+  };
+
   const atrasadasPrevias = [];
   for (let k = 1, m = mesAnteriorIpm(mesActual); k <= 3; k++, m = mesAnteriorIpm(m)) {
     activas.forEach((r) => { if (tocaEn(r, m) && !completada(r, m) && !visitaFacturadaIpm(r, m, facturados)) atrasadasPrevias.push({ r, m }); });
@@ -4204,6 +4265,7 @@ function VisitasIpmMes({ color }) {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: 13.5, color: T.ink, textDecoration: ok ? "line-through" : "none", textDecorationColor: "rgba(0,0,0,.25)" }}>{r.cliente || "(sin cliente)"}</div>
                       <div style={{ fontSize: 12, color: T.inkSoft }}>OD {r.od}{r.frecuencia ? ` · ${r.frecuencia}` : ""}{ok ? ` · Completada el ${fechaCortaIpm(v.fecha)}${v.por ? " por " + v.por : ""}` : ""}</div>
+                      <LineaAgenda r={r} ok={ok} />
                     </div>
                     {fact ? <Badge color={T.steel} soft={T.graySoft}><Check size={12} /> Facturada</Badge>
                       : ok ? <Badge color={T.green} soft="#fff"><Dot color={T.green} /> En facturación</Badge>
@@ -8824,9 +8886,10 @@ function AreaOperativa({ area, color }) {
     { id: "od", label: area === "inspecciones" ? "OD IPM" : "OD Proyectos", icon: ClipboardList },
     { id: "od_correctivos", label: "OD Correctivos", icon: AlertCircle },
     ...(area === "inspecciones" ? [{ id: "visitas_mes", label: "Visitas del mes", icon: Check }] : []),
-    { id: "calendario", label: "Calendario", icon: CalendarDays },
     { id: "porpersona", label: `Por ${tecnicoLabel}`, icon: LayoutDashboard },
   ];
+  // La pestaña Calendario se quitó (ahora se usa la Agenda); si quedó recordada, vuelve a la primera
+  useEffect(() => { if (!tabs.some((t) => t.id === tab)) setTab("horas"); }, [tab]);
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
@@ -8841,7 +8904,6 @@ function AreaOperativa({ area, color }) {
       {tab === "od" && <OrdenesTrabajo area={area} color={color} tipoOD="Normal" />}
       {tab === "od_correctivos" && <OrdenesTrabajo area={area} color={T.amber} tipoOD="Correctivo" />}
       {tab === "visitas_mes" && area === "inspecciones" && <VisitasIpmMes color={color} />}
-      {tab === "calendario" && <Calendario area={area} color={color} />}
       {tab === "porpersona" && <ClientesPorPersona area={area} color={color} />}
     </div>
   );
@@ -13266,6 +13328,471 @@ function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
         )}
       </div>
     </div>
+  );
+}
+
+// =========================================================
+// DOCUMENTACIÓN DEL GERENTE — archivos privados (zip del proyecto, App, INO, placa…)
+// Solo lo ve el usuario marcado como gerente. Todo pasa por /api/documentos, que
+// revisa la contraseña en el servidor; el navegador nunca toca la llave secreta.
+// =========================================================
+const DOC_CATEGORIAS = ["Proyecto completo", "App (web)", "Firmware (INO)", "Placa PCB", "Carcasa 3D", "Otros"];
+const docTamano = (b) => (b == null ? "" : b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
+const docFecha = (iso) => { try { return new Date(iso).toLocaleString("es-CR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }); } catch { return iso || ""; } };
+function adivinarCategoriaDoc(nombre) {
+  const n = String(nombre || "").toLowerCase();
+  if (/\.ino$|firmware|esp32|esp8266/.test(n)) return "Firmware (INO)";
+  if (/gerber|kicad|pcb|placa|easyeda|bom|cpl/.test(n)) return "Placa PCB";
+  if (/\.stl$|\.step$|carcasa|housing/.test(n)) return "Carcasa 3D";
+  if (/app.*\.jsx$|\.jsx$/.test(n)) return "App (web)";
+  if (/proyecto|completo|backup|respaldo/.test(n)) return "Proyecto completo";
+  return "Otros";
+}
+
+function DocumentacionGerente() {
+  const currentUser = useContext(CurrentUserContext);
+  const confirmar = useContext(ConfirmContext);
+  const [pin, setPin] = useState("");          // solo en memoria; al salir se pide otra vez
+  const [pinEscrito, setPinEscrito] = useState("");
+  const [docs, setDocs] = useState(null);
+  const [maxBytes, setMaxBytes] = useState(50 * 1048576);
+  const [error, setError] = useState("");
+  const [cargando, setCargando] = useState(false);
+  const [archivos, setArchivos] = useState([]);
+  const [categoria, setCategoria] = useState("Proyecto completo");
+  const [version, setVersion] = useState("");
+  const [descripcion, setDescripcion] = useState("");
+  const [subiendo, setSubiendo] = useState("");
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroCat, setFiltroCat] = useState("Todas");
+  const [editando, setEditando] = useState(null);
+  const inputRef = useRef(null);
+
+  const api = async (accion, extra = {}, clave = pin) => {
+    const r = await fetch("/api/documentos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accion, usuario_id: currentUser?.id, pin: clave, ...extra }) });
+    let j = {};
+    try { j = await r.json(); } catch { j = { error: r.status === 404 ? "No se encontró /api/documentos (¿se subió la carpeta api a GitHub?)." : `Error ${r.status}` }; }
+    if (!r.ok || j.error) throw new Error(j.error || `Error ${r.status}`);
+    return j;
+  };
+  const entrar = async () => {
+    if (!pinEscrito) return;
+    setCargando(true); setError("");
+    try {
+      const j = await api("listar", {}, pinEscrito);
+      setPin(pinEscrito); setDocs(j.documentos); if (j.maxBytes) setMaxBytes(j.maxBytes);
+    } catch (e) { setError(e.message); }
+    setCargando(false);
+  };
+  const recargar = async () => { try { const j = await api("listar"); setDocs(j.documentos); } catch (e) { setError(e.message); } };
+
+  const elegir = (lista) => {
+    const arr = [...(lista || [])];
+    setArchivos(arr);
+    if (arr.length) setCategoria(adivinarCategoriaDoc(arr[0].name));
+  };
+  const subir = async () => {
+    if (!archivos.length) return;
+    const grandes = archivos.filter((f) => f.size > maxBytes);
+    if (grandes.length) { setError(`${grandes.map((f) => f.name).join(", ")} pasa(n) de ${Math.round(maxBytes / 1048576)} MB, el límite por archivo de Supabase.`); return; }
+    setError("");
+    for (const f of archivos) {
+      try {
+        setSubiendo(`Subiendo ${f.name} (${docTamano(f.size)})…`);
+        const prep = await api("preparar", { nombre: f.name, tamano: f.size, categoria });
+        const { error: eUp } = await supabase.storage.from("documentos_gerente").uploadToSignedUrl(prep.ruta, prep.token, f, { contentType: f.type || "application/octet-stream" });
+        if (eUp) throw new Error(eUp.message);
+        await api("registrar", { ruta: prep.ruta, nombre: f.name, tamano: f.size, categoria, version, descripcion });
+      } catch (e) { setError(`${f.name}: ${e.message}`); break; }
+    }
+    setSubiendo(""); setArchivos([]); setVersion(""); setDescripcion("");
+    if (inputRef.current) inputRef.current.value = "";
+    recargar();
+  };
+  const descargar = async (d) => {
+    try { const j = await api("descargar", { id: d.id }); const a = document.createElement("a"); a.href = j.url; a.download = d.nombre; document.body.appendChild(a); a.click(); a.remove(); }
+    catch (e) { setError(e.message); }
+  };
+  const borrar = async (d) => {
+    if (!(await confirmar(`¿Borrar «${d.nombre}»? El archivo se elimina para siempre.`, { confirmLabel: "Sí, borrar", variant: "danger" }))) return;
+    try { await api("borrar", { id: d.id }); setDocs((p) => p.filter((x) => x.id !== d.id)); } catch (e) { setError(e.message); }
+  };
+  const guardarEdicion = async () => {
+    try { const j = await api("editar", { id: editando.id, version: editando.version, descripcion: editando.descripcion, categoria: editando.categoria }); setDocs((p) => p.map((x) => (x.id === j.documento.id ? j.documento : x))); setEditando(null); }
+    catch (e) { setError(e.message); }
+  };
+
+  if (docs === null) {
+    return (
+      <Card title={<span style={{ display: "flex", alignItems: "center", gap: 8 }}><FolderLock size={18} /> Documentación del Gerente</span>}>
+        <div style={{ maxWidth: 380 }}>
+          <div style={{ fontSize: 13, color: T.inkSoft, marginBottom: 12 }}>Área privada para guardar lo importante: el zip del proyecto completo, App, INO, placa y más. Confirme su contraseña para entrar.</div>
+          <form onSubmit={(e) => { e.preventDefault(); entrar(); }} style={{ display: "flex", gap: 8 }}>
+            <input type="password" autoFocus style={{ ...inputStyle, flex: 1 }} placeholder="Contraseña" value={pinEscrito} onChange={(e) => setPinEscrito(e.target.value)} />
+            <Btn variant="accent" disabled={cargando || !pinEscrito}>{cargando ? "…" : <><Lock size={14} /> Entrar</>}</Btn>
+          </form>
+          {error && <div style={{ color: T.red, fontSize: 12.5, marginTop: 10 }}>{error}</div>}
+        </div>
+      </Card>
+    );
+  }
+
+  const q = busqueda.trim().toLowerCase();
+  const visibles = docs.filter((d) => (filtroCat === "Todas" || d.categoria === filtroCat) && (!q || `${d.nombre} ${d.version || ""} ${d.descripcion || ""}`.toLowerCase().includes(q)));
+  const porCat = DOC_CATEGORIAS.map((c) => [c, visibles.filter((d) => d.categoria === c)]).filter(([, l]) => l.length);
+  const total = docs.reduce((a, d) => a + (Number(d.tamano) || 0), 0);
+  const ultimoDe = (c) => docs.find((d) => d.categoria === c);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <Card title={<span style={{ display: "flex", alignItems: "center", gap: 8 }}><FolderLock size={18} /> Documentación del Gerente</span>}
+        action={<Btn small variant="ghost" onClick={() => { setPin(""); setPinEscrito(""); setDocs(null); }}><Lock size={13} /> Cerrar</Btn>}>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+          {["Proyecto completo", "App (web)", "Firmware (INO)", "Placa PCB"].map((c) => {
+            const u = ultimoDe(c);
+            return (
+              <div key={c} style={{ flex: "1 1 180px", background: T.bg, border: `1px solid ${T.line}`, borderRadius: 12, padding: "10px 12px" }}>
+                <div style={{ fontSize: 11.5, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3 }}>Último · {c}</div>
+                {u ? <>
+                  <div style={{ fontWeight: 700, fontSize: 13, marginTop: 3, wordBreak: "break-all" }}>{u.nombre}</div>
+                  <div style={{ fontSize: 11.5, color: T.inkSoft }}>{u.version ? `v${u.version} · ` : ""}{docFecha(u.subido_en)}</div>
+                  <Btn small variant="ghost" onClick={() => descargar(u)} style={{ marginTop: 6 }}><Download size={13} /> Descargar</Btn>
+                </> : <div style={{ fontSize: 12.5, color: T.gray, marginTop: 4 }}>Todavía nada</div>}
+              </div>
+            );
+          })}
+        </div>
+
+        <div
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => { e.preventDefault(); elegir(e.dataTransfer.files); }}
+          onClick={() => inputRef.current?.click()}
+          style={{ border: `2px dashed ${archivos.length ? T.green : T.line}`, borderRadius: 12, padding: 18, textAlign: "center", cursor: "pointer", background: archivos.length ? T.greenSoft : T.bg }}>
+          <input ref={inputRef} type="file" multiple style={{ display: "none" }} onChange={(e) => elegir(e.target.files)} />
+          <UploadCloud size={26} color={archivos.length ? T.green : T.inkSoft} />
+          <div style={{ fontSize: 13.5, fontWeight: 600, marginTop: 4 }}>{archivos.length ? archivos.map((f) => `${f.name} (${docTamano(f.size)})`).join(" · ") : "Arrastre aquí los archivos o toque para elegir"}</div>
+          <div style={{ fontSize: 11.5, color: T.inkSoft }}>Zip, JSX, INO, PDF, STL… hasta {Math.round(maxBytes / 1048576)} MB por archivo</div>
+        </div>
+        {archivos.length > 0 && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
+            <select style={{ ...inputStyle, width: 180 }} value={categoria} onChange={(e) => setCategoria(e.target.value)}>
+              {DOC_CATEGORIAS.map((c) => <option key={c}>{c}</option>)}
+            </select>
+            <input style={{ ...inputStyle, width: 110 }} placeholder="Versión (6.6)" value={version} onChange={(e) => setVersion(e.target.value)} />
+            <input style={{ ...inputStyle, flex: 1, minWidth: 200 }} placeholder="Descripción: qué contiene, qué cambió…" value={descripcion} onChange={(e) => setDescripcion(e.target.value)} />
+            <Btn variant="accent" onClick={subir} disabled={!!subiendo}><Upload size={14} /> {subiendo ? "Subiendo…" : "Subir"}</Btn>
+            <Btn variant="ghost" onClick={() => { setArchivos([]); if (inputRef.current) inputRef.current.value = ""; }} disabled={!!subiendo}>Cancelar</Btn>
+          </div>
+        )}
+        {subiendo && <div style={{ fontSize: 12.5, color: T.blue, marginTop: 8 }}>{subiendo}</div>}
+        {error && <div style={{ background: T.redSoft, color: T.red, borderRadius: 9, padding: "8px 12px", fontSize: 12.5, marginTop: 10 }}>{error}</div>}
+      </Card>
+
+      <Card title={`Archivos guardados (${docs.length}) · ${docTamano(total) || "0 KB"}`}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
+            <Search size={14} color={T.inkSoft} style={{ position: "absolute", left: 10, top: 10 }} />
+            <input style={{ ...inputStyle, paddingLeft: 30 }} placeholder="Buscar por nombre, versión o descripción…" value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
+          </div>
+          <select style={{ ...inputStyle, width: 190 }} value={filtroCat} onChange={(e) => setFiltroCat(e.target.value)}>
+            <option>Todas</option>{DOC_CATEGORIAS.map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </div>
+        {!porCat.length && <div style={{ color: T.gray, fontSize: 13 }}>{docs.length ? "Ningún resultado." : "Todavía no hay archivos. Suba el primero arriba."}</div>}
+        {porCat.map(([c, lista]) => (
+          <div key={c} style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>{c} · {lista.length}</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {lista.map((d, i) => (
+                <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 10, background: i === 0 ? T.blueSoft : T.bg, border: `1px solid ${T.line}`, flexWrap: "wrap" }}>
+                  <FileText size={18} color={T.steel} />
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13.2, wordBreak: "break-all" }}>{d.nombre}{d.version && <span style={{ marginLeft: 6, fontSize: 11.5, fontWeight: 700, color: T.blue }}>v{d.version}</span>}{i === 0 && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: T.green }}>· más reciente</span>}</div>
+                    {editando?.id === d.id ? (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 5 }}>
+                        <select style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: 150 }} value={editando.categoria} onChange={(e) => setEditando({ ...editando, categoria: e.target.value })}>{DOC_CATEGORIAS.map((x) => <option key={x}>{x}</option>)}</select>
+                        <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: 80 }} value={editando.version || ""} placeholder="Versión" onChange={(e) => setEditando({ ...editando, version: e.target.value })} />
+                        <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", flex: 1, minWidth: 160 }} value={editando.descripcion || ""} placeholder="Descripción" onChange={(e) => setEditando({ ...editando, descripcion: e.target.value })} />
+                        <Btn small variant="accent" onClick={guardarEdicion}><Check size={13} /></Btn>
+                        <Btn small variant="ghost" onClick={() => setEditando(null)}><X size={13} /></Btn>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 11.8, color: T.inkSoft }}>{docTamano(d.tamano)} · {docFecha(d.subido_en)}{d.descripcion ? ` · ${d.descripcion}` : ""}</div>
+                    )}
+                  </div>
+                  <Btn small variant="ghost" onClick={() => descargar(d)}><Download size={13} /> Descargar</Btn>
+                  <Btn small variant="ghost" onClick={() => setEditando({ ...d })} title="Editar versión / descripción"><Pencil size={13} /></Btn>
+                  <Btn small variant="ghost" onClick={() => borrar(d)} title="Borrar"><Trash2 size={13} color={T.red} /></Btn>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </Card>
+      <div style={{ fontSize: 11.5, color: T.inkSoft, textAlign: "center" }}>Los archivos están en una carpeta privada de Supabase; los enlaces de descarga duran 5 minutos. · by Anthony Campos Medina</div>
+    </div>
+  );
+}
+
+// =========================================================
+// CAMPANA DE MENSAJES — avisos entre usuarios (Pendiente, Alerta, Urgente…)
+// Cada usuario solo recibe y ve los mensajes dirigidos a él (funciones de Supabase
+// con su id; la tabla no se puede leer directo desde el navegador).
+// =========================================================
+const MSG_TIPOS = [
+  { id: "Urgente", c: "#B42318", s: "#FDE2E1", icono: "🚨" },
+  { id: "Alerta", c: "#E8590C", s: "#FFE8D9", icono: "⚠️" },
+  { id: "Pendiente", c: T.amber, s: T.amberSoft, icono: "📌" },
+  { id: "Recordatorio", c: "#7048E8", s: "#ECE5FF", icono: "⏰" },
+  { id: "Informacion", c: T.blue, s: T.blueSoft, icono: "ℹ️", label: "Información" },
+];
+const msgTipo = (t) => MSG_TIPOS.find((x) => x.id === t) || MSG_TIPOS[4];
+const msgHace = (iso) => {
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return "ahora";
+  if (s < 3600) return `hace ${Math.floor(s / 60)} min`;
+  if (s < 86400) return `hace ${Math.floor(s / 3600)} h`;
+  return new Date(iso).toLocaleString("es-CR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+};
+function sonarAvisoMensaje(urgente) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const notas = urgente ? [880, 660, 880, 660] : [740, 988];
+    notas.forEach((f, i) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = f; o.type = "sine"; o.connect(g); g.connect(ctx.destination);
+      const t0 = ctx.currentTime + i * 0.16;
+      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.25, t0 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.14);
+      o.start(t0); o.stop(t0 + 0.15);
+    });
+    setTimeout(() => ctx.close(), 1200);
+  } catch {}
+}
+
+function CampanaMensajes({ user, abajo, angosta }) {
+  const [abierto, setAbierto] = useState(false);
+  const [vista, setVista] = useState("recibidos"); // recibidos | enviados | nuevo
+  const [sinLeer, setSinLeer] = useState(0);
+  const [recibidos, setRecibidos] = useState(null);
+  const [enviados, setEnviados] = useState(null);
+  const [personas, setPersonas] = useState([]);
+  const [error, setError] = useState("");
+  const [toast, setToast] = useState(null);
+  const [filtro, setFiltro] = useState("Todos");
+  const previo = useRef(null);
+  const tituloBase = useRef(typeof document !== "undefined" ? document.title.replace(/^\(\d+\)\s*/, "") : "");
+  // formulario nuevo
+  const [dest, setDest] = useState([]);
+  const [tipo, setTipo] = useState("Pendiente");
+  const [texto, setTexto] = useState("");
+  const [buscarPersona, setBuscarPersona] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [enviadoOk, setEnviadoOk] = useState("");
+
+  const cargarRecibidos = useCallback(async () => {
+    const { data, error: e } = await supabase.rpc("mis_mensajes", { p_usuario: user.id, p_limite: 100 });
+    if (e) { setError(/function|does not exist/i.test(e.message) ? "Falta correr en Supabase el SQL «SQL_mensajes_campana.sql»." : e.message); return null; }
+    setError(""); setRecibidos(data || []); return data || [];
+  }, [user.id]);
+  const contar = useCallback(async () => {
+    const { data, error: e } = await supabase.rpc("mensajes_sin_leer", { p_usuario: user.id });
+    if (e || typeof data !== "number") return;
+    const antes = previo.current;
+    previo.current = data;
+    setSinLeer(data);
+    if (antes !== null && data > antes) {
+      const lista = await cargarRecibidos();
+      const nuevo = (lista || []).find((m) => !m.leido_en);
+      if (nuevo) {
+        setToast(nuevo);
+        sonarAvisoMensaje(nuevo.tipo === "Urgente" || nuevo.tipo === "Alerta");
+        try {
+          if (typeof Notification !== "undefined" && Notification.permission === "granted" && document.hidden)
+            new Notification(`${msgTipo(nuevo.tipo).icono} ${msgTipo(nuevo.tipo).label || nuevo.tipo} de ${nuevo.remitente_nombre || ""}`, { body: nuevo.texto.slice(0, 160) });
+        } catch {}
+        setTimeout(() => setToast((t) => (t && t.id === nuevo.id ? null : t)), 9000);
+      }
+    }
+  }, [user.id, cargarRecibidos]);
+
+  useEffect(() => {
+    contar();
+    const iv = setInterval(contar, 25000);
+    const alVolver = () => { if (!document.hidden) contar(); };
+    document.addEventListener("visibilitychange", alVolver);
+    return () => { clearInterval(iv); document.removeEventListener("visibilitychange", alVolver); };
+  }, [contar]);
+  useEffect(() => {
+    try { document.title = sinLeer ? `(${sinLeer}) ${tituloBase.current}` : tituloBase.current; } catch {}
+  }, [sinLeer]);
+  useEffect(() => {
+    if (!abierto) return;
+    if (vista === "recibidos") cargarRecibidos();
+    if (vista === "enviados") supabase.rpc("mensajes_enviados", { p_usuario: user.id, p_limite: 60 }).then(({ data, error: e }) => { if (e) setError(e.message); else setEnviados(data || []); });
+    if (vista === "nuevo" && !personas.length) supabase.rpc("destinatarios_mensajes", { p_usuario: user.id }).then(({ data, error: e }) => { if (e) setError(e.message); else setPersonas((data || []).filter((p) => p.id !== user.id)); });
+  }, [abierto, vista]);
+
+  const marcar = async (m, accion) => {
+    await supabase.rpc("mensaje_marcar", { p_usuario: user.id, p_id: m?.id || null, p_accion: accion });
+    const ahora = new Date().toISOString();
+    setRecibidos((l) => (l || []).flatMap((x) => {
+      if (accion === "todos_leidos") return [{ ...x, leido_en: x.leido_en || ahora }];
+      if (x.id !== m.id) return [x];
+      if (accion === "ocultar") return [];
+      if (accion === "leido") return [{ ...x, leido_en: x.leido_en || ahora }];
+      if (accion === "atendido") return [{ ...x, atendido_en: ahora, leido_en: x.leido_en || ahora }];
+      if (accion === "reabrir") return [{ ...x, atendido_en: null }];
+      return [x];
+    }));
+    contar();
+  };
+  const enviar = async () => {
+    if (!dest.length || !texto.trim()) return;
+    setEnviando(true); setError(""); setEnviadoOk("");
+    const { data, error: e } = await supabase.rpc("enviar_mensaje", { p_usuario: user.id, p_destinatarios: dest, p_tipo: tipo, p_texto: texto.trim() });
+    setEnviando(false);
+    if (e) { setError(e.message); return; }
+    setEnviadoOk(`Enviado a ${data} persona${data === 1 ? "" : "s"}.`);
+    setTexto(""); setDest([]); setEnviados(null);
+    setTimeout(() => setEnviadoOk(""), 4000);
+  };
+  const pedirPermisoNavegador = async () => { try { await Notification.requestPermission(); setToast(null); } catch {} };
+
+  const posBoton = abajo
+    ? { bottom: 18, right: 18 }
+    : angosta ? { top: 10, right: 56 } : { top: 16, right: 22 };
+  const lista = (recibidos || []).filter((m) => filtro === "Todos" || (filtro === "Sin atender" ? !m.atendido_en && m.tipo !== "Informacion" : m.tipo === filtro));
+  const personasFiltradas = personas.filter((p) => !buscarPersona.trim() || p.name.toLowerCase().includes(buscarPersona.trim().toLowerCase()));
+  const chip = (activo) => ({ padding: "4px 10px", borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: "pointer", border: `1px solid ${activo ? T.steel : T.line}`, background: activo ? T.steel : "#fff", color: activo ? "#fff" : T.inkSoft });
+
+  return (
+    <>
+      <button type="button" onClick={() => { setAbierto((a) => !a); setVista("recibidos"); setToast(null); }} title="Mensajes"
+        style={{ position: "fixed", zIndex: 40, ...posBoton, width: 40, height: 40, borderRadius: 12, border: "none", cursor: "pointer",
+          background: sinLeer ? T.accent : T.panel, color: sinLeer ? "#fff" : T.steel, boxShadow: "0 2px 10px rgba(16,24,38,.22)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        {sinLeer ? <BellRing size={19} /> : <Bell size={19} />}
+        {sinLeer > 0 && <span style={{ position: "absolute", top: -6, right: -6, minWidth: 20, height: 20, padding: "0 5px", borderRadius: 10, background: T.red, color: "#fff", fontSize: 11.5, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", border: "2px solid #fff" }}>{sinLeer > 99 ? "99+" : sinLeer}</span>}
+      </button>
+
+      {toast && !abierto && (
+        <div onClick={() => { setAbierto(true); setVista("recibidos"); setToast(null); marcar(toast, "leido"); }}
+          style={{ position: "fixed", zIndex: 41, ...(abajo ? { bottom: 66, right: 18 } : { top: (angosta ? 56 : 62), right: angosta ? 10 : 22 }), width: angosta ? "calc(100% - 20px)" : 340, cursor: "pointer",
+            background: "#fff", borderRadius: 12, boxShadow: "0 10px 30px rgba(0,0,0,.25)", borderLeft: `5px solid ${msgTipo(toast.tipo).c}`, padding: "10px 12px" }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: msgTipo(toast.tipo).c }}>{msgTipo(toast.tipo).icono} {msgTipo(toast.tipo).label || toast.tipo} · {toast.remitente_nombre}</div>
+          <div style={{ fontSize: 13, marginTop: 3, color: T.ink, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{toast.texto}</div>
+        </div>
+      )}
+
+      {abierto && (<>
+        <div onClick={() => setAbierto(false)} style={{ position: "fixed", inset: 0, zIndex: 42, background: angosta ? "rgba(0,0,0,.35)" : "transparent" }} />
+        <div style={{ position: "fixed", zIndex: 43, ...(angosta ? { left: 8, right: 8, top: 56 } : abajo ? { bottom: 66, right: 18, width: 410 } : { top: 62, right: 22, width: 410 }),
+          maxHeight: angosta ? "calc(100% - 70px)" : "78vh", display: "flex", flexDirection: "column", background: T.panel, borderRadius: 14, boxShadow: "0 16px 44px rgba(16,24,38,.3)", overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "10px 12px", borderBottom: `1px solid ${T.line}` }}>
+            <Bell size={16} color={T.steel} /><b style={{ fontSize: 14, flex: 1 }}>Mensajes</b>
+            {[["recibidos", `Recibidos${sinLeer ? ` (${sinLeer})` : ""}`], ["enviados", "Enviados"], ["nuevo", "+ Nuevo"]].map(([v, l]) => (
+              <button key={v} type="button" onClick={() => { setVista(v); setError(""); }} style={chip(vista === v)}>{l}</button>
+            ))}
+            <button type="button" onClick={() => setAbierto(false)} style={{ border: "none", background: "none", cursor: "pointer", color: T.inkSoft, padding: 2 }}><X size={16} /></button>
+          </div>
+          {error && <div style={{ background: T.redSoft, color: T.red, fontSize: 12.5, padding: "8px 12px" }}>{error}</div>}
+
+          <div style={{ overflowY: "auto", padding: 10, flex: 1 }}>
+            {vista === "recibidos" && (<>
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
+                {["Todos", "Sin atender", ...MSG_TIPOS.map((t) => t.id)].map((f) => (
+                  <button key={f} type="button" onClick={() => setFiltro(f)} style={{ ...chip(filtro === f), fontSize: 11, padding: "3px 8px" }}>{f === "Informacion" ? "Información" : f}</button>
+                ))}
+                {sinLeer > 0 && <button type="button" onClick={() => marcar(null, "todos_leidos")} style={{ marginLeft: "auto", border: "none", background: "none", color: T.blue, fontSize: 11.5, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 3 }}><CheckCheck size={13} /> Marcar todo leído</button>}
+              </div>
+              {typeof Notification !== "undefined" && Notification.permission === "default" && (
+                <button type="button" onClick={pedirPermisoNavegador} style={{ width: "100%", marginBottom: 8, border: `1px dashed ${T.line}`, background: T.bg, borderRadius: 9, padding: "6px 8px", fontSize: 12, color: T.inkSoft, cursor: "pointer" }}>🔔 Activar avisos del navegador (aunque la app esté en otra pestaña)</button>
+              )}
+              {recibidos === null && <div style={{ fontSize: 12.5, color: T.gray, padding: 10 }}>Cargando…</div>}
+              {recibidos && !lista.length && <div style={{ fontSize: 12.5, color: T.gray, padding: 14, textAlign: "center" }}><Inbox size={22} /><br />{recibidos.length ? "Nada con ese filtro." : "No tiene mensajes."}</div>}
+              {lista.map((m) => {
+                const tp = msgTipo(m.tipo);
+                return (
+                  <div key={m.id} onClick={() => !m.leido_en && marcar(m, "leido")}
+                    style={{ borderRadius: 10, padding: "9px 10px", marginBottom: 7, borderLeft: `4px solid ${tp.c}`, background: m.leido_en ? T.bg : tp.s, opacity: m.atendido_en ? 0.65 : 1, cursor: m.leido_en ? "default" : "pointer" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5 }}>
+                      <b style={{ color: tp.c }}>{tp.icono} {tp.label || m.tipo}</b>
+                      <span style={{ color: T.inkSoft }}>de <b>{m.remitente_nombre}</b> · {msgHace(m.creado_en)}</span>
+                      {!m.leido_en && <span style={{ marginLeft: "auto", width: 8, height: 8, borderRadius: 4, background: T.red }} />}
+                    </div>
+                    <div style={{ fontSize: 13.2, color: T.ink, marginTop: 4, whiteSpace: "pre-wrap", wordBreak: "break-word", textDecoration: m.atendido_en ? "line-through" : "none" }}>{m.texto}</div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
+                      {m.atendido_en
+                        ? <><span style={{ fontSize: 11.5, color: T.green, fontWeight: 700 }}>✓ Atendido {msgHace(m.atendido_en)}</span>
+                            <button type="button" onClick={(e) => { e.stopPropagation(); marcar(m, "reabrir"); }} style={{ border: "none", background: "none", color: T.inkSoft, fontSize: 11.5, cursor: "pointer", display: "flex", alignItems: "center", gap: 3 }}><RotateCcw size={12} /> Reabrir</button></>
+                        : m.tipo !== "Informacion" && <button type="button" onClick={(e) => { e.stopPropagation(); marcar(m, "atendido"); }} style={{ border: `1px solid ${T.green}`, background: "#fff", color: T.green, borderRadius: 7, fontSize: 11.5, fontWeight: 700, padding: "3px 8px", cursor: "pointer" }}>✓ Marcar atendido</button>}
+                      <button type="button" onClick={(e) => { e.stopPropagation(); marcar(m, "ocultar"); }} title="Quitar de mi lista" style={{ marginLeft: "auto", border: "none", background: "none", color: T.inkSoft, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, fontSize: 11.5 }}><EyeOff size={12} /> Quitar</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </>)}
+
+            {vista === "enviados" && (<>
+              {enviados === null && <div style={{ fontSize: 12.5, color: T.gray, padding: 10 }}>Cargando…</div>}
+              {enviados && !enviados.length && <div style={{ fontSize: 12.5, color: T.gray, padding: 14, textAlign: "center" }}>Todavía no ha enviado mensajes.</div>}
+              {(enviados || []).map((g) => {
+                const tp = msgTipo(g.tipo);
+                const ds = Array.isArray(g.destinatarios) ? g.destinatarios : [];
+                return (
+                  <div key={g.grupo} style={{ borderRadius: 10, padding: "9px 10px", marginBottom: 7, borderLeft: `4px solid ${tp.c}`, background: T.bg }}>
+                    <div style={{ fontSize: 11.5 }}><b style={{ color: tp.c }}>{tp.icono} {tp.label || g.tipo}</b> <span style={{ color: T.inkSoft }}>· {msgHace(g.creado_en)}</span>
+                      <button type="button" onClick={async () => { await supabase.rpc("mensaje_marcar", { p_usuario: user.id, p_id: g.grupo, p_accion: "ocultar_enviado" }); setEnviados((l) => l.filter((x) => x.grupo !== g.grupo)); }} title="Quitar de enviados" style={{ float: "right", border: "none", background: "none", color: T.inkSoft, cursor: "pointer" }}><EyeOff size={12} /></button>
+                    </div>
+                    <div style={{ fontSize: 13, marginTop: 3, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{g.texto}</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
+                      {ds.map((d, i) => (
+                        <span key={i} title={d.atendido_en ? "Atendido" : d.leido_en ? "Leído" : "Sin leer"} style={{ fontSize: 11, borderRadius: 6, padding: "1px 6px", fontWeight: 600,
+                          background: d.atendido_en ? T.greenSoft : d.leido_en ? T.blueSoft : T.graySoft, color: d.atendido_en ? T.green : d.leido_en ? T.blue : T.gray }}>
+                          {d.atendido_en ? "✓✓" : d.leido_en ? "✓" : "•"} {d.nombre}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+              {enviados && enviados.length > 0 && <div style={{ fontSize: 11, color: T.inkSoft, textAlign: "center" }}>• sin leer · ✓ leído · ✓✓ atendido</div>}
+            </>)}
+
+            {vista === "nuevo" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                  {MSG_TIPOS.map((t) => (
+                    <button key={t.id} type="button" onClick={() => setTipo(t.id)} style={{ padding: "5px 9px", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                      border: `1.5px solid ${tipo === t.id ? t.c : T.line}`, background: tipo === t.id ? t.s : "#fff", color: tipo === t.id ? t.c : T.inkSoft }}>{t.icono} {t.label || t.id}</button>
+                  ))}
+                </div>
+                <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 8 }}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+                    <b style={{ fontSize: 12.5, flex: 1 }}>Para ({dest.length})</b>
+                    <button type="button" onClick={() => setDest(dest.length === personas.length ? [] : personas.map((p) => p.id))} style={{ border: "none", background: "none", color: T.blue, fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>{dest.length === personas.length && personas.length ? "Quitar todos" : "Todos"}</button>
+                  </div>
+                  <input style={{ ...inputStyle, fontSize: 12.5, padding: "6px 9px", marginBottom: 6 }} placeholder="Buscar persona…" value={buscarPersona} onChange={(e) => setBuscarPersona(e.target.value)} />
+                  <div style={{ maxHeight: 150, overflowY: "auto" }}>
+                    {personasFiltradas.map((p) => (
+                      <label key={p.id} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.8, padding: "3px 2px", cursor: "pointer" }}>
+                        <input type="checkbox" checked={dest.includes(p.id)} onChange={() => setDest((d) => (d.includes(p.id) ? d.filter((x) => x !== p.id) : [...d, p.id]))} />
+                        {p.name} <span style={{ fontSize: 11, color: T.inkSoft }}>· {p.categoria}</span>
+                      </label>
+                    ))}
+                    {!personas.length && <div style={{ fontSize: 12, color: T.gray }}>Cargando personas…</div>}
+                  </div>
+                </div>
+                <textarea rows={4} style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} placeholder="Escriba el mensaje…" value={texto} maxLength={2000} onChange={(e) => setTexto(e.target.value)} />
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 12, color: T.green, flex: 1 }}>{enviadoOk}</span>
+                  <Btn variant="accent" onClick={enviar} disabled={enviando || !dest.length || !texto.trim()}><Send size={14} /> {enviando ? "Enviando…" : "Enviar"}</Btn>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </>)}
+    </>
   );
 }
 
@@ -26792,6 +27319,15 @@ function AppInner() {
     try { localStorage.removeItem(CLAVE_SESION); } catch {}
   };
 
+  // ¿Es el gerente? (solo admin en la web; se pregunta a Supabase, no se guarda en el navegador)
+  const [esGerente, setEsGerente] = useState(false);
+  useEffect(() => {
+    if (!user?.id || user.categoria !== "admin" || MODO_CLIENTE) { setEsGerente(false); return; }
+    let vivo = true;
+    supabase.rpc("es_gerente", { p_usuario: user.id }).then(({ data }) => { if (vivo) setEsGerente(data === true); });
+    return () => { vivo = false; };
+  }, [user?.id, user?.categoria]);
+
   const visibleAreas = useMemo(() => {
     if (!user) return [];
     // Todos los usuarios ven las áreas operativas; Administrativo
@@ -26804,10 +27340,10 @@ function AppInner() {
     if (user.categoria === "cliente") return AREAS.filter((a) => a.id === "monitoreo_notifier");
     // En el APK el técnico ve Monitoreo (todos los sitios), Agenda y Entrenamiento.
     if (MODO_CLIENTE && user.categoria === "tecnico") return AREAS.filter((a) => ["monitoreo_notifier", "agenda", "entrenamiento"].includes(a.id));
-    if (user.categoria === "admin") return AREAS;
+    if (user.categoria === "admin") return esGerente ? [...AREAS, AREA_DOCUMENTACION] : AREAS;
     if (user.categoria === "tecnico") return AREAS.filter((a) => a.id !== "admin" && a.id !== "proyectos" && a.id !== "planilla");
     return AREAS.filter((a) => a.id !== "admin");
-  }, [user]);
+  }, [user, esGerente]);
 
   useEffect(() => {
     if (user && !tab) setTab(visibleAreas[0]?.id);
@@ -26820,7 +27356,7 @@ function AppInner() {
 
   if (!user) return <Login onLogin={iniciarSesion} />;
 
-  const current = AREAS.find((a) => a.id === tab);
+  const current = AREAS.find((a) => a.id === tab) || (tab === AREA_DOCUMENTACION.id && esGerente ? AREA_DOCUMENTACION : undefined);
 
   return (
     <CurrentUserContext.Provider value={user}>
@@ -26897,13 +27433,14 @@ function AppInner() {
       <div style={{ flex: 1, minWidth: 0, width: esPantallaAngosta ? "100%" : undefined, padding: tab === "monitoreo_notifier" ? 0 : esPantallaAngosta ? "14px 10px 16px" : "28px 32px", overflowY: "auto" }}>
         {tab !== "monitoreo_notifier" && (
           // En el celular el título va a la par del botón de menú (sin dejar una franja vacía arriba)
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: esPantallaAngosta ? 10 : 22, minHeight: esPantallaAngosta ? 38 : undefined, paddingRight: esPantallaAngosta ? 50 : 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: esPantallaAngosta ? 10 : 22, minHeight: esPantallaAngosta ? 38 : undefined, paddingRight: esPantallaAngosta ? 100 : 56 }}>
             {current && <current.icon size={esPantallaAngosta ? 18 : 20} color={current.color} />}
             <h1 style={{ margin: 0, fontSize: esPantallaAngosta ? 18 : 21, fontWeight: 800, letterSpacing: -0.4 }}>{current?.label}</h1>
           </div>
         )}
 
         {user.categoria !== "cliente" && <AvisoEvaluaciones />}
+        {user.categoria !== "cliente" && user.id && <CampanaMensajes user={user} abajo={tab === "monitoreo_notifier"} angosta={esPantallaAngosta} />}
         {tab === "inspecciones" && <AreaOperativa area="inspecciones" color={T.steel} />}
         {tab === "proyectos" && <AreaOperativa area="proyectos" color={T.green} />}
         {tab === "cotizaciones" && <Cotizaciones />}
@@ -26918,6 +27455,7 @@ function AppInner() {
         {tab === "planilla" && <Planilla />}
         {tab === "entrenamiento" && <ErrorBoundaryEntrenamiento><Entrenamiento /></ErrorBoundaryEntrenamiento>}
         {tab === "admin" && <Administrativo />}
+        {tab === "documentacion" && esGerente && <DocumentacionGerente />}
       </div>
     </div>
     </EquiposNavContext.Provider>

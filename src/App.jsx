@@ -13554,20 +13554,59 @@ const msgHace = (iso) => {
   if (s < 86400) return `hace ${Math.floor(s / 3600)} h`;
   return new Date(iso).toLocaleString("es-CR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 };
-function sonarAvisoMensaje(urgente) {
+// Sonido de campana real (sintetizado): golpe con armónicos que se apagan suave.
+// El navegador no deja sonar nada hasta que la persona toca la página una vez,
+// por eso el audio se "despierta" con el primer clic o tecla.
+let ctxAudioMensajes = null;
+function audioMensajes() {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const notas = urgente ? [880, 660, 880, 660] : [740, 988];
-    notas.forEach((f, i) => {
-      const o = ctx.createOscillator(), g = ctx.createGain();
-      o.frequency.value = f; o.type = "sine"; o.connect(g); g.connect(ctx.destination);
-      const t0 = ctx.currentTime + i * 0.16;
-      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.25, t0 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.14);
-      o.start(t0); o.stop(t0 + 0.15);
-    });
-    setTimeout(() => ctx.close(), 1200);
+    if (!ctxAudioMensajes) ctxAudioMensajes = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctxAudioMensajes.state === "suspended") ctxAudioMensajes.resume();
+    return ctxAudioMensajes;
+  } catch { return null; }
+}
+if (typeof window !== "undefined") {
+  const despertar = () => { audioMensajes(); window.removeEventListener("pointerdown", despertar); window.removeEventListener("keydown", despertar); };
+  window.addEventListener("pointerdown", despertar); window.addEventListener("keydown", despertar);
+}
+const sonidoMensajesActivo = () => { try { return localStorage.getItem("campana-sonido") !== "no"; } catch { return true; } };
+function golpeCampana(ctx, f, t0, vol, dur) {
+  const salida = ctx.createGain(); salida.connect(ctx.destination);
+  salida.gain.setValueAtTime(0.0001, t0);
+  salida.gain.exponentialRampToValueAtTime(vol, t0 + 0.008);
+  salida.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  // parciales de una campana: fundamental + armónicos inarmónicos
+  [[1, 1], [2.0, 0.45], [2.76, 0.32], [5.4, 0.16], [8.93, 0.07]].forEach(([k, a]) => {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = "sine"; o.frequency.value = f * k;
+    g.gain.setValueAtTime(a, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur / Math.sqrt(k));
+    o.connect(g); g.connect(salida); o.start(t0); o.stop(t0 + dur + 0.05);
+  });
+}
+function sonarAvisoMensaje(urgente) {
+  if (!sonidoMensajesActivo()) return;
+  const ctx = audioMensajes();
+  if (!ctx) return;
+  try {
+    const t = ctx.currentTime + 0.03;
+    // Mismo "din-don" para todos los mensajes
+    golpeCampana(ctx, 1318.5, t, 0.3, 1.6);       // "din"
+    golpeCampana(ctx, 1046.5, t + 0.28, 0.26, 2.0); // "don"
   } catch {}
 }
+const ESTILO_CAMPANA = `
+@keyframes ignisCampanaMover { 0%,62%,100%{transform:rotate(0)} 66%{transform:rotate(16deg)} 70%{transform:rotate(-14deg)} 74%{transform:rotate(11deg)} 78%{transform:rotate(-8deg)} 82%{transform:rotate(5deg)} 86%{transform:rotate(-2deg)} }
+@keyframes ignisCampanaOnda { 0%{transform:scale(1);opacity:.55} 100%{transform:scale(1.9);opacity:0} }
+@keyframes ignisCampanaPop { 0%{transform:scale(0)} 60%{transform:scale(1.25)} 100%{transform:scale(1)} }
+@keyframes ignisCampanaToast { 0%{transform:translateY(-14px) scale(.96);opacity:0} 100%{transform:none;opacity:1} }
+@keyframes ignisCampanaBarra { from{transform:scaleX(1)} to{transform:scaleX(0)} }
+.ignis-campana-btn{transition:transform .18s ease, box-shadow .18s ease}
+.ignis-campana-btn:hover{transform:translateY(-2px) scale(1.05)}
+.ignis-campana-btn.viva .ignis-campana-icono{animation:ignisCampanaMover 3.2s ease-in-out infinite;transform-origin:50% 8%}
+.ignis-campana-btn.viva::before,.ignis-campana-btn.viva::after{content:"";position:absolute;inset:0;border-radius:14px;border:2px solid #FF7A3D;animation:ignisCampanaOnda 2.2s ease-out infinite;pointer-events:none}
+.ignis-campana-btn.viva::after{animation-delay:1.1s}
+@media (prefers-reduced-motion: reduce){.ignis-campana-btn.viva .ignis-campana-icono,.ignis-campana-btn.viva::before,.ignis-campana-btn.viva::after{animation:none}}
+`;
 
 function CampanaMensajes({ user, abajo, angosta }) {
   const [abierto, setAbierto] = useState(false);
@@ -13579,6 +13618,7 @@ function CampanaMensajes({ user, abajo, angosta }) {
   const [error, setError] = useState("");
   const [toast, setToast] = useState(null);
   const [filtro, setFiltro] = useState("Todos");
+  const [sonido, setSonido] = useState(sonidoMensajesActivo);
   const previo = useRef(null);
   const tituloBase = useRef(typeof document !== "undefined" ? document.title.replace(/^\(\d+\)\s*/, "") : "");
   // formulario nuevo
@@ -13600,6 +13640,11 @@ function CampanaMensajes({ user, abajo, angosta }) {
     const antes = previo.current;
     previo.current = data;
     setSinLeer(data);
+    if (antes === null && data > 0) {
+      let yaAviso = false;
+      try { yaAviso = sessionStorage.getItem("campana-aviso-inicial") === "1"; sessionStorage.setItem("campana-aviso-inicial", "1"); } catch {}
+      if (!yaAviso) setTimeout(() => sonarAvisoMensaje(false), 600);
+    }
     if (antes !== null && data > antes) {
       const lista = await cargarRecibidos();
       const nuevo = (lista || []).find((m) => !m.leido_en);
@@ -13667,17 +13712,22 @@ function CampanaMensajes({ user, abajo, angosta }) {
 
   return (
     <>
-      <button type="button" onClick={() => { setAbierto((a) => !a); setVista("recibidos"); setToast(null); }} title="Mensajes"
-        style={{ position: "fixed", zIndex: 40, ...posBoton, width: 40, height: 40, borderRadius: 12, border: "none", cursor: "pointer",
-          background: sinLeer ? T.accent : T.panel, color: sinLeer ? "#fff" : T.steel, boxShadow: "0 2px 10px rgba(16,24,38,.22)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        {sinLeer ? <BellRing size={19} /> : <Bell size={19} />}
-        {sinLeer > 0 && <span style={{ position: "absolute", top: -6, right: -6, minWidth: 20, height: 20, padding: "0 5px", borderRadius: 10, background: T.red, color: "#fff", fontSize: 11.5, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", border: "2px solid #fff" }}>{sinLeer > 99 ? "99+" : sinLeer}</span>}
+      <style>{ESTILO_CAMPANA}</style>
+      <button type="button" className={`ignis-campana-btn${sinLeer ? " viva" : ""}`} onClick={() => { audioMensajes(); setAbierto((a) => !a); setVista("recibidos"); setToast(null); }} title={sinLeer ? `${sinLeer} mensaje(s) sin leer` : "Mensajes"}
+        style={{ position: "fixed", zIndex: 40, ...posBoton, width: 44, height: 44, borderRadius: 14, border: sinLeer ? "none" : `1px solid ${T.line}`, cursor: "pointer",
+          background: sinLeer ? "linear-gradient(145deg, #FF8A3D 0%, #E8590C 55%, #C92A2A 100%)" : "linear-gradient(145deg, #FFFFFF 0%, #EEF2F7 100%)",
+          color: sinLeer ? "#fff" : T.steel,
+          boxShadow: sinLeer ? "0 6px 18px rgba(232,89,12,.45), inset 0 1px 0 rgba(255,255,255,.35)" : "0 3px 12px rgba(16,24,38,.18)",
+          display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <span className="ignis-campana-icono" style={{ display: "flex" }}>{sinLeer ? <BellRing size={21} strokeWidth={2.3} /> : <Bell size={20} />}</span>
+        {sinLeer > 0 && <span key={sinLeer} style={{ position: "absolute", top: -7, right: -7, minWidth: 22, height: 22, padding: "0 6px", borderRadius: 11, background: "linear-gradient(180deg,#FF4D4F,#C92A2A)", color: "#fff", fontSize: 12, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", border: "2px solid #fff", boxShadow: "0 2px 6px rgba(201,42,42,.5)", animation: "ignisCampanaPop .35s ease-out" }}>{sinLeer > 99 ? "99+" : sinLeer}</span>}
       </button>
 
       {toast && !abierto && (
         <div onClick={() => { setAbierto(true); setVista("recibidos"); setToast(null); marcar(toast, "leido"); }}
           style={{ position: "fixed", zIndex: 41, ...(abajo ? { bottom: 66, right: 18 } : { top: (angosta ? 56 : 62), right: angosta ? 10 : 22 }), width: angosta ? "calc(100% - 20px)" : 340, cursor: "pointer",
-            background: "#fff", borderRadius: 12, boxShadow: "0 10px 30px rgba(0,0,0,.25)", borderLeft: `5px solid ${msgTipo(toast.tipo).c}`, padding: "10px 12px" }}>
+            background: "#fff", borderRadius: 12, boxShadow: "0 12px 34px rgba(0,0,0,.28)", borderLeft: `5px solid ${msgTipo(toast.tipo).c}`, padding: "10px 12px 12px", overflow: "hidden", animation: "ignisCampanaToast .35s cubic-bezier(.2,.9,.3,1.2)" }}>
+          <div style={{ position: "absolute", left: 0, bottom: 0, height: 3, width: "100%", background: msgTipo(toast.tipo).c, transformOrigin: "left", animation: "ignisCampanaBarra 9s linear forwards", opacity: 0.7 }} />
           <div style={{ fontSize: 12, fontWeight: 800, color: msgTipo(toast.tipo).c }}>{msgTipo(toast.tipo).icono} {msgTipo(toast.tipo).label || toast.tipo} · {toast.remitente_nombre}</div>
           <div style={{ fontSize: 13, marginTop: 3, color: T.ink, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{toast.texto}</div>
         </div>
@@ -13689,6 +13739,8 @@ function CampanaMensajes({ user, abajo, angosta }) {
           maxHeight: angosta ? "calc(100% - 70px)" : "78vh", display: "flex", flexDirection: "column", background: T.panel, borderRadius: 14, boxShadow: "0 16px 44px rgba(16,24,38,.3)", overflow: "hidden" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "10px 12px", borderBottom: `1px solid ${T.line}` }}>
             <Bell size={16} color={T.steel} /><b style={{ fontSize: 14, flex: 1 }}>Mensajes</b>
+            <button type="button" title={sonido ? "Sonido activado (tocar para silenciar)" : "Sonido silenciado (tocar para activar)"} onClick={() => { const n = !sonido; setSonido(n); try { localStorage.setItem("campana-sonido", n ? "si" : "no"); } catch {} if (n) setTimeout(() => sonarAvisoMensaje(false), 50); }}
+              style={{ border: "none", background: sonido ? T.accentSoft : T.graySoft, color: sonido ? T.accent : T.gray, borderRadius: 8, padding: "4px 6px", cursor: "pointer", display: "flex" }}>{sonido ? <Volume2 size={15} /> : <VolumeX size={15} />}</button>
             {[["recibidos", `Recibidos${sinLeer ? ` (${sinLeer})` : ""}`], ["enviados", "Enviados"], ["nuevo", "+ Nuevo"]].map(([v, l]) => (
               <button key={v} type="button" onClick={() => { setVista(v); setError(""); }} style={chip(vista === v)}>{l}</button>
             ))}

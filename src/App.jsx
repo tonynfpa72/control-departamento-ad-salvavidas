@@ -2219,7 +2219,8 @@ function ordenarPorOrdenManual(filas) {
 function HorasExtras({ area, color }) {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
-  const puedeAdminAqui = isAdmin || (currentUser?.categoria === "ehs" && area === "salud");
+  // Administrativo y Asistente gestionan las horas extras (editar, aprobar, disponible).
+  const puedeAdminAqui = isAdmin || currentUser?.categoria === "asistente" || (currentUser?.categoria === "ehs" && area === "salud");
   const canCerrar = puedeAdminAqui || currentUser?.categoria === "asistente";
   const canBorrar = puedeAdminAqui || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
@@ -2445,11 +2446,11 @@ function HorasExtras({ area, color }) {
             <div style={{ height: "100%", width: `${Math.min(100, (used / disponible) * 100)}%`, background: used > disponible ? T.red : color }} />
           </div>
           {puedeAdminAqui ? (
-            <Field label="Editar disponible (solo Administrativo)">
+            <Field label="Editar disponible (Administrativo o Asistente)">
               <input style={inputStyle} type="number" value={disponible} onChange={(e) => setDisponible(Number(e.target.value))} />
             </Field>
           ) : (
-            <div style={{ fontSize: 11.5, color: T.gray }}>Solo un usuario Administrativo puede modificar el disponible.</div>
+            <div style={{ fontSize: 11.5, color: T.gray }}>Solo un usuario Administrativo o Asistente puede modificar el disponible.</div>
           )}
         </Card>
         <Card title="Nueva solicitud">
@@ -3366,12 +3367,12 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                             <Badge color={estado.colorTxt} soft={estado.colorFondo}><Dot color={estado.colorTxt} />{estado.etiqueta}</Badge>
                             {canEditEstado && <Btn small variant="ghost" onClick={() => marcarFacturadoIpm(r.id)}><Check size={13} /> Marcar facturado</Btn>}
                             {canEditEstado && r.ultimaFacturaIpm && <Btn small variant="ghost" onClick={() => deshacerFacturaIpm(r.id)} title={`Última marca: ${r.ultimaFacturaIpm}`}><X size={13} /> Deshacer</Btn>}
-                            {isAdmin && <input type="date" style={{ ...inputStyle, fontSize: 11, padding: "3px 6px", width: 130 }} value={r.proximaFacturaIpm || ""} onChange={(e) => setProximaFacturaIpm(r.id, e.target.value)} title="Ajustar próxima fecha de factura manualmente" />}
+                            {canEditEstado && <input type="date" style={{ ...inputStyle, fontSize: 11, padding: "3px 6px", width: 130 }} value={r.proximaFacturaIpm || ""} onChange={(e) => setProximaFacturaIpm(r.id, e.target.value)} title="Ajustar próxima fecha de factura manualmente" />}
                           </div>
                         )}
                         <AgendaFechasIpm
                           row={r}
-                          puedeAgendar={isAdmin}
+                          puedeAgendar={canEditEstado}
                           puedeFacturar={canEditEstado}
                           mesesFacturados={mesesFacturadosDe(r.id)}
                           onToggleMes={toggleMesVisita}
@@ -26834,7 +26835,7 @@ function Planilla() {
         <Btn variant={tab === "cortes" ? "accent" : "ghost"} small onClick={() => setTab("cortes")}>Fechas de Corte</Btn>
       </div>
 
-      {tab === "cortes" && <FechasDeCorte isAdmin={isAdmin} confirmar={confirmar} />}
+      {tab === "cortes" && <FechasDeCorte isAdmin={isAdmin || currentUser?.categoria === "asistente"} confirmar={confirmar} />}
 
       {tab === "personal" && (
         <div style={{ display: "grid", gridTemplateColumns: isAdmin ? "1.4fr 1fr" : "1fr", gap: 16 }}>

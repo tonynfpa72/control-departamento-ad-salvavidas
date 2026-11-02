@@ -13,7 +13,7 @@ import {
   Calculator, Pencil, FolderLock, UploadCloud, Bell, BellRing, Send, Inbox, CheckCheck, EyeOff, RotateCcw,
 } from "lucide-react";
 import { createPortal } from "react-dom";
-import { supabase } from "./supabaseClient";
+import { supabase, setTokenSesion, getTokenSesion, onTokenSesion } from "./supabaseClient";
 
 
 /* ---------------------------------------------------------
@@ -174,6 +174,21 @@ function useEstadoRecordado(clave, inicial) {
 // solo acepta usuarios categoría "cliente" y guarda su sesión aparte.
 const MODO_CLIENTE = typeof window !== "undefined" && !!window.__MODO_CLIENTE__;
 const CLAVE_SESION = MODO_CLIENTE ? "sesion_cliente" : "sesion_usuario";
+// Si ya había una sesión guardada, su token se activa antes de la primera
+// consulta a Supabase (lo exigen las reglas de seguridad de la base).
+try {
+  const guardada = JSON.parse(localStorage.getItem(CLAVE_SESION) || "null");
+  if (guardada?.token) setTokenSesion(guardada.token);
+} catch (e) { /* nada */ }
+// Nombre corto del equipo para el registro de accesos (no identifica a la persona).
+function equipoDeAcceso() {
+  try {
+    const ua = navigator.userAgent || "";
+    const so = /Android/i.test(ua) ? "Android" : /iPhone|iPad/i.test(ua) ? "iOS" : /Windows/i.test(ua) ? "Windows" : /Mac OS/i.test(ua) ? "Mac" : /Linux/i.test(ua) ? "Linux" : "Otro";
+    const nav = /Edg\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : /Firefox\//.test(ua) ? "Firefox" : /Safari\//.test(ua) ? "Safari" : "";
+    return `${MODO_CLIENTE ? "APK" : "Web"} · ${so}${nav ? " · " + nav : ""}`;
+  } catch { return MODO_CLIENTE ? "APK" : "Web"; }
+}
 // Un cliente puede tener uno o varios sitios asignados; se guardan en
 // usuarios.area separados por "|" (ej. "Hotel Belén|Hotel Escazú").
 const SEP_SITIOS = "|";
@@ -2117,17 +2132,24 @@ function Login({ onLogin }) {
     if (!email.trim() || pin.length < 4) { setError("Ingresa correo y contraseña (mínimo 4 caracteres)."); return; }
     setLoading(true);
     setError("");
+    setTokenSesion(null);
+    const equipo = equipoDeAcceso();
     let { data, error: err } = await supabase.rpc("login_usuario", {
       p_email: email.trim(),
       p_pin: pin,
+      p_equipo: equipo,
     });
-    // En el celular el teclado suele poner la primera letra del correo en
-    // mayúscula: si no entra así, se prueba con el correo en minúsculas.
-    if (!err && (!data || data.length === 0) && email.trim() !== email.trim().toLowerCase()) {
-      ({ data, error: err } = await supabase.rpc("login_usuario", { p_email: email.trim().toLowerCase(), p_pin: pin }));
+    // Base todavía sin el SQL de seguridad (login sin p_equipo): se reintenta como antes.
+    if (err && /p_equipo|PGRST202|Could not find the function/i.test(err.message || err.code || "")) {
+      ({ data, error: err } = await supabase.rpc("login_usuario", { p_email: email.trim(), p_pin: pin }));
     }
+    // En el celular el teclado suele poner la primera letra del correo en
+    // mayúscula: la base ya compara sin importar mayúsculas.
     setLoading(false);
-    if (err) { setError("No se pudo conectar. Intenta de nuevo."); return; }
+    if (err) {
+      if (/BLOQUEADO/i.test(err.message || "")) { setError("Demasiados intentos fallidos. Por seguridad espere 15 minutos e intente de nuevo."); return; }
+      setError("No se pudo conectar. Intenta de nuevo."); return;
+    }
     if (!data || data.length === 0) { setError("Email o PIN incorrecto."); return; }
     onLogin(data[0]);
   };
@@ -9597,6 +9619,7 @@ function GestionUsuarios() {
     const m = String(error?.message || error || "");
     if (/check constraint|violates check|categoria/i.test(m)) return 'Supabase todavía no acepta usuarios "Cliente". Corre en Supabase el SQL "SUPABASE_TODO_EN_UNO.sql" (paso 3 del paquete) y vuelve a intentarlo.';
     if (/duplicate|unique|already exists/i.test(m)) return "Ya existe un usuario con ese correo.";
+    if (/Solo un administrador|SESION_INVALIDA/i.test(m)) return "Su sesión no tiene permiso de administrador o venció. Salga y vuelva a entrar.";
     if (/null value.*pin|"pin"/i.test(m)) return 'Para guardar sin escribir la contraseña, corre en Supabase el SQL "SUPABASE_TODO_EN_UNO.sql" (paso 3 del paquete). Mientras tanto, escribe la contraseña del usuario y guarda.';
     return m || "Error desconocido.";
   };
@@ -9852,6 +9875,80 @@ function GestionUsuarios() {
           </Card>
         </div>
       )}
+      <RegistroAccesos usuarios={users} />
+    </div>
+  );
+}
+
+// Registro de accesos (quién entró, cuándo, desde qué equipo, intentos
+// fallidos) y botón para cerrar todas las sesiones de un usuario, por
+// ejemplo si perdió el celular. Lo pide NFPA 72 (2025) 7.6.7: registrar y
+// revisar los accesos a equipos conectables a la red.
+function RegistroAccesos({ usuarios }) {
+  const confirmar = useContext(ConfirmContext);
+  const [filas, setFilas] = useState(null);
+  const [error, setError] = useState("");
+  const [abierto, setAbierto] = useState(false);
+  const [usuarioCerrar, setUsuarioCerrar] = useState("");
+  const [aviso, setAviso] = useState("");
+  const cargar = async () => {
+    const { data, error: e } = await supabase.rpc("accesos_listar", { p_limite: 300 });
+    if (e) { setError(/accesos_listar|PGRST202|Could not find/i.test(e.message || "") ? "Falta correr en Supabase el SQL «SQL_seguridad.sql»." : e.message); setFilas([]); return; }
+    setError(""); setFilas(data || []);
+  };
+  useEffect(() => { if (abierto) cargar(); }, [abierto]);
+  const cerrarSesiones = async () => {
+    const u = (usuarios || []).find((x) => x.id === usuarioCerrar);
+    if (!u) return;
+    if (!(await confirmar(`¿Cerrar todas las sesiones abiertas de ${u.name}? Tendrá que volver a ingresar en todos sus equipos.`))) return;
+    const { data, error: e } = await supabase.rpc("cerrar_sesiones_usuario", { p_id: u.id });
+    setAviso(e ? `No se pudo: ${e.message}` : `Listo: se cerraron ${data || 0} sesión(es) de ${u.name}.`);
+    cargar();
+  };
+  const fallidos24h = (filas || []).filter((f) => f.resultado !== "ok" && f.resultado !== "cierre" && Date.now() - new Date(f.fecha).getTime() < 86400000).length;
+  const colorRes = { ok: T.green, cierre: T.steel, pin_incorrecto: T.amber, bloqueado: T.red };
+  const textoRes = { ok: "Ingreso", cierre: "Salida", pin_incorrecto: "Contraseña incorrecta", bloqueado: "Bloqueado" };
+  return (
+    <div style={{ marginTop: 18 }}>
+      <Card title="Seguridad · Registro de accesos" action={<Btn small variant="ghost" onClick={() => setAbierto((v) => !v)}>{abierto ? "Ocultar" : "Ver registro"}</Btn>}>
+        <div style={{ fontSize: 12.5, color: T.inkSoft }}>Cada ingreso, salida e intento fallido queda registrado con fecha, equipo e IP. Tras 8 intentos fallidos seguidos, el correo se bloquea 15 minutos. Revise este registro al menos una vez al año (NFPA 72, 2025, sección 7.6.7).</div>
+        {abierto && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+              <select style={{ ...inputStyle, width: 240 }} value={usuarioCerrar} onChange={(e) => setUsuarioCerrar(e.target.value)}>
+                <option value="">Cerrar sesiones de…</option>
+                {(usuarios || []).map((u) => <option key={u.id} value={u.id}>{u.name} · {u.email}</option>)}
+              </select>
+              <Btn small variant="danger" onClick={cerrarSesiones} disabled={!usuarioCerrar}><LogOut size={12} /> Cerrar sus sesiones</Btn>
+              <Btn small variant="ghost" onClick={cargar}><RotateCcw size={12} /> Actualizar</Btn>
+              {filas && <span style={{ fontSize: 12, color: fallidos24h ? T.red : T.green, fontWeight: 700, marginLeft: "auto" }}>{fallidos24h ? `${fallidos24h} intento(s) fallido(s) en 24 h` : "Sin intentos fallidos en 24 h"}</span>}
+            </div>
+            {aviso && <div style={{ fontSize: 12.5, color: T.green, fontWeight: 600, marginBottom: 8 }}>{aviso}</div>}
+            {error && <div style={{ fontSize: 12.5, color: T.red, fontWeight: 600 }}>{error}</div>}
+            {filas === null ? <div style={{ fontSize: 12.5, color: T.gray }}>Cargando…</div> : (
+              <div style={{ maxHeight: 360, overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 8 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                  <thead><tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", background: T.graySoft }}>
+                    <th style={{ padding: "6px 8px" }}>Fecha</th><th>Usuario</th><th>Resultado</th><th>Equipo</th><th>IP</th>
+                  </tr></thead>
+                  <tbody>
+                    {filas.map((f, i) => (
+                      <tr key={i} style={{ borderTop: `1px solid ${T.line}` }}>
+                        <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{new Date(f.fecha).toLocaleString("es-CR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+                        <td>{f.nombre || f.email}</td>
+                        <td style={{ color: colorRes[f.resultado] || T.ink, fontWeight: 700 }}>{textoRes[f.resultado] || f.resultado}</td>
+                        <td style={{ color: T.inkSoft }}>{f.equipo || "—"}</td>
+                        <td style={{ color: T.inkSoft }}>{f.ip || "—"}</td>
+                      </tr>
+                    ))}
+                    {filas.length === 0 && !error && <tr><td colSpan={5} style={{ padding: 10, color: T.gray }}>Sin registros todavía.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
     </div>
   );
 }
@@ -13310,6 +13407,48 @@ function htmlFirmasReporte(f) {
 }
 
 
+// ---- Firma digital del firmware (ECDSA P-256 + SHA-256) ----
+// El IgnisMonitor 6.4 solo instala un .bin si viene con su archivo .sig
+// firmado con la llave privada del administrador. La llave privada vive en
+// un archivo que guarda el admin (nunca en Supabase ni en el navegador); el
+// equipo solo conoce la llave pública, que va escrita en el .ino.
+const FIRMA_ALG = { name: "ECDSA", namedCurve: "P-256" };
+function b64DeBytes(bytes) { let s = ""; bytes.forEach((b) => { s += String.fromCharCode(b); }); return btoa(s); }
+function pemDeSpki(spki) {
+  const b64 = b64DeBytes(new Uint8Array(spki));
+  return "-----BEGIN PUBLIC KEY-----\n" + (b64.match(/.{1,64}/g) || []).join("\n") + "\n-----END PUBLIC KEY-----";
+}
+// WebCrypto entrega la firma como r||s (64 bytes); el ESP32 (mbedTLS) la quiere en DER.
+function firmaRawADer(raw) {
+  const enc = (x) => {
+    let i = 0; while (i < x.length - 1 && x[i] === 0) i++;
+    let v = Array.from(x.slice(i)); if (v[0] & 0x80) v = [0, ...v];
+    return [0x02, v.length, ...v];
+  };
+  const r = enc(raw.slice(0, 32)), s2 = enc(raw.slice(32, 64));
+  return new Uint8Array([0x30, r.length + s2.length, ...r, ...s2]);
+}
+async function crearLlaveFirma() {
+  const par = await crypto.subtle.generateKey(FIRMA_ALG, true, ["sign", "verify"]);
+  const privada = await crypto.subtle.exportKey("jwk", par.privateKey);
+  const publicaPem = pemDeSpki(await crypto.subtle.exportKey("spki", par.publicKey));
+  const contenido = { tipo: "llave_firma_ignis", creada: new Date().toISOString(), aviso: "LLAVE PRIVADA: guárdela fuera de la PC y no la comparta. Sin ella no se puede actualizar el IgnisMonitor por internet.", privada, publica_pem: publicaPem };
+  const blob = new Blob([JSON.stringify(contenido, null, 2)], { type: "application/json" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "llave_firma_ignis_GUARDAR.json";
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  return publicaPem;
+}
+async function leerLlaveFirma(file) {
+  const j = JSON.parse(await file.text());
+  if (j?.tipo !== "llave_firma_ignis" || !j.privada) throw new Error("Ese archivo no es una llave de firma del IgnisMonitor.");
+  const llave = await crypto.subtle.importKey("jwk", j.privada, FIRMA_ALG, false, ["sign"]);
+  return { llave, publicaPem: j.publica_pem || "" };
+}
+async function firmarFirmware(llave, buffer) {
+  const raw = new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, llave, buffer));
+  return firmaRawADer(raw);
+}
+
 // ---- Actualizar el firmware de los IgnisMonitor por internet (sin cable) ----
 // El admin sube el .bin a Supabase Storage (carpeta firmware_ignis) y deja la
 // orden "actualizar" a los equipos elegidos; cada equipo la lee en ~30 s,
@@ -13320,6 +13459,18 @@ function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
   const [elegidos, setElegidos] = useState(() => new Set(sitioInicial && sitioInicial !== "Todos" ? [sitioInicial] : dispositivos.map((d) => d.sitio)));
   const [enviando, setEnviando] = useState(false);
   const [enviado, setEnviado] = useState(null); // { nombre, sitios, en }
+  const [firma, setFirma] = useState(null); // { llave, publicaPem, nombre }
+  const [pemNuevo, setPemNuevo] = useState("");
+  const cargarLlave = async (f) => {
+    setAviso("");
+    if (!f) return;
+    try { const r = await leerLlaveFirma(f); setFirma({ ...r, nombre: f.name }); }
+    catch (e) { setFirma(null); setAviso(e.message || "No se pudo leer la llave."); }
+  };
+  const nuevaLlave = async () => {
+    try { setPemNuevo(await crearLlaveFirma()); }
+    catch (e) { setAviso("Este navegador no pudo crear la llave: " + (e.message || e)); }
+  };
   const elegir = async (f) => {
     setAviso(""); setArchivo(null);
     if (!f) return;
@@ -13331,15 +13482,21 @@ function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
   };
   const enviar = async () => {
     if (!archivo || !elegidos.size) return;
+    if (!firma?.llave) { setAviso("Cargue primero la llave de firma (llave_firma_ignis_GUARDAR.json). Los IgnisMonitor 6.4 solo instalan firmware firmado."); return; }
     setEnviando(true); setAviso("");
+    let sig;
+    try { sig = await firmarFirmware(firma.llave, await archivo.arrayBuffer()); }
+    catch (e) { setEnviando(false); setAviso("No se pudo firmar el archivo: " + (e.message || e)); return; }
     const d = new Date(), z = (n) => String(n).padStart(2, "0");
     const nombre = `IgnisMonitor_${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}.bin`;
     const { error: eSub } = await supabase.storage.from("firmware_ignis").upload(nombre, archivo, { contentType: "application/octet-stream", upsert: true });
     if (eSub) {
       setEnviando(false);
-      setAviso(/bucket|not found/i.test(eSub.message || "") ? "Falta correr en Supabase el SQL actualizar_sin_cable.sql (carpeta firmware_ignis)." : `No se pudo subir el archivo: ${eSub.message}`);
+      setAviso(/bucket|not found/i.test(eSub.message || "") ? "Falta correr en Supabase el SQL actualizar_sin_cable.sql (carpeta firmware_ignis)." : /row-level|policy|security/i.test(eSub.message || "") ? "Solo un usuario administrador con sesión vigente puede subir firmware. Salga y vuelva a entrar." : `No se pudo subir el archivo: ${eSub.message}`);
       return;
     }
+    const { error: eSig } = await supabase.storage.from("firmware_ignis").upload(nombre + ".sig", new Blob([sig], { type: "application/octet-stream" }), { contentType: "application/octet-stream", upsert: true });
+    if (eSig) { setEnviando(false); setAviso(`Se subió el .bin pero no su firma: ${eSig.message}`); return; }
     const sitios = [...elegidos];
     const ahora = new Date().toISOString();
     const { error: eOrd } = await supabase.from("dispositivos_panel")
@@ -13359,6 +13516,21 @@ function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
         {!enviado ? (
           <>
             <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 12 }}>Suba el archivo <b>.bin</b> del IgnisMonitor ESP32. Cada equipo elegido lo descarga por internet en menos de 1 minuto, se instala solo y se reinicia (1–2 minutos sin monitoreo). Hágalo cuando el panel no esté imprimiendo.</div>
+            <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 10, marginBottom: 12, background: T.graySoft }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 800, marginBottom: 6 }}><ShieldCheck size={14} color={T.green} /> Firma digital (obligatoria desde el firmware 6.4)</div>
+              <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 8 }}>El equipo solo instala un firmware firmado con su llave privada. Así nadie más puede instalarle un programa, aunque llegue a la base de datos.</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <label style={{ fontSize: 12.5, fontWeight: 600 }}>Llave de firma: <input type="file" accept=".json,application/json" onChange={(e) => cargarLlave(e.target.files?.[0])} /></label>
+                {firma && <span style={{ fontSize: 12, color: T.green, fontWeight: 700 }}>✓ {firma.nombre} cargada</span>}
+              </div>
+              <button type="button" onClick={nuevaLlave} style={{ marginTop: 6, border: "none", background: "transparent", color: T.blue, cursor: "pointer", fontSize: 12, padding: 0, textDecoration: "underline" }}>No tengo llave: crear una nueva (solo la primera vez)</button>
+              {pemNuevo && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 4 }}>Se descargó <b>llave_firma_ignis_GUARDAR.json</b> (guárdela como la llave de la APK). Copie esta llave pública en el .ino, en <code>FIRMA_PUBLICA_PEM</code>, compile y cargue ese firmware una vez por cable o con la actualización anterior:</div>
+                  <textarea readOnly value={pemNuevo} rows={5} style={{ ...inputStyle, width: "100%", fontFamily: "monospace", fontSize: 11 }} onFocus={(e) => e.target.select()} />
+                </div>
+              )}
+            </div>
             <input type="file" accept=".bin" onChange={(e) => elegir(e.target.files?.[0])} style={{ marginBottom: 8 }} />
             {archivo && <div style={{ fontSize: 12.5, color: T.green, fontWeight: 700, marginBottom: 8 }}>✓ {archivo.name} · {Math.round(archivo.size / 1024)} KB</div>}
             <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, margin: "8px 0 6px" }}>Equipos a actualizar</div>
@@ -13378,7 +13550,7 @@ function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
             {aviso && <div style={{ marginTop: 10, fontSize: 13, color: T.red, fontWeight: 600 }}>{aviso}</div>}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
               <Btn variant="ghost" onClick={onCerrar}>Cancelar</Btn>
-              <Btn variant="accent" onClick={enviar} disabled={!archivo || !elegidos.size || enviando}>{enviando ? "Subiendo..." : `Subir e instalar en ${elegidos.size} equipo(s)`}</Btn>
+              <Btn variant="accent" onClick={enviar} disabled={!archivo || !elegidos.size || enviando || !firma}>{enviando ? "Firmando y subiendo..." : `Firmar, subir e instalar en ${elegidos.size} equipo(s)`}</Btn>
             </div>
           </>
         ) : (
@@ -27457,15 +27629,40 @@ function AppInner() {
   useEffect(() => { if (!esPantallaAngosta) setSidebarAbierto(false); }, [esPantallaAngosta]);
 
   const iniciarSesion = (u) => {
+    setTokenSesion(u?.token || null);
     setUser(u);
     try { localStorage.setItem(CLAVE_SESION, JSON.stringify(u)); } catch {}
   };
-  const cerrarSesion = () => {
-    bajaPushDeEsteDispositivo();
+  const salirSinServidor = (aviso) => {
+    setTokenSesion(null);
     setUser(null);
     setTab(null);
     try { localStorage.removeItem(CLAVE_SESION); } catch {}
+    if (aviso) setTimeout(() => { try { window.alert(aviso); } catch (e) { /* nada */ } }, 50);
   };
+  const cerrarSesion = async () => {
+    try { await bajaPushDeEsteDispositivo(); } catch (e) { /* nada */ }
+    try { if (getTokenSesion()) await supabase.rpc("cerrar_sesion"); } catch (e) { /* nada */ }
+    salirSinServidor();
+  };
+
+  // Revisa con Supabase que la sesión siga vigente (y la alarga 30 días).
+  // Si la base todavía no tiene el SQL de seguridad, no hace nada.
+  useEffect(() => {
+    if (!user) return;
+    let vivo = true;
+    const revisar = async () => {
+      const { data, error } = await supabase.rpc("sesion_validar");
+      if (!vivo) return;
+      if (error) return; // sin internet o base sin el SQL de seguridad: se sigue como antes
+      if (data === false) salirSinServidor("Por seguridad su sesión venció o se cerró desde otro lugar. Ingrese de nuevo con su correo y contraseña.");
+    };
+    revisar();
+    const t = setInterval(revisar, 10 * 60 * 1000);
+    const alVolver = () => { if (document.visibilityState === "visible") revisar(); };
+    document.addEventListener("visibilitychange", alVolver);
+    return () => { vivo = false; clearInterval(t); document.removeEventListener("visibilitychange", alVolver); };
+  }, [user?.id, user?.token]);
 
   // ¿Es el gerente? (solo admin en la web; se pregunta a Supabase, no se guarda en el navegador)
   const [esGerente, setEsGerente] = useState(false);
@@ -27970,6 +28167,17 @@ export default function App() {
     const { data } = await supabase.from("app_config").select("value").eq("key", "logo").maybeSingle();
     if (data?.value) setLogoState(data.value);
   };
+
+  // Con sesión nueva (entrar / salir) se vuelven a pedir los datos: sin
+  // sesión la base no entrega datos internos.
+  const [tokenActual, setTokenActual] = useState(() => getTokenSesion());
+  useEffect(() => onTokenSesion(setTokenActual), []);
+  useEffect(() => {
+    if (!tokenActual) { setUsers([]); setClientes({ inspecciones: [], proyectos: [] }); return; }
+    refetchUsers();
+    refetchClientes();
+    refetchFechasCorte();
+  }, [tokenActual]);
 
   useEffect(() => {
     refetchUsers();

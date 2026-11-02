@@ -13407,6 +13407,288 @@ function htmlFirmasReporte(f) {
 }
 
 
+// =========================================================
+// CIBERSEGURIDAD — NFPA 72 (2025), capítulo 11
+// Registros de cumplimiento del IgnisMonitor: versión y fecha de la última
+// actualización de cada equipo (11.8.5), dueño de cada sitio y su contacto
+// verificado cada año (11.8.2 y 11.11.3), revisión trimestral de amenazas
+// (11.8.1), avisos a los dueños (11.8.3 y 11.9) y los eventos de seguridad
+// que mandan los equipos 6.6 (clave incorrecta, firmware rechazado, etc.).
+// Tablas: SQL_ciberseguridad.sql.
+// =========================================================
+const CIBER_TIPOS_EVENTO = {
+  clave_incorrecta: { t: "Clave incorrecta", c: "#b42318" },
+  firmware_rechazado: { t: "Firmware rechazado", c: "#b42318" },
+  firmware_instalado: { t: "Firmware instalado", c: "#027a48" },
+  configuracion_cambiada: { t: "Configuración cambiada", c: "#b54708" },
+  memoria_borrada: { t: "Memoria borrada", c: "#b54708" },
+};
+const ciberDias = (iso) => (iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 86400000) : null);
+const ciberFecha = (iso) => { try { return iso ? new Date(iso).toLocaleDateString("es-CR", { day: "2-digit", month: "short", year: "numeric" }) : "—"; } catch { return iso || "—"; } };
+const ciberFechaHora = (iso) => { try { return new Date(iso).toLocaleString("es-CR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch { return iso || ""; } };
+const ciberFaltaSql = (e) => /does not exist|schema cache|Could not find|PGRST20|42P01/i.test(e?.message || "") ? "Falta correr en Supabase el SQL «SQL_ciberseguridad.sql»." : (e?.message || String(e));
+
+function ModalCiberseguridad({ dispositivos, onCerrar }) {
+  const currentUser = useContext(CurrentUserContext);
+  const [tab, setTab] = useState("equipos");
+  const [sitiosInfo, setSitiosInfo] = useState({});
+  const [eventosSeg, setEventosSeg] = useState([]);
+  const [revisiones, setRevisiones] = useState([]);
+  const [avisos, setAvisos] = useState([]);
+  const [error, setError] = useState("");
+  const [aviso, setAviso] = useState("");
+  const [edit, setEdit] = useState({});
+  const [filtroSitio, setFiltroSitio] = useState("");
+  const hoyISO = new Date().toLocaleDateString("en-CA");
+  const [formRev, setFormRev] = useState({ fecha: hoyISO, revisor: currentUser?.name || "", fuentes: "Avisos de seguridad de Espressif (ESP-IDF / Arduino-ESP32), mbedTLS, Supabase, Vercel, GitHub y bases de vulnerabilidades (CVE)", hallazgos: "", requiere_actualizacion: false, accion: "" });
+  const [formAviso, setFormAviso] = useState({ tipo: "actualizacion", titulo: "", detalle: "", version: "", todos: true, sitios: [] });
+  const sitios = useMemo(() => [...new Set((dispositivos || []).map((d) => d.sitio).filter(Boolean))].sort(), [dispositivos]);
+
+  const cargar = async () => {
+    const [r1, r2, r3, r4] = await Promise.all([
+      supabase.from("sitios_ciber").select("*"),
+      supabase.from("seguridad_equipos").select("*").order("creado_en", { ascending: false }).limit(300),
+      supabase.from("revisiones_ciber").select("*").order("fecha", { ascending: false }).limit(50),
+      supabase.from("avisos_ciber").select("*").order("creado_en", { ascending: false }).limit(50),
+    ]);
+    const e = r1.error || r2.error || r3.error || r4.error;
+    if (e) { setError(ciberFaltaSql(e)); return; }
+    setError("");
+    const m = {}; (r1.data || []).forEach((x) => { m[x.sitio] = x; }); setSitiosInfo(m);
+    setEventosSeg(r2.data || []); setRevisiones(r3.data || []); setAvisos(r4.data || []);
+  };
+  useEffect(() => { cargar(); }, []);
+
+  const guardarDueno = async (sitio, extra = {}) => {
+    const actual = { ...(sitiosInfo[sitio] || {}), ...(edit[sitio] || {}), ...extra };
+    const fila = { sitio, dueno_nombre: actual.dueno_nombre || null, dueno_correo: actual.dueno_correo || null, dueno_telefono: actual.dueno_telefono || null,
+      contacto_verificado_en: actual.contacto_verificado_en || null, verificado_por: actual.verificado_por || null, notas: actual.notas || null, actualizado_en: new Date().toISOString() };
+    const { error: e } = await supabase.from("sitios_ciber").upsert(fila, { onConflict: "sitio" });
+    if (e) { setAviso("No se pudo guardar: " + ciberFaltaSql(e)); return; }
+    setEdit((p) => { const n = { ...p }; delete n[sitio]; return n; });
+    setAviso(`Guardado: ${sitio}.`); cargar();
+  };
+  const verificarHoy = (sitio) => guardarDueno(sitio, { contacto_verificado_en: new Date().toISOString(), verificado_por: currentUser?.name || "" });
+
+  const guardarRevision = async () => {
+    if (!formRev.hallazgos.trim()) { setAviso("Escriba qué se revisó y qué se encontró (aunque sea «sin hallazgos»)."); return; }
+    const { error: e } = await supabase.from("revisiones_ciber").insert({ ...formRev, accion: formRev.accion || null });
+    if (e) { setAviso("No se pudo guardar: " + ciberFaltaSql(e)); return; }
+    setFormRev((f) => ({ ...f, hallazgos: "", accion: "", requiere_actualizacion: false }));
+    setAviso("Revisión trimestral registrada."); cargar();
+  };
+  const publicarAviso = async () => {
+    if (!formAviso.titulo.trim()) { setAviso("Ponga un título al aviso."); return; }
+    if (!formAviso.todos && !formAviso.sitios.length) { setAviso("Elija al menos un sitio o marque «Todos los sitios»."); return; }
+    const { error: e } = await supabase.from("avisos_ciber").insert({ tipo: formAviso.tipo, titulo: formAviso.titulo.trim(), detalle: formAviso.detalle.trim() || null,
+      version: formAviso.version.trim() || null, sitios: formAviso.todos ? null : formAviso.sitios, autor: currentUser?.name || null });
+    if (e) { setAviso("No se pudo publicar: " + ciberFaltaSql(e)); return; }
+    setFormAviso({ tipo: "actualizacion", titulo: "", detalle: "", version: "", todos: true, sitios: [] });
+    setAviso("Aviso publicado: los clientes de esos sitios lo ven en su Monitoreo y en la APK."); cargar();
+  };
+
+  // Indicadores de cumplimiento
+  const ultimaRev = revisiones[0]?.fecha || null;
+  const diasRev = ultimaRev ? Math.floor((Date.now() - new Date(ultimaRev + "T12:00:00").getTime()) / 86400000) : null;
+  const sinActualizar = (dispositivos || []).filter((d) => { const x = ciberDias(d.version_desde); return x === null || x > 365; }).length;
+  const contactosPend = sitios.filter((s) => { const i = sitiosInfo[s]; return !i?.dueno_nombre || ciberDias(i?.contacto_verificado_en) === null || ciberDias(i.contacto_verificado_en) > 365; }).length;
+  const eventos7 = eventosSeg.filter((e) => ciberDias(e.creado_en) <= 7 && e.tipo !== "firmware_instalado").length;
+  const Indicador = ({ ok, titulo, valor, norma }) => (
+    <div style={{ flex: "1 1 140px", border: `1px solid ${ok ? "#abefc6" : "#fecdca"}`, background: ok ? "#ecfdf3" : "#fef3f2", borderRadius: 10, padding: "8px 10px" }}>
+      <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700 }}>{titulo}</div>
+      <div style={{ fontSize: 15, fontWeight: 800, color: ok ? "#027a48" : "#b42318" }}>{valor}</div>
+      <div style={{ fontSize: 10.5, color: T.gray }}>NFPA 72 · {norma}</div>
+    </div>
+  );
+  const pestanas = [["equipos", "Equipos y dueños"], ["eventos", `Eventos (${eventosSeg.length})`], ["revisiones", "Revisión trimestral"], ["avisos", "Avisos a dueños"]];
+  const caja = { background: "#fff", color: T.ink, borderRadius: 16, width: 980, maxWidth: "100%", maxHeight: "calc(100vh - 20px)", overflowY: "auto", padding: 18, boxShadow: "0 20px 60px rgba(0,0,0,.35)" };
+  const inp = { ...inputStyle, fontSize: 12.5, padding: "5px 8px" };
+  const eventosVista = eventosSeg.filter((e) => !filtroSitio || e.sitio === filtroSitio);
+
+  return (
+    <div onClick={onCerrar} style={{ position: "fixed", inset: 0, background: "rgba(16,24,38,0.6)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 10 }}>
+      <div onClick={(e) => e.stopPropagation()} style={caja}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 4, gap: 8 }}>
+          <ShieldCheck size={20} color={T.green} />
+          <div style={{ fontSize: 18, fontWeight: 800, flex: 1 }}>Ciberseguridad · NFPA 72 (2025), capítulo 11</div>
+          <button type="button" onClick={onCerrar} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.gray }}><X size={18} /></button>
+        </div>
+        <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 12 }}>Registros que pide el capítulo 11 para los IgnisMonitor: actualizaciones al menos una vez al año, dueño de cada sitio con su contacto verificado cada año, revisión de amenazas cada trimestre y avisos a los dueños.</div>
+        {error && <div style={{ fontSize: 13, color: T.red, fontWeight: 700, marginBottom: 10 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <Indicador ok={sinActualizar === 0} titulo="Equipos sin actualizar en 1 año" valor={sinActualizar === 0 ? "Todos al día" : `${sinActualizar} equipo(s)`} norma="11.8.5" />
+          <Indicador ok={contactosPend === 0} titulo="Contacto del dueño verificado" valor={contactosPend === 0 ? "Todos al día" : `${contactosPend} sitio(s) pendientes`} norma="11.8.2 / 11.11.3" />
+          <Indicador ok={diasRev !== null && diasRev <= 92} titulo="Revisión trimestral de amenazas" valor={diasRev === null ? "Nunca registrada" : diasRev <= 92 ? `Hace ${diasRev} días` : `Vencida (hace ${diasRev} días)`} norma="11.8.1" />
+          <Indicador ok={eventos7 === 0} titulo="Eventos de seguridad (7 días)" valor={eventos7 === 0 ? "Sin alertas" : `${eventos7} para revisar`} norma="11.10 / 7.6.7" />
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+          {pestanas.map(([id, t]) => <Btn key={id} small variant={tab === id ? "accent" : "ghost"} onClick={() => { setTab(id); setAviso(""); }}>{t}</Btn>)}
+        </div>
+        {aviso && <div style={{ fontSize: 12.5, color: /No se|Escriba|Ponga|Elija/.test(aviso) ? T.red : T.green, fontWeight: 700, marginBottom: 10 }}>{aviso}</div>}
+
+        {tab === "equipos" && (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead><tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", background: T.graySoft }}>
+                <th style={{ padding: "6px 8px" }}>Sitio</th><th>Versión</th><th>Actualizado</th><th>Dueño o representante</th><th>Correo</th><th>Teléfono</th><th>Contacto verificado</th><th></th>
+              </tr></thead>
+              <tbody>
+                {sitios.map((s) => {
+                  const d = (dispositivos || []).find((x) => x.sitio === s) || {};
+                  const i = { ...(sitiosInfo[s] || {}), ...(edit[s] || {}) };
+                  const dv = ciberDias(d.version_desde), dc = ciberDias(sitiosInfo[s]?.contacto_verificado_en);
+                  const set = (k, v) => setEdit((p) => ({ ...p, [s]: { ...(p[s] || {}), [k]: v } }));
+                  return (
+                    <tr key={s} style={{ borderTop: `1px solid ${T.line}` }}>
+                      <td style={{ padding: "6px 8px", fontWeight: 700 }}>{s}</td>
+                      <td>{d.version ? `V${d.version}` : "—"}</td>
+                      <td style={{ color: dv === null || dv > 365 ? T.red : dv > 300 ? T.amber : T.green, fontWeight: 700, whiteSpace: "nowrap" }}>{dv === null ? "sin dato" : `${ciberFecha(d.version_desde)} (${dv} d)`}</td>
+                      <td><input style={{ ...inp, width: 150 }} value={i.dueno_nombre || ""} onChange={(e) => set("dueno_nombre", e.target.value)} placeholder="Nombre" /></td>
+                      <td><input style={{ ...inp, width: 160 }} value={i.dueno_correo || ""} onChange={(e) => set("dueno_correo", e.target.value)} placeholder="correo" /></td>
+                      <td><input style={{ ...inp, width: 100 }} value={i.dueno_telefono || ""} onChange={(e) => set("dueno_telefono", e.target.value)} placeholder="teléfono" /></td>
+                      <td style={{ color: dc === null || dc > 365 ? T.red : T.green, fontWeight: 700, whiteSpace: "nowrap" }}>{dc === null ? "nunca" : `${ciberFecha(sitiosInfo[s].contacto_verificado_en)}`}</td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        {edit[s] && <Btn small variant="accent" onClick={() => guardarDueno(s)}>Guardar</Btn>}
+                        {!edit[s] && <Btn small variant="ghost" onClick={() => verificarHoy(s)}><Check size={12} /> Verificado hoy</Btn>}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!sitios.length && <tr><td colSpan={8} style={{ padding: 10, color: T.gray }}>Todavía no hay equipos conectados.</td></tr>}
+              </tbody>
+            </table>
+            <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 8 }}>11.8.2: el instalador entrega el contacto del dueño al aceptar el sistema. 11.11.3: quien prueba el sistema verifica ese contacto cada año («Verificado hoy»). 11.8.5: cada equipo debe recibir sus actualizaciones de seguridad al menos una vez al año.</div>
+          </div>
+        )}
+
+        {tab === "eventos" && (
+          <div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <select style={{ ...inp, width: 220 }} value={filtroSitio} onChange={(e) => setFiltroSitio(e.target.value)}>
+                <option value="">Todos los sitios</option>
+                {sitios.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <Btn small variant="ghost" onClick={cargar}><RotateCcw size={12} /> Actualizar</Btn>
+              <span style={{ fontSize: 11.5, color: T.inkSoft }}>Los envían los IgnisMonitor 6.6 o superior.</span>
+            </div>
+            <div style={{ maxHeight: 380, overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 8 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                <thead><tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", background: T.graySoft }}><th style={{ padding: "6px 8px" }}>Fecha</th><th>Sitio</th><th>Evento</th><th>Detalle</th><th>Versión</th></tr></thead>
+                <tbody>
+                  {eventosVista.map((e) => (
+                    <tr key={e.id} style={{ borderTop: `1px solid ${T.line}` }}>
+                      <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{ciberFechaHora(e.creado_en)}</td>
+                      <td>{e.sitio || "—"}</td>
+                      <td style={{ color: CIBER_TIPOS_EVENTO[e.tipo]?.c || T.ink, fontWeight: 700, whiteSpace: "nowrap" }}>{CIBER_TIPOS_EVENTO[e.tipo]?.t || e.tipo}</td>
+                      <td style={{ color: T.inkSoft }}>{e.detalle}</td>
+                      <td>{e.version ? `V${e.version}` : ""}</td>
+                    </tr>
+                  ))}
+                  {!eventosVista.length && <tr><td colSpan={5} style={{ padding: 10, color: T.gray }}>Sin eventos de seguridad.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {tab === "revisiones" && (
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 340px) 1fr", gap: 14 }} className="grid-layout">
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 12.5, color: T.inkSoft }}>11.8.1: al menos cada trimestre el fabricante evalúa las amenazas de ciberseguridad y decide si hace falta una actualización.</div>
+              <Field label="Fecha"><input type="date" style={inp} value={formRev.fecha} onChange={(e) => setFormRev({ ...formRev, fecha: e.target.value })} /></Field>
+              <Field label="Revisó"><input style={inp} value={formRev.revisor} onChange={(e) => setFormRev({ ...formRev, revisor: e.target.value })} /></Field>
+              <Field label="Fuentes consultadas"><textarea rows={3} style={{ ...inp, resize: "vertical", fontFamily: "inherit" }} value={formRev.fuentes} onChange={(e) => setFormRev({ ...formRev, fuentes: e.target.value })} /></Field>
+              <Field label="Hallazgos"><textarea rows={3} style={{ ...inp, resize: "vertical", fontFamily: "inherit" }} value={formRev.hallazgos} onChange={(e) => setFormRev({ ...formRev, hallazgos: e.target.value })} placeholder="Ej.: sin vulnerabilidades nuevas que afecten al equipo" /></Field>
+              <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={formRev.requiere_actualizacion} onChange={(e) => setFormRev({ ...formRev, requiere_actualizacion: e.target.checked })} /> Requiere actualización de firmware</label>
+              <Field label="Acción tomada"><input style={inp} value={formRev.accion} onChange={(e) => setFormRev({ ...formRev, accion: e.target.value })} placeholder="Ej.: se publicó V6.7 y se avisó a los dueños" /></Field>
+              <Btn variant="accent" onClick={guardarRevision} style={{ justifyContent: "center" }}><Check size={14} /> Registrar revisión</Btn>
+            </div>
+            <div style={{ maxHeight: 460, overflowY: "auto" }}>
+              {revisiones.map((r) => (
+                <div key={r.id} style={{ border: `1px solid ${T.line}`, borderLeft: `4px solid ${r.requiere_actualizacion ? T.amber : T.green}`, borderRadius: 8, padding: "8px 10px", marginBottom: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><b style={{ fontSize: 13 }}>{ciberFecha(r.fecha + "T12:00:00")}</b><span style={{ fontSize: 12, color: T.inkSoft }}>{r.revisor}</span></div>
+                  <div style={{ fontSize: 12.5, marginTop: 3 }}>{r.hallazgos}</div>
+                  {r.accion && <div style={{ fontSize: 12, color: T.inkSoft, marginTop: 2 }}>Acción: {r.accion}</div>}
+                  <div style={{ fontSize: 11, color: T.gray, marginTop: 2 }}>Fuentes: {r.fuentes}</div>
+                </div>
+              ))}
+              {!revisiones.length && <div style={{ fontSize: 12.5, color: T.gray }}>Todavía no hay revisiones registradas.</div>}
+            </div>
+          </div>
+        )}
+
+        {tab === "avisos" && (
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 360px) 1fr", gap: 14 }} className="grid-layout">
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 12.5, color: T.inkSoft }}>11.8.3: avisar al dueño de cada actualización de seguridad necesaria. 11.9: avisar si termina el soporte. Los clientes lo ven en su Monitoreo (web y APK).</div>
+              <Field label="Tipo">
+                <select style={inp} value={formAviso.tipo} onChange={(e) => setFormAviso({ ...formAviso, tipo: e.target.value })}>
+                  <option value="actualizacion">Actualización de seguridad</option>
+                  <option value="informacion">Información</option>
+                  <option value="fin_soporte">Fin de soporte</option>
+                </select>
+              </Field>
+              <Field label="Título"><input style={inp} value={formAviso.titulo} onChange={(e) => setFormAviso({ ...formAviso, titulo: e.target.value })} placeholder="Ej.: Actualización de seguridad V6.6" /></Field>
+              <Field label="Detalle"><textarea rows={3} style={{ ...inp, resize: "vertical", fontFamily: "inherit" }} value={formAviso.detalle} onChange={(e) => setFormAviso({ ...formAviso, detalle: e.target.value })} /></Field>
+              <Field label="Versión"><input style={inp} value={formAviso.version} onChange={(e) => setFormAviso({ ...formAviso, version: e.target.value })} placeholder="6.6" /></Field>
+              <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={formAviso.todos} onChange={(e) => setFormAviso({ ...formAviso, todos: e.target.checked })} /> Todos los sitios</label>
+              {!formAviso.todos && (
+                <div style={{ border: `1px solid ${T.line}`, borderRadius: 8, padding: 6, maxHeight: 140, overflowY: "auto" }}>
+                  {sitios.map((s) => (
+                    <label key={s} style={{ display: "flex", gap: 6, fontSize: 12.5, padding: "2px 0" }}>
+                      <input type="checkbox" checked={formAviso.sitios.includes(s)} onChange={(e) => setFormAviso((f) => ({ ...f, sitios: e.target.checked ? [...f.sitios, s] : f.sitios.filter((x) => x !== s) }))} /> {s}
+                    </label>
+                  ))}
+                </div>
+              )}
+              <Btn variant="accent" onClick={publicarAviso} style={{ justifyContent: "center" }}><Send size={14} /> Publicar aviso</Btn>
+            </div>
+            <div style={{ maxHeight: 460, overflowY: "auto" }}>
+              {avisos.map((a) => (
+                <div key={a.id} style={{ border: `1px solid ${T.line}`, borderLeft: `4px solid ${a.tipo === "fin_soporte" ? T.red : a.tipo === "actualizacion" ? T.amber : T.blue}`, borderRadius: 8, padding: "8px 10px", marginBottom: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><b style={{ fontSize: 13 }}>{a.titulo}</b><span style={{ fontSize: 12, color: T.inkSoft }}>{ciberFecha(a.creado_en)}</span></div>
+                  {a.detalle && <div style={{ fontSize: 12.5, marginTop: 3 }}>{a.detalle}</div>}
+                  <div style={{ fontSize: 11, color: T.gray, marginTop: 2 }}>{a.version ? `Versión ${a.version} · ` : ""}{a.sitios ? a.sitios.join(", ") : "Todos los sitios"}{a.autor ? ` · ${a.autor}` : ""}</div>
+                </div>
+              ))}
+              {!avisos.length && <div style={{ fontSize: 12.5, color: T.gray }}>Todavía no hay avisos.</div>}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Avisos de ciberseguridad para el cliente (y el personal) arriba del Monitoreo.
+function AvisosCiberMonitoreo() {
+  const [lista, setLista] = useState([]);
+  const [ocultos, setOcultos] = useState(() => { try { return JSON.parse(localStorage.getItem("avisos-ciber-ocultos") || "[]"); } catch { return []; } });
+  useEffect(() => {
+    let vivo = true;
+    supabase.rpc("avisos_ciber_mios").then(({ data, error }) => { if (vivo && !error) setLista((data || []).filter((a) => ciberDias(a.creado_en) <= 180)); });
+    return () => { vivo = false; };
+  }, []);
+  const visibles = lista.filter((a) => !ocultos.includes(a.id)).slice(0, 3);
+  if (!visibles.length) return null;
+  const ocultar = (id) => { const n = [...ocultos, id]; setOcultos(n); try { localStorage.setItem("avisos-ciber-ocultos", JSON.stringify(n)); } catch (e) { /* nada */ } };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {visibles.map((a) => (
+        <div key={a.id} style={{ background: IGNIS.panel, border: `1px solid ${a.tipo === "fin_soporte" ? IGNIS.alarma : IGNIS.problema}`, borderRadius: 10, padding: "10px 12px", display: "flex", gap: 10, alignItems: "flex-start" }}>
+          <ShieldCheck size={18} color={a.tipo === "fin_soporte" ? IGNIS.alarma : IGNIS.problema} style={{ flexShrink: 0, marginTop: 1 }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 800 }}>{a.titulo}</div>
+            {a.detalle && <div style={{ fontSize: 12.5, color: IGNIS.dim, marginTop: 2 }}>{a.detalle}</div>}
+            <div style={{ fontSize: 11, color: IGNIS.dim2, marginTop: 3 }}>Aviso de ciberseguridad · {ciberFecha(a.creado_en)}{a.version ? ` · versión ${a.version}` : ""}</div>
+          </div>
+          <button type="button" onClick={() => ocultar(a.id)} title="Ocultar" style={{ border: "none", background: "transparent", color: IGNIS.dim, cursor: "pointer" }}><X size={15} /></button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ---- Firma digital del firmware (ECDSA P-256 + SHA-256) ----
 // El IgnisMonitor 6.4 solo instala un .bin si viene con su archivo .sig
 // firmado con la llave privada del administrador. La llave privada vive en
@@ -13470,6 +13752,15 @@ function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
   const nuevaLlave = async () => {
     try { setPemNuevo(await crearLlaveFirma()); }
     catch (e) { setAviso("Este navegador no pudo crear la llave: " + (e.message || e)); }
+  };
+  const soloFirmar = async () => {
+    if (!archivo || !firma?.llave) { setAviso("Elija el .bin y cargue la llave de firma."); return; }
+    try {
+      const sig = await firmarFirmware(firma.llave, await archivo.arrayBuffer());
+      const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([sig], { type: "application/octet-stream" })); a.download = archivo.name + ".sig";
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      setAviso(""); 
+    } catch (e) { setAviso("No se pudo firmar: " + (e.message || e)); }
   };
   const elegir = async (f) => {
     setAviso(""); setArchivo(null);
@@ -13550,6 +13841,7 @@ function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
             {aviso && <div style={{ marginTop: 10, fontSize: 13, color: T.red, fontWeight: 600 }}>{aviso}</div>}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
               <Btn variant="ghost" onClick={onCerrar}>Cancelar</Btn>
+              <Btn variant="ghost" onClick={soloFirmar} disabled={!archivo || !firma}>Solo firmar (.sig para instalar en el sitio)</Btn>
               <Btn variant="accent" onClick={enviar} disabled={!archivo || !elegidos.size || enviando || !firma}>{enviando ? "Firmando y subiendo..." : `Firmar, subir e instalar en ${elegidos.size} equipo(s)`}</Btn>
             </div>
           </>
@@ -14116,6 +14408,21 @@ function CampanaMensajes({ user, abajo, angosta }) {
   );
 }
 
+// Lista TODAS las partes de historial/mantenimiento (Supabase entrega de a
+// 1000 nombres por consulta). Desde el firmware 6.5 el historial no tiene
+// tope: el equipo rota su memoria y aquí se juntan todas las partes.
+async function listarHistorialPaneles(opciones) {
+  const todos = [];
+  for (let offset = 0; offset < 200000; offset += 1000) {
+    const { data, error } = await supabase.storage.from("historial_paneles").list("", { ...opciones, limit: 1000, offset });
+    if (error) return { data: todos.length ? todos : null, error: todos.length ? null : error };
+    if (!data || !data.length) break;
+    todos.push(...data);
+    if (data.length < 1000) break;
+  }
+  return { data: todos, error: null };
+}
+
 function MonitoreoNotifier() {
   const currentUser = useContext(CurrentUserContext);
   const confirmar = useContext(ConfirmContext);
@@ -14234,6 +14541,7 @@ function MonitoreoNotifier() {
   };
   const [generandoReporte, setGenerandoReporte] = useState(false);
   const [verActualizarFw, setVerActualizarFw] = useState(false);
+  const [verCiber, setVerCiber] = useState(false);
   const [firmasPara, setFirmasPara] = useState(null); // "reporte" | "tendencias": abre la ventana de firmas
   const [armarInformeTend, setArmarInformeTend] = useState(false); // ventana para elegir qué sale en el informe de tendencias
   const cfgInformeTend = React.useRef(TEND_INFORME_DEF);
@@ -14447,9 +14755,9 @@ function MonitoreoNotifier() {
       if (enCurso) return;
       enCurso = true;
       try {
-        const opciones = { limit: 1000, sortBy: { column: "name", order: "asc" } };
+        const opciones = { sortBy: { column: "name", order: "asc" } };
         if (lista.length === 1) opciones.search = nombreArchivoSitioPanel(lista[0]);
-        const { data, error } = await supabase.storage.from("historial_paneles").list("", opciones);
+        const { data, error } = await listarHistorialPaneles(opciones);
         if (cancelado) return;
         if (error || !data) { setCargandoHistorial(false); return; }
         const marca = (o) => `${o.updated_at || o.created_at || ""}|${o.metadata?.size ?? ""}`;
@@ -14558,8 +14866,7 @@ function MonitoreoNotifier() {
   const archivosDelSitio = async (sitio) => {
     const base = nombreArchivoSitioPanel(sitio);
     const viejosH = [`${base}.txt`], viejosM = [`${base}_mant.txt`];
-    const { data, error } = await supabase.storage.from("historial_paneles")
-      .list("", { limit: 1000, search: base, sortBy: { column: "name", order: "asc" } });
+    const { data, error } = await listarHistorialPaneles({ search: base, sortBy: { column: "name", order: "asc" } });
     if (error || !data) return { hist: viejosH, mant: viejosM, todos: [...viejosH, ...viejosM] };
     const nombres = data.map((o) => o.name);
     const hist = [...nombres.filter((n) => n === `${base}.txt`), ...nombres.filter((n) => n.startsWith(`${base}__h_`)).sort()];
@@ -14855,6 +15162,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
   return (
     <div style={{ background: IGNIS.bg, minHeight: "100vh", padding: 18, paddingTop: esMovilNotifier ? 58 : 18, paddingBottom: esMovilNotifier ? 100 : 30, display: "flex", flexDirection: "column", gap: 14, color: IGNIS.text, boxSizing: "border-box" }}>
       {/* ---- Encabezado estilo IgnisMonitor ---- */}
+      <AvisosCiberMonitoreo />
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, borderBottom: `1px solid ${IGNIS.border}`, paddingBottom: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ width: 30, height: 30, borderRadius: 8, background: IGNIS.panel2, border: `1px solid ${IGNIS.border}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -15043,6 +15351,12 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             <button type="button" onClick={() => setVerActualizarFw(true)} title="Instalar un firmware nuevo en los IgnisMonitor por internet, sin cable"
               style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 7, fontSize: 11.5, fontWeight: 700, cursor: "pointer", background: IGNIS.panel2, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, textTransform: "none", letterSpacing: 0 }}>
               <Download size={12} style={{ transform: "rotate(180deg)" }} /> Actualizar firmware
+            </button>
+          )}
+          {esAdminMonitoreo && dispositivosFiltrados.length > 0 && (
+            <button type="button" onClick={() => setVerCiber(true)} title="Cumplimiento de ciberseguridad NFPA 72 (2025), capítulo 11"
+              style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 7, fontSize: 11.5, fontWeight: 700, cursor: "pointer", background: IGNIS.panel2, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, textTransform: "none", letterSpacing: 0 }}>
+              <ShieldCheck size={12} /> Ciberseguridad
             </button>
           )}
         </div>
@@ -15276,6 +15590,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
       {verActualizarFw && (
         <ModalActualizarFirmware dispositivos={dispositivos} sitioInicial={sitioSeleccionado} onCerrar={() => setVerActualizarFw(false)} />
       )}
+      {verCiber && <ModalCiberseguridad dispositivos={dispositivos} onCerrar={() => setVerCiber(false)} />}
       {armarInformeTend && (
         <ModalInformeTendencias
           sitio={sitioSeleccionado}

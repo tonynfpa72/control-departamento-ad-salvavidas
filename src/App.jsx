@@ -14240,16 +14240,17 @@ function CampanaMensajes({ user, abajo, angosta }) {
     if (vista === "nuevo" && !personas.length) supabase.rpc("destinatarios_mensajes", { p_usuario: user.id }).then(({ data, error: e }) => { if (e) setError(e.message); else setPersonas((data || []).filter((p) => p.id !== user.id)); });
   }, [abierto, vista]);
 
+  const confirmarCampana = useContext(ConfirmContext);
   const marcar = async (m, accion) => {
+    if (accion === "eliminar" && confirmarCampana && !(await confirmarCampana("¿Eliminar este mensaje? Se borra definitivamente."))) return;
     await supabase.rpc("mensaje_marcar", { p_usuario: user.id, p_id: m?.id || null, p_accion: accion });
     const ahora = new Date().toISOString();
     setRecibidos((l) => (l || []).flatMap((x) => {
       if (accion === "todos_leidos") return [{ ...x, leido_en: x.leido_en || ahora }];
       if (x.id !== m.id) return [x];
-      if (accion === "ocultar") return [];
+      // Realizado o eliminado: el mensaje se borra de Supabase y sale de la lista
+      if (accion === "realizado" || accion === "eliminar") return [];
       if (accion === "leido") return [{ ...x, leido_en: x.leido_en || ahora }];
-      if (accion === "atendido") return [{ ...x, atendido_en: ahora, leido_en: x.leido_en || ahora }];
-      if (accion === "reabrir") return [{ ...x, atendido_en: null }];
       return [x];
     }));
     contar();
@@ -14315,7 +14316,7 @@ function CampanaMensajes({ user, abajo, angosta }) {
             {vista === "recibidos" && (<>
               <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
                 {["Todos", "Sin atender", ...MSG_TIPOS.map((t) => t.id)].map((f) => (
-                  <button key={f} type="button" onClick={() => setFiltro(f)} style={{ ...chip(filtro === f), fontSize: 11, padding: "3px 8px" }}>{f === "Informacion" ? "Información" : f}</button>
+                  <button key={f} type="button" onClick={() => setFiltro(f)} style={{ ...chip(filtro === f), fontSize: 11, padding: "3px 8px" }}>{f === "Informacion" ? "Información" : f === "Sin atender" ? "Pendientes" : f}</button>
                 ))}
                 {sinLeer > 0 && <button type="button" onClick={() => marcar(null, "todos_leidos")} style={{ marginLeft: "auto", border: "none", background: "none", color: T.blue, fontSize: 11.5, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 3 }}><CheckCheck size={13} /> Marcar todo leído</button>}
               </div>
@@ -14336,11 +14337,8 @@ function CampanaMensajes({ user, abajo, angosta }) {
                     </div>
                     <div style={{ fontSize: 13.2, color: T.ink, marginTop: 4, whiteSpace: "pre-wrap", wordBreak: "break-word", textDecoration: m.atendido_en ? "line-through" : "none" }}>{m.texto}</div>
                     <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
-                      {m.atendido_en
-                        ? <><span style={{ fontSize: 11.5, color: T.green, fontWeight: 700 }}>✓ Atendido {msgHace(m.atendido_en)}</span>
-                            <button type="button" onClick={(e) => { e.stopPropagation(); marcar(m, "reabrir"); }} style={{ border: "none", background: "none", color: T.inkSoft, fontSize: 11.5, cursor: "pointer", display: "flex", alignItems: "center", gap: 3 }}><RotateCcw size={12} /> Reabrir</button></>
-                        : m.tipo !== "Informacion" && <button type="button" onClick={(e) => { e.stopPropagation(); marcar(m, "atendido"); }} style={{ border: `1px solid ${T.green}`, background: "#fff", color: T.green, borderRadius: 7, fontSize: 11.5, fontWeight: 700, padding: "3px 8px", cursor: "pointer" }}>✓ Marcar atendido</button>}
-                      <button type="button" onClick={(e) => { e.stopPropagation(); marcar(m, "ocultar"); }} title="Quitar de mi lista" style={{ marginLeft: "auto", border: "none", background: "none", color: T.inkSoft, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, fontSize: 11.5 }}><EyeOff size={12} /> Quitar</button>
+                      <button type="button" onClick={(e) => { e.stopPropagation(); marcar(m, "realizado"); }} title={m.tipo === "Informacion" ? "Enterado: se borra el mensaje" : "Realizado: se borra el mensaje y se le avisa a quien lo envió"} style={{ border: `1px solid ${T.green}`, background: "#fff", color: T.green, borderRadius: 7, fontSize: 11.5, fontWeight: 700, padding: "3px 8px", cursor: "pointer" }}>✓ {m.tipo === "Informacion" ? "Enterado" : "Realizado"}</button>
+                      <button type="button" onClick={(e) => { e.stopPropagation(); marcar(m, "eliminar"); }} title="Eliminar mensaje" style={{ marginLeft: "auto", border: "none", background: "none", color: T.inkSoft, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, fontSize: 11.5 }}><Trash2 size={12} /> Eliminar</button>
                     </div>
                   </div>
                 );
@@ -14370,7 +14368,7 @@ function CampanaMensajes({ user, abajo, angosta }) {
                   </div>
                 );
               })}
-              {enviados && enviados.length > 0 && <div style={{ fontSize: 11, color: T.inkSoft, textAlign: "center" }}>• sin leer · ✓ leído · ✓✓ atendido</div>}
+              {enviados && enviados.length > 0 && <div style={{ fontSize: 11, color: T.inkSoft, textAlign: "center" }}>• sin leer · ✓ leído · al marcarlo realizado desaparece y le llega un aviso</div>}
             </>)}
 
             {vista === "nuevo" && (

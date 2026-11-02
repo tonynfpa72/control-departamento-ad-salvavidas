@@ -2826,10 +2826,12 @@ function HomologarTecnicosOD({ area, rowsTodas, setRows, empleados }) {
 function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
+  // El asistente tiene todas las funciones de Inspecciones y Proyectos
+  const puedeTodoOD = isAdmin || currentUser?.categoria === "asistente";
   const canEditFechas = isAdmin || currentUser?.categoria === "asistente";
   // La fecha de vencimiento (Inspecciones) y la fecha de entrega (Proyectos)
-  // solo puede modificarlas un usuario Administrativo.
-  const canEditFechaControl = isAdmin;
+  // solo pueden modificarlas el administrador y el asistente.
+  const canEditFechaControl = puedeTodoOD;
   const canEditEstado = isAdmin || currentUser?.categoria === "asistente";
   const canMoverTipo = isAdmin || currentUser?.categoria === "asistente";
   const canEditProgreso = isAdmin || currentUser?.categoria === "asistente" || currentUser?.categoria === "tecnico";
@@ -3206,7 +3208,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
               Acción: accion,
               ...(!esCorrectivo && isInspecciones ? { Notas: notas } : {}),
             })), `${esCorrectivo ? "od_correctivos" : "od"}_${area}.xlsx`)}><Download size={13} /> Excel</Btn>
-            {isAdmin && <Btn small variant="danger" onClick={eliminarTodos}><X size={13} /> Eliminar todo</Btn>}
+            {puedeTodoOD && <Btn small variant="danger" onClick={eliminarTodos}><X size={13} /> Eliminar todo</Btn>}
           </div>
         }>
           {esCorrectivo && (
@@ -3347,7 +3349,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                   )}
                   {!esCorrectivo && isInspecciones && (
                     <td>
-                      {isAdmin ? (
+                      {puedeTodoOD ? (
                         <select style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }} value={r.frecuencia || ""} onChange={(e) => setFrecuencia(r.id, e.target.value)}>
                           <option value="">—</option>
                           {FRECUENCIA_OPCIONES.map((f) => <option key={f} value={f}>{f}</option>)}
@@ -3399,7 +3401,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                   )}
                   {!(!esCorrectivo && isInspecciones) && (
                   <td>
-                    {isAdmin ? (
+                    {puedeTodoOD ? (
                       <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }} placeholder="Acción tomada..." value={r.accion} onChange={(e) => setAccion(r.id, e.target.value)} />
                     ) : <span style={{ color: T.gray, fontSize: 12 }}>{r.accion || "—"}</span>}
                   </td>
@@ -3443,7 +3445,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                         {esCorrectivo ? `← ${isProyectos ? "Proyectos" : "IPM"}` : (isInspecciones ? "↗" : "→ Correctivo")}
                       </Btn>
                     )}
-                    {isAdmin && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}
+                    {puedeTodoOD && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}
                     {canEditEstado && (
                       <Btn small variant={editandoId === r.id ? "accent" : "ghost"} onClick={() => setEditandoId(editandoId === r.id ? null : r.id)}>
                         {editandoId === r.id ? "Listo" : "Editar"}

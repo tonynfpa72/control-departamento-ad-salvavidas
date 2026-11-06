@@ -13734,6 +13734,29 @@ async function firmarFirmware(llave, buffer) {
   return firmaRawADer(raw);
 }
 
+// Barra de progreso de la actualización sin cable. Los equipos 6.7+ informan
+// "descargando 40%"; los anteriores solo "descargando", y ahí la barra se mueve
+// sin porcentaje. Etapas: orden enviada → descarga → firma → instalado → en línea.
+if (typeof document !== "undefined" && !document.getElementById("ignis-barra-css")) {
+  const st = document.createElement("style"); st.id = "ignis-barra-css";
+  st.textContent = "@keyframes ignisBarra{0%{left:-30%}100%{left:100%}}";
+  document.head.appendChild(st);
+}
+function avanceFirmware(res, d) {
+  const verde = "#2e9e5b", ambar = "#e0a020", rojo = "#d64545";
+  if (/^error/i.test(res)) return { pct: 100, color: rojo, etiqueta: "Falló" };
+  const vNueva = (res.match(/\(V([\d.]+)\)/) || [])[1];
+  if (/instalado/i.test(res)) {
+    if (vNueva && d.version === vNueva) return { pct: 100, color: verde, etiqueta: "100 % · listo", listo: true };
+    return { pct: 92, color: verde, etiqueta: "Reiniciando…" };
+  }
+  if (/verificando/i.test(res)) return { pct: 87, color: ambar, etiqueta: "Verificando firma" };
+  const m = res.match(/descargando\s+(\d{1,3})\s*%/i);
+  if (m) { const n = Math.min(100, Number(m[1])); return { pct: Math.round(8 + n * 0.77), color: ambar, etiqueta: `Descarga ${n} %` }; }
+  if (/descargando/i.test(res)) return { indeterminado: true, color: ambar, etiqueta: "Descargando…" };
+  return { pct: 4, color: ambar, etiqueta: "En espera" };
+}
+
 // ---- Actualizar el firmware de los IgnisMonitor por internet (sin cable) ----
 // El admin sube el .bin a Supabase Storage (carpeta firmware_ignis) y deja la
 // orden "actualizar" a los equipos elegidos; cada equipo la lee en ~30 s,
@@ -13856,15 +13879,24 @@ function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
                 const d = dispositivos.find((x) => x.sitio === sitio) || {};
                 const res = d.comando_resultado || "";
                 const color = /^error/i.test(res) ? T.red : /instalado/i.test(res) ? T.green : T.amber;
+                const av = avanceFirmware(res, d);
                 return (
                   <div key={sitio} style={{ border: `1px solid ${T.line}`, borderLeft: `4px solid ${color}`, borderRadius: 8, padding: "8px 10px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><b style={{ fontSize: 13.5 }}>{sitio}</b><span style={{ fontSize: 12, color: T.inkSoft }}>{d.version ? `versión V${d.version}` : ""}</span></div>
-                    <div style={{ fontSize: 12.5, color, fontWeight: 600, marginTop: 2 }}>{res || (d.comando ? "esperando que el equipo lea la orden" : "—")}</div>
+                    <div style={{ fontSize: 12.5, color, fontWeight: 600, marginTop: 2 }}>{av.listo ? `Listo: el equipo ya trabaja con la V${d.version}` : (res || (d.comando ? "esperando que el equipo lea la orden" : "—"))}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+                      <div style={{ flex: 1, height: 10, borderRadius: 6, background: T.line, overflow: "hidden", position: "relative" }}>
+                        {av.indeterminado
+                          ? <div style={{ position: "absolute", top: 0, bottom: 0, width: "30%", borderRadius: 6, background: av.color, animation: "ignisBarra 1.4s ease-in-out infinite" }} />
+                          : <div style={{ width: `${av.pct}%`, height: "100%", borderRadius: 6, background: av.color, transition: "width .8s ease" }} />}
+                      </div>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: av.color, minWidth: 92, textAlign: "right" }}>{av.etiqueta}</span>
+                    </div>
                   </div>
                 );
               })}
             </div>
-            <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 10 }}>Cuando diga "instalado, reiniciando", en 1–2 minutos el equipo vuelve en línea con la versión nueva.</div>
+            <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 10 }}>La barra avanza sola: en espera → descarga → verificación de la firma → reinicio → listo. Los equipos 6.7 o más nuevos muestran el porcentaje exacto de la descarga.</div>
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}><Btn variant="accent" onClick={onCerrar}>Cerrar</Btn></div>
           </>
         )}

@@ -15875,7 +15875,10 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                   const color = CATEGORIA_PANEL_COLOR_DARK[catVer] || IGNIS.dim;
                   return (
                     <div key={e.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "7px 8px", borderBottom: `1px solid ${IGNIS.paperLine}`, borderRadius: 6, background: catVer === "alarma" ? "rgba(229,72,77,.07)" : catVer === "problema" ? "rgba(242,183,5,.07)" : catVer === "supervision" ? "rgba(255,140,61,.07)" : "transparent" }}>
-                      <Icono size={16} color={color} style={{ flex: "none", marginTop: 1 }} />
+                      <button type="button" onClick={() => setInfoEvento({ e, cat: catVer })} title="Ver causa y solución"
+                        style={{ flex: "none", marginTop: -3, background: "transparent", border: `1px solid ${color}55`, borderRadius: 7, padding: 3, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <Icono size={16} color={color} />
+                      </button>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.45 }}>{e.texto || "—"}</div>
                         <div style={{ fontSize: 10, color: "#8f8870", marginTop: 2, textTransform: "uppercase", letterSpacing: 0.4, fontFamily: "system-ui,-apple-system,sans-serif" }}>

@@ -15616,6 +15616,20 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               <Settings size={13} /> Monitor serial
             </Btn>
           )}
+          {canGestionar && sitioSeleccionado !== "Todos" && (() => {
+            const d = dispositivos.find((x) => x.sitio === sitioSeleccionado);
+            const ip = d && d.ip && d.ip !== "0.0.0.0" ? d.ip : "";
+            return (
+              <Btn small variant="ghost" disabled={!ip}
+                onClick={() => {
+                  if (!window.confirm(`Se abre la página de configuración del IgnisMonitor (http://${ip}/config).\n\nSolo funciona si este teléfono o PC está conectado a la misma red que el equipo (${d.ssid || "la red del sitio"}). Pide la clave de administración del equipo (usuario admin).`)) return;
+                  window.open(`http://${ip}/config`, "_blank", "noopener");
+                }}
+                title={ip ? `Abrir http://${ip}/config (misma red del equipo)` : "El equipo todavía no ha informado su IP"}>
+                <Wifi size={13} /> Config. del equipo
+              </Btn>
+            );
+          })()}
           {canGestionar && sitioSeleccionado !== "Todos" && (
             <Btn small variant="danger" onClick={borrarEventosDelSitio} disabled={borrando} title="Borra eventos, historial y mantenimiento en el app, Supabase y el equipo IgnisMonitor">
               <Trash2 size={13} /> {borrando ? "Borrando..." : "Borrar monitoreo"}

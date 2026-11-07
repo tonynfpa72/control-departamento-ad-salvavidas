@@ -14768,6 +14768,17 @@ function MonitoreoNotifier() {
   const [infoEvento, setInfoEvento] = useState(null);      // guía "Qué significa / Qué hacer"
   const [diagPedido, setDiagPedido] = useState(null);      // { sitio, desde } diagnóstico remoto
   const [diagFila, setDiagFila] = useState(null);
+  // 7.2: monitor serial y configuración del puerto desde la app
+  const [termRemoto, setTermRemoto] = useState(null);      // { sitio, desde, error }
+  const [termFila, setTermFila] = useState(null);
+  const [termTexto, setTermTexto] = useState("");
+  const [termFin, setTermFin] = useState("cr");
+  const [termPin, setTermPin] = useState("");
+  const [termEnviando, setTermEnviando] = useState("");
+  const [cfgAbierta, setCfgAbierta] = useState(false);
+  const [cfgForm, setCfgForm] = useState(null);
+  const [cfgMsg, setCfgMsg] = useState("");
+  const termPreRef = useRef(null);
   const [cargando, setCargando] = useState(true);
   const [sitioSeleccionado, setSitioSeleccionado] = useEstadoRecordado("monitoreo-sitio", () => (esCliente && sitioCliente ? sitioCliente : "Todos"));
   useEffect(() => {
@@ -15241,6 +15252,78 @@ function MonitoreoNotifier() {
     return () => { vivo = false; clearInterval(id); };
   }, [diagPedido]);
 
+  // ---- 7.2: Monitor serial remoto + configuración del puerto ----
+  const leerConfigPanel = (txt) => {
+    const o = {};
+    String(txt || "").split(";").forEach((p) => { const i = p.indexOf("="); if (i > 0) o[p.slice(0, i)] = p.slice(i + 1); });
+    return o;
+  };
+  const abrirMonitorRemoto = async (sitio) => {
+    const ahora = new Date().toISOString();
+    setTermFila(null); setCfgForm(null); setCfgMsg(""); setTermEnviando("");
+    setTermRemoto({ sitio, desde: Date.now(), error: "" });
+    const { error } = await supabase.from("dispositivos_panel")
+      .update({ comando: "terminal", comando_arg: "3", comando_en: ahora, terminal_ping: ahora, comando_resultado: "esperando que el equipo abra el monitor" })
+      .eq("sitio", sitio);
+    if (error) setTermRemoto({ sitio, desde: Date.now(), error: /terminal_/i.test(error.message || "") ? "Falta correr en Supabase el SQL_monitor_remoto.sql." : error.message });
+  };
+  const cerrarMonitorRemoto = async () => {
+    const t = termRemoto; setTermRemoto(null); setCfgAbierta(false);
+    if (t && !t.error) await supabase.from("dispositivos_panel").update({ terminal_tx: "CERRAR", terminal_ping: null }).eq("sitio", t.sitio);
+  };
+  useEffect(() => {
+    if (!termRemoto || termRemoto.error) return;
+    let vivo = true;
+    const leer = async () => {
+      const { data } = await supabase.from("dispositivos_panel").select("*").eq("sitio", termRemoto.sitio).maybeSingle();
+      if (vivo && data) setTermFila(data);
+    };
+    leer();
+    const id = setInterval(leer, 2000);
+    const ping = setInterval(() => {
+      supabase.from("dispositivos_panel").update({ terminal_ping: new Date().toISOString() }).eq("sitio", termRemoto.sitio);
+    }, 60000);
+    return () => { vivo = false; clearInterval(id); clearInterval(ping); };
+  }, [termRemoto]);
+  useEffect(() => { if (termPreRef.current) termPreRef.current.scrollTop = termPreRef.current.scrollHeight; }, [termFila && termFila.terminal_txt]);
+  useEffect(() => {
+    if (termFila && !cfgForm && termFila.config_panel) {
+      const c = leerConfigPanel(termFila.config_panel);
+      setCfgForm({ tipo: c.tipo || "0", baud: c.baud || "9600", fmt: c.fmt || "7E1", proto: c.proto || "0", dhcp: c.dhcp || "0",
+        ethip: c.ethip || "", ethmask: c.ethmask || "255.255.255.0", ethgw: c.ethgw || "", ethdns: c.ethdns || "",
+        panelip: c.panelip || "", port: c.port || "23", lport: c.lport || "23" });
+    }
+  }, [termFila, cfgForm]);
+  const enviarAlPanel = async (bytes, etiqueta) => {
+    if (!termRemoto) return;
+    const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+    if (!hex) return;
+    setTermEnviando("Enviando " + etiqueta + "…");
+    const { data } = await supabase.from("dispositivos_panel").select("terminal_tx").eq("sitio", termRemoto.sitio).maybeSingle();
+    const previo = data && data.terminal_tx && data.terminal_tx !== "CERRAR" ? String(data.terminal_tx).split("|").pop() : "";
+    const { error } = await supabase.from("dispositivos_panel").update({ terminal_tx: termPin + "|" + (previo + hex).slice(-1024) }).eq("sitio", termRemoto.sitio);
+    setTermEnviando(error ? "No se pudo enviar: " + error.message : etiqueta + " en cola (el equipo lo manda en ~3 s)");
+  };
+  const enviarTextoTerminal = () => {
+    const fin = termFin === "cr" ? "\r" : termFin === "lf" ? "\n" : termFin === "crlf" ? "\r\n" : "";
+    enviarAlPanel(new TextEncoder().encode(termTexto + fin), "«" + termTexto + "»");
+    setTermTexto("");
+  };
+  const aplicarConfigPanel = async () => {
+    if (!termRemoto || !cfgForm) return;
+    const actual = leerConfigPanel(termFila && termFila.config_panel);
+    const ipOk = (v) => v === "" || /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(v);
+    for (const k of ["ethip", "ethmask", "ethgw", "ethdns", "panelip"]) if (!ipOk(String(cfgForm[k]).trim())) { setCfgMsg("Revise el campo " + k + ": no es una IP válida."); return; }
+    const partes = Object.keys(cfgForm).filter((k) => String(cfgForm[k]).trim() !== String(actual[k] ?? "")).map((k) => k + "=" + String(cfgForm[k]).trim());
+    if (!partes.length) { setCfgMsg("No hay cambios."); return; }
+    const reinicia = partes.some((p) => !/^(baud|fmt)=/.test(p));
+    if (reinicia && !window.confirm("Estos cambios reinician el IgnisMonitor (unos 20 s sin monitoreo). ¿Aplicar?\n\n" + partes.join("\n"))) return;
+    const { error } = await supabase.from("dispositivos_panel")
+      .update({ comando: "config", comando_arg: partes.join(";"), comando_en: new Date().toISOString(), comando_resultado: "esperando que el equipo lea la configuracion" })
+      .eq("sitio", termRemoto.sitio);
+    setCfgMsg(error ? "No se pudo enviar: " + error.message : "Enviado: " + partes.join(", ") + (reinicia ? ". El equipo se va a reiniciar; vuelva a abrir el monitor en ~1 min." : ""));
+  };
+
   const borrarEventosDelSitio = async () => {
     if (sitioSeleccionado === "Todos") return;
     const sitio = sitioSeleccionado;
@@ -15526,6 +15609,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           {canGestionar && sitioSeleccionado !== "Todos" && (
             <Btn small onClick={() => pedirDiagnostico(sitioSeleccionado)} title="Pide al equipo su diagnóstico (red, señal, memoria, reinicios, caídas de WiFi) sin ir al sitio">
               <Wrench size={13} /> Diagnóstico
+            </Btn>
+          )}
+          {canGestionar && sitioSeleccionado !== "Todos" && (
+            <Btn small onClick={() => abrirMonitorRemoto(sitioSeleccionado)} title="Monitor serial del IgnisMonitor y configuración del puerto (Notifier/Simplex, RS232/Ethernet) desde la app">
+              <Settings size={13} /> Monitor serial
             </Btn>
           )}
           {canGestionar && sitioSeleccionado !== "Todos" && (
@@ -15995,6 +16083,81 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 <Btn small onClick={() => pedirDiagnostico(diagPedido.sitio)}>Pedir de nuevo</Btn>
                 <Btn small onClick={() => setDiagPedido(null)}>Cerrar</Btn>
               </div>
+            </div>
+          </div>
+        );
+      })()}
+      {termRemoto && (() => {
+        const f = termFila || {};
+        const abierto = f.comando_resultado === "monitor serial abierto" || (f.terminal_txt && !f.comando);
+        const c = leerConfigPanel(f.config_panel);
+        const viejo = f.version && /^([0-6]\.|7\.[01]$)/.test(String(f.version));
+        const set = (k) => (e) => setCfgForm({ ...cfgForm, [k]: e.target.value });
+        const inp = { background: IGNIS.bg, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 6, padding: "6px 8px", fontSize: 12.5, width: "100%", boxSizing: "border-box", fontFamily: "inherit" };
+        const lab = { fontSize: 11, color: IGNIS.dim, marginBottom: 3, display: "block" };
+        const campo = (k, titulo, extra) => (<div><span style={lab}>{titulo}</span><input style={inp} value={cfgForm ? cfgForm[k] : ""} onChange={set(k)} {...(extra || {})} /></div>);
+        const tecla = (txt, bytes) => (<Btn small onClick={() => enviarAlPanel(bytes, txt)}>{txt}</Btn>);
+        const red = cfgForm && cfgForm.tipo === "2";
+        return (
+          <div onClick={cerrarMonitorRemoto} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
+            <div onClick={(x) => x.stopPropagation()} style={{ background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 12, width: "100%", maxWidth: 820, maxHeight: "94vh", display: "flex", flexDirection: "column", padding: "14px 16px", fontFamily: "system-ui,-apple-system,sans-serif", overflow: "auto" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                <Settings size={18} color={IGNIS.general} />
+                <div style={{ flex: 1, fontWeight: 800, fontSize: 16 }}>Monitor serial · {termRemoto.sitio}</div>
+                <button onClick={cerrarMonitorRemoto} style={{ background: "transparent", border: "none", color: IGNIS.dim, cursor: "pointer" }}><X size={18} /></button>
+              </div>
+              {termRemoto.error ? (
+                <div style={{ color: IGNIS.alarma, fontSize: 13 }}>No se pudo abrir: {termRemoto.error}</div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 12, color: IGNIS.dim, marginBottom: 8, lineHeight: 1.5 }}>
+                    {abierto ? <span style={{ color: IGNIS.ok || "#3fb950" }}>● Conectado</span> : <span>○ Esperando que el equipo abra el monitor (hasta 30 s)…</span>}
+                    {" · "}{f.comando_resultado || ""}
+                    {c.tipo !== undefined && <> · Panel: <b style={{ color: IGNIS.text }}>{c.tipo === "2" ? "Simplex Ethernet" : c.tipo === "1" ? "Simplex RS232" : "Notifier RS232"}</b> {c.tipo === "2" ? `(${c.ipactual || c.ethip} → ${c.panelip}:${c.port}, ${c.estado})` : `(${c.baud} ${c.fmt})`}</>}
+                    {viejo && <div style={{ color: IGNIS.problema, marginTop: 4 }}>Este equipo tiene la versión {f.version}: el monitor remoto necesita la 7.2. Actualícelo desde «Actualizar firmware».</div>}
+                  </div>
+                  <pre ref={termPreRef} style={{ height: 300, minHeight: 160, overflow: "auto", margin: 0, background: "#05080c", border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: 10, fontSize: 12, lineHeight: 1.45, color: "#7ee787", whiteSpace: "pre-wrap", wordBreak: "break-all", fontFamily: "ui-monospace,Consolas,monospace" }}>{f.terminal_txt || "(todavía no llega nada)"}</pre>
+                  <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <input style={{ ...inp, flex: 1, minWidth: 180, width: "auto" }} placeholder="Texto para mandar al panel" value={termTexto} onChange={(e) => setTermTexto(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") enviarTextoTerminal(); }} />
+                    <select style={{ ...inp, width: 110 }} value={termFin} onChange={(e) => setTermFin(e.target.value)}>
+                      <option value="cr">+ CR</option><option value="lf">+ LF</option><option value="crlf">+ CR LF</option><option value="">sin fin</option>
+                    </select>
+                    <Btn small onClick={enviarTextoTerminal}><Send size={13} /> Enviar</Btn>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
+                    {tecla("ENTER", [13])}{tecla("ESC", [27])}{tecla("↑", [27, 91, 65])}{tecla("↓", [27, 91, 66])}{tecla("←", [27, 91, 68])}{tecla("→", [27, 91, 67])}
+                    <input style={{ ...inp, width: 110 }} placeholder="PIN (si aplica)" value={termPin} onChange={(e) => setTermPin(e.target.value)} />
+                    <span style={{ fontSize: 11.5, color: IGNIS.dim }}>{termEnviando}</span>
+                  </div>
+                  <div style={{ marginTop: 10, borderTop: `1px solid ${IGNIS.border}`, paddingTop: 8 }}>
+                    <button onClick={() => setCfgAbierta(!cfgAbierta)} style={{ background: "transparent", border: "none", color: IGNIS.text, cursor: "pointer", fontWeight: 700, fontSize: 13.5, padding: 0 }}>{cfgAbierta ? "▾" : "▸"} Configuración del puerto / tipo de panel</button>
+                    {cfgAbierta && (!cfgForm ? (
+                      <div style={{ fontSize: 12, color: IGNIS.dim, marginTop: 6 }}>Esperando que el equipo informe su configuración (necesita la versión 7.2)…</div>
+                    ) : (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(170px,1fr))", gap: 8, marginTop: 8 }}>
+                        <div><span style={lab}>Tipo de panel</span><select style={inp} value={cfgForm.tipo} onChange={(e) => { const t = e.target.value; setCfgForm({ ...cfgForm, tipo: t, ...(t !== cfgForm.tipo ? (t === "0" ? { baud: "9600", fmt: "7E1" } : { baud: "115200", fmt: "8N1" }) : {}) }); }}>
+                          <option value="0">Notifier · RS232</option><option value="1">Simplex · RS232</option><option value="2">Simplex · Ethernet</option></select></div>
+                        <div><span style={lab}>Velocidad (DB9)</span><select style={inp} value={cfgForm.baud} onChange={set("baud")}>{["300", "1200", "2400", "4800", "9600", "19200", "38400", "57600", "115200"].map((b) => <option key={b} value={b}>{b}</option>)}</select></div>
+                        <div><span style={lab}>Formato (DB9)</span><select style={inp} value={cfgForm.fmt} onChange={set("fmt")}>{["7E1", "7O1", "7N2", "8N1", "8E1", "8O1", "8N2"].map((b) => <option key={b} value={b}>{b}</option>)}</select></div>
+                        {red && <>
+                          <div><span style={lab}>Protocolo</span><select style={inp} value={cfgForm.proto} onChange={set("proto")}>
+                            <option value="0">TCP cliente (Telnet)</option><option value="1">TCP cliente (crudo)</option><option value="2">TCP servidor</option><option value="3">UDP</option></select></div>
+                          <div><span style={lab}>IPv4 del IgnisMonitor</span><select style={inp} value={cfgForm.dhcp} onChange={set("dhcp")}><option value="0">Manual (IP fija)</option><option value="1">Automática (DHCP)</option></select></div>
+                          {cfgForm.dhcp !== "1" && <>{campo("ethip", "IP del IgnisMonitor")}{campo("ethmask", "Máscara de subred")}{campo("ethgw", "Puerta de enlace (opcional)")}{campo("ethdns", "DNS (opcional)")}</>}
+                          {campo("panelip", cfgForm.proto === "3" ? "IP del panel (vacío = responder al que mande)" : "IP del panel")}
+                          {campo("port", "Puerto del panel", { type: "number" })}
+                          {(cfgForm.proto === "2" || cfgForm.proto === "3") && campo("lport", "Puerto local (escucha)", { type: "number" })}
+                        </>}
+                        <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          <Btn small onClick={aplicarConfigPanel}>Aplicar</Btn>
+                          <Btn small variant="ghost" onClick={() => { setCfgForm(null); setCfgMsg(""); }}>Recargar del equipo</Btn>
+                          <span style={{ fontSize: 11.5, color: IGNIS.dim }}>{cfgMsg} Velocidad y formato se aplican en vivo; lo demás reinicia el equipo.</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         );

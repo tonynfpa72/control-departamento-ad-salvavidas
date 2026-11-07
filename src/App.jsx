@@ -10,10 +10,10 @@ import {
   ChevronLeft, ChevronRight, ChevronUp, ChevronDown, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck, Package, GraduationCap, Award,
   Star, Trophy, Zap, Target, Medal, Rocket, Crown, Sparkles, ShieldCheck, Gem, Repeat, Lock, Search,
   AlertTriangle, Settings, Shield, HelpCircle, Trash2, Wrench, Wifi, TrendingUp, Volume2, VolumeX, Menu,
-  Calculator, Pencil,
+  Calculator, Pencil, FolderLock, UploadCloud, Bell, BellRing, Send, Inbox, CheckCheck, EyeOff, RotateCcw,
 } from "lucide-react";
 import { createPortal } from "react-dom";
-import { supabase } from "./supabaseClient";
+import { supabase, setTokenSesion, getTokenSesion, onTokenSesion } from "./supabaseClient";
 
 
 /* ---------------------------------------------------------
@@ -174,6 +174,21 @@ function useEstadoRecordado(clave, inicial) {
 // solo acepta usuarios categoría "cliente" y guarda su sesión aparte.
 const MODO_CLIENTE = typeof window !== "undefined" && !!window.__MODO_CLIENTE__;
 const CLAVE_SESION = MODO_CLIENTE ? "sesion_cliente" : "sesion_usuario";
+// Si ya había una sesión guardada, su token se activa antes de la primera
+// consulta a Supabase (lo exigen las reglas de seguridad de la base).
+try {
+  const guardada = JSON.parse(localStorage.getItem(CLAVE_SESION) || "null");
+  if (guardada?.token) setTokenSesion(guardada.token);
+} catch (e) { /* nada */ }
+// Nombre corto del equipo para el registro de accesos (no identifica a la persona).
+function equipoDeAcceso() {
+  try {
+    const ua = navigator.userAgent || "";
+    const so = /Android/i.test(ua) ? "Android" : /iPhone|iPad/i.test(ua) ? "iOS" : /Windows/i.test(ua) ? "Windows" : /Mac OS/i.test(ua) ? "Mac" : /Linux/i.test(ua) ? "Linux" : "Otro";
+    const nav = /Edg\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : /Firefox\//.test(ua) ? "Firefox" : /Safari\//.test(ua) ? "Safari" : "";
+    return `${MODO_CLIENTE ? "APK" : "Web"} · ${so}${nav ? " · " + nav : ""}`;
+  } catch { return MODO_CLIENTE ? "APK" : "Web"; }
+}
 // Un cliente puede tener uno o varios sitios asignados; se guardan en
 // usuarios.area separados por "|" (ej. "Hotel Belén|Hotel Escazú").
 const SEP_SITIOS = "|";
@@ -650,6 +665,9 @@ const AREAS = [
   { id: "entrenamiento", label: "Entrenamiento", icon: GraduationCap, color: T.turquoise },
   { id: "admin", label: "Administrativo", icon: LayoutDashboard, color: T.steelSoft },
 ];
+
+// Área privada: solo aparece para el usuario marcado como gerente (usuarios.es_gerente)
+const AREA_DOCUMENTACION = { id: "documentacion", label: "Documentación", icon: FolderLock, color: T.steel };
 
 // Categorías de usuario disponibles para Gestión de Usuarios (solo Admin las crea)
 const CATEGORIAS_USUARIO = [
@@ -1730,7 +1748,14 @@ function reporte2SetCeldaXML(xml, addr, { texto, numero }) {
 async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSemana, lunes, empleadosPorCodigo) {
   const { default: JSZip } = await import("jszip");
   const zip = await JSZip.loadAsync(plantillaBuffer);
-  let xml = await zip.file(REPORTE2_HOJA).async("string");
+  const xml = reporte2LlenarHojaXML(await zip.file(REPORTE2_HOJA).async("string"), od, cliente, entradasSemana, lunes, empleadosPorCodigo);
+  zip.file(REPORTE2_HOJA, xml);
+  await reporte2ForzarRecalculo(zip);
+  return zip.generateAsync({ type: "arraybuffer" });
+}
+
+// Llena el XML de UNA hoja (una semana de un OD) a partir del XML de la plantilla.
+function reporte2LlenarHojaXML(xml, od, cliente, entradasSemana, lunes, empleadosPorCodigo) {
 
   xml = reporte2SetCeldaXML(xml, "E14", { texto: "" });
   xml = reporte2SetCeldaXML(xml, "E15", { numero: reporte2FechaASerial(new Date()) });
@@ -1747,7 +1772,8 @@ async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSem
   // que filas, se toman solo las primeras 8 (limitación conocida).
   entradasSemana.slice(0, REPORTE2_MAX_FILAS).forEach((s, idx) => {
     const filaActual = 26 + idx;
-    const emp = empleadosPorCodigo[s.personal_codigos?.[0]];
+    const cod = s.personal_codigos?.[0];
+    const emp = cod ? empleadosPorCodigo[cod] : null;
     xml = reporte2SetCeldaXML(xml, `C${filaActual}`, { texto: emp?.nombre || s.personal || "" });
     xml = reporte2SetCeldaXML(xml, `E${filaActual}`, { texto: emp?.puesto || "" });
     xml = reporte2SetCeldaXML(xml, `F${filaActual}`, { texto: s.hora_inicio || "" });
@@ -1761,9 +1787,10 @@ async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSem
 
   const personasUnicas = new Set(entradasSemana.map((s) => s.personal_codigos?.[0] || s.personal));
   xml = reporte2SetCeldaXML(xml, "E35", { numero: personasUnicas.size });
+  return xml;
+}
 
-  zip.file(REPORTE2_HOJA, xml);
-
+async function reporte2ForzarRecalculo(zip) {
   // Fuerza a Excel a recalcular TODAS las fórmulas al abrir el archivo
   // (por defecto, Excel confía en el valor guardado en caché de cada
   // fórmula, y como aquí solo cambiamos los valores de entrada por fuera
@@ -1778,7 +1805,84 @@ async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSem
     }
     zip.file(REPORTE2_WORKBOOK, wbXml);
   }
+}
 
+// Arma UN solo .xlsx con una pestaña por hoja (cada pestaña es una copia
+// completa de la plantilla: formato, logo, fórmulas y casillas de verificación).
+// hojas: [{ nombre, xml }] con el XML de la hoja ya llenado.
+async function reporte2CombinarHojas(plantillaBuffer, hojas) {
+  const { default: JSZip } = await import("jszip");
+  const zip = await JSZip.loadAsync(plantillaBuffer);
+  const leer = async (ruta) => (zip.file(ruta) ? zip.file(ruta).async("string") : "");
+  const relsHoja = await leer("xl/worksheets/_rels/sheet1.xml.rels");
+  const drawing = await leer("xl/drawings/drawing1.xml");
+  const drawingRels = await leer("xl/drawings/_rels/drawing1.xml.rels");
+  const vml = await leer("xl/drawings/vmlDrawing1.vml");
+  const ctrlRutas = Object.keys(zip.files).filter((f) => /^xl\/ctrlProps\/ctrlProp\d+\.xml$/.test(f)).sort((a, b) => Number(a.match(/(\d+)\.xml$/)[1]) - Number(b.match(/(\d+)\.xml$/)[1]));
+  const ctrlXml = await Promise.all(ctrlRutas.map((r) => zip.file(r).async("string")));
+  let tipos = await leer("[Content_Types].xml");
+  let wbXml = await leer(REPORTE2_WORKBOOK);
+  let wbRels = await leer("xl/_rels/workbook.xml.rels");
+  // La cadena de cálculo de la plantilla solo conoce la hoja 1: se quita y Excel la rehace.
+  zip.remove("xl/calcChain.xml");
+  tipos = tipos.replace(/<Override PartName="\/xl\/calcChain\.xml"[^>]*\/>/, "");
+  wbRels = wbRels.replace(/<Relationship [^>]*Target="calcChain\.xml"[^>]*\/>/, "");
+  // Nombres de pestaña válidos para Excel (máx. 31, sin : \ / ? * [ ] y sin repetir)
+  const usados = new Set();
+  const nombres = hojas.map((h) => {
+    let base = String(h.nombre || "Hoja").replace(/[:\\/?*\[\]]/g, "-").replace(/^'+|'+$/g, "").slice(0, 31) || "Hoja";
+    let nom = base, i = 2;
+    while (usados.has(nom.toLowerCase())) { const suf = ` (${i++})`; nom = base.slice(0, 31 - suf.length) + suf; }
+    usados.add(nom.toLowerCase());
+    return nom;
+  });
+  const esc = (t) => reporte2EscaparXML(t).replace(/"/g, "&quot;");
+  let hojasXml = "";
+  hojas.forEach((h, idx) => {
+    const k = idx + 1;
+    const desp = 1024 * idx; // las casillas de cada hoja necesitan ids de forma propios
+    let xml = h.xml.replace(/shapeId="(\d+)"/g, (m, n) => `shapeId="${Number(n) + desp}"`);
+    if (k > 1) {
+      xml = xml.replace(/\stabSelected="1"/, "");
+      // identificadores internos propios para cada copia (Excel no acepta repetidos)
+      const guid = () => "xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx".replace(/x/g, () => "0123456789ABCDEF"[Math.floor(Math.random() * 16)]);
+      xml = xml.replace(/xr:uid="\{[0-9A-Fa-f-]+\}"/g, () => `xr:uid="{${guid()}}"`);
+    }
+    zip.file(`xl/worksheets/sheet${k}.xml`, xml);
+    if (k > 1) {
+      // Copia de dibujo (logo + casillas), VML y propiedades de las casillas para esta hoja
+      let rels = relsHoja.replace(/drawings\/drawing1\.xml/, `drawings/drawing${k}.xml`).replace(/drawings\/vmlDrawing1\.vml/, `drawings/vmlDrawing${k}.vml`);
+      ctrlRutas.forEach((ruta, j) => {
+        const nuevo = idx * ctrlRutas.length + j + 1;
+        const nombre = ruta.split("/").pop();
+        rels = rels.replace(new RegExp(`ctrlProps/${nombre.replace(".", "\\.")}"`), `ctrlProps/__ctrl${nuevo}.xml"`);
+        zip.file(`xl/ctrlProps/ctrlProp${nuevo}.xml`, ctrlXml[j]);
+        tipos = tipos.replace("</Types>", `<Override PartName="/xl/ctrlProps/ctrlProp${nuevo}.xml" ContentType="application/vnd.ms-excel.controlproperties+xml"/></Types>`);
+      });
+      rels = rels.replace(/__ctrl(\d+)\.xml/g, "ctrlProp$1.xml");
+      zip.file(`xl/worksheets/_rels/sheet${k}.xml.rels`, rels);
+      if (drawing) {
+        zip.file(`xl/drawings/drawing${k}.xml`, drawing.replace(/<xdr:cNvPr id="(\d+)"/g, (m, n) => (Number(n) >= 1024 ? `<xdr:cNvPr id="${Number(n) + desp}"` : m)));
+        if (drawingRels) zip.file(`xl/drawings/_rels/drawing${k}.xml.rels`, drawingRels);
+        tipos = tipos.replace("</Types>", `<Override PartName="/xl/drawings/drawing${k}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>`);
+      }
+      if (vml) zip.file(`xl/drawings/vmlDrawing${k}.vml`, vml.replace(/(idmap[^>]*data=")(\d+)"/, (m, a, n) => `${a}${Number(n) + idx}"`).replace(/_x0000_s(\d+)/g, (m, n) => `_x0000_s${Number(n) + desp}`));
+      tipos = tipos.replace("</Types>", `<Override PartName="/xl/worksheets/sheet${k}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`);
+      wbRels = wbRels.replace("</Relationships>", `<Relationship Id="rIdHoja${k}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${k}.xml"/></Relationships>`);
+    }
+    hojasXml += `<sheet name="${esc(nombres[idx])}" sheetId="${100 + k}" r:id="${k === 1 ? "rId1" : "rIdHoja" + k}"/>`;
+  });
+  wbXml = wbXml.replace(/<sheets>[\s\S]*?<\/sheets>/, `<sheets>${hojasXml}</sheets>`);
+  zip.file(REPORTE2_WORKBOOK, wbXml);
+  zip.file("xl/_rels/workbook.xml.rels", wbRels);
+  zip.file("[Content_Types].xml", tipos);
+  const app = await leer("docProps/app.xml");
+  if (app) {
+    zip.file("docProps/app.xml", app
+      .replace(/(<vt:lpstr>Hojas de cálculo<\/vt:lpstr><\/vt:variant><vt:variant><vt:i4>)\d+/, `$1${hojas.length}`)
+      .replace(/<TitlesOfParts>[\s\S]*?<\/TitlesOfParts>/, `<TitlesOfParts><vt:vector size="${hojas.length}" baseType="lpstr">${nombres.map((n) => `<vt:lpstr>${reporte2EscaparXML(n)}</vt:lpstr>`).join("")}</vt:vector></TitlesOfParts>`));
+  }
+  await reporte2ForzarRecalculo(zip);
   return zip.generateAsync({ type: "arraybuffer" });
 }
 
@@ -1837,29 +1941,27 @@ async function reporte2Descargar(area) {
   }
 
   try {
-    let totalGenerados = 0;
+    // Un solo Excel: una pestaña por OD + quincena (y por semana si la quincena cae en dos semanas)
+    const { default: JSZip } = await import("jszip");
+    const hojaBase = await (await JSZip.loadAsync(plantillaBuffer)).file(REPORTE2_HOJA).async("string");
+    const piezas = [];
     for (const od of odsConDatos) {
       for (const quincena of Object.keys(grupos[od])) {
         const semanas = Object.keys(grupos[od][quincena]).sort();
-        for (const lunesISO of semanas) {
-          const entradasSemana = grupos[od][quincena][lunesISO];
-          const buffer = await reporte2LlenarPlantilla(
-            plantillaBuffer, od, clientePorOd[od], entradasSemana, new Date(lunesISO + "T00:00:00"), empleadosPorCodigo
-          );
-          const sufijoSemana = semanas.length > 1 ? `_semana-${lunesISO}` : "";
-          const nombreOd = String(od).replace(/[^a-zA-Z0-9-]/g, "");
-          const nombreArchivo = `SolicitudHoras_${nombreArea}_${nombreOd}_${reporte2NombreQuincena(quincena)}${sufijoSemana}.xlsx`;
-          reporte2Descargar_disparar(buffer, nombreArchivo);
-          totalGenerados++;
-          // Los navegadores bloquean/ignoran descargas disparadas muy rápido
-          // seguidas; una pequeña pausa entre cada una evita que se pierdan.
-          await new Promise((resolve) => setTimeout(resolve, 400));
-        }
+        for (const lunesISO of semanas) piezas.push({ od, quincena, lunesISO, variasSemanas: semanas.length > 1 });
       }
     }
-    if (totalGenerados > 5) {
-      alert(`Se generaron ${totalGenerados} reportes. Si tu navegador preguntó "¿Permitir varias descargas?", asegúrate de darle clic a "Permitir" para recibirlos todos.`);
-    }
+    piezas.sort((a, b) => a.quincena.localeCompare(b.quincena) || String(a.od).localeCompare(String(b.od)) || a.lunesISO.localeCompare(b.lunesISO));
+    const hojas = piezas.map(({ od, quincena, lunesISO, variasSemanas }) => {
+      const [, mes, q] = quincena.split("-");
+      const mesTxt = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"][Number(mes) - 1];
+      const nombre = `${od} ${q === "Q1" ? "1-15" : "16-fin"} ${mesTxt}${variasSemanas ? " sem " + lunesISO.slice(8, 10) + "-" + lunesISO.slice(5, 7) : ""}`;
+      return { nombre, xml: reporte2LlenarHojaXML(hojaBase, od, clientePorOd[od], grupos[od][quincena][lunesISO], new Date(lunesISO + "T00:00:00"), empleadosPorCodigo) };
+    });
+    const buffer = await reporte2CombinarHojas(plantillaBuffer, hojas);
+    const quincenas = [...new Set(piezas.map((x) => x.quincena))].sort();
+    const rango = quincenas.length === 1 ? reporte2NombreQuincena(quincenas[0]) : `${reporte2NombreQuincena(quincenas[0])}_a_${reporte2NombreQuincena(quincenas[quincenas.length - 1])}`;
+    reporte2Descargar_disparar(buffer, `SolicitudHoras_${nombreArea}_${rango}.xlsx`);
   } catch (err) {
     alert("No se pudo generar el Reporte: " + (err.message || "error desconocido al armar el Excel."));
   }
@@ -1928,6 +2030,7 @@ function odRowFromDb(r) {
     cliente: r.cliente || "",
     estado: r.estado || "Activo",
     tecnico: r.tecnico || "",
+    tecnicoCodigo: r.tecnico_codigo || "",
     vencimiento: r.vencimiento || "",
     frecuencia: r.frecuencia || "",
     fechaInicio: r.fecha_inicio || "",
@@ -1946,6 +2049,7 @@ function odRowFromDb(r) {
     proximaFacturaIpm: r.proxima_factura_ipm || "",
     ultimaFacturaIpm: r.ultima_factura_ipm || "",
     mesesVisita: r.meses_visita || [],
+    visitasCompletadas: (r.visitas_completadas && typeof r.visitas_completadas === "object") ? r.visitas_completadas : {},
     area: r.area,
     created_at: r.created_at,
   };
@@ -1954,12 +2058,33 @@ const ODFIELD_TO_DB = {
   fechaInicio: "fecha_inicio", fechaEntrega: "fecha_entrega", fechaAprobacion: "fecha_aprobacion",
   equiposCorrectivo: "equipos_correctivo", tipoOD: "tipo_od",
   poNumero: "po_numero", fechaPo: "fecha_po", sapNumero: "sap_numero", estatusEquipo: "estatus_equipo",
-  proximaFacturaIpm: "proxima_factura_ipm", ultimaFacturaIpm: "ultima_factura_ipm", mesesVisita: "meses_visita",
+  proximaFacturaIpm: "proxima_factura_ipm", ultimaFacturaIpm: "ultima_factura_ipm", mesesVisita: "meses_visita", visitasCompletadas: "visitas_completadas",
+  tecnicoCodigo: "tecnico_codigo",
 };
 function odPatchToDb(patch) {
   const out = {};
   for (const k in patch) out[ODFIELD_TO_DB[k] || k] = patch[k] === "" ? null : patch[k];
   return out;
+}
+
+// Atraso de una solicitud de cotización según su fecha estimada de entrega.
+// Se considera entregada cuando ya se envió al cliente (Enviado / Comparado) o se canceló.
+function atrasoCotizacion(r, hoy = new Date().toLocaleDateString("en-CA")) {
+  const fe = String(r.fechaEstimada || "").slice(0, 10);
+  if (!fe) return { estado: "sin" };
+  const dias = (a, b) => Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 86400000);
+  const entregada = r.estado === "Enviado" || r.estado === "Comparado";
+  if (r.actividad === "Cancelado") return { estado: "cancelada" };
+  if (entregada) {
+    const env = String(r.fechaEnvio || "").slice(0, 10);
+    const tarde = env ? dias(fe, env) : 0;
+    return { estado: "entregada", tarde: tarde > 0 ? tarde : 0 };
+  }
+  const d = dias(hoy, fe);
+  if (d < 0) return { estado: "atrasada", dias: -d };
+  if (d === 0) return { estado: "hoy" };
+  if (d <= 2) return { estado: "pronto", dias: d };
+  return { estado: "atiempo", dias: d };
 }
 
 function cotRowFromDb(r) {
@@ -1988,6 +2113,8 @@ function cotRowFromDb(r) {
     fechaEnvio: r.fecha_envio || "",
     moneda: r.moneda || "USD",
     tipoCambio: r.tipo_cambio || null,
+    realizadoPor: r.realizado_por || "",
+    fechaEstimada: r.fecha_estimada || "",
   };
 }
 
@@ -2005,17 +2132,24 @@ function Login({ onLogin }) {
     if (!email.trim() || pin.length < 4) { setError("Ingresa correo y contraseña (mínimo 4 caracteres)."); return; }
     setLoading(true);
     setError("");
+    setTokenSesion(null);
+    const equipo = equipoDeAcceso();
     let { data, error: err } = await supabase.rpc("login_usuario", {
       p_email: email.trim(),
       p_pin: pin,
+      p_equipo: equipo,
     });
-    // En el celular el teclado suele poner la primera letra del correo en
-    // mayúscula: si no entra así, se prueba con el correo en minúsculas.
-    if (!err && (!data || data.length === 0) && email.trim() !== email.trim().toLowerCase()) {
-      ({ data, error: err } = await supabase.rpc("login_usuario", { p_email: email.trim().toLowerCase(), p_pin: pin }));
+    // Base todavía sin el SQL de seguridad (login sin p_equipo): se reintenta como antes.
+    if (err && /p_equipo|PGRST202|Could not find the function/i.test(err.message || err.code || "")) {
+      ({ data, error: err } = await supabase.rpc("login_usuario", { p_email: email.trim(), p_pin: pin }));
     }
+    // En el celular el teclado suele poner la primera letra del correo en
+    // mayúscula: la base ya compara sin importar mayúsculas.
     setLoading(false);
-    if (err) { setError("No se pudo conectar. Intenta de nuevo."); return; }
+    if (err) {
+      if (/BLOQUEADO/i.test(err.message || "")) { setError("Demasiados intentos fallidos. Por seguridad espere 15 minutos e intente de nuevo."); return; }
+      setError("No se pudo conectar. Intenta de nuevo."); return;
+    }
     if (!data || data.length === 0) { setError("Email o PIN incorrecto."); return; }
     onLogin(data[0]);
   };
@@ -2085,7 +2219,8 @@ function ordenarPorOrdenManual(filas) {
 function HorasExtras({ area, color }) {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
-  const puedeAdminAqui = isAdmin || (currentUser?.categoria === "ehs" && area === "salud");
+  // Administrativo y Asistente gestionan las horas extras (editar, aprobar, disponible).
+  const puedeAdminAqui = isAdmin || currentUser?.categoria === "asistente" || (currentUser?.categoria === "ehs" && area === "salud");
   const canCerrar = puedeAdminAqui || currentUser?.categoria === "asistente";
   const canBorrar = puedeAdminAqui || currentUser?.categoria === "asistente";
   const confirmar = useContext(ConfirmContext);
@@ -2234,6 +2369,12 @@ function HorasExtras({ area, color }) {
   const [filtroPersonalHoras, setFiltroPersonalHoras] = useState("");
   const [filtroOdHoras, setFiltroOdHoras] = useState("");
   const [filtroFechaEjecHoras, setFiltroFechaEjecHoras] = useState("");
+  // Cada solicitud cae en el período (corte de planilla) de su fecha de
+  // ejecución; si no tiene, en el de la fecha en que se pidió.
+  const [filtroPeriodoHoras, setFiltroPeriodoHoras] = useState("");
+  const fechaDePeriodo = (r) => r.fecha_ejecucion || r.fecha || "";
+  const periodoDe = (r) => { const f = fechaDePeriodo(r); return f ? etiquetaPeriodo(f, fechasCorte) : "Sin fecha"; };
+  const periodoActual = etiquetaPeriodo(todayISO(), fechasCorte);
 
   const rowsSolicitud = ordenarPorOrdenManual(rows.filter((r) => r.estado === "Pendiente" || r.estado === "Aprobada"));
   const rowsDenegadas = ordenarPorOrdenManual(rows.filter((r) => r.estado === "Rechazada"));
@@ -2242,8 +2383,32 @@ function HorasExtras({ area, color }) {
     const matchPersonal = !filtroPersonalHoras.trim() || (r.personal || "").toLowerCase().includes(filtroPersonalHoras.trim().toLowerCase());
     const matchOd = !filtroOdHoras.trim() || (r.od || "").toLowerCase().includes(filtroOdHoras.trim().toLowerCase());
     const matchFecha = !filtroFechaEjecHoras || r.fecha_ejecucion === filtroFechaEjecHoras;
-    return matchPersonal && matchOd && matchFecha;
+    const matchPeriodo = !filtroPeriodoHoras || periodoDe(r) === filtroPeriodoHoras;
+    return matchPersonal && matchOd && matchFecha && matchPeriodo;
   });
+
+  // Agrupa una lista por período, del más reciente al más viejo ("Sin fecha" al final).
+  const agruparPorPeriodo = (lista) => {
+    const mapa = new Map();
+    lista.forEach((r) => {
+      const et = periodoDe(r);
+      if (!mapa.has(et)) mapa.set(et, { etiqueta: et, filas: [], fechaMax: "" });
+      const g = mapa.get(et);
+      g.filas.push(r);
+      const f = fechaDePeriodo(r);
+      if (f > g.fechaMax) g.fechaMax = f;
+    });
+    return [...mapa.values()].sort((a, b) => (b.fechaMax || "").localeCompare(a.fechaMax || ""));
+  };
+  const sumaHoras = (lista) => lista.reduce((s, r) => s + Number(r.horas || 0), 0);
+  const periodosDePestana = agruparPorPeriodo(subTab === "solicitud" ? rowsSolicitud : subTab === "denegadas" ? rowsDenegadas : rowsCerradas);
+  const gruposMostrados = agruparPorPeriodo(rowsMostradas);
+  const aprobarPeriodo = async (grupo) => {
+    const pendientes = grupo.filas.filter((r) => r.estado === "Pendiente");
+    if (pendientes.length === 0) return;
+    if (!(await confirmar(`¿Aprobar las ${pendientes.length} solicitudes pendientes del período ${grupo.etiqueta} (${sumaHoras(pendientes)}h)?`))) return;
+    pendientes.forEach((r) => setEstado(r.id, "Aprobada"));
+  };
 
   // Sube o baja una fila dentro de la lista que se está viendo ahora
   // mismo (respeta los filtros activos), intercambiando su "orden" con
@@ -2255,8 +2420,12 @@ function HorasExtras({ area, color }) {
   // sea siempre consistente aunque haya un filtro activo.
   const moverFila = (id, direccion) => {
     const idx = bucketActual.findIndex((r) => r.id === id);
-    const idxVecino = idx + direccion;
-    if (idx === -1 || idxVecino < 0 || idxVecino >= bucketActual.length) return;
+    if (idx === -1) return;
+    // Solo se intercambia con la fila vecina del MISMO período.
+    const per = periodoDe(bucketActual[idx]);
+    let idxVecino = idx + direccion;
+    while (idxVecino >= 0 && idxVecino < bucketActual.length && periodoDe(bucketActual[idxVecino]) !== per) idxVecino += direccion;
+    if (idxVecino < 0 || idxVecino >= bucketActual.length) return;
     const idsEnOrden = bucketActual.map((r) => r.id);
     [idsEnOrden[idx], idsEnOrden[idxVecino]] = [idsEnOrden[idxVecino], idsEnOrden[idx]];
     const nuevoOrdenPorId = {};
@@ -2277,11 +2446,11 @@ function HorasExtras({ area, color }) {
             <div style={{ height: "100%", width: `${Math.min(100, (used / disponible) * 100)}%`, background: used > disponible ? T.red : color }} />
           </div>
           {puedeAdminAqui ? (
-            <Field label="Editar disponible (solo Administrativo)">
+            <Field label="Editar disponible (Administrativo o Asistente)">
               <input style={inputStyle} type="number" value={disponible} onChange={(e) => setDisponible(Number(e.target.value))} />
             </Field>
           ) : (
-            <div style={{ fontSize: 11.5, color: T.gray }}>Solo un usuario Administrativo puede modificar el disponible.</div>
+            <div style={{ fontSize: 11.5, color: T.gray }}>Solo un usuario Administrativo o Asistente puede modificar el disponible.</div>
           )}
         </Card>
         <Card title="Nueva solicitud">
@@ -2352,6 +2521,24 @@ function HorasExtras({ area, color }) {
             <Btn small variant="ghost" onClick={() => { setFiltroPersonalHoras(""); setFiltroOdHoras(""); setFiltroFechaEjecHoras(""); }}>Limpiar filtros</Btn>
           )}
         </div>
+        {periodosDePestana.length > 0 && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ fontSize: 11.5, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginRight: 2 }}>Período:</span>
+            <button type="button" onClick={() => setFiltroPeriodoHoras("")} style={{ border: `1px solid ${!filtroPeriodoHoras ? color : T.line}`, background: !filtroPeriodoHoras ? color : "#fff", color: !filtroPeriodoHoras ? "#fff" : T.ink, borderRadius: 999, padding: "4px 11px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Todos</button>
+            {periodosDePestana.map((g) => {
+              const activo = filtroPeriodoHoras === g.etiqueta;
+              const pend = g.filas.filter((r) => r.estado === "Pendiente").length;
+              return (
+                <button key={g.etiqueta} type="button" onClick={() => setFiltroPeriodoHoras(activo ? "" : g.etiqueta)} title={`${g.filas.length} solicitudes · ${sumaHoras(g.filas)}h`}
+                  style={{ border: `1px solid ${activo ? color : T.line}`, background: activo ? color : "#fff", color: activo ? "#fff" : T.ink, borderRadius: 999, padding: "4px 11px", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "inline-flex", gap: 6, alignItems: "center" }}>
+                  {g.etiqueta}{g.etiqueta === periodoActual ? " (actual)" : ""}
+                  <span style={{ opacity: 0.75, fontWeight: 500 }}>{sumaHoras(g.filas)}h</span>
+                  {subTab === "solicitud" && pend > 0 && <span style={{ background: activo ? "rgba(255,255,255,.25)" : T.amberSoft, color: activo ? "#fff" : T.amber, borderRadius: 999, padding: "0 6px", fontSize: 11 }}>{pend} pend.</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
@@ -2359,14 +2546,35 @@ function HorasExtras({ area, color }) {
             </tr>
           </thead>
           <tbody>
-            {rowsMostradas.map((r, iMostrada) => (
+            {gruposMostrados.map((grupo) => (
+            <React.Fragment key={grupo.etiqueta}>
+              <tr style={{ background: T.graySoft }}>
+                <td colSpan={9} style={{ padding: "7px 10px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <strong style={{ fontSize: 12.5, color: T.ink }}>Período {grupo.etiqueta}{grupo.etiqueta === periodoActual ? " · actual" : ""}</strong>
+                    <span style={{ fontSize: 12, color: T.inkSoft }}>{grupo.filas.length} solicitud{grupo.filas.length === 1 ? "" : "es"} · {sumaHoras(grupo.filas)}h</span>
+                    {subTab === "solicitud" && (() => {
+                      const pend = grupo.filas.filter((r) => r.estado === "Pendiente");
+                      const apr = grupo.filas.filter((r) => r.estado === "Aprobada");
+                      return <>
+                        {pend.length > 0 && <span style={{ fontSize: 12, color: T.amber, fontWeight: 700 }}>{sumaHoras(pend)}h pendientes</span>}
+                        {apr.length > 0 && <span style={{ fontSize: 12, color: T.green, fontWeight: 700 }}>{sumaHoras(apr)}h aprobadas</span>}
+                        {puedeAdminAqui && pend.length > 0 && (
+                          <Btn small variant="success" onClick={() => aprobarPeriodo(grupo)} style={{ marginLeft: "auto" }}><Check size={12} /> Aprobar las {pend.length} pendientes</Btn>
+                        )}
+                      </>;
+                    })()}
+                  </div>
+                </td>
+              </tr>
+            {grupo.filas.map((r, iMostrada) => (
               <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
                 <td style={{ padding: "4px 4px 4px 8px" }}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
                     <button onClick={() => moverFila(r.id, -1)} disabled={iMostrada === 0} title="Subir" style={{ background: "transparent", border: "none", cursor: iMostrada === 0 ? "default" : "pointer", opacity: iMostrada === 0 ? 0.3 : 1, padding: 0, lineHeight: 1 }}>
                       <ChevronUp size={14} color={T.inkSoft} />
                     </button>
-                    <button onClick={() => moverFila(r.id, 1)} disabled={iMostrada === rowsMostradas.length - 1} title="Bajar" style={{ background: "transparent", border: "none", cursor: iMostrada === rowsMostradas.length - 1 ? "default" : "pointer", opacity: iMostrada === rowsMostradas.length - 1 ? 0.3 : 1, padding: 0, lineHeight: 1 }}>
+                    <button onClick={() => moverFila(r.id, 1)} disabled={iMostrada === grupo.filas.length - 1} title="Bajar" style={{ background: "transparent", border: "none", cursor: iMostrada === grupo.filas.length - 1 ? "default" : "pointer", opacity: iMostrada === grupo.filas.length - 1 ? 0.3 : 1, padding: 0, lineHeight: 1 }}>
                       <ChevronDown size={14} color={T.inkSoft} />
                     </button>
                   </div>
@@ -2427,10 +2635,12 @@ function HorasExtras({ area, color }) {
                 </td>
               </tr>
             ))}
+            </React.Fragment>
+            ))}
           </tbody>
         </table>
         <div style={{ marginTop: 10, fontSize: 12.5, color: T.inkSoft, textAlign: "right", fontWeight: 700 }}>
-          Total horas (esta pestaña): {rowsMostradas.reduce((s, r) => s + Number(r.horas || 0), 0)}h
+          Total horas ({filtroPeriodoHoras ? `período ${filtroPeriodoHoras}` : "esta pestaña"}): {rowsMostradas.reduce((s, r) => s + Number(r.horas || 0), 0)}h
         </div>
         {subTab === "solicitud" && (
           <div style={{ marginTop: 4, fontSize: 12, color: T.inkSoft, textAlign: "right" }}>
@@ -2466,13 +2676,162 @@ function useClientesArea(area) {
   return [rows, setRows];
 }
 
+// ---- Técnico de cada OD tomado de la lista de empleados (Planilla) ----
+// La columna «tecnico» sigue guardando el nombre (todo lo que agrupa o filtra por
+// nombre sigue funcionando) y «tecnico_codigo» guarda el código del empleado.
+function normNombreEmp(s) {
+  return String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+}
+// Sugiere el empleado que más se parece a un nombre escrito a mano ("J. Solano" -> "Juan Solano Pérez").
+function sugerirEmpleado(texto, empleados) {
+  const t = normNombreEmp(texto).split(" ").filter(Boolean);
+  if (!t.length) return null;
+  const exacto = empleados.find((e) => normNombreEmp(e.nombre) === t.join(" "));
+  if (exacto) return exacto;
+  let mejor = null, mejorPts = 0, empate = false;
+  empleados.forEach((e) => {
+    const et = normNombreEmp(e.nombre).split(" ").filter(Boolean);
+    let pts = 0;
+    t.forEach((w) => {
+      if (et.includes(w)) pts += w.length >= 3 ? 2 : 1;
+      else if (w.length <= 2 && et.some((x) => x.startsWith(w))) pts += 0.6;
+      else if (w.length >= 4 && et.some((x) => x.startsWith(w) || w.startsWith(x) && x.length >= 4)) pts += 1.2;
+    });
+    if (pts > mejorPts) { mejor = e; mejorPts = pts; empate = false; } else if (pts === mejorPts && pts > 0) empate = true;
+  });
+  return mejorPts >= 2 && !empate ? mejor : null;
+}
+function valorEmpleadoOD(r, empleados) {
+  if (r.tecnicoCodigo && empleados.some((e) => String(e.codigo) === String(r.tecnicoCodigo))) return String(r.tecnicoCodigo);
+  if (!r.tecnicoCodigo) {
+    const porNombre = empleados.find((e) => normNombreEmp(e.nombre) === normNombreEmp(r.tecnico));
+    if (porNombre) return String(porNombre.codigo);
+  }
+  return (r.tecnico || "").trim() ? "__anterior__" : "";
+}
+function SelectorEmpleadoOD({ r, empleados, onElegir, style }) {
+  const valor = valorEmpleadoOD(r, empleados);
+  const anterior = valor === "__anterior__";
+  return (
+    <select
+      style={{ ...style, ...(anterior ? { borderColor: T.amber, background: T.amberSoft } : {}) }}
+      value={valor}
+      title={anterior ? `«${r.tecnico}» se escribió a mano y todavía no está vinculado a un empleado. Elija el empleado correcto.` : ""}
+      onChange={(e) => { if (e.target.value !== "__anterior__") onElegir(e.target.value); }}
+    >
+      <option value="">— Sin asignar —</option>
+      {anterior && <option value="__anterior__">⚠ {r.tecnico}{r.tecnicoCodigo ? " (inactivo)" : " (sin vincular)"}</option>}
+      {empleados.map((e) => <option key={e.codigo} value={String(e.codigo)}>{e.nombre}</option>)}
+    </select>
+  );
+}
+// Panel para pasar los nombres escritos a mano a empleados de la lista, sin perder nada:
+// agrupa por el texto actual, sugiere el empleado y actualiza todas las OD de ese texto.
+function HomologarTecnicosOD({ area, rowsTodas, setRows, empleados }) {
+  const confirmar = useContext(ConfirmContext);
+  const [abierto, setAbierto] = useState(false);
+  const [eleccion, setEleccion] = useState({});
+  const [trabajando, setTrabajando] = useState("");
+  const [error, setError] = useState("");
+  const grupos = useMemo(() => {
+    const m = {};
+    rowsTodas.forEach((r) => {
+      const t = (r.tecnico || "").trim();
+      if (!t || valorEmpleadoOD(r, empleados) !== "__anterior__") return;
+      (m[r.tecnico] = m[r.tecnico] || []).push(r.id);
+    });
+    return Object.entries(m).sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0], "es"));
+  }, [rowsTodas, empleados]);
+  const yaVinculablesPorNombre = useMemo(() => rowsTodas.filter((r) => !r.tecnicoCodigo && (r.tecnico || "").trim() && valorEmpleadoOD(r, empleados) !== "__anterior__" && valorEmpleadoOD(r, empleados) !== ""), [rowsTodas, empleados]);
+  const elegido = (texto) => eleccion[texto] !== undefined ? eleccion[texto] : (sugerirEmpleado(texto, empleados)?.codigo ?? "");
+  const nOd = grupos.reduce((a, [, ids]) => a + ids.length, 0);
+
+  const actualizar = async (ids, emp) => {
+    for (let i = 0; i < ids.length; i += 150) {
+      const lote = ids.slice(i, i + 150);
+      const { error: e } = await supabase.from("ordenes_trabajo").update({ tecnico: emp.nombre, tecnico_codigo: String(emp.codigo) }).in("id", lote);
+      if (e) return e;
+    }
+    setRows((prev) => prev.map((r) => ids.includes(r.id) ? { ...r, tecnico: emp.nombre, tecnicoCodigo: String(emp.codigo) } : r));
+    return null;
+  };
+  const aplicar = async (lista) => {
+    setError("");
+    const tareas = lista.map(([texto, ids]) => ({ texto, ids, emp: empleados.find((e) => String(e.codigo) === String(elegido(texto))) })).filter((x) => x.emp);
+    if (!tareas.length) return;
+    const total = tareas.reduce((a, x) => a + x.ids.length, 0);
+    const detalle = tareas.length === 1 ? `«${tareas[0].texto}» → ${tareas[0].emp.nombre}` : `${tareas.length} nombres`;
+    if (!(await confirmar(`¿Vincular ${detalle}? Se actualizan ${total} OD. El texto anterior queda respaldado en Supabase (tabla ordenes_trabajo_respaldo_tecnico).`, { confirmLabel: "Sí, vincular", variant: "accent" }))) return;
+    for (const x of tareas) {
+      setTrabajando(x.texto);
+      const e = await actualizar(x.ids, x.emp);
+      if (e) { setError(`${e.message}. Corra primero en Supabase el SQL «SQL_tecnicos_ipm_empleados.sql».`); break; }
+    }
+    setTrabajando("");
+  };
+  const vincularExactos = async () => {
+    setError(""); setTrabajando("__exactos__");
+    const porEmp = {};
+    yaVinculablesPorNombre.forEach((r) => { const c = valorEmpleadoOD(r, empleados); (porEmp[c] = porEmp[c] || []).push(r.id); });
+    for (const [c, ids] of Object.entries(porEmp)) {
+      const e = await actualizar(ids, empleados.find((x) => String(x.codigo) === c));
+      if (e) { setError(`${e.message}. Corra primero en Supabase el SQL «SQL_tecnicos_ipm_empleados.sql».`); break; }
+    }
+    setTrabajando("");
+  };
+
+  if (!empleados.length || (!grupos.length && !yaVinculablesPorNombre.length)) return null;
+  return (
+    <div style={{ background: T.amberSoft, border: `1px solid ${T.amber}`, borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 220, fontSize: 12.8 }}>
+          {grupos.length > 0
+            ? <><b>{grupos.length} nombre(s) escritos a mano</b> en {nOd} OD todavía no están vinculados a la lista de empleados.</>
+            : <><b>{yaVinculablesPorNombre.length} OD</b> ya coinciden con un empleado por nombre; falta guardar el vínculo.</>}
+        </div>
+        {yaVinculablesPorNombre.length > 0 && <Btn small variant="ghost" onClick={vincularExactos} disabled={!!trabajando}>{trabajando === "__exactos__" ? "Guardando…" : `Guardar vínculo de ${yaVinculablesPorNombre.length} coincidencias exactas`}</Btn>}
+        {grupos.length > 0 && <Btn small variant="accent" onClick={() => setAbierto(!abierto)}>{abierto ? "Cerrar" : "Vincular técnicos"}</Btn>}
+      </div>
+      {error && <div style={{ color: T.red, fontSize: 12.5, marginTop: 8 }}>{error}</div>}
+      {abierto && grupos.length > 0 && (
+        <div style={{ marginTop: 10, background: T.panel, borderRadius: 9, padding: 10, overflowX: "auto" }}>
+          <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 8 }}>Elija el empleado de cada nombre. La sugerencia sale sola cuando el nombre se parece; revísela antes de aplicar. Lo que deje en «— No cambiar —» queda igual que ahora.</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.8 }}>
+            <thead><tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11.5 }}><th style={{ padding: "4px 6px" }}>Escrito actualmente</th><th>OD</th><th>Empleado de la lista</th><th></th></tr></thead>
+            <tbody>
+              {grupos.map(([texto, ids]) => (
+                <tr key={texto} style={{ borderTop: `1px solid ${T.line}` }}>
+                  <td style={{ padding: "6px", fontWeight: 600 }}>{texto}</td>
+                  <td>{ids.length}</td>
+                  <td>
+                    <select style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", minWidth: 200 }} value={String(elegido(texto))} onChange={(e) => setEleccion((p) => ({ ...p, [texto]: e.target.value }))}>
+                      <option value="">— No cambiar —</option>
+                      {empleados.map((e) => <option key={e.codigo} value={String(e.codigo)}>{e.nombre}</option>)}
+                    </select>
+                  </td>
+                  <td style={{ textAlign: "right" }}><Btn small variant="ghost" disabled={!elegido(texto) || !!trabajando} onClick={() => aplicar([[texto, ids]])}>{trabajando === texto ? "…" : "Aplicar"}</Btn></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+            <Btn small variant="accent" disabled={!!trabajando || !grupos.some(([t]) => elegido(t))} onClick={() => aplicar(grupos)}>Aplicar todos los elegidos</Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const currentUser = useContext(CurrentUserContext);
   const isAdmin = currentUser?.categoria === "admin";
+  // El asistente tiene todas las funciones de Inspecciones y Proyectos
+  const puedeTodoOD = isAdmin || currentUser?.categoria === "asistente";
   const canEditFechas = isAdmin || currentUser?.categoria === "asistente";
   // La fecha de vencimiento (Inspecciones) y la fecha de entrega (Proyectos)
-  // solo puede modificarlas un usuario Administrativo.
-  const canEditFechaControl = isAdmin;
+  // solo pueden modificarlas el administrador y el asistente.
+  const canEditFechaControl = puedeTodoOD;
   const canEditEstado = isAdmin || currentUser?.categoria === "asistente";
   const canMoverTipo = isAdmin || currentUser?.categoria === "asistente";
   const canEditProgreso = isAdmin || currentUser?.categoria === "asistente" || currentUser?.categoria === "tecnico";
@@ -2524,8 +2883,13 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const add = async () => {
     if (!form.od || !form.cliente) return;
     const payload = { area, od: form.od, cliente: form.cliente, estado: "Activo", tecnico: form.tecnico, accion: "", tipo_od: tipoOD, progreso: "Pendiente", facturado: "Sin facturar" };
+    if (form.tecnicoCodigo) payload.tecnico_codigo = String(form.tecnicoCodigo);
     setForm({ od: "", cliente: "", tecnico: "" });
-    const { data, error } = await supabase.from("ordenes_trabajo").insert(payload).select().single();
+    let { data, error } = await supabase.from("ordenes_trabajo").insert(payload).select().single();
+    if (error && payload.tecnico_codigo) {
+      delete payload.tecnico_codigo;
+      ({ data, error } = await supabase.from("ordenes_trabajo").insert(payload).select().single());
+    }
     if (!error && data) setRows((prev) => [odRowFromDb(data), ...prev]);
   };
   const setProgreso = (id, progreso) => {
@@ -2565,6 +2929,27 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
   const setTecnico = (id, tecnico) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, tecnico } : r));
     supabase.from("ordenes_trabajo").update(odPatchToDb({ tecnico })).eq("id", id).then();
+  };
+  // IPM: el técnico se elige de la lista de empleados activos (Planilla)
+  const usaListaEmpleados = isInspecciones;
+  const [empleadosLista, setEmpleadosLista] = useState([]);
+  const [avisoTecnico, setAvisoTecnico] = useState("");
+  useEffect(() => {
+    if (!usaListaEmpleados) return;
+    supabase.from("empleados").select("codigo, nombre, puesto, area, activo").eq("activo", true).order("nombre", { ascending: true })
+      .then(({ data }) => { if (data) setEmpleadosLista(data.filter((e) => e.codigo != null && e.nombre)); });
+  }, [usaListaEmpleados]);
+  const asignarTecnico = async (id, codigo) => {
+    const emp = empleadosLista.find((e) => String(e.codigo) === String(codigo));
+    const nombre = emp ? emp.nombre : "";
+    const cod = emp ? String(emp.codigo) : "";
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, tecnico: nombre, tecnicoCodigo: cod } : r));
+    const { error } = await supabase.from("ordenes_trabajo").update({ tecnico: nombre || null, tecnico_codigo: cod || null }).eq("id", id);
+    if (error) {
+      // sin la columna nueva todavía: guarda al menos el nombre
+      await supabase.from("ordenes_trabajo").update({ tecnico: nombre || null }).eq("id", id);
+      setAvisoTecnico("Falta correr en Supabase el SQL «SQL_tecnicos_ipm_empleados.sql»; por ahora se guardó solo el nombre.");
+    }
   };
   const setOD = (id, od) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, od } : r));
@@ -2823,7 +3208,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
               Acción: accion,
               ...(!esCorrectivo && isInspecciones ? { Notas: notas } : {}),
             })), `${esCorrectivo ? "od_correctivos" : "od"}_${area}.xlsx`)}><Download size={13} /> Excel</Btn>
-            {isAdmin && <Btn small variant="danger" onClick={eliminarTodos}><X size={13} /> Eliminar todo</Btn>}
+            {puedeTodoOD && <Btn small variant="danger" onClick={eliminarTodos}><X size={13} /> Eliminar todo</Btn>}
           </div>
         }>
           {esCorrectivo && (
@@ -2832,6 +3217,8 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
               <Btn small variant={subTabCorrectivo === "Completados" ? "accent" : "ghost"} onClick={() => setSubTabCorrectivo("Completados")}>Completados ({completadosCorrectivoCount})</Btn>
             </div>
           )}
+          {usaListaEmpleados && canEditEstado && <HomologarTecnicosOD area={area} rowsTodas={rowsTodas} setRows={setRows} empleados={empleadosLista} />}
+          {avisoTecnico && <div style={{ background: T.redSoft, color: T.red, borderRadius: 9, padding: "8px 12px", fontSize: 12.5, marginBottom: 10 }}>{avisoTecnico}</div>}
           {!esCorrectivo && isInspecciones && (
             <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
               <Btn small variant={subTabIpmEstado === "Activos" ? "accent" : "ghost"} onClick={() => setSubTabIpmEstado("Activos")}>Activos ({activosIpmCount})</Btn>
@@ -2926,7 +3313,9 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                     )}
                   </td>
                   <td>
-                    {canEditEstado ? (
+                    {canEditEstado && usaListaEmpleados && empleadosLista.length ? (
+                      <SelectorEmpleadoOD r={r} empleados={empleadosLista} onElegir={(c) => asignarTecnico(r.id, c)} style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 150 }} />
+                    ) : canEditEstado ? (
                       <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 110 }} value={r.tecnico} onChange={(e) => setTecnico(r.id, e.target.value)} />
                     ) : (r.tecnico || "—")}
                   </td>
@@ -2960,7 +3349,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                   )}
                   {!esCorrectivo && isInspecciones && (
                     <td>
-                      {isAdmin ? (
+                      {puedeTodoOD ? (
                         <select style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }} value={r.frecuencia || ""} onChange={(e) => setFrecuencia(r.id, e.target.value)}>
                           <option value="">—</option>
                           {FRECUENCIA_OPCIONES.map((f) => <option key={f} value={f}>{f}</option>)}
@@ -2980,12 +3369,12 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                             <Badge color={estado.colorTxt} soft={estado.colorFondo}><Dot color={estado.colorTxt} />{estado.etiqueta}</Badge>
                             {canEditEstado && <Btn small variant="ghost" onClick={() => marcarFacturadoIpm(r.id)}><Check size={13} /> Marcar facturado</Btn>}
                             {canEditEstado && r.ultimaFacturaIpm && <Btn small variant="ghost" onClick={() => deshacerFacturaIpm(r.id)} title={`Última marca: ${r.ultimaFacturaIpm}`}><X size={13} /> Deshacer</Btn>}
-                            {isAdmin && <input type="date" style={{ ...inputStyle, fontSize: 11, padding: "3px 6px", width: 130 }} value={r.proximaFacturaIpm || ""} onChange={(e) => setProximaFacturaIpm(r.id, e.target.value)} title="Ajustar próxima fecha de factura manualmente" />}
+                            {canEditEstado && <input type="date" style={{ ...inputStyle, fontSize: 11, padding: "3px 6px", width: 130 }} value={r.proximaFacturaIpm || ""} onChange={(e) => setProximaFacturaIpm(r.id, e.target.value)} title="Ajustar próxima fecha de factura manualmente" />}
                           </div>
                         )}
                         <AgendaFechasIpm
                           row={r}
-                          puedeAgendar={isAdmin}
+                          puedeAgendar={canEditEstado}
                           puedeFacturar={canEditEstado}
                           mesesFacturados={mesesFacturadosDe(r.id)}
                           onToggleMes={toggleMesVisita}
@@ -3012,7 +3401,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                   )}
                   {!(!esCorrectivo && isInspecciones) && (
                   <td>
-                    {isAdmin ? (
+                    {puedeTodoOD ? (
                       <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }} placeholder="Acción tomada..." value={r.accion} onChange={(e) => setAccion(r.id, e.target.value)} />
                     ) : <span style={{ color: T.gray, fontSize: 12 }}>{r.accion || "—"}</span>}
                   </td>
@@ -3056,7 +3445,7 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
                         {esCorrectivo ? `← ${isProyectos ? "Proyectos" : "IPM"}` : (isInspecciones ? "↗" : "→ Correctivo")}
                       </Btn>
                     )}
-                    {isAdmin && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}
+                    {puedeTodoOD && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}
                     {canEditEstado && (
                       <Btn small variant={editandoId === r.id ? "accent" : "ghost"} onClick={() => setEditandoId(editandoId === r.id ? null : r.id)}>
                         {editandoId === r.id ? "Listo" : "Editar"}
@@ -3073,7 +3462,14 @@ function OrdenesTrabajo({ area, color, tipoOD = "Normal" }) {
           <div style={{ display: "flex", gap: 10 }}>
             <input style={inputStyle} placeholder="OD" value={form.od} onChange={(e) => setForm({ ...form, od: e.target.value })} />
             <input style={{ ...inputStyle, flex: 1 }} placeholder="Cliente" value={form.cliente} onChange={(e) => setForm({ ...form, cliente: e.target.value })} />
-            <input style={inputStyle} placeholder={tecnicoLabel} value={form.tecnico} onChange={(e) => setForm({ ...form, tecnico: e.target.value })} />
+            {usaListaEmpleados && empleadosLista.length ? (
+              <select style={inputStyle} value={form.tecnicoCodigo || ""} onChange={(e) => { const emp = empleadosLista.find((x) => String(x.codigo) === e.target.value); setForm({ ...form, tecnicoCodigo: e.target.value, tecnico: emp ? emp.nombre : "" }); }}>
+                <option value="">— {tecnicoLabel} —</option>
+                {empleadosLista.map((e) => <option key={e.codigo} value={String(e.codigo)}>{e.nombre}</option>)}
+              </select>
+            ) : (
+              <input style={inputStyle} placeholder={tecnicoLabel} value={form.tecnico} onChange={(e) => setForm({ ...form, tecnico: e.target.value })} />
+            )}
             <Btn variant="accent" onClick={add}><Plus size={14} /></Btn>
           </div>
         </Card>
@@ -3734,91 +4130,380 @@ function CotizacionPrintView({ r, onClose }) {
 // cada mes (se basa en la fecha de hoy, no en una lista fija), y en cuanto
 // se marca "Facturado" la fila desaparece de aquí porque su próxima fecha
 // pasa a caer en un mes futuro.
+// ---- Visitas IPM del mes: lista por técnico con check de «Completado» ----
+// Al completar una visita, esa OD (y ese mes) pasa sola a Facturación; al
+// marcarla facturada sale de Facturación. Se guarda en ordenes_trabajo.visitas_completadas:
+// { "2026-10": { fecha: "2026-10-21", por: "Nombre", facturada: "2026-10-25" } }
+const hoyLocalIpm = () => new Date().toLocaleDateString("en-CA");
+const mesAnteriorIpm = (clave) => { const [a, m] = clave.split("-").map(Number); const d = new Date(a, m - 2, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
+const fechaCortaIpm = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}` : "");
+// Meses ya facturados de cada OD (tabla facturas_ipm + última factura de la OD)
+function useMesesFacturadosIpm() {
+  const [mapa, setMapa] = useState({});
+  useEffect(() => {
+    let cancelado = false;
+    (async () => {
+      const m = {};
+      for (let desde = 0; desde < 50000; desde += 1000) {
+        const { data, error } = await supabase.from("facturas_ipm").select("od_id, fecha_facturada").range(desde, desde + 999);
+        if (error || !data) break;
+        data.forEach((f) => { if (f.fecha_facturada) (m[f.od_id] = m[f.od_id] || new Set()).add(String(f.fecha_facturada).slice(0, 7)); });
+        if (data.length < 1000) break;
+      }
+      if (!cancelado) setMapa(m);
+    })();
+    return () => { cancelado = true; };
+  }, []);
+  const agregar = (odId, mes) => setMapa((prev) => ({ ...prev, [odId]: new Set([...(prev[odId] || []), mes]) }));
+  return [mapa, agregar];
+}
+function visitaFacturadaIpm(r, mes, facturados) {
+  const v = (r.visitasCompletadas || {})[mes];
+  if (v && v.facturada) return true;
+  if (facturados[r.id] && facturados[r.id].has(mes)) return true;
+  return !!r.ultimaFacturaIpm && r.ultimaFacturaIpm.slice(0, 7) === mes;
+}
+
+function VisitasIpmMes({ color }) {
+  const [rows, setRows] = useClientesArea("inspecciones");
+  const currentUser = useContext(CurrentUserContext);
+  const confirmar = useContext(ConfirmContext);
+  const cat = currentUser?.categoria;
+  const puedeMarcar = cat === "admin" || cat === "asistente" || cat === "tecnico";
+  const [facturados] = useMesesFacturadosIpm();
+  const hoy = hoyLocalIpm();
+  const mesActual = hoy.slice(0, 7);
+  const [mes, setMes] = useState(mesActual);
+  const [busqueda, setBusqueda] = useState("");
+  const [soloPend, setSoloPend] = useEstadoRecordado("ipm-visitas-solo-pend", false);
+  const [guardando, setGuardando] = useState("");
+  // Técnicos con la lista oculta (se toca el nombre para mostrar u ocultar)
+  const [ocultos, setOcultos] = useEstadoRecordado("ipm-visitas-ocultos", []);
+  const estaOculto = (t) => Array.isArray(ocultos) && ocultos.includes(t);
+  const alternarTec = (t) => setOcultos((l) => { const a = Array.isArray(l) ? l : []; return a.includes(t) ? a.filter((x) => x !== t) : [...a, t]; });
+
+  const activas = rows.filter((r) => (r.tipoOD || "Normal") === "Normal" && r.estado === "Activo");
+  const tocaEn = (r, m) => mesesValidosOrdenados(r.mesesVisita).includes(m);
+  const completada = (r, m) => !!(r.visitasCompletadas || {})[m];
+  const delMes = activas.filter((r) => tocaEn(r, mes));
+  // visitas de los 3 meses anteriores que quedaron sin completar
+  // Eventos de la Agenda del mes elegido, ligados a cada OD
+  const [agendaMes, setAgendaMes] = useState({ mes: "", eventos: [], equipos: {} });
+  useEffect(() => {
+    let cancelado = false;
+    (async () => {
+      const [a, m] = mes.split("-").map(Number);
+      const ini = `${mes}-01`;
+      const fin = fechaLocalISO(new Date(a, m, 0));
+      const { data } = await supabase.from("agenda_visitas").select("id, od_id, od, area, tipo, fecha_inicio, fecha_fin, equipo")
+        .lte("fecha_inicio", fin).gte("fecha_fin", ini).order("fecha_inicio", { ascending: true });
+      const { data: eqs } = await supabase.from("agenda_equipos").select("*");
+      const equipos = {};
+      (eqs || []).forEach((e) => { if (e.nombre) equipos[e.numero] = e.nombre; });
+      if (!cancelado) setAgendaMes({ mes, eventos: data || [], equipos });
+    })();
+    return () => { cancelado = true; };
+  }, [mes]);
+  const eventosDeOd = (r) => agendaMes.mes !== mes ? [] : agendaMes.eventos.filter((ev) =>
+    (ev.od_id && String(ev.od_id) === String(r.id)) || (!ev.od_id && ev.od && String(ev.od).trim() === String(r.od || "").trim()));
+  const DIAS_CORTOS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+  const MESES_CORTOS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "set", "oct", "nov", "dic"];
+  const diaTexto = (iso) => { const d = new Date(iso + "T00:00:00"); return `${DIAS_CORTOS[d.getDay()]} ${d.getDate()} ${MESES_CORTOS[d.getMonth()]}`; };
+  const rangoTexto = (ev) => {
+    const a = String(ev.fecha_inicio).slice(0, 10), b = String(ev.fecha_fin || ev.fecha_inicio).slice(0, 10);
+    if (a === b) return diaTexto(a);
+    const da = new Date(a + "T00:00:00"), db = new Date(b + "T00:00:00");
+    return da.getMonth() === db.getMonth() ? `${DIAS_CORTOS[da.getDay()]} ${da.getDate()} – ${diaTexto(b)}` : `${diaTexto(a)} – ${diaTexto(b)}`;
+  };
+  const equipoDe = (ev) => {
+    const k = indiceColor(ev.area === "proyectos" ? "proyectos" : "inspecciones", ev.equipo);
+    const n = agendaMes.equipos[k + 1];
+    return { nombre: n && n !== `Equipo ${k + 1}` ? n : nombreColorPorDefecto(k), color: AGENDA_COLORES[k] };
+  };
+  const nombreMesLargo = (clave) => ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "setiembre", "octubre", "noviembre", "diciembre"][Number(clave.slice(5, 7)) - 1] || "";
+  const LineaAgenda = ({ r, ok }) => {
+    const evs = eventosDeOd(r);
+    if (agendaMes.mes !== mes) return null;
+    if (!evs.length) {
+      if (ok) return null;
+      return <div style={{ marginTop: 4 }} onClick={(e) => e.preventDefault()}><span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.8, fontWeight: 600, borderRadius: 7, padding: "2px 8px", background: T.redSoft, color: T.red }}><AlertCircle size={12} /> Sin agendar en {nombreMesLargo(mes)}</span></div>;
+    }
+    return (
+      <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }} onClick={(e) => e.preventDefault()}>
+        {evs.map((ev) => {
+          const yaPaso = String(ev.fecha_fin || ev.fecha_inicio).slice(0, 10) < hoy;
+          const gris = ok || yaPaso;
+          const eq = equipoDe(ev);
+          return (
+            <span key={ev.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.8, fontWeight: 600, borderRadius: 7, padding: "2px 8px", background: gris ? T.graySoft : T.blueSoft, color: gris ? T.inkSoft : T.blue }}>
+              <CalendarDays size={12} /> {ok ? "Visitada" : yaPaso ? "Agendada (ya pasó)" : "Agendada"}: {rangoTexto(ev)}
+              <span style={{ width: 8, height: 8, borderRadius: 4, background: eq.color, display: "inline-block", marginLeft: 3 }} />{eq.nombre}
+            </span>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const atrasadasPrevias = [];
+  for (let k = 1, m = mesAnteriorIpm(mesActual); k <= 3; k++, m = mesAnteriorIpm(m)) {
+    activas.forEach((r) => { if (tocaEn(r, m) && !completada(r, m) && !visitaFacturadaIpm(r, m, facturados)) atrasadasPrevias.push({ r, m }); });
+  }
+  const q = busqueda.trim().toLowerCase();
+  const visibles = delMes.filter((r) => (!q || `${r.od} ${r.cliente} ${r.tecnico}`.toLowerCase().includes(q)) && (!soloPend || !completada(r, mes)));
+  const grupos = {};
+  visibles.forEach((r) => { const t = (r.tecnico || "").trim() || "Sin técnico asignado"; (grupos[t] = grupos[t] || []).push(r); });
+  const nombresGrupo = Object.keys(grupos).sort((a, b) => (a === "Sin técnico asignado") - (b === "Sin técnico asignado") || a.localeCompare(b, "es"));
+  const nComp = delMes.filter((r) => completada(r, mes)).length;
+  const nFact = delMes.filter((r) => visitaFacturadaIpm(r, mes, facturados)).length;
+  const pasado = mes < mesActual;
+  const todosTecnicos = [...new Set(delMes.map((r) => (r.tecnico || "").trim() || "Sin técnico asignado"))];
+  const normTec = (t) => String(t || "").trim().toLowerCase();
+  const miGrupo = todosTecnicos.find((t) => currentUser?.name && normTec(t) === normTec(currentUser.name));
+
+  const guardarVisitas = async (r, nuevas) => {
+    setGuardando(r.id);
+    const { error } = await supabase.from("ordenes_trabajo").update({ visitas_completadas: nuevas }).eq("id", r.id);
+    setGuardando("");
+    if (error) { await confirmar(`No se pudo guardar: ${error.message}. Corra en Supabase el SQL «SQL_visitas_ipm.sql».`, { confirmLabel: "Entendido", soloAviso: true }); return false; }
+    setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, visitasCompletadas: nuevas } : x)));
+    return true;
+  };
+  const alternar = async (r) => {
+    if (!puedeMarcar || guardando) return;
+    const actuales = { ...(r.visitasCompletadas || {}) };
+    if (actuales[mes]) {
+      if (visitaFacturadaIpm(r, mes, facturados)) { await confirmar(`La visita de ${formatMesAno(mes)} de la OD ${r.od} ya está facturada; no se puede desmarcar.`, { confirmLabel: "Entendido", soloAviso: true }); return; }
+      if (!(await confirmar(`¿Quitar «Completado» de la OD ${r.od} (${formatMesAno(mes)})? Saldrá de la lista de Facturación.`, { confirmLabel: "Sí, quitar", variant: "danger" }))) return;
+      delete actuales[mes];
+    } else {
+      actuales[mes] = { fecha: hoy, por: currentUser?.name || "" };
+    }
+    await guardarVisitas(r, actuales);
+  };
+
+  const kpi = (t, v, sub, col) => (
+    <div style={{ flex: "1 1 150px", background: T.panel, border: `1px solid ${T.line}`, borderRadius: 12, padding: "10px 14px" }}>
+      <div style={{ fontSize: 12, color: T.inkSoft, fontWeight: 600 }}>{t}</div>
+      <div style={{ fontSize: 24, fontWeight: 800, color: col || T.ink }}>{v}</div>
+      {sub && <div style={{ fontSize: 11.5, color: T.inkSoft }}>{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <Card title={`Visitas IPM — ${formatMesAno(mes)}`} action={
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <Btn small variant="ghost" onClick={() => setMes(mesAnteriorIpm(mes))}><ChevronLeft size={14} /></Btn>
+          {mes !== mesActual && <Btn small variant="ghost" onClick={() => setMes(mesActual)}>Mes actual</Btn>}
+          <Btn small variant="ghost" onClick={() => setMes(claveMesSiguiente(mes))}><ChevronRight size={14} /></Btn>
+        </div>}>
+        <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 12 }}>
+          Clientes que tienen visita en {formatMesAno(mes)} según su agenda (columna «Acción» de OD IPM), agrupados por técnico. Al marcar <b>Completado</b>, la visita pasa sola a la lista de <b>Facturación</b>; cuando se factura, sale de esa lista.
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+          {kpi("Visitas del mes", delMes.length, "clientes en agenda")}
+          {kpi("Completadas", nComp, delMes.length ? `${Math.round((nComp / delMes.length) * 100)} % del mes` : "", T.green)}
+          {kpi("Pendientes", delMes.length - nComp, pasado && delMes.length - nComp ? "mes ya cerrado" : "", delMes.length - nComp ? (pasado ? T.red : T.amber) : T.ink)}
+          {kpi("Facturadas", nFact, nComp - nFact > 0 ? `${nComp - nFact} esperando factura` : "", T.steel)}
+        </div>
+        {mes === mesActual && atrasadasPrevias.length > 0 && (
+          <div style={{ background: T.redSoft, color: T.red, borderRadius: 10, padding: "8px 12px", fontSize: 12.5, marginBottom: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <AlertTriangle size={14} /> {atrasadasPrevias.length} visita(s) de meses anteriores sin completar:
+            {[...new Set(atrasadasPrevias.map((x) => x.m))].map((m) => (
+              <Btn key={m} small variant="ghost" onClick={() => setMes(m)}>{formatMesAno(m)} ({atrasadasPrevias.filter((x) => x.m === m).length})</Btn>
+            ))}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ position: "relative", flex: "1 1 240px" }}>
+            <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T.gray }} />
+            <input style={{ ...inputStyle, paddingLeft: 30, fontSize: 12.5 }} placeholder="Buscar por OD, cliente o técnico..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
+          </div>
+          {todosTecnicos.length > 1 && (<>
+            {miGrupo && <Btn small variant="ghost" onClick={() => setOcultos(todosTecnicos.filter((t) => t !== miGrupo))}>Ver solo los míos</Btn>}
+            <Btn small variant="ghost" onClick={() => setOcultos([])}>Mostrar todos</Btn>
+            <Btn small variant="ghost" onClick={() => setOcultos(todosTecnicos)}>Ocultar todos</Btn>
+          </>)}
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
+            <input type="checkbox" checked={soloPend} onChange={(e) => setSoloPend(e.target.checked)} /> Solo pendientes
+          </label>
+        </div>
+      </Card>
+
+      {delMes.length === 0 ? (
+        <Card><div style={{ color: T.gray, fontSize: 13 }}>Ninguna OD IPM tiene visita en {formatMesAno(mes)}. La agenda de meses se marca en la columna «Acción» de OD IPM.</div></Card>
+      ) : visibles.length === 0 ? (
+        <Card><div style={{ color: T.gray, fontSize: 13 }}>{soloPend ? "¡Todas las visitas de este mes están completadas!" : `Ningún resultado para "${busqueda}".`}</div></Card>
+      ) : nombresGrupo.map((tec) => {
+        const lista = [...grupos[tec]].sort((a, b) => completada(a, mes) - completada(b, mes) || (a.cliente || "").localeCompare(b.cliente || "", "es"));
+        const todosTec = delMes.filter((r) => ((r.tecnico || "").trim() || "Sin técnico asignado") === tec);
+        const hechos = todosTec.filter((r) => completada(r, mes)).length;
+        const pct = todosTec.length ? hechos / todosTec.length : 0;
+        return (
+          <Card key={tec} style={estaOculto(tec) ? { paddingBottom: 6 } : undefined}
+            title={<button type="button" onClick={() => alternarTec(tec)} aria-expanded={!estaOculto(tec)} title={estaOculto(tec) ? "Mostrar la lista" : "Ocultar la lista"}
+              style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit", color: "inherit", fontWeight: 700 }}>
+              {estaOculto(tec) ? <ChevronRight size={16} /> : <ChevronDown size={16} />}<HardHat size={16} color={color || T.steel} /> {tec}
+              <span style={{ fontSize: 12, fontWeight: 500, color: T.inkSoft }}>{estaOculto(tec) ? "· mostrar" : "· ocultar"}</span>
+            </button>}
+            action={<Badge color={hechos === todosTec.length ? T.green : T.amber} soft={hechos === todosTec.length ? T.greenSoft : T.amberSoft}>{hechos} / {todosTec.length} completadas</Badge>}>
+            {!estaOculto(tec) && (<>
+            <div style={{ height: 6, background: T.graySoft, borderRadius: 4, overflow: "hidden", marginBottom: 12 }}>
+              <div style={{ width: `${pct * 100}%`, height: "100%", background: hechos === todosTec.length ? T.green : (color || T.steel), transition: "width .3s" }} />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {lista.map((r) => {
+                const v = (r.visitasCompletadas || {})[mes];
+                const fact = visitaFacturadaIpm(r, mes, facturados);
+                const ok = !!v;
+                return (
+                  <label key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "9px 12px", borderRadius: 10, cursor: puedeMarcar ? "pointer" : "default",
+                    background: ok ? T.greenSoft : T.bg, border: `1px solid ${ok ? "transparent" : T.line}`, opacity: guardando === r.id ? 0.6 : 1 }}>
+                    <input type="checkbox" checked={ok} disabled={!puedeMarcar || guardando === r.id} onChange={() => alternar(r)}
+                      style={{ width: 22, height: 22, accentColor: T.green, flexShrink: 0, cursor: puedeMarcar ? "pointer" : "default" }} aria-label={`Completado ${r.od}`} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13.5, color: T.ink, textDecoration: ok ? "line-through" : "none", textDecorationColor: "rgba(0,0,0,.25)" }}>{r.cliente || "(sin cliente)"}</div>
+                      <div style={{ fontSize: 12, color: T.inkSoft }}>OD {r.od}{r.frecuencia ? ` · ${r.frecuencia}` : ""}{ok ? ` · Completada el ${fechaCortaIpm(v.fecha)}${v.por ? " por " + v.por : ""}` : ""}</div>
+                      <LineaAgenda r={r} ok={ok} />
+                    </div>
+                    {fact ? <Badge color={T.steel} soft={T.graySoft}><Check size={12} /> Facturada</Badge>
+                      : ok ? <Badge color={T.green} soft="#fff"><Dot color={T.green} /> En facturación</Badge>
+                      : <Badge color={pasado ? T.red : T.amber} soft={pasado ? T.redSoft : T.amberSoft}><Dot color={pasado ? T.red : T.amber} /> {pasado ? "Atrasada" : "Pendiente"}</Badge>}
+                  </label>
+                );
+              })}
+            </div>
+            </>)}
+          </Card>
+        );
+      })}
+      {!puedeMarcar && <div style={{ fontSize: 12, color: T.inkSoft }}>Solo técnicos, asistentes y administradores pueden marcar visitas como completadas.</div>}
+    </div>
+  );
+}
+
 function FacturacionIpmCard() {
   const [rows, setRows] = useClientesArea("inspecciones");
   const currentUser = useContext(CurrentUserContext);
   const confirmar = useContext(ConfirmContext);
   const puedeMarcar = currentUser?.categoria === "admin" || currentUser?.categoria === "asistente";
   const [busqueda, setBusqueda] = useState("");
-  const hoy = todayISO();
-  const pendientesDelMes = rows
-    .filter((r) => (r.tipoOD || "Normal") === "Normal" && r.estado === "Activo")
-    .filter((r) => {
-      // Solo entran a "este mes" las OD que tienen agenda de meses de visita
-      // (marcada en "Acción") y ese mes en curso está en su agenda y aún no
-      // se marcó facturado. Las que no tienen agenda quedan fuera de esta
-      // lista hasta que se les configure, en vez de aparecer todos los
-      // meses como "Sin programar".
-      const usaAgenda = Array.isArray(r.mesesVisita) && r.mesesVisita.length > 0;
-      if (!usaAgenda) return false;
-      return estadoFacturacionIpm(r, hoy).pendiente;
-    })
-    .sort((a, b) => {
-      // De la más próxima (atrasadas y el mes actual, arriba) a la más
-      // lejana. Se recalcula en cada render, así se reacomoda sola en
-      // cuanto cambia el mes o se marca algo facturado.
-      const claveA = claveOrdenamientoIpm(a, hoy);
-      const claveB = claveOrdenamientoIpm(b, hoy);
-      if (claveA !== claveB) return claveA.localeCompare(claveB);
-      return (a.od || "").localeCompare(b.od || "");
+  const [facturados, agregarFacturado] = useMesesFacturadosIpm();
+  const hoy = hoyLocalIpm();
+  const mesActual = hoy.slice(0, 7);
+  // Solo entran las visitas que el técnico marcó «Completado» en IPM → Visitas del mes
+  // y que todavía no se facturan. Al facturarlas salen de la lista.
+  const porFacturar = [];
+  rows.filter((r) => (r.tipoOD || "Normal") === "Normal").forEach((r) => {
+    Object.entries(r.visitasCompletadas || {}).forEach(([mes, v]) => {
+      if (esClaveMesAnoValida(mes) && v && !visitaFacturadaIpm(r, mes, facturados)) porFacturar.push({ r, mes, v });
     });
-  const atrasadas = pendientesDelMes.filter((r) => r.proximaFacturaIpm && r.proximaFacturaIpm < hoy);
+  });
+  porFacturar.sort((a, b) => a.mes.localeCompare(b.mes) || String(a.v.fecha || "").localeCompare(String(b.v.fecha || "")) || (a.r.od || "").localeCompare(b.r.od || ""));
+  const anteriores = porFacturar.filter((x) => x.mes < mesActual);
   const q = busqueda.trim().toLowerCase();
-  const pendientes = q
-    ? pendientesDelMes.filter((r) => (r.od || "").toLowerCase().includes(q) || (r.cliente || "").toLowerCase().includes(q) || (r.tecnico || "").toLowerCase().includes(q))
-    : pendientesDelMes;
+  const visibles = q ? porFacturar.filter((x) => `${x.r.od} ${x.r.cliente} ${x.r.tecnico}`.toLowerCase().includes(q)) : porFacturar;
 
-  const marcarFacturado = async (r) => {
-    if (!(await confirmar(`¿Confirmas que ya facturaste la OD ${r.od}?`, { confirmLabel: "Sí, ya facturé", variant: "accent" }))) return;
-    const usaAgenda = Array.isArray(r.mesesVisita) && r.mesesVisita.length > 0;
-    const proxima = usaAgenda ? r.proximaFacturaIpm : sumarIntervaloFrecuencia(hoy, r.frecuencia);
-    setRows((prev) => prev.map((x) => x.id === r.id ? { ...x, ultimaFacturaIpm: hoy, proximaFacturaIpm: proxima } : x));
-    supabase.from("ordenes_trabajo").update(odPatchToDb({ ultimaFacturaIpm: hoy, proximaFacturaIpm: proxima })).eq("id", r.id).then();
-    supabase.from("facturas_ipm").insert({ od_id: r.id, fecha_facturada: hoy }).then();
+  const marcarFacturado = async ({ r, mes }) => {
+    if (!(await confirmar(`¿Confirmas que ya facturaste la OD ${r.od} (visita de ${formatMesAno(mes)})?`, { confirmLabel: "Sí, ya facturé", variant: "accent" }))) return;
+    const fecha = mes === mesActual ? hoy : `${mes}-01`;
+    const visitas = { ...(r.visitasCompletadas || {}), [mes]: { ...((r.visitasCompletadas || {})[mes] || {}), facturada: hoy, facturadaPor: currentUser?.name || "" } };
+    const ultima = !r.ultimaFacturaIpm || fecha > r.ultimaFacturaIpm ? fecha : r.ultimaFacturaIpm;
+    const { error } = await supabase.from("ordenes_trabajo").update({ visitas_completadas: visitas, ultima_factura_ipm: ultima }).eq("id", r.id);
+    if (error) { await confirmar(`No se pudo guardar: ${error.message}`, { confirmLabel: "Entendido", soloAviso: true }); return; }
+    setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, visitasCompletadas: visitas, ultimaFacturaIpm: ultima } : x)));
+    supabase.from("facturas_ipm").insert({ od_id: r.id, fecha_facturada: fecha }).then(() => {}, () => {});
+    agregarFacturado(r.id, mes);
   };
 
   return (
-    <Card title="IPM a facturar este mes" action={pendientesDelMes.length > 0 ? <Badge color={atrasadas.length ? T.red : T.amber} soft={atrasadas.length ? T.redSoft : T.amberSoft}>{pendientesDelMes.length}</Badge> : null}>
-      {pendientesDelMes.length > 0 && (
+    <Card title="IPM a facturar (visitas completadas)" action={porFacturar.length > 0 ? <Badge color={anteriores.length ? T.red : T.amber} soft={anteriores.length ? T.redSoft : T.amberSoft}>{porFacturar.length}</Badge> : null}>
+      <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 10 }}>Aparecen aquí cuando el técnico marca la visita como <b>Completado</b> en IPM → Visitas del mes. Al marcarla facturada sale de la lista.</div>
+      {porFacturar.length > 0 && (
         <div style={{ position: "relative", marginBottom: 10 }}>
           <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T.gray }} />
-          <input
-            style={{ ...inputStyle, paddingLeft: 30, fontSize: 12.5 }}
-            placeholder="Buscar por OD, cliente o técnico..."
-            value={busqueda}
-            onChange={(e) => setBusqueda(e.target.value)}
-          />
+          <input style={{ ...inputStyle, paddingLeft: 30, fontSize: 12.5 }} placeholder="Buscar por OD, cliente o técnico..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
         </div>
       )}
-      {pendientesDelMes.length === 0 ? (
-        <div style={{ color: T.gray, fontSize: 13 }}>No hay IPM pendientes de facturar este mes.</div>
-      ) : pendientes.length === 0 ? (
+      {porFacturar.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 13 }}>No hay visitas completadas pendientes de facturar.</div>
+      ) : visibles.length === 0 ? (
         <div style={{ color: T.gray, fontSize: 13 }}>Ningún resultado para "{busqueda}".</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {pendientes.map((r) => {
-            const usaAgenda = Array.isArray(r.mesesVisita) && r.mesesVisita.length > 0;
-            const estado = estadoFacturacionIpm(r, hoy);
+          {visibles.map((x) => {
+            const { r, mes, v } = x;
+            const viejo = mes < mesActual;
             return (
-              <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: T.bg, borderRadius: 8, gap: 8 }}>
-                <div>
+              <div key={r.id + mes} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: T.bg, borderRadius: 8, gap: 8, flexWrap: "wrap" }}>
+                <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 13 }}>{r.od} — {r.cliente}</div>
                   <div style={{ fontSize: 12, color: T.inkSoft }}>
-                    {usaAgenda ? `Mes a facturar: ${formatMesAno(hoy.slice(0, 7))}` : `Frecuencia: ${r.frecuencia || "—"}`}{r.tecnico ? ` · ${r.tecnico}` : ""}
+                    Visita de {formatMesAno(mes)} · completada el {fechaCortaIpm(v.fecha)}{v.por ? ` por ${v.por}` : ""}{r.tecnico ? ` · Técnico: ${r.tecnico}` : ""}
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <Badge color={estado.colorTxt} soft={estado.colorFondo}>
-                    <Dot color={estado.colorTxt} />
-                    {estado.etiqueta}
-                  </Badge>
-                  {puedeMarcar && (
-                    <Btn small variant="ghost" onClick={() => marcarFacturado(r)}><Check size={13} /> Marcar facturado</Btn>
-                  )}
+                  <Badge color={viejo ? T.red : T.green} soft={viejo ? T.redSoft : T.greenSoft}><Dot color={viejo ? T.red : T.green} />{viejo ? "De un mes anterior" : "Completada"}</Badge>
+                  {puedeMarcar && <Btn small variant="ghost" onClick={() => marcarFacturado(x)}><Check size={13} /> Marcar facturado</Btn>}
                 </div>
               </div>
             );
           })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// OD Correctivos de IPM: en cuanto un trabajo queda "Completado" y sigue
+// "Sin facturar", aparece aquí para que no se olvide facturarlo. Al marcarlo
+// facturado sale de la lista (y en OD Correctivos queda como "Facturado").
+function FacturacionCorrectivosCard() {
+  const [rows, setRows] = useClientesArea("inspecciones");
+  const currentUser = useContext(CurrentUserContext);
+  const confirmar = useContext(ConfirmContext);
+  const puedeMarcar = currentUser?.categoria === "admin" || currentUser?.categoria === "asistente";
+  const [busqueda, setBusqueda] = useState("");
+  const porFacturar = rows
+    .filter((r) => (r.tipoOD || "Normal") === "Correctivo" && (r.progreso || "Pendiente") === "Completado" && (r.facturado || "Sin facturar") !== "Facturado")
+    .sort((a, b) => String(a.fechaAprobacion || a.created_at || "").localeCompare(String(b.fechaAprobacion || b.created_at || "")) || (a.od || "").localeCompare(b.od || ""));
+  const q = busqueda.trim().toLowerCase();
+  const lista = q ? porFacturar.filter((r) => [r.od, r.cliente, r.tecnico, r.equiposCorrectivo].some((x) => String(x || "").toLowerCase().includes(q))) : porFacturar;
+  const marcarFacturado = async (r) => {
+    if (!(await confirmar(`¿Confirmas que ya facturaste el correctivo ${r.od}?`, { confirmLabel: "Sí, ya facturé", variant: "accent" }))) return;
+    setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, facturado: "Facturado" } : x)));
+    supabase.from("ordenes_trabajo").update({ facturado: "Facturado" }).eq("id", r.id).then();
+  };
+  return (
+    <Card title="Correctivos IPM completados por facturar" action={porFacturar.length > 0 ? <Badge color={T.red} soft={T.redSoft}>{porFacturar.length}</Badge> : null}>
+      {porFacturar.length > 0 && (
+        <div style={{ position: "relative", marginBottom: 10 }}>
+          <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: T.gray }} />
+          <input style={{ ...inputStyle, paddingLeft: 30, fontSize: 12.5 }} placeholder="Buscar por OD, cliente, técnico o equipo..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
+        </div>
+      )}
+      {porFacturar.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 13 }}>No hay correctivos completados pendientes de facturar.</div>
+      ) : lista.length === 0 ? (
+        <div style={{ color: T.gray, fontSize: 13 }}>Ningún resultado para "{busqueda}".</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {lista.map((r) => (
+            <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 10px", background: T.bg, borderRadius: 8, gap: 8, flexWrap: "wrap" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 13 }}>{r.od} — {r.cliente}</div>
+                <div style={{ fontSize: 12, color: T.inkSoft }}>
+                  {r.fechaAprobacion ? `Aprobado: ${r.fechaAprobacion}` : "Correctivo"}{r.tecnico ? ` · ${r.tecnico}` : ""}{r.equiposCorrectivo ? ` · ${r.equiposCorrectivo}` : ""}
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Badge color={T.green} soft={T.greenSoft}><Dot color={T.green} />Completado</Badge>
+                <Badge color={T.red} soft={T.redSoft}>Sin facturar</Badge>
+                {puedeMarcar && <Btn small variant="ghost" onClick={() => marcarFacturado(r)}><Check size={13} /> Marcar facturado</Btn>}
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </Card>
@@ -6453,8 +7138,16 @@ function unificarCotizaciones(sols, hist, proc, tcHoy) {
   const hPorSol = {}, pPorSol = {};
   hist.forEach((h) => { if (h.solicitud_id) hPorSol[String(h.solicitud_id)] = h; });
   proc.forEach((p) => { if (p.solicitud_id) pPorSol[String(p.solicitud_id)] = p; });
+  // Historial sin enlace a su solicitud: se enlaza por el número de cotización (así se sabe qué perfil la hizo)
+  const idsSol0 = new Set(sols.map((x) => String(x.id)));
+  const normNum = (v) => String(v || '').trim().toUpperCase().replace(/\s+/g, '');
+  const hPorNum = {};
+  hist.forEach((h) => { const k = normNum(h.numero); if (k && (!h.solicitud_id || !idsSol0.has(String(h.solicitud_id))) && !hPorNum[k]) hPorNum[k] = h; });
+  const hUsados = new Set();
   sols.forEach((s) => {
-    const h = hPorSol[String(s.id)], p = pPorSol[String(s.id)];
+    let h = hPorSol[String(s.id)]; const p = pPorSol[String(s.id)];
+    if (!h && normNum(s.numCot) && hPorNum[normNum(s.numCot)] && !hUsados.has(hPorNum[normNum(s.numCot)].id)) h = hPorNum[normNum(s.numCot)];
+    if (h && !hPorSol[String(s.id)]) hUsados.add(h.id);
     const carga = (h && fechaLocal(h.fecha_carga)) || fechaLocal(s.creado) || (p && fechaLocal(p.fecha_carga)) || '';
     const envio = fechaLocal(s.fechaEnvio) || (h && fechaLocal(h.fecha_envio)) || '';
     let etapa;
@@ -6466,13 +7159,17 @@ function unificarCotizaciones(sols, hist, proc, tcHoy) {
     items.push({ key: 's' + s.id, numero: s.numCot || (h && h.numero) || '#' + s.consecutivo, consecutivo: s.consecutivo, cliente: s.cliente || (h && h.cliente) || '',
       proyecto: s.descripcion || (h && h.proyecto) || '', area: s.tipo || (h && h.area) || '', origen: (h && h.origen) || (p && p.origen) || ORIGEN_DEF,
       responsable: (p && p.usuario_nombre) || (h && h.presupuestista) || s.solicitante || '', monto: aUSD(s.monto, s.moneda, s.tipoCambio, tcHoy) || n(h && h.total_oferta) || n(p && p.total), moneda: s.moneda || 'USD',
-      carga, envio, etapa, sinFechaEnvio: etapa === 'enviada' && !envio, compra: s.actividad === 'Con OC' });
+      carga, envio, etapa, sinFechaEnvio: etapa === 'enviada' && !envio, compra: s.actividad === 'Con OC',
+      hecha: etapa === 'lista' || etapa === 'enviada' ? ((h && (fechaLocal(h.fecha) || fechaLocal(h.creado_en))) || envio || '') : '',
+      hizo: (h && (h.presupuestista || h.creado_por_nombre)) || s.realizadoPor || (p && p.usuario_nombre) || (/Creada desde el Cotizador/i.test(s.observaciones || '') ? s.solicitante : '') || '',
+      solId: s.id });
   });
   const solIds = new Set(sols.map((x) => String(x.id)));
-  hist.filter((h) => !h.solicitud_id || !solIds.has(String(h.solicitud_id))).forEach((h) => {
+  hist.filter((h) => (!h.solicitud_id || !solIds.has(String(h.solicitud_id))) && !hUsados.has(h.id)).forEach((h) => {
     const envio = fechaLocal(h.fecha_envio);
     items.push({ key: 'h' + h.id, numero: h.numero || '—', cliente: h.cliente || '', proyecto: h.proyecto || '', area: h.area || '', origen: h.origen || ORIGEN_DEF,
-      responsable: h.presupuestista || h.creado_por_nombre || '', monto: n(h.total_oferta), carga: fechaLocal(h.fecha_carga) || fechaLocal(h.creado_en), envio, etapa: envio ? 'enviada' : 'lista' });
+      responsable: h.presupuestista || h.creado_por_nombre || '', monto: n(h.total_oferta), carga: fechaLocal(h.fecha_carga) || fechaLocal(h.creado_en), envio, etapa: envio ? 'enviada' : 'lista',
+      hecha: fechaLocal(h.fecha) || fechaLocal(h.creado_en) || envio || '', hizo: h.presupuestista || h.creado_por_nombre || '' });
   });
   proc.filter((p) => (!p.solicitud_id || !solIds.has(String(p.solicitud_id))) && !p.hist_id).forEach((p) => {
     items.push({ key: 'p' + p.usuario_id, numero: p.numero || '(sin número)', cliente: p.cliente || '', proyecto: p.proyecto || '', area: p.area || '', origen: p.origen || ORIGEN_DEF,
@@ -6481,6 +7178,184 @@ function unificarCotizaciones(sols, hist, proc, tcHoy) {
   return items;
 }
 
+// ---- Productividad por presupuestista: cuántas cotizaciones hace cada uno por día, semana y mes ----
+const COLORES_PERSONA = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
+const lunesDe = (iso) => { const d = new Date(iso + 'T00:00:00'); const dia = (d.getDay() + 6) % 7; d.setDate(d.getDate() - dia); return d.toLocaleDateString('en-CA'); };
+const sumarDias = (iso, k) => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + k); return d.toLocaleDateString('en-CA'); };
+const diasHabiles = (desde, hasta) => { let c = 0; for (let d = desde; d <= hasta; d = sumarDias(d, 1)) { const w = new Date(d + 'T00:00:00').getDay(); if (w !== 0 && w !== 6) c++; } return c; };
+function ProductividadPresupuestistas({ items, onAsignar }) {
+  const [verSin, setVerSin] = useState(false);
+  const [asignando, setAsignando] = useState('');
+  const [modo, setModo] = useState(() => lsGet('cotAD.prodModo') || 'hechas');
+  const [vista, setVista] = useState(() => lsGet('cotAD.prodVista') || 'semana');
+  const [verTabla, setVerTabla] = useState(false);
+  const cambiar = (k, v) => { if (k === 'modo') { setModo(v); lsSet('cotAD.prodModo', v); } else { setVista(v); lsSet('cotAD.prodVista', v); } };
+  const hoy = hoyISO();
+  const fechaDe = (x) => (modo === 'enviadas' ? x.envio : x.hecha) || '';
+  const validos = items.filter((x) => x.etapa !== 'cancelada' && fechaDe(x));
+  const sinFecha = items.filter((x) => x.etapa !== 'cancelada' && (modo === 'enviadas' ? x.etapa === 'enviada' : (x.etapa === 'lista' || x.etapa === 'enviada')) && !fechaDe(x)).length;
+  // personas (se agrupan sin importar mayúsculas o espacios)
+  const quien = (x) => (x.hizo !== undefined ? x.hizo : x.responsable) || '';
+  const clave = (x) => String(quien(x)).trim().toLowerCase().replace(/\s+/g, ' ') || '(sin asignar)';
+  const nombres = {};
+  validos.forEach((x) => { const k = clave(x); if (!nombres[k]) nombres[k] = String(quien(x)).trim() || 'Sin asignar'; });
+  const totalesPorPersona = {};
+  validos.forEach((x) => { const k = clave(x); totalesPorPersona[k] = (totalesPorPersona[k] || 0) + 1; });
+  // colores fijos por nombre (orden alfabético), máximo 8; el resto va a «Otros»
+  const alfabetico = Object.keys(nombres).sort((a, b) => nombres[a].localeCompare(nombres[b], 'es'));
+  const top = [...alfabetico].sort((a, b) => totalesPorPersona[b] - totalesPorPersona[a]).slice(0, alfabetico.length > 8 ? 7 : 8);
+  const series = alfabetico.filter((k) => top.includes(k));
+  const hayOtros = alfabetico.length > series.length;
+  const serieDe = (k) => (series.includes(k) ? k : '__otros');
+  const etiquetaSerie = (k) => (k === '__otros' ? 'Otros' : nombres[k]);
+  const colorSerie = (k) => (k === '__otros' ? '#868e96' : COLORES_PERSONA[series.indexOf(k) % 8]);
+  const todasSeries = [...series, ...(hayOtros ? ['__otros'] : [])];
+  // periodos del gráfico
+  const periodos = [];
+  if (vista === 'dia') { for (let k = 29; k >= 0; k--) { const d = sumarDias(hoy, -k); periodos.push({ k: d, t: d.slice(8, 10) + '/' + d.slice(5, 7), desde: d, hasta: d }); } }
+  else if (vista === 'semana') { const l0 = lunesDe(hoy); for (let k = 11; k >= 0; k--) { const l = sumarDias(l0, -7 * k); periodos.push({ k: l, t: 'Sem ' + l.slice(8, 10) + '/' + l.slice(5, 7), desde: l, hasta: sumarDias(l, 6) }); } }
+  else { const d0 = new Date(hoy + 'T00:00:00'); for (let k = 11; k >= 0; k--) { const d = new Date(d0.getFullYear(), d0.getMonth() - k, 1); const m = d.toLocaleDateString('en-CA').slice(0, 7); const fin = new Date(d.getFullYear(), d.getMonth() + 1, 0).toLocaleDateString('en-CA'); periodos.push({ k: m, t: MESES[d.getMonth()] + ' ' + String(d.getFullYear()).slice(2), desde: m + '-01', hasta: fin }); } }
+  const datos = periodos.map((pp) => {
+    const fila = { t: pp.t, total: 0 };
+    todasSeries.forEach((sk) => { fila[sk] = 0; });
+    validos.forEach((x) => { const f = fechaDe(x); if (f >= pp.desde && f <= pp.hasta) { fila[serieDe(clave(x))]++; fila.total++; } });
+    return fila;
+  });
+  // tabla por persona
+  const lunes = lunesDe(hoy), mes = hoy.slice(0, 7);
+  const dmPasado = new Date(new Date(hoy + 'T00:00:00').getFullYear(), new Date(hoy + 'T00:00:00').getMonth() - 1, 1);
+  const mesPasado = dmPasado.toLocaleDateString('en-CA').slice(0, 7);
+  const habMes = Math.max(1, diasHabiles(mes + '-01', hoy));
+  const tabla = alfabetico.map((k) => {
+    const mias = validos.filter((x) => clave(x) === k), f = (x) => fechaDe(x);
+    const esteMes = mias.filter((x) => f(x).slice(0, 7) === mes);
+    return { k, nombre: nombres[k], hoy: mias.filter((x) => f(x) === hoy).length, semana: mias.filter((x) => f(x) >= lunes && f(x) <= hoy).length,
+      mes: esteMes.length, montoMes: esteMes.reduce((a, x) => a + n(x.monto), 0), mesPasado: mias.filter((x) => f(x).slice(0, 7) === mesPasado).length,
+      porDia: esteMes.length / habMes, total: mias.length };
+  }).sort((a, b) => b.mes - a.mes || b.total - a.total);
+  const T0 = tabla.reduce((a, r) => ({ hoy: a.hoy + r.hoy, semana: a.semana + r.semana, mes: a.mes + r.mes, montoMes: a.montoMes + r.montoMes, mesPasado: a.mesPasado + r.mesPasado, total: a.total + r.total }), { hoy: 0, semana: 0, mes: 0, montoMes: 0, mesPasado: 0, total: 0 });
+  const verbo = modo === 'enviadas' ? 'enviadas' : 'realizadas';
+  const ejeTick = { fontSize: 11, fill: '#5B6572' };
+  const kpi = (t, v, sub, color) => (<div className="kpi"><div className="kpi-t">{t}</div><div className="kpi-v" style={color ? { color } : null}>{v}</div>{sub && <div className="kpi-s">{sub}</div>}</div>);
+  const btn = (activo, txt, on) => <button type="button" className={'btn ' + (activo ? 'btn-dark' : 'btn-line')} aria-pressed={activo} style={{ minHeight: 30, padding: '5px 11px', fontSize: 12.5 }} onClick={on}>{txt}</button>;
+  const Tip = ({ active, payload, label }) => {
+    if (!active || !payload || !payload.length) return null;
+    const filas = payload.filter((x) => x.value);
+    return (<div style={{ background: '#fff', border: '1px solid #E1E6EB', borderRadius: 8, padding: '8px 10px', fontSize: 12 }}>
+      <div style={{ fontWeight: 800, marginBottom: 4 }}>{label}</div>
+      {filas.map((x) => <div key={x.dataKey} style={{ display: 'flex', gap: 6, alignItems: 'center' }}><span style={{ width: 9, height: 9, borderRadius: 2, background: x.color }} />{etiquetaSerie(x.dataKey)}: <b>{x.value}</b></div>)}
+      <div style={{ color: '#5B6572', marginTop: 4 }}>Total: <b>{filas.reduce((a, x) => a + x.value, 0)}</b> cotizaciones {verbo}</div>
+    </div>);
+  };
+  const ultimo = todasSeries[todasSeries.length - 1];
+  const promDiaEquipo = T0.mes / habMes;
+  const lider = tabla[0];
+  return (
+    <div className="card" style={{ marginTop: 12 }}>
+      <h2 className="ctitle">Cotizaciones por presupuestista</h2>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+        <span style={{ fontSize: 12, color: '#5B6572', fontWeight: 700 }}>Contar:</span>
+        {btn(modo === 'hechas', 'Realizadas', () => cambiar('modo', 'hechas'))}
+        {btn(modo === 'enviadas', 'Enviadas al cliente', () => cambiar('modo', 'enviadas'))}
+        <span style={{ width: 1, height: 22, background: '#E1E6EB', margin: '0 6px' }} />
+        <span style={{ fontSize: 12, color: '#5B6572', fontWeight: 700 }}>Gráfico:</span>
+        {btn(vista === 'dia', 'Por día', () => cambiar('vista', 'dia'))}
+        {btn(vista === 'semana', 'Por semana', () => cambiar('vista', 'semana'))}
+        {btn(vista === 'mes', 'Por mes', () => cambiar('vista', 'mes'))}
+        <div style={{ flex: 1 }} />
+        {btn(verTabla, verTabla ? 'Ver gráfico' : 'Ver datos del gráfico', () => setVerTabla(!verTabla))}
+      </div>
+      <div className="kpis">
+        {kpi('Este mes', T0.mes, 'cotizaciones ' + verbo + ' · ' + usd(T0.montoMes))}
+        {kpi('Mes pasado', T0.mesPasado, T0.mesPasado ? (T0.mes >= T0.mesPasado ? '▲ ' : '▼ ') + Math.round(((T0.mes - T0.mesPasado) / T0.mesPasado) * 100) + ' % este mes (va en curso)' : '')}
+        {kpi('Esta semana', T0.semana, 'desde el lunes')}
+        {kpi('Hoy', T0.hoy, 'cotizaciones ' + verbo)}
+        {kpi('Promedio diario del equipo', (Math.round(promDiaEquipo * 10) / 10).toLocaleString('es-CR'), 'por día hábil este mes (' + habMes + ' días)')}
+        {kpi('Más ' + verbo + ' este mes', lider && lider.mes ? lider.nombre : '—', lider && lider.mes ? lider.mes + ' cotizaciones' : '')}
+      </div>
+      {!validos.length ? <div className="chart-vacio" style={{ marginTop: 10 }}>Todavía no hay cotizaciones {verbo} con fecha.</div> : (
+        <>
+          <div className="chartbox" style={{ marginTop: 12 }}>
+            <div className="chart-t">Cotizaciones {verbo} {vista === 'dia' ? 'por día (últimos 30 días)' : vista === 'semana' ? 'por semana (últimas 12, de lunes a domingo)' : 'por mes (últimos 12)'}</div>
+            <div className="chart-ley" style={{ marginTop: 0, marginBottom: 6 }}>{todasSeries.map((sk) => <span key={sk}><i style={{ background: colorSerie(sk) }} />{etiquetaSerie(sk)}</span>)}</div>
+            {verTabla ? (
+              <div style={{ overflowX: 'auto' }}><table>
+                <thead><tr><th>Periodo</th>{todasSeries.map((sk) => <th key={sk} className="r">{etiquetaSerie(sk)}</th>)}<th className="r">Total</th></tr></thead>
+                <tbody>{datos.map((d) => <tr key={d.t}><td className="strong">{d.t}</td>{todasSeries.map((sk) => <td key={sk} className="r">{d[sk] || ''}</td>)}<td className="r strong">{d.total}</td></tr>)}</tbody>
+              </table></div>
+            ) : (
+              <ResponsiveContainer width="100%" height={260}>
+                <BarChart data={datos} margin={{ top: 18, right: 6, left: -18, bottom: 0 }}>
+                  <CartesianGrid vertical={false} stroke="#EDEFF2" />
+                  <XAxis dataKey="t" tick={ejeTick} axisLine={false} tickLine={false} interval={vista === 'dia' ? 2 : 0} />
+                  <YAxis allowDecimals={false} tick={ejeTick} axisLine={false} tickLine={false} />
+                  <Tooltip content={<Tip />} cursor={{ fill: 'rgba(31,58,95,.06)' }} />
+                  {todasSeries.map((sk) => (
+                    <Bar key={sk} dataKey={sk} stackId="p" fill={colorSerie(sk)} stroke="#fff" strokeWidth={1.5} maxBarSize={vista === 'dia' ? 22 : 44} radius={sk === ultimo ? [4, 4, 0, 0] : [0, 0, 0, 0]} isAnimationActive={false}>
+                      {sk === ultimo && <LabelList dataKey="total" position="top" style={{ fontSize: 11, fill: '#101826', fontWeight: 700 }} formatter={(v) => (v ? v : '')} />}
+                    </Bar>
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+          <div style={{ overflowX: 'auto', marginTop: 12 }}><table>
+            <thead><tr><th>Presupuestista</th><th className="r">Hoy</th><th className="r">Esta semana</th><th className="r">Este mes</th><th className="r">Promedio por día</th><th className="r">Mes pasado</th><th className="r">Monto este mes</th><th className="r">Total</th></tr></thead>
+            <tbody>
+              {tabla.map((r) => (
+                <tr key={r.k}>
+                  <td className="strong"><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: colorSerie(serieDe(r.k)), marginRight: 6 }} />{r.nombre}</td>
+                  <td className="r">{r.hoy || '—'}</td><td className="r">{r.semana || '—'}</td><td className="r strong">{r.mes}</td>
+                  <td className="r">{(Math.round(r.porDia * 10) / 10).toLocaleString('es-CR')}</td><td className="r">{r.mesPasado}</td><td className="r">{usd(r.montoMes)}</td><td className="r">{r.total}</td>
+                </tr>
+              ))}
+              <tr className="subt"><td>Total del equipo</td><td className="r">{T0.hoy}</td><td className="r">{T0.semana}</td><td className="r">{T0.mes}</td><td className="r">{(Math.round(promDiaEquipo * 10) / 10).toLocaleString('es-CR')}</td><td className="r">{T0.mesPasado}</td><td className="r">{usd(T0.montoMes)}</td><td className="r">{T0.total}</td></tr>
+            </tbody>
+          </table></div>
+          {(() => {
+            const sin = validos.filter((x) => !String(quien(x)).trim()).sort((a, b) => (fechaDe(a) < fechaDe(b) ? 1 : -1));
+            if (!sin.length) return null;
+            const conocidos = Object.keys(nombres).filter((k) => k !== '(sin asignar)').map((k) => nombres[k]).sort((a, b) => a.localeCompare(b, 'es'));
+            const asignar = async (x, v) => {
+              let nom = v;
+              if (v === '__otro') nom = (window.prompt('Nombre del presupuestista que hizo la cotización ' + x.numero + ':') || '').trim();
+              if (!nom || !onAsignar) return;
+              setAsignando(x.key); const ok = await onAsignar(x.solId, nom); setAsignando('');
+              if (!ok) window.alert('No se pudo guardar. Corra en Supabase el SQL «SQL_cotizaciones_realizado_por.sql» y vuelva a intentar.');
+            };
+            return (
+              <div style={{ marginTop: 12, border: '1px solid #F2C9A8', background: '#FFF7F0', borderRadius: 10, padding: '10px 12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <b style={{ fontSize: 13 }}>{sin.length} cotizaciones sin presupuestista</b>
+                  <span style={{ fontSize: 12, color: '#5B6572' }}>Se marcaron como realizadas o enviadas en la lista de solicitudes, sin pasar por el Cotizador, y el sistema no guardó quién las hizo. Asigne a cada una el perfil que la hizo.</span>
+                  <button type="button" className="btn btn-line" style={{ minHeight: 30, padding: '5px 11px', fontSize: 12.5, marginLeft: 'auto' }} onClick={() => setVerSin((v) => !v)}>{verSin ? 'Ocultar' : 'Asignar'}</button>
+                </div>
+                {verSin && (
+                  <div style={{ overflowX: 'auto', marginTop: 8 }}><table>
+                    <thead><tr><th>Cotización</th><th>Cliente</th><th>Fecha</th><th className="r">Monto</th><th>Hecha por</th></tr></thead>
+                    <tbody>{sin.map((x) => (
+                      <tr key={x.key}>
+                        <td className="strong">{x.numero}</td><td>{x.cliente}</td><td>{fechaDe(x)}</td><td className="r">{usd(x.monto)}</td>
+                        <td>{x.solId ? (
+                          <select className="txt" disabled={asignando === x.key} value="" onChange={(e) => asignar(x, e.target.value)} style={{ minHeight: 30, fontSize: 12.5 }}>
+                            <option value="">{asignando === x.key ? 'Guardando…' : 'Elegir…'}</option>
+                            {conocidos.map((nm) => <option key={nm} value={nm}>{nm}</option>)}
+                            <option value="__otro">Otro…</option>
+                          </select>) : '—'}</td>
+                      </tr>))}</tbody>
+                  </table></div>
+                )}
+              </div>
+            );
+          })()}
+          <div style={{ fontSize: 11.5, color: '#5B6572', marginTop: 8 }}>
+            {modo === 'enviadas' ? 'Cuenta cada cotización el día en que se envió al cliente.' : 'Cuenta cada cotización REALIZADA por el presupuestista, en la fecha de la cotización (si no tiene, el día en que la terminó en el Cotizador). No importa cuándo se cargó la solicitud.'} El promedio por día usa los días hábiles (lunes a viernes) del mes en curso. Las canceladas no cuentan.{sinFecha ? ` ${sinFecha} cotización${sinFecha > 1 ? 'es' : ''} sin fecha no aparece${sinFecha > 1 ? 'n' : ''}.` : ''}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 function ControlCotizaciones({ supabase, usuarioId }) {
   const [sols, setSols] = useState([]); const [hist, setHist] = useState([]); const [proc, setProc] = useState([]);
   const [cargando, setCargando] = useState(true); const [avisos, setAvisos] = useState([]);
@@ -6688,6 +7563,13 @@ function ControlCotizaciones({ supabase, usuarioId }) {
         </div>
       </div>
 
+      <ProductividadPresupuestistas onAsignar={async (id, nom) => {
+        const { error } = await supabase.from('cotizaciones').update({ realizado_por: nom }).eq('id', id);
+        if (error) return false;
+        setSols((l) => l.map((x) => (String(x.id) === String(id) ? { ...x, realizadoPor: nom } : x)));
+        return true;
+      }} items={todos.filter((x) => (f.origen === '__vend' ? x.origen === ORIGEN_DEF : (!f.origen || x.origen === f.origen)) && (!f.area || String(x.area).includes(f.area)))} />
+
       <div className="card" style={{ marginTop: 12 }}>
         <h2 className="ctitle">Ofertas: solicitadas → enviadas → compradas</h2>
         <div className="embudo">
@@ -6798,7 +7680,7 @@ function Cotizaciones() {
   const [form, setForm] = useState({
     solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "",
     dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Solicitud",
-    actividad: "Seguimiento", tipo: "Inspecciones", frecuencia: "", observaciones: "", monto: "",
+    actividad: "Seguimiento", tipo: "Inspecciones", frecuencia: "", observaciones: "", monto: "", fechaEstimada: "",
   });
 
   useEffect(() => {
@@ -6831,13 +7713,16 @@ function Cotizaciones() {
       num_cot: form.numCot, estado: form.estado, actividad: form.actividad, tipo: form.tipo,
       frecuencia: form.frecuencia, observaciones: form.observaciones, monto: Number(form.monto) || 0,
     };
-    setForm({ solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "", dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Solicitud", actividad: "Seguimiento", tipo: "Inspecciones", frecuencia: "", observaciones: "", monto: "" });
+    setForm({ solicitante: "", cliente: "", contacto: "", email: "", telefono: "", provincia: "", dias: "", personal: "", descripcion: "", equipos: "", dispositivos: "", numCot: "", estado: "Solicitud", actividad: "Seguimiento", tipo: "Inspecciones", frecuencia: "", observaciones: "", monto: "", fechaEstimada: "" });
     setOpen(false);
     const monedaForm = form.moneda || "USD";
+    const fechaEst = form.fechaEstimada || "";
     const { data, error } = await supabase.from("cotizaciones").insert(payload).select().single();
     if (!error && data) {
-      setRows((prev) => [cotRowFromDb(data), ...prev]);
+      setRows((prev) => [{ ...cotRowFromDb(data), fechaEstimada: fechaEst }, ...prev]);
       if (monedaForm === "CRC") setMoneda(data.id, "CRC");
+      // Se guarda aparte: si falta la columna en Supabase, la solicitud igual se crea
+      if (fechaEst) supabase.from("cotizaciones").update({ fecha_estimada: fechaEst }).eq("id", data.id).then(() => {}, () => {});
     }
   };
   const setEstado = (id, estado, fechaEnvio) => {
@@ -6847,6 +7732,11 @@ function Cotizaciones() {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado, ...(fe ? { fechaEnvio: fe } : {}) } : r));
     supabase.from("cotizaciones").update({ estado }).eq("id", id).then();
     if (fe) supabase.from("cotizaciones").update({ fecha_envio: fe }).eq("id", id).then();
+    // Queda registrado qué perfil hizo la cotización (para la productividad por presupuestista)
+    if (["Realizado", "Enviado", "Comparado"].includes(estado) && fila && !fila.realizadoPor && currentUser?.name) {
+      setRows((prev) => prev.map((r) => r.id === id ? { ...r, realizadoPor: currentUser.name } : r));
+      supabase.from("cotizaciones").update({ realizado_por: currentUser.name }).eq("id", id).then(() => {}, () => {});
+    }
   };
   const setActividad = (id, actividad) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, actividad } : r));
@@ -6863,6 +7753,12 @@ function Cotizaciones() {
   const setObservaciones = (id, observaciones) => {
     setRows((prev) => prev.map((r) => r.id === id ? { ...r, observaciones } : r));
     supabase.from("cotizaciones").update({ observaciones }).eq("id", id).then();
+  };
+  const setFechaEstimada = (id, fechaEstimada) => {
+    setRows((prev) => prev.map((r) => r.id === id ? { ...r, fechaEstimada } : r));
+    supabase.from("cotizaciones").update({ fecha_estimada: fechaEstimada || null }).eq("id", id).then(({ error } = {}) => {
+      if (error) window.alert("No se pudo guardar la fecha estimada. Corra en Supabase el SQL «SQL_cotizaciones_fecha_estimada.sql».");
+    }, () => {});
   };
   const tcHoy = useTipoCambio();
   // Moneda de la solicitud; si es en colones se guarda el tipo de cambio del día
@@ -6887,7 +7783,7 @@ function Cotizaciones() {
   const TIPO_OFERTA_OPCIONES = ["Inspecciones", "Proyectos", "Inspecciones y Proyectos"];
 
   const rowsFiltradas = rows.filter((r) => {
-    const matchTab = subTab === "Todas" || r.estado === subTab;
+    const matchTab = subTab === "Todas" || (subTab === "__atrasadas" ? atrasoCotizacion(r).estado === "atrasada" : r.estado === subTab);
     const matchSolicitante = !filtroSolicitante.trim() || (r.solicitante || "").toLowerCase().includes(filtroSolicitante.trim().toLowerCase());
     const matchCliente = !filtroCliente.trim() || (r.cliente || "").toLowerCase().includes(filtroCliente.trim().toLowerCase());
     const matchProvincia = !filtroProvincia.trim() || (r.provincia || "").toLowerCase().includes(filtroProvincia.trim().toLowerCase());
@@ -6944,7 +7840,8 @@ function Cotizaciones() {
                 if (fila) setRows((prev) => prev.map((r) => r.id === id ? cotRowFromDb(fila) : r));
                 return false;
               }
-              setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado: "En proceso" } : r));
+              setRows((prev) => prev.map((r) => r.id === id ? { ...r, estado: "En proceso", realizadoPor: currentUser?.name || r.realizadoPor } : r));
+              if (currentUser?.name) supabase.from("cotizaciones").update({ realizado_por: currentUser.name }).eq("id", id).then(() => {}, () => {});
               return true;
             }}
             onPasarMonto={(id, monto, numCot, moneda, tcv) => { setMonto(id, monto); if (numCot) setNumCot(id, numCot); setMoneda(id, moneda || "USD", tcv); }}
@@ -7004,6 +7901,7 @@ function Cotizaciones() {
             <Field label="Equipos de elevación (cant./tipo/marca/modelo)"><input style={inputStyle} value={form.equipos} onChange={(e) => setForm({ ...form, equipos: e.target.value })} placeholder="1x Grúa / Terex / AC55" /></Field>
             <Field label="Lista de dispositivos"><input style={inputStyle} value={form.dispositivos} onChange={(e) => setForm({ ...form, dispositivos: e.target.value })} placeholder="Materiales y/o equipos..." /></Field>
             <Field label="N° de cotización (si aplica)"><input style={inputStyle} value={form.numCot} onChange={(e) => setForm({ ...form, numCot: e.target.value })} /></Field>
+            <Field label="Fecha estimada de entrega"><input style={inputStyle} type="date" min={new Date().toLocaleDateString("en-CA")} value={form.fechaEstimada || ""} onChange={(e) => setForm({ ...form, fechaEstimada: e.target.value })} /></Field>
             <Field label="Tipo de oferta">
               <select style={inputStyle} value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })}>
                 {TIPO_OFERTA_OPCIONES.map((t) => <option key={t}>{t}</option>)}
@@ -7030,6 +7928,10 @@ function Cotizaciones() {
           {ESTADOS_COT.map((e) => (
             <Btn key={e} small variant={subTab === e ? "accent" : "ghost"} onClick={() => setSubTab(e)}>{e} ({rows.filter((r) => r.estado === e).length})</Btn>
           ))}
+          {(() => { const n = rows.filter((r) => atrasoCotizacion(r).estado === "atrasada").length; return (
+            <Btn small variant={subTab === "__atrasadas" ? "danger" : "ghost"} onClick={() => setSubTab("__atrasadas")} style={n && subTab !== "__atrasadas" ? { color: T.red, borderColor: T.red } : undefined}>
+              <AlertTriangle size={12} /> Atrasadas ({n})
+            </Btn>); })()}
         </div>
 
 
@@ -7056,12 +7958,12 @@ function Cotizaciones() {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
             <tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>
-              <th style={{ padding: "6px 8px" }}>#</th><th>Solicitante</th><th>Cliente</th><th>Provincia</th><th>Días</th><th style={{ minWidth: 150 }}>N° Cotización</th><th>Tipo</th><th>Monto</th><th>Estado</th><th>Actividad</th><th style={{ minWidth: 180 }}>Observaciones</th><th></th><th></th>
+              <th style={{ padding: "6px 8px" }}>#</th><th>Solicitante</th><th>Cliente</th><th>Provincia</th><th>Días</th><th style={{ minWidth: 150 }}>N° Cotización</th><th style={{ minWidth: 150 }}>Entrega estimada</th><th>Tipo</th><th>Monto</th><th>Estado</th><th>Actividad</th><th style={{ minWidth: 180 }}>Observaciones</th><th></th><th></th>
             </tr>
           </thead>
           <tbody>
-            {rowsFiltradas.map((r) => (
-              <tr key={r.id} style={{ borderTop: `1px solid ${T.line}` }}>
+            {rowsFiltradas.map((r) => { const at = atrasoCotizacion(r); const fondoAt = at.estado === "atrasada" ? T.redSoft : at.estado === "hoy" || at.estado === "pronto" ? T.amberSoft : undefined; return (
+              <tr key={r.id} style={{ borderTop: `1px solid ${T.line}`, background: fondoAt, boxShadow: at.estado === "atrasada" ? `inset 4px 0 0 ${T.red}` : at.estado === "hoy" || at.estado === "pronto" ? `inset 4px 0 0 ${T.amber}` : undefined }}>
                 <td style={{ padding: "9px 8px", fontWeight: 700 }}>{r.consecutivo}</td>
                 <td>{r.solicitante}</td>
                 <td>{r.cliente}</td>
@@ -7071,6 +7973,14 @@ function Cotizaciones() {
                   {canEditEstadoCot ? (
                     <input style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }} value={r.numCot} onChange={(e) => setNumCot(r.id, e.target.value)} placeholder="COT-000" />
                   ) : (r.numCot || "—")}
+                </td>
+                <td>
+                  {canEditEstadoCot ? (
+                    <input type="date" style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: 140, ...(at.estado === "atrasada" ? { borderColor: T.red, color: T.red, fontWeight: 700 } : {}) }} value={r.fechaEstimada || ""} onChange={(e) => setFechaEstimada(r.id, e.target.value)} title="Fecha estimada de entrega" />
+                  ) : (r.fechaEstimada ? <span style={{ fontWeight: at.estado === "atrasada" ? 700 : 500, color: at.estado === "atrasada" ? T.red : T.ink }}>{String(r.fechaEstimada).slice(0, 10).split("-").reverse().join("/")}</span> : "—")}
+                  <div style={{ fontSize: 11, marginTop: 2, fontWeight: 700, color: at.estado === "atrasada" ? T.red : at.estado === "hoy" || at.estado === "pronto" ? T.amber : at.estado === "atiempo" ? T.green : T.inkSoft }}>
+                    {at.estado === "atrasada" ? `Atrasada ${at.dias} día${at.dias === 1 ? "" : "s"}` : at.estado === "hoy" ? "Vence hoy" : at.estado === "pronto" ? `Vence en ${at.dias} día${at.dias === 1 ? "" : "s"}` : at.estado === "atiempo" ? `Faltan ${at.dias} días` : at.estado === "entregada" ? (at.tarde ? `Enviada ${at.tarde} día${at.tarde === 1 ? "" : "s"} tarde` : "Enviada a tiempo") : ""}
+                  </div>
                 </td>
                 <td>
                   {isAdmin ? (
@@ -7122,7 +8032,7 @@ function Cotizaciones() {
                   {isAdmin && <Btn small variant="danger" onClick={() => del(r.id)}><X size={12} /></Btn>}
                 </td>
               </tr>
-            ))}
+            ); })}
           </tbody>
         </table>
       </Card>
@@ -8075,9 +8985,11 @@ function AreaOperativa({ area, color }) {
     { id: "horas_quincenales", label: "Estadística de Horas Extras", icon: LayoutDashboard },
     { id: "od", label: area === "inspecciones" ? "OD IPM" : "OD Proyectos", icon: ClipboardList },
     { id: "od_correctivos", label: "OD Correctivos", icon: AlertCircle },
-    { id: "calendario", label: "Calendario", icon: CalendarDays },
+    ...(area === "inspecciones" ? [{ id: "visitas_mes", label: "Visitas del mes", icon: Check }] : []),
     { id: "porpersona", label: `Por ${tecnicoLabel}`, icon: LayoutDashboard },
   ];
+  // La pestaña Calendario se quitó (ahora se usa la Agenda); si quedó recordada, vuelve a la primera
+  useEffect(() => { if (!tabs.some((t) => t.id === tab)) setTab("horas"); }, [tab]);
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
@@ -8091,7 +9003,7 @@ function AreaOperativa({ area, color }) {
       {tab === "horas_quincenales" && <HorasExtrasQuincenales area={area} color={color} />}
       {tab === "od" && <OrdenesTrabajo area={area} color={color} tipoOD="Normal" />}
       {tab === "od_correctivos" && <OrdenesTrabajo area={area} color={T.amber} tipoOD="Correctivo" />}
-      {tab === "calendario" && <Calendario area={area} color={color} />}
+      {tab === "visitas_mes" && area === "inspecciones" && <VisitasIpmMes color={color} />}
       {tab === "porpersona" && <ClientesPorPersona area={area} color={color} />}
     </div>
   );
@@ -8710,6 +9622,7 @@ function GestionUsuarios() {
     const m = String(error?.message || error || "");
     if (/check constraint|violates check|categoria/i.test(m)) return 'Supabase todavía no acepta usuarios "Cliente". Corre en Supabase el SQL "SUPABASE_TODO_EN_UNO.sql" (paso 3 del paquete) y vuelve a intentarlo.';
     if (/duplicate|unique|already exists/i.test(m)) return "Ya existe un usuario con ese correo.";
+    if (/Solo un administrador|SESION_INVALIDA/i.test(m)) return "Su sesión no tiene permiso de administrador o venció. Salga y vuelva a entrar.";
     if (/null value.*pin|"pin"/i.test(m)) return 'Para guardar sin escribir la contraseña, corre en Supabase el SQL "SUPABASE_TODO_EN_UNO.sql" (paso 3 del paquete). Mientras tanto, escribe la contraseña del usuario y guarda.';
     return m || "Error desconocido.";
   };
@@ -8965,6 +9878,80 @@ function GestionUsuarios() {
           </Card>
         </div>
       )}
+      <RegistroAccesos usuarios={users} />
+    </div>
+  );
+}
+
+// Registro de accesos (quién entró, cuándo, desde qué equipo, intentos
+// fallidos) y botón para cerrar todas las sesiones de un usuario, por
+// ejemplo si perdió el celular. Lo pide NFPA 72 (2025) 7.6.7: registrar y
+// revisar los accesos a equipos conectables a la red.
+function RegistroAccesos({ usuarios }) {
+  const confirmar = useContext(ConfirmContext);
+  const [filas, setFilas] = useState(null);
+  const [error, setError] = useState("");
+  const [abierto, setAbierto] = useState(false);
+  const [usuarioCerrar, setUsuarioCerrar] = useState("");
+  const [aviso, setAviso] = useState("");
+  const cargar = async () => {
+    const { data, error: e } = await supabase.rpc("accesos_listar", { p_limite: 300 });
+    if (e) { setError(/accesos_listar|PGRST202|Could not find/i.test(e.message || "") ? "Falta correr en Supabase el SQL «SQL_seguridad.sql»." : e.message); setFilas([]); return; }
+    setError(""); setFilas(data || []);
+  };
+  useEffect(() => { if (abierto) cargar(); }, [abierto]);
+  const cerrarSesiones = async () => {
+    const u = (usuarios || []).find((x) => x.id === usuarioCerrar);
+    if (!u) return;
+    if (!(await confirmar(`¿Cerrar todas las sesiones abiertas de ${u.name}? Tendrá que volver a ingresar en todos sus equipos.`))) return;
+    const { data, error: e } = await supabase.rpc("cerrar_sesiones_usuario", { p_id: u.id });
+    setAviso(e ? `No se pudo: ${e.message}` : `Listo: se cerraron ${data || 0} sesión(es) de ${u.name}.`);
+    cargar();
+  };
+  const fallidos24h = (filas || []).filter((f) => f.resultado !== "ok" && f.resultado !== "cierre" && Date.now() - new Date(f.fecha).getTime() < 86400000).length;
+  const colorRes = { ok: T.green, cierre: T.steel, pin_incorrecto: T.amber, bloqueado: T.red };
+  const textoRes = { ok: "Ingreso", cierre: "Salida", pin_incorrecto: "Contraseña incorrecta", bloqueado: "Bloqueado" };
+  return (
+    <div style={{ marginTop: 18 }}>
+      <Card title="Seguridad · Registro de accesos" action={<Btn small variant="ghost" onClick={() => setAbierto((v) => !v)}>{abierto ? "Ocultar" : "Ver registro"}</Btn>}>
+        <div style={{ fontSize: 12.5, color: T.inkSoft }}>Cada ingreso, salida e intento fallido queda registrado con fecha, equipo e IP. Tras 8 intentos fallidos seguidos, el correo se bloquea 15 minutos. Revise este registro al menos una vez al año (NFPA 72, 2025, sección 7.6.7).</div>
+        {abierto && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+              <select style={{ ...inputStyle, width: 240 }} value={usuarioCerrar} onChange={(e) => setUsuarioCerrar(e.target.value)}>
+                <option value="">Cerrar sesiones de…</option>
+                {(usuarios || []).map((u) => <option key={u.id} value={u.id}>{u.name} · {u.email}</option>)}
+              </select>
+              <Btn small variant="danger" onClick={cerrarSesiones} disabled={!usuarioCerrar}><LogOut size={12} /> Cerrar sus sesiones</Btn>
+              <Btn small variant="ghost" onClick={cargar}><RotateCcw size={12} /> Actualizar</Btn>
+              {filas && <span style={{ fontSize: 12, color: fallidos24h ? T.red : T.green, fontWeight: 700, marginLeft: "auto" }}>{fallidos24h ? `${fallidos24h} intento(s) fallido(s) en 24 h` : "Sin intentos fallidos en 24 h"}</span>}
+            </div>
+            {aviso && <div style={{ fontSize: 12.5, color: T.green, fontWeight: 600, marginBottom: 8 }}>{aviso}</div>}
+            {error && <div style={{ fontSize: 12.5, color: T.red, fontWeight: 600 }}>{error}</div>}
+            {filas === null ? <div style={{ fontSize: 12.5, color: T.gray }}>Cargando…</div> : (
+              <div style={{ maxHeight: 360, overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 8 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                  <thead><tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", background: T.graySoft }}>
+                    <th style={{ padding: "6px 8px" }}>Fecha</th><th>Usuario</th><th>Resultado</th><th>Equipo</th><th>IP</th>
+                  </tr></thead>
+                  <tbody>
+                    {filas.map((f, i) => (
+                      <tr key={i} style={{ borderTop: `1px solid ${T.line}` }}>
+                        <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{new Date(f.fecha).toLocaleString("es-CR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+                        <td>{f.nombre || f.email}</td>
+                        <td style={{ color: colorRes[f.resultado] || T.ink, fontWeight: 700 }}>{textoRes[f.resultado] || f.resultado}</td>
+                        <td style={{ color: T.inkSoft }}>{f.equipo || "—"}</td>
+                        <td style={{ color: T.inkSoft }}>{f.ip || "—"}</td>
+                      </tr>
+                    ))}
+                    {filas.length === 0 && !error && <tr><td colSpan={5} style={{ padding: 10, color: T.gray }}>Sin registros todavía.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
     </div>
   );
 }
@@ -11425,6 +12412,7 @@ function FacturacionPublica() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <FacturacionIpmCard />
+      <FacturacionCorrectivosCard />
       <Card
         title="Facturación mensual vs. punto de equilibrio ($120,000)"
         action={facturasAnioActual.length > 0 && (
@@ -11686,6 +12674,283 @@ function ResumenGastosCard() {
     </Card>
   );
 }
+
+// ---------------------------------------------------------------------
+// GUÍA DE EVENTOS DEL PANEL (la misma "troubleshooting" del IgnisMonitor,
+// http://ignismonitor.local): Apéndice D del manual + guía general.
+// ---------------------------------------------------------------------
+const GUIA_IGNIS = (() => {
+
+// =====================================================================
+// Diccionario de problemas del panel (Apéndice D) con el TEXTO LITERAL
+// de los manuales, sin reescribir:
+//   es = Manual de operaciones NFS-320/E/C (P/N 52747:A) — Apéndice D
+//   en = NFS2-640/E Operations Manual (P/N 52743:C) — Appendix D
+//   tr = traducción de referencia, SOLO para códigos que no aparecen en
+//        el manual en español (el modal lo indica)
+// Cada entrada: code = como lo muestra el panel; t = 'p' problema de
+// punto (Tabla D.1) o 's' problema del sistema (Tabla D.2); alias =
+// otras formas en que el panel puede imprimir el mismo problema.
+// Para la línea de impresora, "x" = número (lazo, puerto o dirección).
+// =====================================================================
+const MANUAL_ES = 'Manual de operaciones NFS-320/E/C (P/N 52747:A) — Apéndice D';
+const MANUAL_EN = 'NFS2-640/E Operations Manual (P/N 52743:C) — Appendix D';
+const TABLAS = {
+  p: {tipo:'Problema de punto (dispositivo)', es:'Tabla D.1 Problemas de puntos (dispositivos)', en:'Table D.1 Point (Device) Troubles'},
+  s: {tipo:'Problema del sistema', es:'Tabla D.2 Problemas en el sistema', en:'Table D.2 System Troubles'}
+};
+const TROUBLESHOOTING_RAW = [
+  {code:"AC FAILURE", t:'p', alias:["FALLA DE CA"], en:["The auxiliary power supply has lost AC power.", "Determine whether there is an AC power loss or whether the power supply and wiring is correct."], abrev:["FALLA CA", "FALLA AC", "SIN CA", "FALL CA", "PERDIDA CA"], es:["La fuente de alimentación auxiliar ha perdido alimentación de CA.", "Determine si hay pérdida de alimentación de CA o si la fuente de alimentación y el cableado están bien."]},
+  {code:"ADRFLT", t:'p', alias:["FALLA DE DIRECCION"], en:["There is more than one device of a single type (detector or module) with the same SLC address. A detector and a module can share the same address on an SLC, but two detectors, or two modules, cannot. Note that some addressable devices (e.g. certain power supplies and XPIQs) may not appear to be detectors or modules, but are addressed on the SLC as such.", "Readdress the incorrect device."], abrev:["FALLA DIRECCION", "FALLA DIR", "DIRECCION DUPLICADA", "DIR DUPLICADA", "DIR DUP", "DOBLE DIRECCION", "FALLA DIR", "FLL DIR", "FL DIR", "ERROR DIRECCION", "ERR DIR"], es:["Hay más de un dispositivo para un mismo tipo (detector o módulo) con la misma dirección de SLC. Un detector y un módulo pueden compartir la misma dirección en un SLC pero no así dos detectores o dos módulos. Tenga en cuenta que algunos dispositivos direccionables (como ciertas fuentes de alimentación) tal vez no aparezcan como detectores o módulos pero en el SLC son considerados como tales.", "Redireccione el dispositivo incorrecto."]},
+  {code:"ALIGN", t:'p', alias:["ALINEACION"], en:["A beam detector is in configuration mode.", "No action is necessary, as the trouble will clear when the configuration is complete. However, the detector will not detect a fire while this trouble exists."], abrev:["ALINEA", "ALINEANDO", "ALINEAR"], es:["Un detector de haces está en modo de configuración.", "No se requiere ninguna acción, ya que el problema se despejará cuando se complete la configuración. Sin embargo, el detector no detectará un incendio mientras exista este problema."]},
+  {code:"BLOCK", t:'p', alias:["BLOQUEO"], en:["Something has come between the detector's beam and its reflector.", "Investigate and clear the blockage."], abrev:["BLOQUE", "BLOQUEADO", "OBSTRUIDO", "OBSTRUCCION"], es:["Algo se interpone entre el haz del detector y su reflector.", "Investigue las causas y despeje la obstrucción."]},
+  {code:"CHGFLT", t:'p', alias:["FALLA DE CARGADOR", "FALLA CARGADOR"], en:["The power supply's battery charger is not working properly.", "Correct the fault."], abrev:["FALLA CARGADOR", "FALL CARG", "FL CARG", "CARGADOR"], es:["El cargador de batería de la fuente de alimentación no está funcionando bien.", "Corrija la falla."]},
+  {code:"CO 6MN", t:'p', alias:["CO 6M", "CO 6 MESES", "CO 6 MONTH"], en:["The CO (carbon monoxide) detection element on an FSC-851 IntelliQuad detector has six months left to expiration. (This trouble generates in FlashScan mode only. CLIP mode will generate a LO VAL error.)", "Replace the detector."], abrev:["CO 6 MESES", "CO6MES"], tr:["Al elemento de detección de CO (monóxido de carbono) de un detector IntelliQuad FSC-851 le quedan seis meses para su vencimiento. (Este problema se genera solo en modo FlashScan. El modo CLIP generará un error LO VAL.)", "Reemplace el detector."]},
+  {code:"CO EXP", t:'p', alias:["CO VENCIDO", "CO EXPIRADO", "CO EXPIRED"], en:["The CO (carbon monoxide) detection element on an FSC-851 IntelliQuad detector has reached the expiration date. (This trouble generates in FlashScan mode only. CLIP mode will generate a LO VAL error.)", "Replace the detector."], abrev:["CO VENCIDO", "CO EXPIRADO", "CO VENC"], tr:["El elemento de detección de CO (monóxido de carbono) de un detector IntelliQuad FSC-851 llegó a su fecha de vencimiento. (Este problema se genera solo en modo FlashScan. El modo CLIP generará un error LO VAL.)", "Reemplace el detector."]},
+  {code:"CO TBL", t:'p', alias:["PROBLEMA CO", "FALLA CO", "CO TROUBLE"], en:["The CO element on an FSC-851 IntelliQuad detector is not working properly. (This trouble generates in FlashScan mode only. CLIP mode will generate a LO VAL error.)", "Replace the detector."], abrev:["FALLA CO", "PROBLEMA CO", "PRB CO", "AVERIA CO"], tr:["El elemento de CO de un detector IntelliQuad FSC-851 no está funcionando correctamente. (Este problema se genera solo en modo FlashScan. El modo CLIP generará un error LO VAL.)", "Reemplace el detector."]},
+  {code:"DIRTY 1", t:'p', alias:["SUCIO 1"], en:["The detector is dirty and needs cleaning.", "Clean the detector."], abrev:["DIRTY1", "SUCIO1", "SUCIO", "SUCIEDAD 1"], es:["El detector está sucio y necesita limpieza.", "Limpie el detector."]},
+  {code:"DIRTY 2", t:'p', alias:["SUCIO 2"], en:["The detector requires cleaning immediately. It is a false alarm risk.", "Clean the detector immediately."], abrev:["DIRTY2", "SUCIO2", "MUY SUCIO", "SUCIEDAD 2"], es:["El detector necesita limpieza de inmediato. Implica un riesgo de falsa alarma.", "Limpie el detector de inmediato."]},
+  {code:"DISABL", t:'p', alias:["INHABILITADO", "DESHABILITADO"], en:["The point has been disabled.", "Service and re-enable the point."], abrev:["DISABLED", "INHABIL", "INHAB", "DESHAB", "FUERA DE SERVICIO", "FUERA SERV", "ANULADO", "DESACTIVADO", "DESACT"], es:["El punto ha sido inhabilitado.", "Realice el mantenimiento del punto y vuelva a habilitarlo."]},
+  {code:"GNDFLT", t:'p', alias:["FALLA A TIERRA", "FALLA DE TIERRA"], en:["There is a ground fault on the main or auxiliary power supply.", "Correct the fault."], abrev:["FALLA TIERRA", "FALL TIERRA", "FL TIERRA", "TIERRA"], es:["Hay una falla a tierra en la fuente de alimentación principal o auxiliar.", "Corrija la falla."]},
+  {code:"HI BAT", t:'p', alias:["BATERIA ALTA"], en:["The auxiliary power supply's battery charge is too high.", "Check the batteries for problems. Replace batteries if necessary."], abrev:["BAT ALTA", "BAT AL", "BATERIA ALTA", "BAT ALTA", "ALTA BAT"], es:["La carga de la batería de la fuente de alimentación auxiliar es muy alta.", "Verifique que las baterías no tengan problemas. Reemplácelas si fuera necesario."]},
+  {code:"INVREP", t:'p', alias:["RESPUESTA NO VALIDA", "RESP NO VALIDA", "RESP INVALIDA"], en:["The device has returned a response to the panel that the panel did not expect.", "Check the device for functionality, addressing and wiring."], abrev:["INVRP", "INV RP", "INV REP", "INVRES", "RESP INV", "RESPUESTA INVALIDA", "RESP INVALIDA", "INVALIDA", "INV RESP"], es:["El dispositivo envió una respuesta al panel que este no esperaba.", "Verifique que la funcionalidad, las direcciones y el cableado del dispositivo sean correctos."]},
+  {code:"IR TBL", t:'p', alias:["PROBLEMA IR", "FALLA IR", "IR TROUBLE"], en:["The infrared element is not working properly on an FSC-851 IntelliQuad detector. (This trouble generates in FlashScan mode only. CLIP mode will generate a LO VAL error.)", "Replace the detector."], abrev:["FALLA IR", "PROBLEMA IR", "PRB IR", "AVERIA IR", "INFRARROJO"], tr:["El elemento infrarrojo de un detector IntelliQuad FSC-851 no está funcionando correctamente. (Este problema se genera solo en modo FlashScan. El modo CLIP generará un error LO VAL.)", "Reemplace el detector."]},
+  {code:"LO BAT", t:'p', alias:["BATERIA BAJA"], en:["The auxiliary power supply's battery charge is low.", "Check the batteries for problems. Replace batteries if necessary."], abrev:["BAT BAJA", "BAT BA", "BATERIA BAJA", "BAT BAJA", "BAJA BAT"], es:["La carga de la batería de la fuente de alimentación auxiliar es muy baja.", "Verifique que las baterías no tengan problemas. Reemplácelas si fuera necesario."]},
+  {code:"LO TEMP", t:'p', alias:["TEMPERATURA BAJA"], en:["The temperature read by a Heat+ or Acclimate™+ detector is too low.", "Raise the heat in the area of the detector."], abrev:["TEMP BAJA", "TMP BAJ", "TEMP BAJA", "BAJA TEMP", "TEMPERATURA BAJA"], es:["La lectura de temperatura de un detector Heat+ o Acclimate™+ es muy baja.", "Eleve la temperatura en el área del detector."]},
+  {code:"LO VAL", t:'p', alias:["LO-VAL", "VALOR BAJO"], en:["The detector chamber reading is too low; the detector is not operating properly. Or (CLIP Mode only) the thermistors, CO element, or infra-red element on an FSC-851 IntelliQuad detector is not working properly, or the FSC-851 IntelliQuad is experiencing a freeze warning.", "The detector must be removed and replaced by an authorized service representative."], abrev:["LOVAL", "VAL BAJO", "VAL BAJ", "VALOR BAJO", "VAL BAJO", "BAJO VALOR", "LECTURA BAJA"], es:["La lectura de la cámara del detector es muy baja; el detector no está funcionando correctamente.", "Un representante del servicio técnico autorizado debe extraer el detector y reemplazarlo."]},
+  {code:"NO ANS", t:'p', alias:["SIN RESPUESTA", "NO RESPUESTA"], en:["The device (module or detector) is not responding to the poll. Either the device is not working or it is not connected properly.", "Determine whether the device is functional, and connected and addressed properly on the SLC."], abrev:["NO ANSWER", "NO RES", "NO RESP", "SIN RESP", "SIN RES", "NO RESPONDE", "NO RESPONDE", "NO RESPUESTA", "SIN RESPUESTA", "NO CONTESTA", "NO ANSWER"], es:["El dispositivo (módulo o detector) no responde a la interrogación. O el dispositivo no funciona o no está conectado correctamente.", "Determine si el dispositivo funciona y si está conectado y direccionado correctamente en el SLC."]},
+  {code:"NO SIG", t:'p', alias:["SIN SENAL"], en:["The device (module or detector) is not responding to the poll. Either the device is not working or it is not connected properly.", "Determine whether the device is functional, and connected and addressed properly on the SLC."], abrev:["SIN SEN", "SIN SE", "NO SENAL", "NO SEN", "SIN SENAL", "NO SENAL", "NO SIGNAL"], es:["El dispositivo (módulo o detector) no responde a la interrogación. O el dispositivo no funciona o no está conectado correctamente.", "Determine si el dispositivo funciona y si está conectado y direccionado correctamente en el SLC."]},
+  {code:"OPEN", t:'p', alias:["ABIERTO", "CIRCUITO ABIERTO"], en:["The module device has an open circuit on its supervised wiring.", "Check the connections from the module to the input or output device to which it is wired."], abrev:["ABIERT", "ABIER", "CIRC ABIERTO", "ABIERTO", "CIRCUITO ABIERTO", "CTO ABIERTO", "CIRC ABIERTO"], es:["El dispositivo del módulo tiene un circuito abierto en su cableado supervisado.", "Verifique que las conexiones del módulo al dispositivo de entrada o salida sean correctas."]},
+  {code:"OPEN ON X", t:'p', alias:["ABIERTO EN X", "ABIERTO EN PARLANTE X", "ABIERTO EN CIRCUITO X", "OPEN SPKR X"], en:["There is an open on speaker circuit x.", "Locate the open and fix."], tr:["Hay un circuito abierto en el circuito de altavoces x.", "Localice el circuito abierto y repárelo."]},
+  {code:"PSFAIL", t:'p', alias:["FALLA EN FUENTE DE ALIMENTACION"], en:["The power supply is not working properly.", "Check the battery for problems. Replace battery if necessary."], abrev:["FALLA FUENTE", "FALLA FUENTE", "FALLA ALIMENTACION", "FALL FUENTE", "FL FUENTE", "FUENTE"], es:["La fuente de alimentación no está funcionando correctamente.", "Verifique que la batería no tenga problemas. Reemplácela si fuera necesario."]},
+  {code:"SHORT", t:'p', alias:["CORTOCIRCUITO"], en:["The module device has a short circuit on its supervised wiring.", "Check the connections from the module to the input or output device to which it is wired."], abrev:["CORTOC", "CORTO", "CORTOCIRCUITO", "CORTO", "CTO CORTO", "EN CORTO"], es:["El dispositivo del módulo tiene un cortocircuito en su cableado supervisado.", "Verifique que las conexiones del módulo al dispositivo de entrada o salida sean correctas."]},
+  {code:"SHORT ON X", t:'p', alias:["CORTO EN X", "CORTO EN PARLANTE X", "CORTO EN CIRCUITO X", "SHORT SPKR X"], en:["There is a short on speaker circuit x.", "Locate the short and fix."], tr:["Hay un cortocircuito en el circuito de altavoces x.", "Localice el cortocircuito y repárelo."]},
+  {code:"TEST F", t:'p', alias:["PRUEBA REPROBADA"], en:["This detector has failed the FACP's periodic detector test for alarm capabilities.", "The detector should be removed and replaced by an authorized service representative."], abrev:["TEST FAIL", "PRB REP", "PRUEBA F", "PRUEBA FALLIDA", "PRUEBA REPROBADA", "FALLO PRUEBA", "FALLA PRUEBA", "TEST FALLA"], es:["Este detector ha reprobado la prueba periódica del FACP para detectores relativa a las capacidades de alarma.", "Un representante del servicio técnico autorizado debe extraer el detector y reemplazarlo."]},
+  {code:"THERM", t:'p', alias:["TERMISTOR", "TERMISTORES", "FALLA TERMISTOR"], en:["The thermistors are not functioning properly on a FSC-851 Intelliquad detector. (This trouble generates in FlashScan mode only. CLIP mode will generate a LO VAL error.)", "Replace the detector."], abrev:["TERMISTOR", "TERMISTORES", "FALLA TERMISTOR"], tr:["Los termistores de un detector IntelliQuad FSC-851 no están funcionando correctamente. (Este problema se genera solo en modo FlashScan. El modo CLIP generará un error LO VAL.)", "Reemplace el detector."]},
+  {code:"VER HI", t:'p', alias:["VERIFICACION ALTA"], en:["This detector, which has been programmed to participate in alarm verification, has gone into and come out of verification its programmed limit without going into alarm. Either something is wrong with the detector or there is a condition nearby (such as someone smoking) that causes it to go into verification frequently.", "Check the detector and the nearby conditions to determine the problem."], abrev:["VERIFICACION ALTA", "VERIF ALTA", "VER ALTA"], es:["Este detector, que ha sido programado para participar en la verificación de alarmas, ha llegado y ha regresado de su límite de verificación programado sin emitir alarmas. O algo funciona mal en el detector o hay una condición circundante (como alguien fumando) que provoca la verificación frecuentemente.", "Verifique el funcionamiento del detector y las condiciones circundantes para determinar el problema."]},
+  {code:"XP TBL", t:'p', alias:["PROBLEMA XP", "FALLA XP", "XP TROUBLE", "XPIQ TROUBLE"], en:["XPIQ general trouble.", "Check the XPIQ point for problems."], abrev:["FALLA XP", "PROBLEMA XP", "PRB XP", "AVERIA XP"], tr:["Problema general del XPIQ.", "Revise si el punto XPIQ tiene problemas."]},
+  {code:"AC FAIL", t:'s', alias:["FALLA DE CA", "AC FAILURE", "AC POWER FAIL", "FALLA CA", "FALLA AC", "FALLA ALIMENTACION CA"], en:["The main power supply has lost AC power.", "Investigate whether there is an AC power loss, or whether the PS is correctly installed and wired."], es:["La fuente de alimentación principal ha perdido alimentación de CA.", "Determine si hay pérdida de alimentación de CA o si la fuente de alimentación y el cableado están bien."]},
+  {code:"ADV WALK TEST", t:'s', alias:["PRUEBA DE RECORRIDO AVANZADA", "PRUEBA RECORRIDO AVANZADA", "ADVANCED WALK TEST"], en:["There is an Advanced Walk Test in progress.", "No action is required."], es:["Se está ejecutando una prueba de recorrido avanzada.", "No se requiere ninguna acción."]},
+  {code:"ANNUN X NO ANSWER", t:'s', alias:["SIN RESPUESTA DEL ANUNCIADOR X", "ANUNC X SIN RESPUESTA", "ANUNCIADOR X NO RESPONDE", "ANUN X NO RESP"], en:["The annunciator at address x is not responding.", "Determine whether the device is functional, and connected and addressed properly."], es:["El anunciador de la dirección x no responde.", "Determine si el dispositivo funciona y si está conectado y direccionado correctamente."]},
+  {code:"ANNUN X TROUBLE", t:'s', alias:["PROBLEMAS CON EL ANUNCIADOR X", "ANUNC X PROBLEMA", "ANUNCIADOR X PROBLEMA", "ANUN X PRB"], en:["The annunciator at address x is in trouble.", "Determine if the ACS module is functional, correctly installed, and configured properly."], es:["El anunciador de la dirección x tiene problemas.", "Determine si el módulo ACS funciona, si está bien instalado y correctamente configurado."]},
+  {code:"AUXILIARY TROUBLE", t:'s', alias:["PROBLEMAS EN AUXILIAR", "PROBLEMA AUXILIAR", "AUX TROUBLE", "FALLA AUXILIAR"], en:["An auxiliary device connected to the CPU2-640 at J6 is in trouble or the cable is missing.", "Check the wiring and source."], es:["Un dispositivo auxiliar conectado al NFS-320 en J6 tiene problemas o falta el cable.", "Verifique el cableado y la fuente."]},
+  {code:"BASIC WALK TEST", t:'s', alias:["PRUEBA DE RECORRIDO BASICA", "PRUEBA RECORRIDO BASICA", "PRUEBA DE RECORRIDO", "WALK TEST"], en:["A Basic Walk Test is in progress.", "No action is required."], es:["Se está ejecutando una prueba de recorrido básica.", "No se requiere ninguna acción."]},
+  {code:"BATTERY", t:'s', alias:["BATERIA", "BATTERY TROUBLE", "BAT TROUBLE", "PROBLEMA BATERIA", "FALLA BATERIA"], en:["The main power supply's battery charge is too high or too low.", "Check batteries, replace if necessary."], es:["La carga de la batería de la fuente de alimentación principal es muy alta o muy baja.", "Verifique que las baterías no tengan problemas; reemplácelas si fuera necesario."]},
+  {code:"BAT.BACKUP RAM", t:'s', alias:["RAM DE RESPALDO DE BATERIA", "BATERIA RAM", "RAM BATTERY LOW"], en:["RAM battery backup is low.", "Replace battery."], es:["El respaldo de RAM de la batería es bajo.", "Reemplace la batería."]},
+  {code:"CHARGER FAIL", t:'s', alias:["FALLA DEL CARGADOR", "CHARGER FAILURE", "FALLA CARGADOR", "FALLA DE CARGADOR"], en:["The main power supply's battery charger is not working properly.", "Correct the fault."], es:["El cargador de baterías de la fuente de alimentación principal no está funcionando bien.", "Corrija la falla."]},
+  {code:"CORRUPT LOGIC EQUAT", t:'s', alias:["ECUACIONES LOGICAS DANADAS", "ECUACIONES LOGICAS CORRUPTAS", "LOGICA DANADA"], en:["The database that houses the panel's logic equations is corrupt.", "The database must be re-downloaded, or all programming must be cleared and re-entered."], es:["La base de datos que alberga las ecuaciones lógicas del panel está dañada. Se debe descargar nuevamente o se deben borrar todos los datos de programación y volver a ingresarlos.", "La base de datos se debe descargar nuevamente o se deben borrar todos los datos de programación y volver a ingresarlos."]},
+  {code:"DRILL ACTIVATED", t:'s', alias:["SIMULACRO ACTIVADO", "SIMULACRO", "DRILL"], en:["Drill has been activated.", "No action is required."], es:["Se ha iniciado el simulacro.", "No se requiere ninguna acción."]},
+  {code:"DETECTOR INITIALIZE", t:'s', alias:["INICIALIZACION DE DETECTOR", "DETECTORES INICIALIZANDO", "INICIALIZANDO DETECTORES", "DETECTOR INIT"], en:["The detectors are initializing.", "No action is required, as the trouble will clear when initialization is completed. However, the detector will not detect a fire while this trouble exists."], es:["Los detectores se están inicializando.", "No se requiere ninguna acción, ya que el problema se despejará cuando se complete la inicialización. Sin embargo, el detector no detectará un incendio mientras exista este problema."]},
+  {code:"DVC ANALOG OUT X TBL", t:'s', alias:["DVC SALIDA ANALOGICA X", "DVC SAL ANALOG X", "DVC ANALOG OUT X TROUBLE"], en:["A trouble has occurred on DVC-AO analog output x (1-4). The analog output is configured for style 7, but no audio signal is returned.", "Investigate and fix."], tr:["Ocurrió un problema en la salida analógica x (1-4) del DVC-AO. La salida analógica está configurada como estilo 7, pero no regresa señal de audio.", "Investigue y repare."]},
+  {code:"DVC AUDIO LIB. CORRUP", t:'s', alias:["DVC BIBLIOTECA AUDIO DANADA", "DVC LIB AUDIO DANADA", "DVC AUDIO LIB CORRUPT"], en:["The audio library is corrupt.", "The library must be re-downloaded, or all programming must be cleared and re-entered. If the trouble still does not clear, contact Technical Services."], tr:["La biblioteca de audio está dañada.", "La biblioteca se debe descargar nuevamente, o se deben borrar todos los datos de programación y volver a ingresarlos. Si el problema no se despeja, comuníquese con el Servicio de asistencia técnica."]},
+  {code:"DVC AUDIO LIB. INCOMP", t:'s', alias:["DVC BIBLIOTECA AUDIO INCOMPATIBLE", "DVC LIB AUDIO INCOMP", "DVC AUDIO LIB INCOMPAT"], en:["The application or database version is incompatible.", "The correct application or database version must be downloaded."], tr:["La versión de la aplicación o de la base de datos es incompatible.", "Se debe descargar la versión correcta de la aplicación o de la base de datos."]},
+  {code:"DVC BUZZER OFF-LINE", t:'s', alias:["DVC ZUMBADOR FUERA DE LINEA", "DVC ZUMBADOR DESHAB", "DVC PIEZO DESHAB", "DVC BUZZER OFFLINE"], en:["The piezo is disabled.", "Re-enable the piezo at switch 5 on the DVC."], tr:["El zumbador piezoeléctrico está inhabilitado.", "Vuelva a habilitar el piezo con el interruptor 5 del DVC."]},
+  {code:"DVC DAA DOWNLOADING", t:'s', alias:["DVC DESCARGANDO DAA", "DVC DESCARGA DAA"], en:["A DAA download is in progress.", "No action is required."], tr:["Se está realizando una descarga al DAA.", "No se requiere ninguna acción."]},
+  {code:"DVC DATABASE CORRUPT", t:'s', alias:["DVC BASE DE DATOS DANADA", "DVC BASE DATOS DANADA", "DVC BD DANADA"], en:["The database that houses the DVC's programming is corrupt.", "The database must be re-downloaded, or all programming must be cleared and re-entered. If the trouble still does not clear, contact Technical Services."], tr:["La base de datos que alberga la programación del DVC está dañada.", "La base de datos se debe descargar nuevamente, o se deben borrar todos los datos de programación y volver a ingresarlos. Si el problema no se despeja, comuníquese con el Servicio de asistencia técnica."]},
+  {code:"DVC DBASE INCOMPAT", t:'s', alias:["DVC BASE DE DATOS INCOMPATIBLE", "DVC BD INCOMPAT", "DVC DATABASE INCOMPAT"], en:["The application or database version is incompatible.", "The correct application or database version must be downloaded."], tr:["La versión de la aplicación o de la base de datos es incompatible.", "Se debe descargar la versión correcta de la aplicación o de la base de datos."]},
+  {code:"DVC DVC AUX TROUBLE", t:'s', alias:["DVC PROBLEMA AUXILIAR", "DVC AUX PROBLEMA", "DVC AUX TROUBLE"], en:["This trouble is generated when the auxiliary input is supervised (as determined in VeriFire toolsprogramming) and no signal is coming from the input.", "Check the wiring and source."], tr:["Este problema se genera cuando la entrada auxiliar está supervisada (según la programación en VeriFire Tools) y no llega señal por esa entrada.", "Verifique el cableado y la fuente."]},
+  {code:"DVC EXT RAM ERROR", t:'s', alias:["DVC ERROR RAM EXTERNA", "DVC ERROR DE RAM EXTERNA"], en:["The external RAM test failed.", "Service is required."], tr:["La prueba de RAM externa no fue aprobada.", "Se requiere mantenimiento."]},
+  {code:"DVC FFT TROUBLE", t:'s', alias:["DVC PROBLEMA FFT", "DVC FFT PROBLEMA", "DVC FALLA FFT"], en:["There is a short or open on the FFT riser.", "Check that the 4-wire switch is correctly set and that there is an end-of-line resistor in place for 2-wire operation."], tr:["Hay un cortocircuito o un circuito abierto en el riser de FFT (teléfono de bomberos).", "Verifique que el interruptor de 4 hilos esté bien configurado y que haya una resistencia de fin de línea instalada para operación a 2 hilos."]},
+  {code:"DVC FLASH IMAGE ERR", t:'s', alias:["DVC ERROR IMAGEN FLASH", "DVC ERR IMAGEN FLASH", "DVC FLASH IMAGE ERROR"], en:["The DVC software is corrupt.", "Re-download the panel code software from VeriFire tools. If the trouble still does not clear, call Technical Services."], tr:["El software del DVC está dañado.", "Vuelva a descargar el software del panel desde VeriFire Tools. Si el problema no se despeja, llame al Servicio de asistencia técnica."]},
+  {code:"DVC LOADING NO SERV", t:'s', alias:["DVC CARGANDO SIN SERVICIO", "DVC CARGANDO SIN SERV", "DVC LOADING NO SERVICE"], en:["A program or database download is in progress. The panel is NOT providing fire protection during the download.", "Proper authorities should be notified while a download is in progress so that other means of fire protection can be supplied."], tr:["Se está descargando un programa o una base de datos. El panel NO brinda protección contra incendios durante la descarga.", "Se debe notificar a las autoridades correspondientes mientras se realiza una descarga para que suministren otros medios de protección contra incendios."]},
+  {code:"DVC LOCAL MIC. TBL", t:'s', alias:["DVC PROBLEMA MICROFONO LOCAL", "DVC MIC LOCAL PROBLEMA", "DVC MIC. LOCAL PRB", "DVC LOCAL MIC TROUBLE"], en:["The local microphone is in trouble. There is no communication, or paging has been enabled for over 28 seconds and no signal has been received.", "Investigate whether the mic is plugged into the DVC or whether there is a problem with the local mic."], tr:["El micrófono local tiene problemas. No hay comunicación, o el voceo lleva más de 28 segundos habilitado sin recibir señal.", "Investigue si el micrófono está conectado al DVC o si hay un problema con el micrófono local."]},
+  {code:"DVC LOCAL PHONE TBL", t:'s', alias:["DVC PROBLEMA TELEFONO LOCAL", "DVC TEL LOCAL PROBLEMA", "DVC TEL. LOCAL PRB", "DVC LOCAL PHONE TROUBLE"], en:["The local FFT handset is in trouble. There is no communication, or paging has been enabled for over 28 seconds and no signal has been received.", "Investigate whether the handset is plugged into the DVC or whether there is a problem with the local handset."], tr:["El auricular FFT local tiene problemas. No hay comunicación, o el voceo lleva más de 28 segundos habilitado sin recibir señal.", "Investigue si el auricular está conectado al DVC o si hay un problema con el auricular local."]},
+  {code:"DVC NVRAM BATT TBL", t:'s', alias:["DVC BATERIA NVRAM", "DVC BAT NVRAM", "DVC NVRAM BAT PRB"], en:["Battery backup and/or clock backup is low.", "Replace the battery. Refer to the DVC Series Manual for replacement instructions."], tr:["La batería de respaldo y/o el respaldo del reloj están bajos.", "Reemplace la batería. Consulte el Manual de la serie DVC para las instrucciones de reemplazo."]},
+  {code:"DVC PROGRAM CORRUPT", t:'s', alias:["DVC PROGRAMA DANADO", "DVC PROGRAMA CORRUPTO"], en:["The database that houses the DVC's programming is corrupt.", "The database must be re-downloaded, or all programming must be cleared and re-entered. If the trouble still does not clear, contact Technical Services."], tr:["La base de datos que alberga la programación del DVC está dañada.", "La base de datos se debe descargar nuevamente, o se deben borrar todos los datos de programación y volver a ingresarlos. Si el problema no se despeja, comuníquese con el Servicio de asistencia técnica."]},
+  {code:"DVC REM. MIC. TBL", t:'s', alias:["DVC PROBLEMA MICROFONO REMOTO", "DVC MIC REMOTO PROBLEMA", "DVC MIC. REM. PRB", "DVC REMOTE MIC TROUBLE"], en:["The remote microphone is in trouble. It is installed and supervised, but no signal is coming from it.", "Check wiring and connections."], tr:["El micrófono remoto tiene problemas. Está instalado y supervisado, pero no llega señal de él.", "Verifique el cableado y las conexiones."]},
+  {code:"DVC SELF TEST FAIL", t:'s', alias:["DVC PRUEBA AUTOMATICA REPROBADA", "DVC AUTOPRUEBA FALLIDA", "DVC SELF TEST FAILED"], en:["The diagnostic test failed on the DVC.", "Call Technical Services."], tr:["La prueba de diagnóstico del DVC no fue aprobada.", "Llame al Servicio de asistencia técnica."]},
+  {code:"DVC SOFT. MISMATCH", t:'s', alias:["DVC SOFTWARE NO COINCIDE", "DVC SOFT. NO COINCIDE", "DVC SOFTWARE MISMATCH"], en:["One or more DAAs has a software revision that does not match other DAA software revisions.", "Update the DAA software to match."], tr:["Uno o más DAA tienen una revisión de software que no coincide con la de los demás DAA.", "Actualice el software de los DAA para que coincida."]},
+  {code:"EPROM ERROR", t:'s', alias:["ERROR DE EPROM", "ERROR EPROM"], en:["The application and/or boot code is corrupt.", "Service is required."], es:["La aplicación o el código de arranque están dañados.", "Se requiere mantenimiento."]},
+  {code:"EXTERNAL RAM ERROR", t:'s', alias:["ERROR DE RAM EXTERNA", "ERROR RAM EXTERNA", "EXT RAM ERROR"], en:["The external RAM test failed.", "Service is required."], es:["La prueba de RAM externa no fue aprobada.", "Se requiere mantenimiento."]},
+  {code:"GROUND FAULT", t:'s', alias:["FALLA A TIERRA", "FALLA DE TIERRA", "GND FAULT", "FALLA TIERRA", "TIERRA PANEL"], en:["A ground fault has occurred within the panel.", "Locate the ground fault and repair."], es:["Se produjo una falla a tierra en el panel.", "Localice la falla a tierra y repárela."]},
+  {code:"GROUND FAULT LOOP X", t:'s', alias:["FALLA A TIERRA EN EL BUCLE X", "FALLA A TIERRA LAZO X", "FALLA DE TIERRA LAZO X", "GND FAULT LOOP X", "FALLA TIERRA LAZO X", "FALLA TIERRA BUCLE X"], en:["There is a ground fault on loop x.", "Locate the ground fault and repair."], es:["Hay una falla a tierra en el bucle x.", "Localice la falla a tierra y repárela."]},
+  {code:"INTERNAL RAM ERROR", t:'s', alias:["ERROR DE RAM INTERNA", "ERROR RAM INTERNA", "INT RAM ERROR"], en:["The internal RAM test failed.", "Service is required."], es:["La prueba de RAM interna no resultó satisfactoria.", "Se requiere mantenimiento."]},
+  {code:"LCD80 SUPERVISORY", t:'s', alias:["SUPERVISION DE LCD80", "LCD-80 SUPERVISORY", "SUPERVISION LCD80", "SUPERV LCD80"], en:["Communication has been lost with the LCD-80.", "Check connections to the LCD-80 Annunciator."], es:["Se ha perdido la comunicación con el LCD-80.", "Verifique las conexiones al anunciador LCD-80."]},
+  {code:"LOADING.NO SERVICE", t:'s', alias:["LOADING NO SERVICE", "CARGANDO, SIN SERVICIO", "CARGANDO SIN SERVICIO", "CARGANDO", "LOADING"], en:["A program or database download is in progress. The panel is NOT providing fire protection during the download.", "Proper authorities should be notified while a download is in progress so that other means of fire protection can be supplied."], es:["Se está descargando un programa o una base de datos. El panel NO brinda protección contra incendios durante la descarga.", "Se debe notificar a las autoridades correspondientes mientras se realiza una descarga para que suministren otros medios de protección contra incendios."]},
+  {code:"MASTER BOX TROUBLE", t:'s', alias:["PROBLEMAS CON LA CAJA PRINCIPAL", "PROBLEMA CAJA MAESTRA", "CAJA MAESTRA PROBLEMA"], en:["A TM-4 connected to a municipal box is in trouble.", "Reset the master box."], es:["Una TM-4 conectada a una caja con conexión municipal tiene problemas.", "Reinicie la caja principal."]},
+  {code:"MASTER BOX NO ANSWER", t:'s', alias:["SIN RESPUESTA EN LA CAJA PRINCIPAL", "CAJA MAESTRA SIN RESPUESTA", "CAJA MAESTRA NO RESP"], en:["A TM-4 connected to a municipal box is not responding.", "Determine whether the device is functional and connected properly."], es:["Una TM-4 conectada a una caja con conexión municipal no responde.", "Determine si el dispositivo funciona y si está conectado correctamente."]},
+  {code:"NCM COMM FAILURE", t:'s', alias:["FALLA DE COMUNICACION CON NCM", "NCM COMM FAIL", "FALLA COM NCM", "FALLA COMUNICACION NCM"], en:["Communication is lost between the CPU2-640 and the network communications module or DVC.", "Check to see if the NUP cable is properly installed and the network communications module or DVC is functional."], es:["Se pierde la comunicación entre el sistema CPU-320 y el NCM (Network Control Module, Módulo de control de red).", "Verifique que el cable de NUP esté instalado correctamente y que el NCM funcione."]},
+  {code:"NETWORK FAIL PORT X", t:'s', alias:["FALLA DE RED DEL PUERTO X", "FALLA RED PUERTO X", "NET FAIL PORT X"], en:["Communication lost between NCM Port x and corresponding node.", "Check wiring and verify the node is online."], es:["Pérdida de comunicación entre el puerto NCM x y el nodo correspondiente.", "Revise el cableado y verifique que el nodo esté en línea."]},
+  {code:"NETWORK INCOMPATIBLE", t:'s', alias:["INCOMPATIBLE CON LA RED", "RED INCOMPATIBLE"], en:["The brand of this panel is incompatible with this network.", "Verify all nodes are branded for the same OEM."], es:["La marca de este panel no es compatible con esta red.", "Verifique que todos los nodos estén marcados para el mismo OEM."]},
+  {code:"NFPA 24HR REMINDER", t:'s', alias:["RECORDATORIO DE NFPA CADA 24 H", "RECORDATORIO DE NFPA", "RECORDATORIO 24H", "RECORDATORIO 24 H", "NFPA 24 HR REMINDER"], en:["This message occurs every day at 11 AM if any troubles exist.", "Resolve any troubles on the system."], es:["Este mensaje aparece todos los días a las 11 a.m. si hay algún problema.", "Resuelva los problemas que presente el sistema."]},
+  {code:"NO DEV. INST ON L1", t:'s', alias:["SIN DISPOSITIVOS INSTALADOS EN L1", "NO HAY DISPOSITIVOS EN L1", "SIN DISP EN L1"], en:["No devices are installed on the system.", "Install SLC and run autoprogram."], es:["No hay dispositivos instalados en el sistema.", "Instale el SLC y ejecute la autoprogramación."]},
+  {code:"PANEL DOOR OPEN", t:'s', alias:["PUERTA DEL PANEL ABIERTA", "PUERTA PANEL ABIERTA", "PUERTA ABIERTA"], en:["The panel door is open.", "Close door."], es:["La puerta del panel está abierta.", "Cierre la puerta."]},
+  {code:"POWER SUPPLY COMM FAIL", t:'s', alias:["FALLA EN LA COMUNICACION CON LA FUENTE DE ALIMENTACION", "FALLA COM FUENTE", "FALLA COMUNICACION FUENTE", "PS COMM FAIL"], en:["There has been a communication failure with the power supply.", "Service is required."], es:["Ha ocurrido una falla en la comunicación con la fuente de alimentación.", "Se requiere mantenimiento."]},
+  {code:"PROGRAM CORRUPTED", t:'s', alias:["PROGRAMA DANADO", "PROGRAMA CORRUPTO", "PROGRAM CORRUPT"], en:["The database that houses the panel's programming is corrupt.", "The database must be re-downloaded, or all programming must be cleared and re-entered. If the trouble still does not clear, contact Technical Services."], es:["La base de datos que alberga la programación del panel está dañada.", "La base de datos se debe descargar nuevamente o se deben borrar todos los datos de programación y volver a ingresarlos. Se requiere mantenimiento."]},
+  {code:"PROGRAM MODE ACTIVATED", t:'s', alias:["MODO DE PROGRAMACION ACTIVADO", "MODO PROGRAMACION", "PROGRAM MODE"], en:["A user is currently accessing the panel's programming menus.", "No action is required / Exit the Programming mode."], es:["Hay un usuario accediendo a los menús de programación del panel.", "No se requiere ninguna acción / Salga del modo de programación."]},
+  {code:"RELEASE DEV. DISABLE", t:'s', alias:["DISPOSITIVO DE DESCARGA INHABILITADO", "DISP DESCARGA INHABILITADO", "DESCARGA INHABILITADA", "RELEASE DISABLE"], en:["Releasing devices have been disaled.", "Enable the devices."], es:["Los dispositivos de descarga han sido inhabilitados.", "Habilite los dispositivos."]},
+  {code:"SELF TEST FAILED", t:'s', alias:["PRUEBA AUTOMATICA REPROBADA", "AUTOPRUEBA FALLIDA", "SELF TEST FAIL"], en:["Diagnostic test failed.", "Call Technical Services."], es:["No se aprobó la prueba de diagnóstico.", "Comuníquese con el Servicio de asistencia técnica."]},
+  {code:"STYLE 6 POS. LOOP X", t:'s', alias:["BUCLE X POSITIVO ESTILO 6"], en:["There is an open circuit on the positive side of loop x. Style 6 and Style 7 are supervised methods of communicating with addressable devices. If the control panel detects a trouble (open), it will drive both ends of the loop, maintaining communication in an unsupervised method. The latching trouble will display on the panel as a Style 6 trouble until you correct the condition and press RESET. Style 7 configuration of the SLC requires the use of ISO-X isolator modules.", ""], es:["Hay un circuito abierto en el lado positivo del bucle x. El estilo 6 y el estilo 7 son métodos supervisados de comunicación con dispositivos direccionables. Si el panel de control detecta un problema (circuito abierto), activará ambos extremos del bucle, manteniendo la comunicación con un método no supervisado. El problema con enclavamiento se visualizará en el panel como un problema de estilo 6 hasta que usted corrija la condición y presione RESET. La configuración de estilo 7 del SLC requiere el uso de módulos ISO-X.", ""]},
+  {code:"STYLE 6 NEG. LOOP X", t:'s', alias:["BUCLE X NEGATIVO ESTILO 6"], en:["There is an open circuit on the negative side of loop x. Style 6 and Style 7 are supervised methods of communicating with addressable devices. If the control panel detects a trouble (open), it will drive both ends of the loop, maintaining communication in an unsupervised method. The latching trouble will display on the panel as a Style 6 trouble until you correct the condition and press RESET. Style 7 configuration of the SLC requires the use of ISO-X isolator modules.", ""], es:["Hay un circuito abierto en el lado negativo del bucle x. El estilo 6 y el estilo 7 son métodos supervisados de comunicación con dispositivos direccionables. Si el panel de control detecta un problema (circuito abierto), activará ambos extremos del bucle, manteniendo la comunicación con un método no supervisado. El problema con enclavamiento se visualizará en el panel como un problema de estilo 6 hasta que usted corrija la condición y presione RESET. La configuración de estilo 7 del SLC requiere el uso de módulos ISO-X.", ""]},
+  {code:"STYLE 6 SHORT LOOP X", t:'s', alias:["BUCLE X CON CORTOCIRCUITO ESTILO 6"], en:["Style 6 and Style 7 are supervised methods of communicating with addressable devices. If the control panel detects a trouble (open or short), it will drive both ends of the loop, maintaining communication in an unsupervised method. The latching trouble will display on the panel as a Style 6 trouble until you correct the condition and press RESET. Style 7 configuration of the SLC requires the use of ISO-X isolator modules.", ""], es:["El estilo 6 y el estilo 7 son métodos supervisados de comunicación con dispositivos direccionables. Si el panel de control detecta un problema (circuito abierto o cortocircuito), activará ambos extremos del bucle, manteniendo la comunicación con un método no supervisado. El problema con enclavamiento se visualizará en el panel como un problema de estilo 6 hasta que usted corrija la condición y presione RESET. La configuración de estilo 7 del SLC requiere el uso de módulos ISO-X.", ""]},
+  {code:"TERM. SUPERVISORY", t:'s', alias:["TERMINAL SUPERVISORY", "TERM SUPERVISORY", "SUPERVISION DEL TERMINAL", "SUPERVISION TERMINAL", "SUPERV TERMINAL", "CRT SUPERVISORY"], en:["There is a communication error with the CRT-2.", "Check connections to the CRT-2 terminal."], es:["Hay un error de comunicación con el CRT-2.", "Verifique las conexiones al terminal CRT-2."]},
+  {code:"UDACT NO ANSWER", t:'s', alias:["SIN RESPUESTA DE UDACT", "UDACT NO RESPONDE", "UDACT NO RESP"], en:["The UDACT is not responding.", "Determine whether the UDACT is functional, and connected and addressed properly."], es:["El UDACT no responde.", "Determine si el UDACT funciona y si está conectado y direccionado correctamente."]},
+  {code:"UDACT TROUBLE", t:'s', alias:["PROBLEMAS CON EL UDACT", "UDACT PROBLEMA", "UDACT PRB", "UDACT FALLA"], en:["The UDACT is in trouble.", "Determine if the UDACT is functional and wired correctly."], es:["El UDACT tiene problemas.", "Determine si el UDACT funciona y si está conectado correctamente."]}
+];
+
+// Quita tildes y pasa a mayúsculas para comparar sin importar cómo lo imprima el panel
+var normalizarTS = function(t){
+  return String(t).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+}
+var escRegex = function(v){ return v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+var regexVariante = function(v){
+  let esc = escRegex(normalizarTS(v)).replace(/\\\./g, '\\.?');      // "TERM." = "TERM"
+  esc = esc.replace(/ /g, '[\\s._-]*');                               // espacios flexibles
+  esc = esc.replace(/\bX\b/g, '\\d+');                                // "x" del manual = número
+  return new RegExp('(?:^|[^A-Z0-9])' + esc + '(?![A-Z0-9])');        // palabra completa
+}
+
+const TROUBLESHOOTING = TROUBLESHOOTING_RAW.map(item => {
+  const tabla = TABLAS[item.t];
+  const txt = item.es || item.tr;
+  return {...item,
+    tipo: tabla.tipo,
+    desc: txt[0], accion: txt[1],
+    variantes: [item.code, ...(item.alias || [])].map(v => { const c = normalizarTS(v).replace(/[\s.\-_]/g, ''); return {largo: c.length, comp: c, re: regexVariante(v)}; })
+  };
+});
+
+// Una dirección de SLC tipo 1D023 / 1M041 / L1D023, o un circuito NAC del panel (B01, B02…), indica un problema de punto (Tabla D.1);
+// sin dirección es más probable un problema del sistema (Tabla D.2).
+var esLineaDePunto = function(t){ return /(?:^|[^A-Z0-9])(?:L?\d{1,2}[DM]\d{2,3}|B\d{2})(?![0-9])/.test(t); };
+
+// ---- Búsqueda por el CAMPO de problema ----
+// En la línea de impresora el tipo de problema va justo antes de la hora:
+//   "AVERIA HUMO(HAZ)  BOD IMPORTADOS BIDONES  NO RES 06:21P 092726 1D060"
+// El panel en español lo corta a ~6 letras ("NO RES", "ABIERT"), así que
+// ese campo se compara como PREFIJO de todas las variantes de cada código.
+var compacto = function(v){ return normalizarTS(v).replace(/[\s.\-_]/g, ''); };
+TROUBLESHOOTING.forEach(function(item){
+  item.compactos = [item.code].concat(item.alias || [], item.abrev || [])
+    .filter(function(v){ return !/\bX\b/.test(v); })
+    .map(compacto);
+});
+// "INVRP" es abreviatura de "INVREP": mismas primeras letras y el resto en orden
+var esAbreviatura = function(c, v){
+  if (c[0] !== v[0] || c.length > v.length || c.length * 2 < v.length) return false;   // debe conservar al menos la mitad de las letras
+  let j = 0;
+  for (let i = 0; i < v.length && j < c.length; i++) if (v[i] === c[j]) j++;
+  return j === c.length;
+};
+var RE_HORA = /\s(\d{1,2}):(\d{2})(?::\d{2})?\s*[AP]M?(?![A-Z0-9])/;
+var RE_LINEA_PROBLEMA = /^\s*(?:BR |CLR )?(?:AVERIA|TROUBL|PRB|PROBLEMA|TB |FALLA|FAULT)/;
+var buscarPorCampo = function(t, punto){
+  if (!RE_LINEA_PROBLEMA.test(t)) return null;
+  const h = t.match(RE_HORA);
+  if (!h) return null;
+  const tokens = t.slice(0, h.index).trim().split(/\s+/);
+  if (tokens.length < 3) return null;
+  const candidatos = [tokens.slice(-2).join(' '), tokens[tokens.length - 1]];
+  for (const cand of candidatos) {
+    const c = compacto(cand);
+    if (c.length < 2) continue;
+    // Niveles: 3 = igual · 2 = cortado ("ABIERT", "INV") · 1 = abreviado
+    // quitando letras ("INVRP", "FL DIR"). Los niveles 2 con 3 letras y el
+    // nivel 1 solo se aceptan si apuntan a UN solo código.
+    let mejor = null, puntos = -1;
+    const porNivel = {2: new Map(), 1: new Map()};   // código -> ¿coincide el tipo?
+    for (const item of TROUBLESHOOTING) {
+      for (const v of item.compactos) {
+        let p = -1;
+        if (v === c) p = 3;
+        else if (c.length >= 3 && v.startsWith(c)) p = 2;
+        else if (c.length >= 4 && esAbreviatura(c, v)) p = 1;
+        if (p < 0) continue;
+        if (p < 3) porNivel[p].set(item.code, (item.t === 'p') === punto);
+        if ((item.t === 'p') === punto) p += 0.5;          // desempate: punto / sistema
+        if (p > puntos) { puntos = p; mejor = item; }
+      }
+    }
+    const nivel = Math.floor(puntos);
+    // ambiguo: se acepta solo si queda UN código del tipo de línea (punto / sistema)
+    const unico = m => m.size === 1 || [...m.values()].filter(Boolean).length === 1;
+    if (nivel === 2 && c.length === 3 && !unico(porNivel[2])) mejor = null;
+    if (nivel === 1 && !unico(porNivel[1])) mejor = null;
+    if (mejor) return {item: mejor, largo: c.length, comp: c};
+  }
+  return null;
+};
+
+var buscarInfo = function(texto){
+  const t = normalizarTS(texto);
+  const punto = esLineaDePunto(t);
+  if (/^\s*(?:BR |CLR )?(?:ALARM|FUEGO|FIRE|PRE-?ALARM|PRE ALARM)/.test(t)) return null;
+  const porCampo = buscarPorCampo(t, punto);
+  let mejor = null, mejorLargo = 0, mejorTipoOk = false, mejorComp = '';
+  for (const item of TROUBLESHOOTING) {
+    for (const v of item.variantes) {
+      if (!v.re.test(t)) continue;
+      const tipoOk = (item.t === 'p') === punto;
+      // gana la coincidencia más larga (PANEL DOOR OPEN antes que OPEN);
+      // si empatan, la que corresponde al tipo de línea (punto / sistema)
+      if (v.largo > mejorLargo || (v.largo === mejorLargo && tipoOk && !mejorTipoOk)) {
+        mejor = item; mejorLargo = v.largo; mejorTipoOk = tipoOk; mejorComp = v.comp;
+      }
+    }
+  }
+  // El campo de problema gana, salvo que el texto completo traiga un código
+  // más específico (ej. "UDACT NO RESPONDE" antes que "NO RESPONDE").
+  if (porCampo && !(mejor && mejorLargo > porCampo.largo && mejorComp.indexOf(porCampo.comp.replace(/\d+$/, '')) >= 0)) return porCampo.item;
+  return mejor;
+}
+
+const GUIA_CATEGORIA = {
+  alarma: {desc:'El panel reportó una condición de ALARMA en el dispositivo o zona que indica el evento.',
+           accion:'Siga el procedimiento de respuesta a alarmas del sitio: vaya a la ubicación indicada y confirme si hay humo o fuego real antes de restablecer el panel. Si es una falsa alarma, identifique la causa (polvo, vapor, trabajos, detector sucio) para que no se repita.'},
+  prealarma: {desc:'El detector superó su nivel de prealarma: está viendo algo, pero todavía no llega al nivel de alarma.',
+           accion:'Revise el área del detector indicado cuanto antes. Si no hay causa real, programe la revisión o limpieza del detector.'},
+  problema: {desc:'El panel reportó un problema (avería) en el dispositivo o circuito indicado. El texto no trae un código de la tabla del manual.',
+           accion:'Ubique el dispositivo por su dirección (por ejemplo 1D003 = lazo 1, detector 003; 1M041 = lazo 1, módulo 041) y revise el tipo de problema que muestra la pantalla del panel.'},
+  supervision: {desc:'Un dispositivo de supervisión cambió de su estado normal (por ejemplo una válvula de rociadores, un interruptor de manipulación o la presión de una bomba).',
+           accion:'Revise el dispositivo indicado y devuélvalo a su condición normal (válvula abierta, presión correcta, bomba en automático).'},
+  seguridad: {desc:'Un punto programado como seguridad se activó.',
+           accion:'Verifique el punto y la zona indicados según el procedimiento del sitio.'},
+  historial: {desc:'Línea de un volcado de historial que imprimió el panel. Es un evento pasado, no una condición actual.',
+           accion:'No requiere acción. Sirve para analizar ocurrencias anteriores.'},
+  mantenimiento: {desc:'Línea del informe de mantenimiento de detectores que imprimió el panel.',
+           accion:'No requiere acción inmediata. Úsela para planificar la limpieza preventiva de detectores.'},
+  sinclasificar: {desc:'Mensaje operativo del panel (reconocimiento, silencio, restablecimiento o programación).',
+           accion:'No requiere acción.'},
+  otro: {desc:'Mensaje del panel que no corresponde a ninguna categoría conocida.',
+           accion:'Revise el texto completo del evento en la pantalla del panel.'}
+};
+// Casos que el panel imprime como avería del sistema pero tienen una
+// explicación propia (guía del IgnisMonitor, no texto del manual).
+const GUIA_ESPECIAL = [
+  {re: /PROG\.?\s*ACTIVAD|PROGRAM(?:ACION|MING)?\s*(?:ACTIVAD|MODE)|MODO\s+(?:DE\s+)?PROGRAM/,
+   titulo: 'Modo de programación activado',
+   desc: 'Alguien entró al modo de programación desde el menú del panel. Mientras el panel está en programación, lo reporta como avería del sistema.',
+   accion: 'Salga del menú de programación con la tecla ESC del panel (presiónela hasta volver a la pantalla normal). Si nadie autorizado está programando el panel, averigüe quién tuvo acceso.'},
+  {re: /SYS\.?\s*INITIALI[SZ]ATION|SYSTEM\s+INITIALI[SZ]|INICIALIZ/,
+   titulo: 'Panel inicializando',
+   desc: 'El panel se está inicializando: arranca después de encenderse, de un reinicio o al salir del modo de programación. Mientras tanto lo reporta como avería del sistema.',
+   accion: 'Espere a que el panel termine de inicializar; la avería se despeja sola. Si no se despeja en unos minutos, revise la pantalla del panel.'}
+];
+function guiaEspecial(texto){
+  const t = String(texto || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+  return GUIA_ESPECIAL.find(g => g.re.test(t)) || null;
+}
+
+  function explicar(texto, categoria, etiqueta) {
+    const t = String(texto || "");
+    const borrado = /^\s*(BR|CLR)\b/i.test(t) || categoria === "borrado";
+    const nota = borrado ? "Este evento (BR/CLR) indica que la condición YA SE DESPEJÓ en el panel." : "";
+    const yaNormal = "No requiere acción: la condición ya se normalizó.";
+    const e = guiaEspecial(t);
+    if (e) return { titulo: e.titulo, tipo: "Guía del IgnisMonitor", desc: e.desc, accion: borrado ? yaNormal : e.accion, nota, fuente: "Guía del IgnisMonitor (no es texto del manual del panel).", guia: true };
+    let item = null;
+    try { item = buscarInfo(t); } catch (_) { item = null; }
+    if (item) {
+      const tabla = TABLAS[item.t];
+      return { titulo: item.code, tipo: item.tipo, desc: item.desc, accion: borrado ? yaNormal : item.accion, nota,
+        fuente: item.es ? "Fuente: " + MANUAL_ES + " · " + tabla.es : "Fuente: " + MANUAL_EN + " · " + tabla.en + " (traducción de referencia)" };
+    }
+    const g = GUIA_CATEGORIA[categoria] || GUIA_CATEGORIA.otro;
+    return { titulo: etiqueta || "Evento", tipo: "", desc: g.desc, accion: borrado ? yaNormal : g.accion, nota,
+      fuente: "Guía general del IgnisMonitor: el texto de este evento no trae un código de las tablas D.1 / D.2 del manual.", guia: true };
+  }
+  return { explicar };
+})();
 
 // ---------------------------------------------------------------------
 // MONITOREO NOTIFIER: réplica del dashboard del propio IgnisMonitor
@@ -12422,6 +13687,353 @@ function htmlFirmasReporte(f) {
 }
 
 
+// =========================================================
+// CIBERSEGURIDAD — NFPA 72 (2025), capítulo 11
+// Registros de cumplimiento del IgnisMonitor: versión y fecha de la última
+// actualización de cada equipo (11.8.5), dueño de cada sitio y su contacto
+// verificado cada año (11.8.2 y 11.11.3), revisión trimestral de amenazas
+// (11.8.1), avisos a los dueños (11.8.3 y 11.9) y los eventos de seguridad
+// que mandan los equipos 6.6 (clave incorrecta, firmware rechazado, etc.).
+// Tablas: SQL_ciberseguridad.sql.
+// =========================================================
+const CIBER_TIPOS_EVENTO = {
+  clave_incorrecta: { t: "Clave incorrecta", c: "#b42318" },
+  firmware_rechazado: { t: "Firmware rechazado", c: "#b42318" },
+  firmware_instalado: { t: "Firmware instalado", c: "#027a48" },
+  configuracion_cambiada: { t: "Configuración cambiada", c: "#b54708" },
+  memoria_borrada: { t: "Memoria borrada", c: "#b54708" },
+};
+const ciberDias = (iso) => (iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 86400000) : null);
+const ciberFecha = (iso) => { try { return iso ? new Date(iso).toLocaleDateString("es-CR", { day: "2-digit", month: "short", year: "numeric" }) : "—"; } catch { return iso || "—"; } };
+const ciberFechaHora = (iso) => { try { return new Date(iso).toLocaleString("es-CR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch { return iso || ""; } };
+const ciberFaltaSql = (e) => /does not exist|schema cache|Could not find|PGRST20|42P01/i.test(e?.message || "") ? "Falta correr en Supabase el SQL «SQL_ciberseguridad.sql»." : (e?.message || String(e));
+
+function ModalCiberseguridad({ dispositivos, onCerrar }) {
+  const currentUser = useContext(CurrentUserContext);
+  const [tab, setTab] = useState("equipos");
+  const [sitiosInfo, setSitiosInfo] = useState({});
+  const [eventosSeg, setEventosSeg] = useState([]);
+  const [revisiones, setRevisiones] = useState([]);
+  const [avisos, setAvisos] = useState([]);
+  const [error, setError] = useState("");
+  const [aviso, setAviso] = useState("");
+  const [edit, setEdit] = useState({});
+  const [filtroSitio, setFiltroSitio] = useState("");
+  const hoyISO = new Date().toLocaleDateString("en-CA");
+  const [formRev, setFormRev] = useState({ fecha: hoyISO, revisor: currentUser?.name || "", fuentes: "Avisos de seguridad de Espressif (ESP-IDF / Arduino-ESP32), mbedTLS, Supabase, Vercel, GitHub y bases de vulnerabilidades (CVE)", hallazgos: "", requiere_actualizacion: false, accion: "" });
+  const [formAviso, setFormAviso] = useState({ tipo: "actualizacion", titulo: "", detalle: "", version: "", todos: true, sitios: [] });
+  const sitios = useMemo(() => [...new Set((dispositivos || []).map((d) => d.sitio).filter(Boolean))].sort(), [dispositivos]);
+
+  const cargar = async () => {
+    const [r1, r2, r3, r4] = await Promise.all([
+      supabase.from("sitios_ciber").select("*"),
+      supabase.from("seguridad_equipos").select("*").order("creado_en", { ascending: false }).limit(300),
+      supabase.from("revisiones_ciber").select("*").order("fecha", { ascending: false }).limit(50),
+      supabase.from("avisos_ciber").select("*").order("creado_en", { ascending: false }).limit(50),
+    ]);
+    const e = r1.error || r2.error || r3.error || r4.error;
+    if (e) { setError(ciberFaltaSql(e)); return; }
+    setError("");
+    const m = {}; (r1.data || []).forEach((x) => { m[x.sitio] = x; }); setSitiosInfo(m);
+    setEventosSeg(r2.data || []); setRevisiones(r3.data || []); setAvisos(r4.data || []);
+  };
+  useEffect(() => { cargar(); }, []);
+
+  const guardarDueno = async (sitio, extra = {}) => {
+    const actual = { ...(sitiosInfo[sitio] || {}), ...(edit[sitio] || {}), ...extra };
+    const fila = { sitio, dueno_nombre: actual.dueno_nombre || null, dueno_correo: actual.dueno_correo || null, dueno_telefono: actual.dueno_telefono || null,
+      contacto_verificado_en: actual.contacto_verificado_en || null, verificado_por: actual.verificado_por || null, notas: actual.notas || null, actualizado_en: new Date().toISOString() };
+    const { error: e } = await supabase.from("sitios_ciber").upsert(fila, { onConflict: "sitio" });
+    if (e) { setAviso("No se pudo guardar: " + ciberFaltaSql(e)); return; }
+    setEdit((p) => { const n = { ...p }; delete n[sitio]; return n; });
+    setAviso(`Guardado: ${sitio}.`); cargar();
+  };
+  const verificarHoy = (sitio) => guardarDueno(sitio, { contacto_verificado_en: new Date().toISOString(), verificado_por: currentUser?.name || "" });
+
+  const guardarRevision = async () => {
+    if (!formRev.hallazgos.trim()) { setAviso("Escriba qué se revisó y qué se encontró (aunque sea «sin hallazgos»)."); return; }
+    const { error: e } = await supabase.from("revisiones_ciber").insert({ ...formRev, accion: formRev.accion || null });
+    if (e) { setAviso("No se pudo guardar: " + ciberFaltaSql(e)); return; }
+    setFormRev((f) => ({ ...f, hallazgos: "", accion: "", requiere_actualizacion: false }));
+    setAviso("Revisión trimestral registrada."); cargar();
+  };
+  const publicarAviso = async () => {
+    if (!formAviso.titulo.trim()) { setAviso("Ponga un título al aviso."); return; }
+    if (!formAviso.todos && !formAviso.sitios.length) { setAviso("Elija al menos un sitio o marque «Todos los sitios»."); return; }
+    const { error: e } = await supabase.from("avisos_ciber").insert({ tipo: formAviso.tipo, titulo: formAviso.titulo.trim(), detalle: formAviso.detalle.trim() || null,
+      version: formAviso.version.trim() || null, sitios: formAviso.todos ? null : formAviso.sitios, autor: currentUser?.name || null });
+    if (e) { setAviso("No se pudo publicar: " + ciberFaltaSql(e)); return; }
+    setFormAviso({ tipo: "actualizacion", titulo: "", detalle: "", version: "", todos: true, sitios: [] });
+    setAviso("Aviso publicado: los clientes de esos sitios lo ven en su Monitoreo y en la APK."); cargar();
+  };
+
+  // Indicadores de cumplimiento
+  const ultimaRev = revisiones[0]?.fecha || null;
+  const diasRev = ultimaRev ? Math.floor((Date.now() - new Date(ultimaRev + "T12:00:00").getTime()) / 86400000) : null;
+  const sinActualizar = (dispositivos || []).filter((d) => { const x = ciberDias(d.version_desde); return x === null || x > 365; }).length;
+  const contactosPend = sitios.filter((s) => { const i = sitiosInfo[s]; return !i?.dueno_nombre || ciberDias(i?.contacto_verificado_en) === null || ciberDias(i.contacto_verificado_en) > 365; }).length;
+  const eventos7 = eventosSeg.filter((e) => ciberDias(e.creado_en) <= 7 && e.tipo !== "firmware_instalado").length;
+  const Indicador = ({ ok, titulo, valor, norma }) => (
+    <div style={{ flex: "1 1 140px", border: `1px solid ${ok ? "#abefc6" : "#fecdca"}`, background: ok ? "#ecfdf3" : "#fef3f2", borderRadius: 10, padding: "8px 10px" }}>
+      <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700 }}>{titulo}</div>
+      <div style={{ fontSize: 15, fontWeight: 800, color: ok ? "#027a48" : "#b42318" }}>{valor}</div>
+      <div style={{ fontSize: 10.5, color: T.gray }}>NFPA 72 · {norma}</div>
+    </div>
+  );
+  const pestanas = [["equipos", "Equipos y dueños"], ["eventos", `Eventos (${eventosSeg.length})`], ["revisiones", "Revisión trimestral"], ["avisos", "Avisos a dueños"]];
+  const caja = { background: "#fff", color: T.ink, borderRadius: 16, width: 980, maxWidth: "100%", maxHeight: "calc(100vh - 20px)", overflowY: "auto", padding: 18, boxShadow: "0 20px 60px rgba(0,0,0,.35)" };
+  const inp = { ...inputStyle, fontSize: 12.5, padding: "5px 8px" };
+  const eventosVista = eventosSeg.filter((e) => !filtroSitio || e.sitio === filtroSitio);
+
+  return (
+    <div onClick={onCerrar} style={{ position: "fixed", inset: 0, background: "rgba(16,24,38,0.6)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 10 }}>
+      <div onClick={(e) => e.stopPropagation()} style={caja}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 4, gap: 8 }}>
+          <ShieldCheck size={20} color={T.green} />
+          <div style={{ fontSize: 18, fontWeight: 800, flex: 1 }}>Ciberseguridad · NFPA 72 (2025), capítulo 11</div>
+          <button type="button" onClick={onCerrar} style={{ border: "none", background: "transparent", cursor: "pointer", color: T.gray }}><X size={18} /></button>
+        </div>
+        <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 12 }}>Registros que pide el capítulo 11 para los IgnisMonitor: actualizaciones al menos una vez al año, dueño de cada sitio con su contacto verificado cada año, revisión de amenazas cada trimestre y avisos a los dueños.</div>
+        {error && <div style={{ fontSize: 13, color: T.red, fontWeight: 700, marginBottom: 10 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <Indicador ok={sinActualizar === 0} titulo="Equipos sin actualizar en 1 año" valor={sinActualizar === 0 ? "Todos al día" : `${sinActualizar} equipo(s)`} norma="11.8.5" />
+          <Indicador ok={contactosPend === 0} titulo="Contacto del dueño verificado" valor={contactosPend === 0 ? "Todos al día" : `${contactosPend} sitio(s) pendientes`} norma="11.8.2 / 11.11.3" />
+          <Indicador ok={diasRev !== null && diasRev <= 92} titulo="Revisión trimestral de amenazas" valor={diasRev === null ? "Nunca registrada" : diasRev <= 92 ? `Hace ${diasRev} días` : `Vencida (hace ${diasRev} días)`} norma="11.8.1" />
+          <Indicador ok={eventos7 === 0} titulo="Eventos de seguridad (7 días)" valor={eventos7 === 0 ? "Sin alertas" : `${eventos7} para revisar`} norma="11.10 / 7.6.7" />
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+          {pestanas.map(([id, t]) => <Btn key={id} small variant={tab === id ? "accent" : "ghost"} onClick={() => { setTab(id); setAviso(""); }}>{t}</Btn>)}
+        </div>
+        {aviso && <div style={{ fontSize: 12.5, color: /No se|Escriba|Ponga|Elija/.test(aviso) ? T.red : T.green, fontWeight: 700, marginBottom: 10 }}>{aviso}</div>}
+
+        {tab === "equipos" && (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead><tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", background: T.graySoft }}>
+                <th style={{ padding: "6px 8px" }}>Sitio</th><th>Versión</th><th>Actualizado</th><th>Dueño o representante</th><th>Correo</th><th>Teléfono</th><th>Contacto verificado</th><th></th>
+              </tr></thead>
+              <tbody>
+                {sitios.map((s) => {
+                  const d = (dispositivos || []).find((x) => x.sitio === s) || {};
+                  const i = { ...(sitiosInfo[s] || {}), ...(edit[s] || {}) };
+                  const dv = ciberDias(d.version_desde), dc = ciberDias(sitiosInfo[s]?.contacto_verificado_en);
+                  const set = (k, v) => setEdit((p) => ({ ...p, [s]: { ...(p[s] || {}), [k]: v } }));
+                  return (
+                    <tr key={s} style={{ borderTop: `1px solid ${T.line}` }}>
+                      <td style={{ padding: "6px 8px", fontWeight: 700 }}>{s}</td>
+                      <td>{d.version ? `V${d.version}` : "—"}</td>
+                      <td style={{ color: dv === null || dv > 365 ? T.red : dv > 300 ? T.amber : T.green, fontWeight: 700, whiteSpace: "nowrap" }}>{dv === null ? "sin dato" : `${ciberFecha(d.version_desde)} (${dv} d)`}</td>
+                      <td><input style={{ ...inp, width: 150 }} value={i.dueno_nombre || ""} onChange={(e) => set("dueno_nombre", e.target.value)} placeholder="Nombre" /></td>
+                      <td><input style={{ ...inp, width: 160 }} value={i.dueno_correo || ""} onChange={(e) => set("dueno_correo", e.target.value)} placeholder="correo" /></td>
+                      <td><input style={{ ...inp, width: 100 }} value={i.dueno_telefono || ""} onChange={(e) => set("dueno_telefono", e.target.value)} placeholder="teléfono" /></td>
+                      <td style={{ color: dc === null || dc > 365 ? T.red : T.green, fontWeight: 700, whiteSpace: "nowrap" }}>{dc === null ? "nunca" : `${ciberFecha(sitiosInfo[s].contacto_verificado_en)}`}</td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        {edit[s] && <Btn small variant="accent" onClick={() => guardarDueno(s)}>Guardar</Btn>}
+                        {!edit[s] && <Btn small variant="ghost" onClick={() => verificarHoy(s)}><Check size={12} /> Verificado hoy</Btn>}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!sitios.length && <tr><td colSpan={8} style={{ padding: 10, color: T.gray }}>Todavía no hay equipos conectados.</td></tr>}
+              </tbody>
+            </table>
+            <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 8 }}>11.8.2: el instalador entrega el contacto del dueño al aceptar el sistema. 11.11.3: quien prueba el sistema verifica ese contacto cada año («Verificado hoy»). 11.8.5: cada equipo debe recibir sus actualizaciones de seguridad al menos una vez al año.</div>
+          </div>
+        )}
+
+        {tab === "eventos" && (
+          <div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <select style={{ ...inp, width: 220 }} value={filtroSitio} onChange={(e) => setFiltroSitio(e.target.value)}>
+                <option value="">Todos los sitios</option>
+                {sitios.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <Btn small variant="ghost" onClick={cargar}><RotateCcw size={12} /> Actualizar</Btn>
+              <span style={{ fontSize: 11.5, color: T.inkSoft }}>Los envían los IgnisMonitor 6.6 o superior.</span>
+            </div>
+            <div style={{ maxHeight: 380, overflowY: "auto", border: `1px solid ${T.line}`, borderRadius: 8 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                <thead><tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase", background: T.graySoft }}><th style={{ padding: "6px 8px" }}>Fecha</th><th>Sitio</th><th>Evento</th><th>Detalle</th><th>Versión</th></tr></thead>
+                <tbody>
+                  {eventosVista.map((e) => (
+                    <tr key={e.id} style={{ borderTop: `1px solid ${T.line}` }}>
+                      <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{ciberFechaHora(e.creado_en)}</td>
+                      <td>{e.sitio || "—"}</td>
+                      <td style={{ color: CIBER_TIPOS_EVENTO[e.tipo]?.c || T.ink, fontWeight: 700, whiteSpace: "nowrap" }}>{CIBER_TIPOS_EVENTO[e.tipo]?.t || e.tipo}</td>
+                      <td style={{ color: T.inkSoft }}>{e.detalle}</td>
+                      <td>{e.version ? `V${e.version}` : ""}</td>
+                    </tr>
+                  ))}
+                  {!eventosVista.length && <tr><td colSpan={5} style={{ padding: 10, color: T.gray }}>Sin eventos de seguridad.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {tab === "revisiones" && (
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 340px) 1fr", gap: 14 }} className="grid-layout">
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 12.5, color: T.inkSoft }}>11.8.1: al menos cada trimestre el fabricante evalúa las amenazas de ciberseguridad y decide si hace falta una actualización.</div>
+              <Field label="Fecha"><input type="date" style={inp} value={formRev.fecha} onChange={(e) => setFormRev({ ...formRev, fecha: e.target.value })} /></Field>
+              <Field label="Revisó"><input style={inp} value={formRev.revisor} onChange={(e) => setFormRev({ ...formRev, revisor: e.target.value })} /></Field>
+              <Field label="Fuentes consultadas"><textarea rows={3} style={{ ...inp, resize: "vertical", fontFamily: "inherit" }} value={formRev.fuentes} onChange={(e) => setFormRev({ ...formRev, fuentes: e.target.value })} /></Field>
+              <Field label="Hallazgos"><textarea rows={3} style={{ ...inp, resize: "vertical", fontFamily: "inherit" }} value={formRev.hallazgos} onChange={(e) => setFormRev({ ...formRev, hallazgos: e.target.value })} placeholder="Ej.: sin vulnerabilidades nuevas que afecten al equipo" /></Field>
+              <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={formRev.requiere_actualizacion} onChange={(e) => setFormRev({ ...formRev, requiere_actualizacion: e.target.checked })} /> Requiere actualización de firmware</label>
+              <Field label="Acción tomada"><input style={inp} value={formRev.accion} onChange={(e) => setFormRev({ ...formRev, accion: e.target.value })} placeholder="Ej.: se publicó V6.7 y se avisó a los dueños" /></Field>
+              <Btn variant="accent" onClick={guardarRevision} style={{ justifyContent: "center" }}><Check size={14} /> Registrar revisión</Btn>
+            </div>
+            <div style={{ maxHeight: 460, overflowY: "auto" }}>
+              {revisiones.map((r) => (
+                <div key={r.id} style={{ border: `1px solid ${T.line}`, borderLeft: `4px solid ${r.requiere_actualizacion ? T.amber : T.green}`, borderRadius: 8, padding: "8px 10px", marginBottom: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><b style={{ fontSize: 13 }}>{ciberFecha(r.fecha + "T12:00:00")}</b><span style={{ fontSize: 12, color: T.inkSoft }}>{r.revisor}</span></div>
+                  <div style={{ fontSize: 12.5, marginTop: 3 }}>{r.hallazgos}</div>
+                  {r.accion && <div style={{ fontSize: 12, color: T.inkSoft, marginTop: 2 }}>Acción: {r.accion}</div>}
+                  <div style={{ fontSize: 11, color: T.gray, marginTop: 2 }}>Fuentes: {r.fuentes}</div>
+                </div>
+              ))}
+              {!revisiones.length && <div style={{ fontSize: 12.5, color: T.gray }}>Todavía no hay revisiones registradas.</div>}
+            </div>
+          </div>
+        )}
+
+        {tab === "avisos" && (
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 360px) 1fr", gap: 14 }} className="grid-layout">
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 12.5, color: T.inkSoft }}>11.8.3: avisar al dueño de cada actualización de seguridad necesaria. 11.9: avisar si termina el soporte. Los clientes lo ven en su Monitoreo (web y APK).</div>
+              <Field label="Tipo">
+                <select style={inp} value={formAviso.tipo} onChange={(e) => setFormAviso({ ...formAviso, tipo: e.target.value })}>
+                  <option value="actualizacion">Actualización de seguridad</option>
+                  <option value="informacion">Información</option>
+                  <option value="fin_soporte">Fin de soporte</option>
+                </select>
+              </Field>
+              <Field label="Título"><input style={inp} value={formAviso.titulo} onChange={(e) => setFormAviso({ ...formAviso, titulo: e.target.value })} placeholder="Ej.: Actualización de seguridad V6.6" /></Field>
+              <Field label="Detalle"><textarea rows={3} style={{ ...inp, resize: "vertical", fontFamily: "inherit" }} value={formAviso.detalle} onChange={(e) => setFormAviso({ ...formAviso, detalle: e.target.value })} /></Field>
+              <Field label="Versión"><input style={inp} value={formAviso.version} onChange={(e) => setFormAviso({ ...formAviso, version: e.target.value })} placeholder="6.6" /></Field>
+              <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={formAviso.todos} onChange={(e) => setFormAviso({ ...formAviso, todos: e.target.checked })} /> Todos los sitios</label>
+              {!formAviso.todos && (
+                <div style={{ border: `1px solid ${T.line}`, borderRadius: 8, padding: 6, maxHeight: 140, overflowY: "auto" }}>
+                  {sitios.map((s) => (
+                    <label key={s} style={{ display: "flex", gap: 6, fontSize: 12.5, padding: "2px 0" }}>
+                      <input type="checkbox" checked={formAviso.sitios.includes(s)} onChange={(e) => setFormAviso((f) => ({ ...f, sitios: e.target.checked ? [...f.sitios, s] : f.sitios.filter((x) => x !== s) }))} /> {s}
+                    </label>
+                  ))}
+                </div>
+              )}
+              <Btn variant="accent" onClick={publicarAviso} style={{ justifyContent: "center" }}><Send size={14} /> Publicar aviso</Btn>
+            </div>
+            <div style={{ maxHeight: 460, overflowY: "auto" }}>
+              {avisos.map((a) => (
+                <div key={a.id} style={{ border: `1px solid ${T.line}`, borderLeft: `4px solid ${a.tipo === "fin_soporte" ? T.red : a.tipo === "actualizacion" ? T.amber : T.blue}`, borderRadius: 8, padding: "8px 10px", marginBottom: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><b style={{ fontSize: 13 }}>{a.titulo}</b><span style={{ fontSize: 12, color: T.inkSoft }}>{ciberFecha(a.creado_en)}</span></div>
+                  {a.detalle && <div style={{ fontSize: 12.5, marginTop: 3 }}>{a.detalle}</div>}
+                  <div style={{ fontSize: 11, color: T.gray, marginTop: 2 }}>{a.version ? `Versión ${a.version} · ` : ""}{a.sitios ? a.sitios.join(", ") : "Todos los sitios"}{a.autor ? ` · ${a.autor}` : ""}</div>
+                </div>
+              ))}
+              {!avisos.length && <div style={{ fontSize: 12.5, color: T.gray }}>Todavía no hay avisos.</div>}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Avisos de ciberseguridad para el cliente (y el personal) arriba del Monitoreo.
+function AvisosCiberMonitoreo() {
+  const [lista, setLista] = useState([]);
+  const [ocultos, setOcultos] = useState(() => { try { return JSON.parse(localStorage.getItem("avisos-ciber-ocultos") || "[]"); } catch { return []; } });
+  useEffect(() => {
+    let vivo = true;
+    supabase.rpc("avisos_ciber_mios").then(({ data, error }) => { if (vivo && !error) setLista((data || []).filter((a) => ciberDias(a.creado_en) <= 180)); });
+    return () => { vivo = false; };
+  }, []);
+  const visibles = lista.filter((a) => !ocultos.includes(a.id)).slice(0, 3);
+  if (!visibles.length) return null;
+  const ocultar = (id) => { const n = [...ocultos, id]; setOcultos(n); try { localStorage.setItem("avisos-ciber-ocultos", JSON.stringify(n)); } catch (e) { /* nada */ } };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {visibles.map((a) => (
+        <div key={a.id} style={{ background: IGNIS.panel, border: `1px solid ${a.tipo === "fin_soporte" ? IGNIS.alarma : IGNIS.problema}`, borderRadius: 10, padding: "10px 12px", display: "flex", gap: 10, alignItems: "flex-start" }}>
+          <ShieldCheck size={18} color={a.tipo === "fin_soporte" ? IGNIS.alarma : IGNIS.problema} style={{ flexShrink: 0, marginTop: 1 }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 800 }}>{a.titulo}</div>
+            {a.detalle && <div style={{ fontSize: 12.5, color: IGNIS.dim, marginTop: 2 }}>{a.detalle}</div>}
+            <div style={{ fontSize: 11, color: IGNIS.dim2, marginTop: 3 }}>Aviso de ciberseguridad · {ciberFecha(a.creado_en)}{a.version ? ` · versión ${a.version}` : ""}</div>
+          </div>
+          <button type="button" onClick={() => ocultar(a.id)} title="Ocultar" style={{ border: "none", background: "transparent", color: IGNIS.dim, cursor: "pointer" }}><X size={15} /></button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---- Firma digital del firmware (ECDSA P-256 + SHA-256) ----
+// El IgnisMonitor 6.4 solo instala un .bin si viene con su archivo .sig
+// firmado con la llave privada del administrador. La llave privada vive en
+// un archivo que guarda el admin (nunca en Supabase ni en el navegador); el
+// equipo solo conoce la llave pública, que va escrita en el .ino.
+const FIRMA_ALG = { name: "ECDSA", namedCurve: "P-256" };
+function b64DeBytes(bytes) { let s = ""; bytes.forEach((b) => { s += String.fromCharCode(b); }); return btoa(s); }
+function pemDeSpki(spki) {
+  const b64 = b64DeBytes(new Uint8Array(spki));
+  return "-----BEGIN PUBLIC KEY-----\n" + (b64.match(/.{1,64}/g) || []).join("\n") + "\n-----END PUBLIC KEY-----";
+}
+// WebCrypto entrega la firma como r||s (64 bytes); el ESP32 (mbedTLS) la quiere en DER.
+function firmaRawADer(raw) {
+  const enc = (x) => {
+    let i = 0; while (i < x.length - 1 && x[i] === 0) i++;
+    let v = Array.from(x.slice(i)); if (v[0] & 0x80) v = [0, ...v];
+    return [0x02, v.length, ...v];
+  };
+  const r = enc(raw.slice(0, 32)), s2 = enc(raw.slice(32, 64));
+  return new Uint8Array([0x30, r.length + s2.length, ...r, ...s2]);
+}
+async function crearLlaveFirma() {
+  const par = await crypto.subtle.generateKey(FIRMA_ALG, true, ["sign", "verify"]);
+  const privada = await crypto.subtle.exportKey("jwk", par.privateKey);
+  const publicaPem = pemDeSpki(await crypto.subtle.exportKey("spki", par.publicKey));
+  const contenido = { tipo: "llave_firma_ignis", creada: new Date().toISOString(), aviso: "LLAVE PRIVADA: guárdela fuera de la PC y no la comparta. Sin ella no se puede actualizar el IgnisMonitor por internet.", privada, publica_pem: publicaPem };
+  const blob = new Blob([JSON.stringify(contenido, null, 2)], { type: "application/json" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "llave_firma_ignis_GUARDAR.json";
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  return publicaPem;
+}
+async function leerLlaveFirma(file) {
+  const j = JSON.parse(await file.text());
+  if (j?.tipo !== "llave_firma_ignis" || !j.privada) throw new Error("Ese archivo no es una llave de firma del IgnisMonitor.");
+  const llave = await crypto.subtle.importKey("jwk", j.privada, FIRMA_ALG, false, ["sign"]);
+  return { llave, publicaPem: j.publica_pem || "" };
+}
+async function firmarFirmware(llave, buffer) {
+  const raw = new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, llave, buffer));
+  return firmaRawADer(raw);
+}
+
+// Barra de progreso de la actualización sin cable. Los equipos 6.7+ informan
+// "descargando 40%"; los anteriores solo "descargando", y ahí la barra se mueve
+// sin porcentaje. Etapas: orden enviada → descarga → firma → instalado → en línea.
+if (typeof document !== "undefined" && !document.getElementById("ignis-barra-css")) {
+  const st = document.createElement("style"); st.id = "ignis-barra-css";
+  st.textContent = "@keyframes ignisBarra{0%{left:-30%}100%{left:100%}}";
+  document.head.appendChild(st);
+}
+function avanceFirmware(res, d) {
+  const verde = "#2e9e5b", ambar = "#e0a020", rojo = "#d64545";
+  if (/^error/i.test(res)) return { pct: 100, color: rojo, etiqueta: "Falló" };
+  const vNueva = (res.match(/\(V([\d.]+)\)/) || [])[1];
+  if (/instalado/i.test(res)) {
+    if (vNueva && d.version === vNueva) return { pct: 100, color: verde, etiqueta: "100 % · listo", listo: true };
+    return { pct: 92, color: verde, etiqueta: "Reiniciando…" };
+  }
+  if (/verificando/i.test(res)) return { pct: 87, color: ambar, etiqueta: "Verificando firma" };
+  const m = res.match(/descargando\s+(\d{1,3})\s*%/i);
+  if (m) { const n = Math.min(100, Number(m[1])); return { pct: Math.round(8 + n * 0.77), color: ambar, etiqueta: `Descarga ${n} %` }; }
+  if (/descargando/i.test(res)) return { indeterminado: true, color: ambar, etiqueta: "Descargando…" };
+  return { pct: 4, color: ambar, etiqueta: "En espera" };
+}
+
 // ---- Actualizar el firmware de los IgnisMonitor por internet (sin cable) ----
 // El admin sube el .bin a Supabase Storage (carpeta firmware_ignis) y deja la
 // orden "actualizar" a los equipos elegidos; cada equipo la lee en ~30 s,
@@ -12432,6 +14044,27 @@ function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
   const [elegidos, setElegidos] = useState(() => new Set(sitioInicial && sitioInicial !== "Todos" ? [sitioInicial] : dispositivos.map((d) => d.sitio)));
   const [enviando, setEnviando] = useState(false);
   const [enviado, setEnviado] = useState(null); // { nombre, sitios, en }
+  const [firma, setFirma] = useState(null); // { llave, publicaPem, nombre }
+  const [pemNuevo, setPemNuevo] = useState("");
+  const cargarLlave = async (f) => {
+    setAviso("");
+    if (!f) return;
+    try { const r = await leerLlaveFirma(f); setFirma({ ...r, nombre: f.name }); }
+    catch (e) { setFirma(null); setAviso(e.message || "No se pudo leer la llave."); }
+  };
+  const nuevaLlave = async () => {
+    try { setPemNuevo(await crearLlaveFirma()); }
+    catch (e) { setAviso("Este navegador no pudo crear la llave: " + (e.message || e)); }
+  };
+  const soloFirmar = async () => {
+    if (!archivo || !firma?.llave) { setAviso("Elija el .bin y cargue la llave de firma."); return; }
+    try {
+      const sig = await firmarFirmware(firma.llave, await archivo.arrayBuffer());
+      const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([sig], { type: "application/octet-stream" })); a.download = archivo.name + ".sig";
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      setAviso(""); 
+    } catch (e) { setAviso("No se pudo firmar: " + (e.message || e)); }
+  };
   const elegir = async (f) => {
     setAviso(""); setArchivo(null);
     if (!f) return;
@@ -12443,15 +14076,21 @@ function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
   };
   const enviar = async () => {
     if (!archivo || !elegidos.size) return;
+    if (!firma?.llave) { setAviso("Cargue primero la llave de firma (llave_firma_ignis_GUARDAR.json). Los IgnisMonitor 6.4 solo instalan firmware firmado."); return; }
     setEnviando(true); setAviso("");
+    let sig;
+    try { sig = await firmarFirmware(firma.llave, await archivo.arrayBuffer()); }
+    catch (e) { setEnviando(false); setAviso("No se pudo firmar el archivo: " + (e.message || e)); return; }
     const d = new Date(), z = (n) => String(n).padStart(2, "0");
     const nombre = `IgnisMonitor_${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}.bin`;
     const { error: eSub } = await supabase.storage.from("firmware_ignis").upload(nombre, archivo, { contentType: "application/octet-stream", upsert: true });
     if (eSub) {
       setEnviando(false);
-      setAviso(/bucket|not found/i.test(eSub.message || "") ? "Falta correr en Supabase el SQL actualizar_sin_cable.sql (carpeta firmware_ignis)." : `No se pudo subir el archivo: ${eSub.message}`);
+      setAviso(/bucket|not found/i.test(eSub.message || "") ? "Falta correr en Supabase el SQL actualizar_sin_cable.sql (carpeta firmware_ignis)." : /row-level|policy|security/i.test(eSub.message || "") ? "Solo un usuario administrador con sesión vigente puede subir firmware. Salga y vuelva a entrar." : `No se pudo subir el archivo: ${eSub.message}`);
       return;
     }
+    const { error: eSig } = await supabase.storage.from("firmware_ignis").upload(nombre + ".sig", new Blob([sig], { type: "application/octet-stream" }), { contentType: "application/octet-stream", upsert: true });
+    if (eSig) { setEnviando(false); setAviso(`Se subió el .bin pero no su firma: ${eSig.message}`); return; }
     const sitios = [...elegidos];
     const ahora = new Date().toISOString();
     const { error: eOrd } = await supabase.from("dispositivos_panel")
@@ -12471,6 +14110,21 @@ function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
         {!enviado ? (
           <>
             <div style={{ fontSize: 12.5, color: T.inkSoft, marginBottom: 12 }}>Suba el archivo <b>.bin</b> del IgnisMonitor ESP32. Cada equipo elegido lo descarga por internet en menos de 1 minuto, se instala solo y se reinicia (1–2 minutos sin monitoreo). Hágalo cuando el panel no esté imprimiendo.</div>
+            <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 10, marginBottom: 12, background: T.graySoft }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 800, marginBottom: 6 }}><ShieldCheck size={14} color={T.green} /> Firma digital (obligatoria desde el firmware 6.4)</div>
+              <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 8 }}>El equipo solo instala un firmware firmado con su llave privada. Así nadie más puede instalarle un programa, aunque llegue a la base de datos.</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <label style={{ fontSize: 12.5, fontWeight: 600 }}>Llave de firma: <input type="file" accept=".json,application/json" onChange={(e) => cargarLlave(e.target.files?.[0])} /></label>
+                {firma && <span style={{ fontSize: 12, color: T.green, fontWeight: 700 }}>✓ {firma.nombre} cargada</span>}
+              </div>
+              <button type="button" onClick={nuevaLlave} style={{ marginTop: 6, border: "none", background: "transparent", color: T.blue, cursor: "pointer", fontSize: 12, padding: 0, textDecoration: "underline" }}>No tengo llave: crear una nueva (solo la primera vez)</button>
+              {pemNuevo && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontSize: 12, color: T.inkSoft, marginBottom: 4 }}>Se descargó <b>llave_firma_ignis_GUARDAR.json</b> (guárdela como la llave de la APK). Copie esta llave pública en el .ino, en <code>FIRMA_PUBLICA_PEM</code>, compile y cargue ese firmware una vez por cable o con la actualización anterior:</div>
+                  <textarea readOnly value={pemNuevo} rows={5} style={{ ...inputStyle, width: "100%", fontFamily: "monospace", fontSize: 11 }} onFocus={(e) => e.target.select()} />
+                </div>
+              )}
+            </div>
             <input type="file" accept=".bin" onChange={(e) => elegir(e.target.files?.[0])} style={{ marginBottom: 8 }} />
             {archivo && <div style={{ fontSize: 12.5, color: T.green, fontWeight: 700, marginBottom: 8 }}>✓ {archivo.name} · {Math.round(archivo.size / 1024)} KB</div>}
             <div style={{ fontSize: 12, fontWeight: 700, color: T.inkSoft, margin: "8px 0 6px" }}>Equipos a actualizar</div>
@@ -12490,7 +14144,8 @@ function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
             {aviso && <div style={{ marginTop: 10, fontSize: 13, color: T.red, fontWeight: 600 }}>{aviso}</div>}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
               <Btn variant="ghost" onClick={onCerrar}>Cancelar</Btn>
-              <Btn variant="accent" onClick={enviar} disabled={!archivo || !elegidos.size || enviando}>{enviando ? "Subiendo..." : `Subir e instalar en ${elegidos.size} equipo(s)`}</Btn>
+              <Btn variant="ghost" onClick={soloFirmar} disabled={!archivo || !firma}>Solo firmar (.sig para instalar en el sitio)</Btn>
+              <Btn variant="accent" onClick={enviar} disabled={!archivo || !elegidos.size || enviando || !firma}>{enviando ? "Firmando y subiendo..." : `Firmar, subir e instalar en ${elegidos.size} equipo(s)`}</Btn>
             </div>
           </>
         ) : (
@@ -12501,15 +14156,24 @@ function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
                 const d = dispositivos.find((x) => x.sitio === sitio) || {};
                 const res = d.comando_resultado || "";
                 const color = /^error/i.test(res) ? T.red : /instalado/i.test(res) ? T.green : T.amber;
+                const av = avanceFirmware(res, d);
                 return (
                   <div key={sitio} style={{ border: `1px solid ${T.line}`, borderLeft: `4px solid ${color}`, borderRadius: 8, padding: "8px 10px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><b style={{ fontSize: 13.5 }}>{sitio}</b><span style={{ fontSize: 12, color: T.inkSoft }}>{d.version ? `versión V${d.version}` : ""}</span></div>
-                    <div style={{ fontSize: 12.5, color, fontWeight: 600, marginTop: 2 }}>{res || (d.comando ? "esperando que el equipo lea la orden" : "—")}</div>
+                    <div style={{ fontSize: 12.5, color, fontWeight: 600, marginTop: 2 }}>{av.listo ? `Listo: el equipo ya trabaja con la V${d.version}` : (res || (d.comando ? "esperando que el equipo lea la orden" : "—"))}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+                      <div style={{ flex: 1, height: 10, borderRadius: 6, background: T.line, overflow: "hidden", position: "relative" }}>
+                        {av.indeterminado
+                          ? <div style={{ position: "absolute", top: 0, bottom: 0, width: "30%", borderRadius: 6, background: av.color, animation: "ignisBarra 1.4s ease-in-out infinite" }} />
+                          : <div style={{ width: `${av.pct}%`, height: "100%", borderRadius: 6, background: av.color, transition: "width .8s ease" }} />}
+                      </div>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: av.color, minWidth: 92, textAlign: "right" }}>{av.etiqueta}</span>
+                    </div>
                   </div>
                 );
               })}
             </div>
-            <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 10 }}>Cuando diga "instalado, reiniciando", en 1–2 minutos el equipo vuelve en línea con la versión nueva.</div>
+            <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 10 }}>La barra avanza sola: en espera → descarga → verificación de la firma → reinicio → listo. Los equipos 6.7 o más nuevos muestran el porcentaje exacto de la descarga.</div>
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}><Btn variant="accent" onClick={onCerrar}>Cerrar</Btn></div>
           </>
         )}
@@ -12518,15 +14182,566 @@ function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
   );
 }
 
+// =========================================================
+// DOCUMENTACIÓN DEL GERENTE — archivos privados (zip del proyecto, App, INO, placa…)
+// Solo lo ve el usuario marcado como gerente (usuarios.es_gerente). Guarda directo
+// en Supabase Storage (carpeta documentos_gerente) y la lista en documentos_gerente.
+// =========================================================
+const DOC_CATEGORIAS = ["Proyecto completo", "App (web)", "Firmware (INO)", "Placa PCB", "Carcasa 3D", "Otros"];
+const docTamano = (b) => (b == null ? "" : b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
+const docFecha = (iso) => { try { return new Date(iso).toLocaleString("es-CR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }); } catch { return iso || ""; } };
+function adivinarCategoriaDoc(nombre) {
+  const n = String(nombre || "").toLowerCase();
+  if (/\.ino$|firmware|esp32|esp8266/.test(n)) return "Firmware (INO)";
+  if (/gerber|kicad|pcb|placa|easyeda|bom|cpl/.test(n)) return "Placa PCB";
+  if (/\.stl$|\.step$|carcasa|housing/.test(n)) return "Carcasa 3D";
+  if (/app.*\.jsx$|\.jsx$/.test(n)) return "App (web)";
+  if (/proyecto|completo|backup|respaldo/.test(n)) return "Proyecto completo";
+  return "Otros";
+}
+
+function DocumentacionGerente() {
+  const currentUser = useContext(CurrentUserContext);
+  const confirmar = useContext(ConfirmContext);
+  const [docs, setDocs] = useState(null);
+  const [maxBytes, setMaxBytes] = useState(50 * 1048576);
+  const [error, setError] = useState("");
+  const [cargando, setCargando] = useState(false);
+  const [archivos, setArchivos] = useState([]);
+  const [categoria, setCategoria] = useState("Proyecto completo");
+  const [version, setVersion] = useState("");
+  const [descripcion, setDescripcion] = useState("");
+  const [subiendo, setSubiendo] = useState("");
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroCat, setFiltroCat] = useState("Todas");
+  const [editando, setEditando] = useState(null);
+  const inputRef = useRef(null);
+
+  const BUCKET_DOCS = "documentos_gerente";
+  const msgSql = (e) => (/docs_|function|bucket|not found|policy|row-level/i.test(e?.message || "") ? `${e.message} — corra en Supabase el SQL «SQL_documentacion_simple.sql».` : (e?.message || String(e)));
+  const api = async (accion, extra = {}) => {
+    const uid = currentUser?.id;
+    if (accion === "listar") {
+      const { data, error: e } = await supabase.rpc("docs_listar", { p_usuario: uid });
+      if (e) throw new Error(msgSql(e));
+      return { documentos: data || [] };
+    }
+    if (accion === "subir") {
+      const f = extra.archivo;
+      const d = new Date(), z = (n) => String(n).padStart(2, "0");
+      const limpio = f.name.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9._-]+/g, "_");
+      const carpeta = extra.categoria.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9]+/g, "_").toLowerCase();
+      const ruta = `${carpeta}/${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}_${limpio}`;
+      const { error: eUp } = await supabase.storage.from(BUCKET_DOCS).upload(ruta, f, { contentType: f.type || "application/octet-stream", upsert: false });
+      if (eUp) throw new Error(msgSql(eUp));
+      const { error: e } = await supabase.rpc("docs_guardar", { p_usuario: uid, p_id: null, p_ruta: ruta, p_nombre: f.name, p_tamano: f.size, p_categoria: extra.categoria, p_version: extra.version || "", p_descripcion: extra.descripcion || "" });
+      if (e) { await supabase.storage.from(BUCKET_DOCS).remove([ruta]); throw new Error(msgSql(e)); }
+      return {};
+    }
+    if (accion === "descargar") {
+      const doc = (docs || []).find((x) => x.id === extra.id);
+      const { data, error: e } = await supabase.storage.from(BUCKET_DOCS).createSignedUrl(doc.ruta, 300, { download: doc.nombre });
+      if (e) throw new Error(msgSql(e));
+      return { url: data.signedUrl };
+    }
+    if (accion === "editar") {
+      const { data, error: e } = await supabase.rpc("docs_guardar", { p_usuario: uid, p_id: extra.id, p_ruta: null, p_nombre: null, p_tamano: null, p_categoria: extra.categoria, p_version: extra.version || "", p_descripcion: extra.descripcion || "" });
+      if (e) throw new Error(msgSql(e));
+      return { documento: data };
+    }
+    if (accion === "borrar") {
+      const { data: ruta, error: e } = await supabase.rpc("docs_borrar", { p_usuario: uid, p_id: extra.id });
+      if (e) throw new Error(msgSql(e));
+      if (ruta) await supabase.storage.from(BUCKET_DOCS).remove([ruta]);
+      return {};
+    }
+    return {};
+  };
+  useEffect(() => { api("listar").then((j) => setDocs(j.documentos)).catch((e) => { setError(e.message); setDocs([]); }); }, []);
+  const recargar = async () => { try { const j = await api("listar"); setDocs(j.documentos); } catch (e) { setError(e.message); } };
+
+  const elegir = (lista) => {
+    const arr = [...(lista || [])];
+    setArchivos(arr);
+    if (arr.length) setCategoria(adivinarCategoriaDoc(arr[0].name));
+  };
+  const subir = async () => {
+    if (!archivos.length) return;
+    const grandes = archivos.filter((f) => f.size > maxBytes);
+    if (grandes.length) { setError(`${grandes.map((f) => f.name).join(", ")} pasa(n) de ${Math.round(maxBytes / 1048576)} MB, el límite por archivo de Supabase.`); return; }
+    setError("");
+    for (const f of archivos) {
+      try {
+        setSubiendo(`Subiendo ${f.name} (${docTamano(f.size)})…`);
+        await api("subir", { archivo: f, categoria, version, descripcion });
+      } catch (e) { setError(`${f.name}: ${e.message}`); break; }
+    }
+    setSubiendo(""); setArchivos([]); setVersion(""); setDescripcion("");
+    if (inputRef.current) inputRef.current.value = "";
+    recargar();
+  };
+  const descargar = async (d) => {
+    try {
+      const j = await api("descargar", { id: d.id });
+      if (EN_APK && puenteArchivos()) {
+        // En la APK se baja el archivo y la APK lo guarda en Descargas/Salvavidas
+        setSubiendo(`Descargando ${d.nombre}…`);
+        const r = await fetch(j.url);
+        if (!r.ok) throw new Error(`No se pudo descargar (${r.status})`);
+        const blob = await r.blob();
+        const ok = await guardarArchivoApk(blob, d.nombre, blob.type || "application/octet-stream");
+        setSubiendo("");
+        if (!ok) throw new Error("La app no pudo guardar el archivo en el celular.");
+        return;
+      }
+      const a = document.createElement("a"); a.href = j.url; a.download = d.nombre; document.body.appendChild(a); a.click(); a.remove();
+    }
+    catch (e) { setError(e.message); }
+  };
+  const borrar = async (d) => {
+    if (!(await confirmar(`¿Borrar «${d.nombre}»? El archivo se elimina para siempre.`, { confirmLabel: "Sí, borrar", variant: "danger" }))) return;
+    try { await api("borrar", { id: d.id }); setDocs((p) => p.filter((x) => x.id !== d.id)); } catch (e) { setError(e.message); }
+  };
+  const guardarEdicion = async () => {
+    try { const j = await api("editar", { id: editando.id, version: editando.version, descripcion: editando.descripcion, categoria: editando.categoria }); setDocs((p) => p.map((x) => (x.id === j.documento.id ? j.documento : x))); setEditando(null); }
+    catch (e) { setError(e.message); }
+  };
+
+  if (docs === null) return <Card><div style={{ fontSize: 13, color: T.gray }}>Cargando documentos…</div></Card>;
+
+  const q = busqueda.trim().toLowerCase();
+  const visibles = docs.filter((d) => (filtroCat === "Todas" || d.categoria === filtroCat) && (!q || `${d.nombre} ${d.version || ""} ${d.descripcion || ""}`.toLowerCase().includes(q)));
+  const porCat = DOC_CATEGORIAS.map((c) => [c, visibles.filter((d) => d.categoria === c)]).filter(([, l]) => l.length);
+  const total = docs.reduce((a, d) => a + (Number(d.tamano) || 0), 0);
+  const ultimoDe = (c) => docs.find((d) => d.categoria === c);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <Card title={<span style={{ display: "flex", alignItems: "center", gap: 8 }}><FolderLock size={18} /> Documentación del Gerente</span>}
+        action={null}>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+          {["Proyecto completo", "App (web)", "Firmware (INO)", "Placa PCB"].map((c) => {
+            const u = ultimoDe(c);
+            return (
+              <div key={c} style={{ flex: "1 1 180px", background: T.bg, border: `1px solid ${T.line}`, borderRadius: 12, padding: "10px 12px" }}>
+                <div style={{ fontSize: 11.5, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3 }}>Último · {c}</div>
+                {u ? <>
+                  <div style={{ fontWeight: 700, fontSize: 13, marginTop: 3, wordBreak: "break-all" }}>{u.nombre}</div>
+                  <div style={{ fontSize: 11.5, color: T.inkSoft }}>{u.version ? `v${u.version} · ` : ""}{docFecha(u.subido_en)}</div>
+                  <Btn small variant="ghost" onClick={() => descargar(u)} style={{ marginTop: 6 }}><Download size={13} /> Descargar</Btn>
+                </> : <div style={{ fontSize: 12.5, color: T.gray, marginTop: 4 }}>Todavía nada</div>}
+              </div>
+            );
+          })}
+        </div>
+
+        <div
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => { e.preventDefault(); elegir(e.dataTransfer.files); }}
+          onClick={() => inputRef.current?.click()}
+          style={{ border: `2px dashed ${archivos.length ? T.green : T.line}`, borderRadius: 12, padding: 18, textAlign: "center", cursor: "pointer", background: archivos.length ? T.greenSoft : T.bg }}>
+          <input ref={inputRef} type="file" multiple style={{ display: "none" }} onChange={(e) => elegir(e.target.files)} />
+          <UploadCloud size={26} color={archivos.length ? T.green : T.inkSoft} />
+          <div style={{ fontSize: 13.5, fontWeight: 600, marginTop: 4 }}>{archivos.length ? archivos.map((f) => `${f.name} (${docTamano(f.size)})`).join(" · ") : "Arrastre aquí los archivos o toque para elegir"}</div>
+          <div style={{ fontSize: 11.5, color: T.inkSoft }}>Zip, JSX, INO, PDF, STL… hasta {Math.round(maxBytes / 1048576)} MB por archivo</div>
+        </div>
+        {archivos.length > 0 && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
+            <select style={{ ...inputStyle, width: 180 }} value={categoria} onChange={(e) => setCategoria(e.target.value)}>
+              {DOC_CATEGORIAS.map((c) => <option key={c}>{c}</option>)}
+            </select>
+            <input style={{ ...inputStyle, width: 110 }} placeholder="Versión (6.6)" value={version} onChange={(e) => setVersion(e.target.value)} />
+            <input style={{ ...inputStyle, flex: 1, minWidth: 200 }} placeholder="Descripción: qué contiene, qué cambió…" value={descripcion} onChange={(e) => setDescripcion(e.target.value)} />
+            <Btn variant="accent" onClick={subir} disabled={!!subiendo}><Upload size={14} /> {subiendo ? "Subiendo…" : "Subir"}</Btn>
+            <Btn variant="ghost" onClick={() => { setArchivos([]); if (inputRef.current) inputRef.current.value = ""; }} disabled={!!subiendo}>Cancelar</Btn>
+          </div>
+        )}
+        {subiendo && <div style={{ fontSize: 12.5, color: T.blue, marginTop: 8 }}>{subiendo}</div>}
+        {error && <div style={{ background: T.redSoft, color: T.red, borderRadius: 9, padding: "8px 12px", fontSize: 12.5, marginTop: 10 }}>{error}</div>}
+      </Card>
+
+      <Card title={`Archivos guardados (${docs.length}) · ${docTamano(total) || "0 KB"}`}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
+            <Search size={14} color={T.inkSoft} style={{ position: "absolute", left: 10, top: 10 }} />
+            <input style={{ ...inputStyle, paddingLeft: 30 }} placeholder="Buscar por nombre, versión o descripción…" value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
+          </div>
+          <select style={{ ...inputStyle, width: 190 }} value={filtroCat} onChange={(e) => setFiltroCat(e.target.value)}>
+            <option>Todas</option>{DOC_CATEGORIAS.map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </div>
+        {!porCat.length && <div style={{ color: T.gray, fontSize: 13 }}>{docs.length ? "Ningún resultado." : "Todavía no hay archivos. Suba el primero arriba."}</div>}
+        {porCat.map(([c, lista]) => (
+          <div key={c} style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: T.inkSoft, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>{c} · {lista.length}</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {lista.map((d, i) => (
+                <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 10, background: i === 0 ? T.blueSoft : T.bg, border: `1px solid ${T.line}`, flexWrap: "wrap" }}>
+                  <FileText size={18} color={T.steel} />
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13.2, wordBreak: "break-all" }}>{d.nombre}{d.version && <span style={{ marginLeft: 6, fontSize: 11.5, fontWeight: 700, color: T.blue }}>v{d.version}</span>}{i === 0 && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: T.green }}>· más reciente</span>}</div>
+                    {editando?.id === d.id ? (
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 5 }}>
+                        <select style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: 150 }} value={editando.categoria} onChange={(e) => setEditando({ ...editando, categoria: e.target.value })}>{DOC_CATEGORIAS.map((x) => <option key={x}>{x}</option>)}</select>
+                        <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", width: 80 }} value={editando.version || ""} placeholder="Versión" onChange={(e) => setEditando({ ...editando, version: e.target.value })} />
+                        <input style={{ ...inputStyle, fontSize: 12, padding: "4px 6px", flex: 1, minWidth: 160 }} value={editando.descripcion || ""} placeholder="Descripción" onChange={(e) => setEditando({ ...editando, descripcion: e.target.value })} />
+                        <Btn small variant="accent" onClick={guardarEdicion}><Check size={13} /></Btn>
+                        <Btn small variant="ghost" onClick={() => setEditando(null)}><X size={13} /></Btn>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 11.8, color: T.inkSoft }}>{docTamano(d.tamano)} · {docFecha(d.subido_en)}{d.descripcion ? ` · ${d.descripcion}` : ""}</div>
+                    )}
+                  </div>
+                  <Btn small variant="ghost" onClick={() => descargar(d)}><Download size={13} /> Descargar</Btn>
+                  <Btn small variant="ghost" onClick={() => setEditando({ ...d })} title="Editar versión / descripción"><Pencil size={13} /></Btn>
+                  <Btn small variant="ghost" onClick={() => borrar(d)} title="Borrar"><Trash2 size={13} color={T.red} /></Btn>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </Card>
+      <div style={{ fontSize: 11.5, color: T.inkSoft, textAlign: "center" }}>Los archivos se guardan en Supabase (carpeta documentos_gerente). · by Anthony Campos Medina</div>
+    </div>
+  );
+}
+
+// =========================================================
+// CAMPANA DE MENSAJES — avisos entre usuarios (Pendiente, Alerta, Urgente…)
+// Cada usuario solo recibe y ve los mensajes dirigidos a él (funciones de Supabase
+// con su id; la tabla no se puede leer directo desde el navegador).
+// =========================================================
+const MSG_TIPOS = [
+  { id: "Urgente", c: "#B42318", s: "#FDE2E1", icono: "🚨" },
+  { id: "Alerta", c: "#E8590C", s: "#FFE8D9", icono: "⚠️" },
+  { id: "Pendiente", c: T.amber, s: T.amberSoft, icono: "📌" },
+  { id: "Recordatorio", c: "#7048E8", s: "#ECE5FF", icono: "⏰" },
+  { id: "Informacion", c: T.blue, s: T.blueSoft, icono: "ℹ️", label: "Información" },
+];
+const msgTipo = (t) => MSG_TIPOS.find((x) => x.id === t) || MSG_TIPOS[4];
+const msgHace = (iso) => {
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return "ahora";
+  if (s < 3600) return `hace ${Math.floor(s / 60)} min`;
+  if (s < 86400) return `hace ${Math.floor(s / 3600)} h`;
+  return new Date(iso).toLocaleString("es-CR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+};
+// Sonido de campana real (sintetizado): golpe con armónicos que se apagan suave.
+// El navegador no deja sonar nada hasta que la persona toca la página una vez,
+// por eso el audio se "despierta" con el primer clic o tecla.
+let ctxAudioMensajes = null;
+function audioMensajes() {
+  try {
+    if (!ctxAudioMensajes) ctxAudioMensajes = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctxAudioMensajes.state === "suspended") ctxAudioMensajes.resume();
+    return ctxAudioMensajes;
+  } catch { return null; }
+}
+if (typeof window !== "undefined") {
+  const despertar = () => { audioMensajes(); window.removeEventListener("pointerdown", despertar); window.removeEventListener("keydown", despertar); };
+  window.addEventListener("pointerdown", despertar); window.addEventListener("keydown", despertar);
+}
+const sonidoMensajesActivo = () => { try { return localStorage.getItem("campana-sonido") !== "no"; } catch { return true; } };
+function golpeCampana(ctx, f, t0, vol, dur) {
+  const salida = ctx.createGain(); salida.connect(ctx.destination);
+  salida.gain.setValueAtTime(0.0001, t0);
+  salida.gain.exponentialRampToValueAtTime(vol, t0 + 0.008);
+  salida.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  // parciales de una campana: fundamental + armónicos inarmónicos
+  [[1, 1], [2.0, 0.45], [2.76, 0.32], [5.4, 0.16], [8.93, 0.07]].forEach(([k, a]) => {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = "sine"; o.frequency.value = f * k;
+    g.gain.setValueAtTime(a, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur / Math.sqrt(k));
+    o.connect(g); g.connect(salida); o.start(t0); o.stop(t0 + dur + 0.05);
+  });
+}
+function sonarAvisoMensaje(urgente) {
+  if (!sonidoMensajesActivo()) return;
+  const ctx = audioMensajes();
+  if (!ctx) return;
+  try {
+    const t = ctx.currentTime + 0.03;
+    // Mismo "din-don" para todos los mensajes
+    golpeCampana(ctx, 1318.5, t, 0.3, 1.6);       // "din"
+    golpeCampana(ctx, 1046.5, t + 0.28, 0.26, 2.0); // "don"
+  } catch {}
+}
+const ESTILO_CAMPANA = `
+@keyframes ignisCampanaMover { 0%,62%,100%{transform:rotate(0)} 66%{transform:rotate(16deg)} 70%{transform:rotate(-14deg)} 74%{transform:rotate(11deg)} 78%{transform:rotate(-8deg)} 82%{transform:rotate(5deg)} 86%{transform:rotate(-2deg)} }
+@keyframes ignisCampanaOnda { 0%{transform:scale(1);opacity:.55} 100%{transform:scale(1.9);opacity:0} }
+@keyframes ignisCampanaPop { 0%{transform:scale(0)} 60%{transform:scale(1.25)} 100%{transform:scale(1)} }
+@keyframes ignisCampanaToast { 0%{transform:translateY(-14px) scale(.96);opacity:0} 100%{transform:none;opacity:1} }
+@keyframes ignisCampanaBarra { from{transform:scaleX(1)} to{transform:scaleX(0)} }
+.ignis-campana-btn{transition:transform .18s ease, box-shadow .18s ease}
+.ignis-campana-btn:hover{transform:translateY(-2px) scale(1.05)}
+.ignis-campana-btn.viva .ignis-campana-icono{animation:ignisCampanaMover 3.2s ease-in-out infinite;transform-origin:50% 8%}
+.ignis-campana-btn.viva::before,.ignis-campana-btn.viva::after{content:"";position:absolute;inset:0;border-radius:14px;border:2px solid #FF7A3D;animation:ignisCampanaOnda 2.2s ease-out infinite;pointer-events:none}
+.ignis-campana-btn.viva::after{animation-delay:1.1s}
+@media (prefers-reduced-motion: reduce){.ignis-campana-btn.viva .ignis-campana-icono,.ignis-campana-btn.viva::before,.ignis-campana-btn.viva::after{animation:none}}
+`;
+
+function CampanaMensajes({ user, abajo, angosta }) {
+  const [abierto, setAbierto] = useState(false);
+  const [vista, setVista] = useState("recibidos"); // recibidos | enviados | nuevo
+  const [sinLeer, setSinLeer] = useState(0);
+  const [recibidos, setRecibidos] = useState(null);
+  const [enviados, setEnviados] = useState(null);
+  const [personas, setPersonas] = useState([]);
+  const [error, setError] = useState("");
+  const [toast, setToast] = useState(null);
+  const [filtro, setFiltro] = useState("Todos");
+  const [sonido, setSonido] = useState(sonidoMensajesActivo);
+  const previo = useRef(null);
+  const tituloBase = useRef(typeof document !== "undefined" ? document.title.replace(/^\(\d+\)\s*/, "") : "");
+  // formulario nuevo
+  const [dest, setDest] = useState([]);
+  const [tipo, setTipo] = useState("Pendiente");
+  const [texto, setTexto] = useState("");
+  const [buscarPersona, setBuscarPersona] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [enviadoOk, setEnviadoOk] = useState("");
+
+  const cargarRecibidos = useCallback(async () => {
+    const { data, error: e } = await supabase.rpc("mis_mensajes", { p_usuario: user.id, p_limite: 100 });
+    if (e) { setError(/function|does not exist/i.test(e.message) ? "Falta correr en Supabase el SQL «SQL_mensajes_campana.sql»." : e.message); return null; }
+    setError(""); setRecibidos(data || []); return data || [];
+  }, [user.id]);
+  const contar = useCallback(async () => {
+    const { data, error: e } = await supabase.rpc("mensajes_sin_leer", { p_usuario: user.id });
+    if (e || typeof data !== "number") return;
+    const antes = previo.current;
+    previo.current = data;
+    setSinLeer(data);
+    if (antes === null && data > 0) {
+      let yaAviso = false;
+      try { yaAviso = sessionStorage.getItem("campana-aviso-inicial") === "1"; sessionStorage.setItem("campana-aviso-inicial", "1"); } catch {}
+      if (!yaAviso) setTimeout(() => sonarAvisoMensaje(false), 600);
+    }
+    if (antes !== null && data > antes) {
+      const lista = await cargarRecibidos();
+      const nuevo = (lista || []).find((m) => !m.leido_en);
+      if (nuevo) {
+        setToast(nuevo);
+        sonarAvisoMensaje(nuevo.tipo === "Urgente" || nuevo.tipo === "Alerta");
+        try {
+          if (typeof Notification !== "undefined" && Notification.permission === "granted" && document.hidden)
+            new Notification(`${msgTipo(nuevo.tipo).icono} ${msgTipo(nuevo.tipo).label || nuevo.tipo} de ${nuevo.remitente_nombre || ""}`, { body: nuevo.texto.slice(0, 160) });
+        } catch {}
+        setTimeout(() => setToast((t) => (t && t.id === nuevo.id ? null : t)), 9000);
+      }
+    }
+  }, [user.id, cargarRecibidos]);
+
+  useEffect(() => {
+    contar();
+    const iv = setInterval(contar, 25000);
+    const alVolver = () => { if (!document.hidden) contar(); };
+    document.addEventListener("visibilitychange", alVolver);
+    return () => { clearInterval(iv); document.removeEventListener("visibilitychange", alVolver); };
+  }, [contar]);
+  useEffect(() => {
+    try { document.title = sinLeer ? `(${sinLeer}) ${tituloBase.current}` : tituloBase.current; } catch {}
+  }, [sinLeer]);
+  useEffect(() => {
+    if (!abierto) return;
+    if (vista === "recibidos") cargarRecibidos();
+    if (vista === "enviados") supabase.rpc("mensajes_enviados", { p_usuario: user.id, p_limite: 60 }).then(({ data, error: e }) => { if (e) setError(e.message); else setEnviados(data || []); });
+    if (vista === "nuevo" && !personas.length) supabase.rpc("destinatarios_mensajes", { p_usuario: user.id }).then(({ data, error: e }) => { if (e) setError(e.message); else setPersonas((data || []).filter((p) => p.id !== user.id)); });
+  }, [abierto, vista]);
+
+  const confirmarCampana = useContext(ConfirmContext);
+  const marcar = async (m, accion) => {
+    if (accion === "eliminar" && confirmarCampana && !(await confirmarCampana("¿Eliminar este mensaje? Se borra definitivamente."))) return;
+    await supabase.rpc("mensaje_marcar", { p_usuario: user.id, p_id: m?.id || null, p_accion: accion });
+    const ahora = new Date().toISOString();
+    setRecibidos((l) => (l || []).flatMap((x) => {
+      if (accion === "todos_leidos") return [{ ...x, leido_en: x.leido_en || ahora }];
+      if (x.id !== m.id) return [x];
+      // Realizado o eliminado: el mensaje se borra de Supabase y sale de la lista
+      if (accion === "realizado" || accion === "eliminar") return [];
+      if (accion === "leido") return [{ ...x, leido_en: x.leido_en || ahora }];
+      return [x];
+    }));
+    contar();
+  };
+  const enviar = async () => {
+    if (!dest.length || !texto.trim()) return;
+    setEnviando(true); setError(""); setEnviadoOk("");
+    const { data, error: e } = await supabase.rpc("enviar_mensaje", { p_usuario: user.id, p_destinatarios: dest, p_tipo: tipo, p_texto: texto.trim() });
+    setEnviando(false);
+    if (e) { setError(e.message); return; }
+    setEnviadoOk(`Enviado a ${data} persona${data === 1 ? "" : "s"}.`);
+    setTexto(""); setDest([]); setEnviados(null);
+    setTimeout(() => setEnviadoOk(""), 4000);
+  };
+  const pedirPermisoNavegador = async () => { try { await Notification.requestPermission(); setToast(null); } catch {} };
+
+  const posBoton = abajo
+    ? { bottom: 18, right: 18 }
+    : angosta ? { top: 10, right: 56 } : { top: 16, right: 22 };
+  const lista = (recibidos || []).filter((m) => filtro === "Todos" || (filtro === "Sin atender" ? !m.atendido_en && m.tipo !== "Informacion" : m.tipo === filtro));
+  const personasFiltradas = personas.filter((p) => !buscarPersona.trim() || p.name.toLowerCase().includes(buscarPersona.trim().toLowerCase()));
+  const chip = (activo) => ({ padding: "4px 10px", borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: "pointer", border: `1px solid ${activo ? T.steel : T.line}`, background: activo ? T.steel : "#fff", color: activo ? "#fff" : T.inkSoft });
+
+  return (
+    <>
+      <style>{ESTILO_CAMPANA}</style>
+      <button type="button" className={`ignis-campana-btn${sinLeer ? " viva" : ""}`} onClick={() => { audioMensajes(); setAbierto((a) => !a); setVista("recibidos"); setToast(null); }} title={sinLeer ? `${sinLeer} mensaje(s) sin leer` : "Mensajes"}
+        style={{ position: "fixed", zIndex: 40, ...posBoton, width: 44, height: 44, borderRadius: 14, border: sinLeer ? "none" : `1px solid ${T.line}`, cursor: "pointer",
+          background: sinLeer ? "linear-gradient(145deg, #FF8A3D 0%, #E8590C 55%, #C92A2A 100%)" : "linear-gradient(145deg, #FFFFFF 0%, #EEF2F7 100%)",
+          color: sinLeer ? "#fff" : T.steel,
+          boxShadow: sinLeer ? "0 6px 18px rgba(232,89,12,.45), inset 0 1px 0 rgba(255,255,255,.35)" : "0 3px 12px rgba(16,24,38,.18)",
+          display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <span className="ignis-campana-icono" style={{ display: "flex" }}>{sinLeer ? <BellRing size={21} strokeWidth={2.3} /> : <Bell size={20} />}</span>
+        {sinLeer > 0 && <span key={sinLeer} style={{ position: "absolute", top: -7, right: -7, minWidth: 22, height: 22, padding: "0 6px", borderRadius: 11, background: "linear-gradient(180deg,#FF4D4F,#C92A2A)", color: "#fff", fontSize: 12, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", border: "2px solid #fff", boxShadow: "0 2px 6px rgba(201,42,42,.5)", animation: "ignisCampanaPop .35s ease-out" }}>{sinLeer > 99 ? "99+" : sinLeer}</span>}
+      </button>
+
+      {toast && !abierto && (
+        <div onClick={() => { setAbierto(true); setVista("recibidos"); setToast(null); marcar(toast, "leido"); }}
+          style={{ position: "fixed", zIndex: 41, ...(abajo ? { bottom: 66, right: 18 } : { top: (angosta ? 56 : 62), right: angosta ? 10 : 22 }), width: angosta ? "calc(100% - 20px)" : 340, cursor: "pointer",
+            background: "#fff", borderRadius: 12, boxShadow: "0 12px 34px rgba(0,0,0,.28)", borderLeft: `5px solid ${msgTipo(toast.tipo).c}`, padding: "10px 12px 12px", overflow: "hidden", animation: "ignisCampanaToast .35s cubic-bezier(.2,.9,.3,1.2)" }}>
+          <div style={{ position: "absolute", left: 0, bottom: 0, height: 3, width: "100%", background: msgTipo(toast.tipo).c, transformOrigin: "left", animation: "ignisCampanaBarra 9s linear forwards", opacity: 0.7 }} />
+          <div style={{ fontSize: 12, fontWeight: 800, color: msgTipo(toast.tipo).c }}>{msgTipo(toast.tipo).icono} {msgTipo(toast.tipo).label || toast.tipo} · {toast.remitente_nombre}</div>
+          <div style={{ fontSize: 13, marginTop: 3, color: T.ink, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{toast.texto}</div>
+        </div>
+      )}
+
+      {abierto && (<>
+        <div onClick={() => setAbierto(false)} style={{ position: "fixed", inset: 0, zIndex: 42, background: angosta ? "rgba(0,0,0,.35)" : "transparent" }} />
+        <div style={{ position: "fixed", zIndex: 43, ...(angosta ? { left: 8, right: 8, top: 56 } : abajo ? { bottom: 66, right: 18, width: 410 } : { top: 62, right: 22, width: 410 }),
+          maxHeight: angosta ? "calc(100% - 70px)" : "78vh", display: "flex", flexDirection: "column", background: T.panel, borderRadius: 14, boxShadow: "0 16px 44px rgba(16,24,38,.3)", overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "10px 12px", borderBottom: `1px solid ${T.line}` }}>
+            <Bell size={16} color={T.steel} /><b style={{ fontSize: 14, flex: 1 }}>Mensajes</b>
+            <button type="button" title={sonido ? "Sonido activado (tocar para silenciar)" : "Sonido silenciado (tocar para activar)"} onClick={() => { const n = !sonido; setSonido(n); try { localStorage.setItem("campana-sonido", n ? "si" : "no"); } catch {} if (n) setTimeout(() => sonarAvisoMensaje(false), 50); }}
+              style={{ border: "none", background: sonido ? T.accentSoft : T.graySoft, color: sonido ? T.accent : T.gray, borderRadius: 8, padding: "4px 6px", cursor: "pointer", display: "flex" }}>{sonido ? <Volume2 size={15} /> : <VolumeX size={15} />}</button>
+            {[["recibidos", `Recibidos${sinLeer ? ` (${sinLeer})` : ""}`], ["enviados", "Enviados"], ["nuevo", "+ Nuevo"]].map(([v, l]) => (
+              <button key={v} type="button" onClick={() => { setVista(v); setError(""); }} style={chip(vista === v)}>{l}</button>
+            ))}
+            <button type="button" onClick={() => setAbierto(false)} style={{ border: "none", background: "none", cursor: "pointer", color: T.inkSoft, padding: 2 }}><X size={16} /></button>
+          </div>
+          {error && <div style={{ background: T.redSoft, color: T.red, fontSize: 12.5, padding: "8px 12px" }}>{error}</div>}
+
+          <div style={{ overflowY: "auto", padding: 10, flex: 1 }}>
+            {vista === "recibidos" && (<>
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
+                {["Todos", "Sin atender", ...MSG_TIPOS.map((t) => t.id)].map((f) => (
+                  <button key={f} type="button" onClick={() => setFiltro(f)} style={{ ...chip(filtro === f), fontSize: 11, padding: "3px 8px" }}>{f === "Informacion" ? "Información" : f === "Sin atender" ? "Pendientes" : f}</button>
+                ))}
+                {sinLeer > 0 && <button type="button" onClick={() => marcar(null, "todos_leidos")} style={{ marginLeft: "auto", border: "none", background: "none", color: T.blue, fontSize: 11.5, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 3 }}><CheckCheck size={13} /> Marcar todo leído</button>}
+              </div>
+              {typeof Notification !== "undefined" && Notification.permission === "default" && (
+                <button type="button" onClick={pedirPermisoNavegador} style={{ width: "100%", marginBottom: 8, border: `1px dashed ${T.line}`, background: T.bg, borderRadius: 9, padding: "6px 8px", fontSize: 12, color: T.inkSoft, cursor: "pointer" }}>🔔 Activar avisos del navegador (aunque la app esté en otra pestaña)</button>
+              )}
+              {recibidos === null && <div style={{ fontSize: 12.5, color: T.gray, padding: 10 }}>Cargando…</div>}
+              {recibidos && !lista.length && <div style={{ fontSize: 12.5, color: T.gray, padding: 14, textAlign: "center" }}><Inbox size={22} /><br />{recibidos.length ? "Nada con ese filtro." : "No tiene mensajes."}</div>}
+              {lista.map((m) => {
+                const tp = msgTipo(m.tipo);
+                return (
+                  <div key={m.id} onClick={() => !m.leido_en && marcar(m, "leido")}
+                    style={{ borderRadius: 10, padding: "9px 10px", marginBottom: 7, borderLeft: `4px solid ${tp.c}`, background: m.leido_en ? T.bg : tp.s, opacity: m.atendido_en ? 0.65 : 1, cursor: m.leido_en ? "default" : "pointer" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5 }}>
+                      <b style={{ color: tp.c }}>{tp.icono} {tp.label || m.tipo}</b>
+                      <span style={{ color: T.inkSoft }}>de <b>{m.remitente_nombre}</b> · {msgHace(m.creado_en)}</span>
+                      {!m.leido_en && <span style={{ marginLeft: "auto", width: 8, height: 8, borderRadius: 4, background: T.red }} />}
+                    </div>
+                    <div style={{ fontSize: 13.2, color: T.ink, marginTop: 4, whiteSpace: "pre-wrap", wordBreak: "break-word", textDecoration: m.atendido_en ? "line-through" : "none" }}>{m.texto}</div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
+                      <button type="button" onClick={(e) => { e.stopPropagation(); marcar(m, "realizado"); }} title={m.tipo === "Informacion" ? "Enterado: se borra el mensaje" : "Realizado: se borra el mensaje y se le avisa a quien lo envió"} style={{ border: `1px solid ${T.green}`, background: "#fff", color: T.green, borderRadius: 7, fontSize: 11.5, fontWeight: 700, padding: "3px 8px", cursor: "pointer" }}>✓ {m.tipo === "Informacion" ? "Enterado" : "Realizado"}</button>
+                      <button type="button" onClick={(e) => { e.stopPropagation(); marcar(m, "eliminar"); }} title="Eliminar mensaje" style={{ marginLeft: "auto", border: "none", background: "none", color: T.inkSoft, cursor: "pointer", display: "flex", alignItems: "center", gap: 3, fontSize: 11.5 }}><Trash2 size={12} /> Eliminar</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </>)}
+
+            {vista === "enviados" && (<>
+              {enviados === null && <div style={{ fontSize: 12.5, color: T.gray, padding: 10 }}>Cargando…</div>}
+              {enviados && !enviados.length && <div style={{ fontSize: 12.5, color: T.gray, padding: 14, textAlign: "center" }}>Todavía no ha enviado mensajes.</div>}
+              {(enviados || []).map((g) => {
+                const tp = msgTipo(g.tipo);
+                const ds = Array.isArray(g.destinatarios) ? g.destinatarios : [];
+                return (
+                  <div key={g.grupo} style={{ borderRadius: 10, padding: "9px 10px", marginBottom: 7, borderLeft: `4px solid ${tp.c}`, background: T.bg }}>
+                    <div style={{ fontSize: 11.5 }}><b style={{ color: tp.c }}>{tp.icono} {tp.label || g.tipo}</b> <span style={{ color: T.inkSoft }}>· {msgHace(g.creado_en)}</span>
+                      <button type="button" onClick={async () => { await supabase.rpc("mensaje_marcar", { p_usuario: user.id, p_id: g.grupo, p_accion: "ocultar_enviado" }); setEnviados((l) => l.filter((x) => x.grupo !== g.grupo)); }} title="Quitar de enviados" style={{ float: "right", border: "none", background: "none", color: T.inkSoft, cursor: "pointer" }}><EyeOff size={12} /></button>
+                    </div>
+                    <div style={{ fontSize: 13, marginTop: 3, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{g.texto}</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
+                      {ds.map((d, i) => (
+                        <span key={i} title={d.atendido_en ? "Atendido" : d.leido_en ? "Leído" : "Sin leer"} style={{ fontSize: 11, borderRadius: 6, padding: "1px 6px", fontWeight: 600,
+                          background: d.atendido_en ? T.greenSoft : d.leido_en ? T.blueSoft : T.graySoft, color: d.atendido_en ? T.green : d.leido_en ? T.blue : T.gray }}>
+                          {d.atendido_en ? "✓✓" : d.leido_en ? "✓" : "•"} {d.nombre}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+              {enviados && enviados.length > 0 && <div style={{ fontSize: 11, color: T.inkSoft, textAlign: "center" }}>• sin leer · ✓ leído · al marcarlo realizado desaparece y le llega un aviso</div>}
+            </>)}
+
+            {vista === "nuevo" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                  {MSG_TIPOS.map((t) => (
+                    <button key={t.id} type="button" onClick={() => setTipo(t.id)} style={{ padding: "5px 9px", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                      border: `1.5px solid ${tipo === t.id ? t.c : T.line}`, background: tipo === t.id ? t.s : "#fff", color: tipo === t.id ? t.c : T.inkSoft }}>{t.icono} {t.label || t.id}</button>
+                  ))}
+                </div>
+                <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 8 }}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+                    <b style={{ fontSize: 12.5, flex: 1 }}>Para ({dest.length})</b>
+                    <button type="button" onClick={() => setDest(dest.length === personas.length ? [] : personas.map((p) => p.id))} style={{ border: "none", background: "none", color: T.blue, fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>{dest.length === personas.length && personas.length ? "Quitar todos" : "Todos"}</button>
+                  </div>
+                  <input style={{ ...inputStyle, fontSize: 12.5, padding: "6px 9px", marginBottom: 6 }} placeholder="Buscar persona…" value={buscarPersona} onChange={(e) => setBuscarPersona(e.target.value)} />
+                  <div style={{ maxHeight: 150, overflowY: "auto" }}>
+                    {personasFiltradas.map((p) => (
+                      <label key={p.id} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.8, padding: "3px 2px", cursor: "pointer" }}>
+                        <input type="checkbox" checked={dest.includes(p.id)} onChange={() => setDest((d) => (d.includes(p.id) ? d.filter((x) => x !== p.id) : [...d, p.id]))} />
+                        {p.name} <span style={{ fontSize: 11, color: T.inkSoft }}>· {p.categoria}</span>
+                      </label>
+                    ))}
+                    {!personas.length && <div style={{ fontSize: 12, color: T.gray }}>Cargando personas…</div>}
+                  </div>
+                </div>
+                <textarea rows={4} style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }} placeholder="Escriba el mensaje…" value={texto} maxLength={2000} onChange={(e) => setTexto(e.target.value)} />
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 12, color: T.green, flex: 1 }}>{enviadoOk}</span>
+                  <Btn variant="accent" onClick={enviar} disabled={enviando || !dest.length || !texto.trim()}><Send size={14} /> {enviando ? "Enviando…" : "Enviar"}</Btn>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </>)}
+    </>
+  );
+}
+
+// Lista TODAS las partes de historial/mantenimiento (Supabase entrega de a
+// 1000 nombres por consulta). Desde el firmware 6.5 el historial no tiene
+// tope: el equipo rota su memoria y aquí se juntan todas las partes.
+async function listarHistorialPaneles(opciones) {
+  const todos = [];
+  for (let offset = 0; offset < 200000; offset += 1000) {
+    const { data, error } = await supabase.storage.from("historial_paneles").list("", { ...opciones, limit: 1000, offset });
+    if (error) return { data: todos.length ? todos : null, error: todos.length ? null : error };
+    if (!data || !data.length) break;
+    todos.push(...data);
+    if (data.length < 1000) break;
+  }
+  return { data: todos, error: null };
+}
+
 function MonitoreoNotifier() {
   const currentUser = useContext(CurrentUserContext);
   const confirmar = useContext(ConfirmContext);
   // En este módulo, a diferencia del resto de la app, Técnico tiene el mismo
   // acceso que Admin/Asistente (puede borrar, etc.) — así lo pidió el gerente.
   const canGestionar = currentUser?.categoria === "admin" || currentUser?.categoria === "asistente" || currentUser?.categoria === "tecnico";
-  // Escuchan el sonido de alarmas: Técnicos (todos los sitios que estén
-  // viendo) y Clientes (solo su sitio, porque solo reciben esos eventos).
-  const esTecnicoSonido = currentUser?.categoria === "tecnico" || currentUser?.categoria === "cliente";
+  // Escuchan el sonido de alarmas TODOS los usuarios (cada uno lo puede
+  // apagar con el botón "Sonido activo"; se recuerda en ese dispositivo).
+  const esTecnicoSonido = !!currentUser;
   // Usuario "cliente": solo ve SU sitio asignado (guardado en usuarios.area).
   // Los datos se piden a Supabase ya filtrados por ese sitio, así que los
   // otros equipos ni siquiera llegan a su navegador.
@@ -12550,6 +14765,9 @@ function MonitoreoNotifier() {
   const [seccionMovil, setSeccionMovil] = useEstadoRecordado("monitoreo-seccion-movil", "eventos"); // "resumen" | "eventos" | "equipos" | "tendencias"
   const [eventos, setEventos] = useState([]);
   const [dispositivos, setDispositivos] = useState([]);
+  const [infoEvento, setInfoEvento] = useState(null);      // guía "Qué significa / Qué hacer"
+  const [diagPedido, setDiagPedido] = useState(null);      // { sitio, desde } diagnóstico remoto
+  const [diagFila, setDiagFila] = useState(null);
   const [cargando, setCargando] = useState(true);
   const [sitioSeleccionado, setSitioSeleccionado] = useEstadoRecordado("monitoreo-sitio", () => (esCliente && sitioCliente ? sitioCliente : "Todos"));
   useEffect(() => {
@@ -12636,6 +14854,7 @@ function MonitoreoNotifier() {
   };
   const [generandoReporte, setGenerandoReporte] = useState(false);
   const [verActualizarFw, setVerActualizarFw] = useState(false);
+  const [verCiber, setVerCiber] = useState(false);
   const [firmasPara, setFirmasPara] = useState(null); // "reporte" | "tendencias": abre la ventana de firmas
   const [armarInformeTend, setArmarInformeTend] = useState(false); // ventana para elegir qué sale en el informe de tendencias
   const cfgInformeTend = React.useRef(TEND_INFORME_DEF);
@@ -12783,16 +15002,21 @@ function MonitoreoNotifier() {
     if (!esTecnicoSonido) return;
     const delSitio = sitioSeleccionado === "Todos" ? eventos : eventos.filter((e) => e.sitio === sitioSeleccionado);
     if (!delSitio.length) return;
-    const masReciente = delSitio[0].fecha_panel;
+    // "Nuevo" = número de registro (id) mayor al último visto. No se usa la
+    // hora del panel: si su reloj está atrasado o los eventos llegan en
+    // desorden, igual suena.
+    const idNum = (e) => Number(e.id) || 0;
+    const mayorId = delSitio.reduce((m, e) => Math.max(m, idNum(e)), 0);
     if (ultimoEventoVistoRef.current === null) {
-      ultimoEventoVistoRef.current = masReciente; // recién abierto (o recién cambiado de sitio): no suena por eventos viejos
+      ultimoEventoVistoRef.current = mayorId; // recién abierto (o recién cambiado de sitio): no suena por eventos viejos
       return;
     }
-    if (masReciente === ultimoEventoVistoRef.current) return;
-    const nuevos = delSitio.filter((e) => new Date(e.fecha_panel) > new Date(ultimoEventoVistoRef.current));
-    ultimoEventoVistoRef.current = masReciente;
-    if (nuevos.some((e) => e.categoria === "alarma" || e.categoria === "prealarma")) sonar(2);
-    else if (nuevos.some((e) => ["problema", "supervision", "seguridad"].includes(e.categoria))) sonar(1, 6000);
+    if (mayorId <= ultimoEventoVistoRef.current) return;
+    const nuevos = delSitio.filter((e) => idNum(e) > ultimoEventoVistoRef.current);
+    ultimoEventoVistoRef.current = mayorId;
+    const cats = (e) => [e.categoria, e.subcat];   // la subcategoría también cuenta (ej. "general" + "problema")
+    if (nuevos.some((e) => cats(e).some((c) => c === "alarma" || c === "prealarma"))) sonar(2);
+    else if (nuevos.some((e) => cats(e).some((c) => ["problema", "supervision", "seguridad"].includes(c)))) sonar(1, 6000);
   }, [eventos, esTecnicoSonido, sonidoOn, sitioSeleccionado]);
 
   useEffect(() => { sonidoOnRef.current = sonidoOn; }, [sonidoOn]);
@@ -12849,9 +15073,9 @@ function MonitoreoNotifier() {
       if (enCurso) return;
       enCurso = true;
       try {
-        const opciones = { limit: 1000, sortBy: { column: "name", order: "asc" } };
+        const opciones = { sortBy: { column: "name", order: "asc" } };
         if (lista.length === 1) opciones.search = nombreArchivoSitioPanel(lista[0]);
-        const { data, error } = await supabase.storage.from("historial_paneles").list("", opciones);
+        const { data, error } = await listarHistorialPaneles(opciones);
         if (cancelado) return;
         if (error || !data) { setCargandoHistorial(false); return; }
         const marca = (o) => `${o.updated_at || o.created_at || ""}|${o.metadata?.size ?? ""}`;
@@ -12960,8 +15184,7 @@ function MonitoreoNotifier() {
   const archivosDelSitio = async (sitio) => {
     const base = nombreArchivoSitioPanel(sitio);
     const viejosH = [`${base}.txt`], viejosM = [`${base}_mant.txt`];
-    const { data, error } = await supabase.storage.from("historial_paneles")
-      .list("", { limit: 1000, search: base, sortBy: { column: "name", order: "asc" } });
+    const { data, error } = await listarHistorialPaneles({ search: base, sortBy: { column: "name", order: "asc" } });
     if (error || !data) return { hist: viejosH, mant: viejosM, todos: [...viejosH, ...viejosM] };
     const nombres = data.map((o) => o.name);
     const hist = [...nombres.filter((n) => n === `${base}.txt`), ...nombres.filter((n) => n.startsWith(`${base}__h_`)).sort()];
@@ -12999,6 +15222,25 @@ function MonitoreoNotifier() {
 
   // Borra TODO lo de monitoreo del sitio: eventos (app y Supabase),
   // historial y mantenimiento (Supabase Storage) y la memoria del equipo.
+  const pedirDiagnostico = async (sitio) => {
+    const desde = Date.now();
+    setDiagFila(null); setDiagPedido({ sitio, desde, error: "" });
+    const { error } = await supabase.from("dispositivos_panel")
+      .update({ comando: "diag", comando_en: new Date().toISOString(), comando_resultado: "esperando que el equipo lea la orden" }).eq("sitio", sitio);
+    if (error) setDiagPedido({ sitio, desde, error: error.message });
+  };
+  useEffect(() => {
+    if (!diagPedido || diagPedido.error) return;
+    let vivo = true;
+    const leer = async () => {
+      const { data } = await supabase.from("dispositivos_panel").select("*").eq("sitio", diagPedido.sitio).maybeSingle();
+      if (vivo && data) setDiagFila(data);
+    };
+    leer();
+    const id = setInterval(leer, 3000);
+    return () => { vivo = false; clearInterval(id); };
+  }, [diagPedido]);
+
   const borrarEventosDelSitio = async () => {
     if (sitioSeleccionado === "Todos") return;
     const sitio = sitioSeleccionado;
@@ -13257,6 +15499,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
   return (
     <div style={{ background: IGNIS.bg, minHeight: "100vh", padding: 18, paddingTop: esMovilNotifier ? 58 : 18, paddingBottom: esMovilNotifier ? 100 : 30, display: "flex", flexDirection: "column", gap: 14, color: IGNIS.text, boxSizing: "border-box" }}>
       {/* ---- Encabezado estilo IgnisMonitor ---- */}
+      <AvisosCiberMonitoreo />
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, borderBottom: `1px solid ${IGNIS.border}`, paddingBottom: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ width: 30, height: 30, borderRadius: 8, background: IGNIS.panel2, border: `1px solid ${IGNIS.border}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -13279,6 +15522,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               <button onClick={() => setVista("eventos")} style={{ padding: "7px 12px", fontSize: 12.5, border: "none", cursor: "pointer", background: vista === "eventos" ? IGNIS.panel2 : IGNIS.panel, color: vista === "eventos" ? IGNIS.text : IGNIS.dim, fontWeight: 600 }}>Eventos</button>
               <button onClick={() => setVista("tendencias")} style={{ padding: "7px 12px", fontSize: 12.5, border: "none", cursor: "pointer", background: vista === "tendencias" ? IGNIS.panel2 : IGNIS.panel, color: vista === "tendencias" ? IGNIS.text : IGNIS.dim, fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}><TrendingUp size={13} /> Tendencias</button>
             </div>
+          )}
+          {canGestionar && sitioSeleccionado !== "Todos" && (
+            <Btn small onClick={() => pedirDiagnostico(sitioSeleccionado)} title="Pide al equipo su diagnóstico (red, señal, memoria, reinicios, caídas de WiFi) sin ir al sitio">
+              <Wrench size={13} /> Diagnóstico
+            </Btn>
           )}
           {canGestionar && sitioSeleccionado !== "Todos" && (
             <Btn small variant="danger" onClick={borrarEventosDelSitio} disabled={borrando} title="Borra eventos, historial y mantenimiento en el app, Supabase y el equipo IgnisMonitor">
@@ -13445,6 +15693,12 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             <button type="button" onClick={() => setVerActualizarFw(true)} title="Instalar un firmware nuevo en los IgnisMonitor por internet, sin cable"
               style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 7, fontSize: 11.5, fontWeight: 700, cursor: "pointer", background: IGNIS.panel2, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, textTransform: "none", letterSpacing: 0 }}>
               <Download size={12} style={{ transform: "rotate(180deg)" }} /> Actualizar firmware
+            </button>
+          )}
+          {esAdminMonitoreo && dispositivosFiltrados.length > 0 && (
+            <button type="button" onClick={() => setVerCiber(true)} title="Cumplimiento de ciberseguridad NFPA 72 (2025), capítulo 11"
+              style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 7, fontSize: 11.5, fontWeight: 700, cursor: "pointer", background: IGNIS.panel2, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, textTransform: "none", letterSpacing: 0 }}>
+              <ShieldCheck size={12} /> Ciberseguridad
             </button>
           )}
         </div>
@@ -13628,6 +15882,9 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                           {sitioSeleccionado === "Todos" ? `${e.sitio || "—"} · ` : ""}{ETIQUETA_CATEGORIA_PANEL[e.categoria] || e.categoria || "Otro"}{e.subcat && e.subcat !== "otro" ? ` · ${ETIQUETA_CATEGORIA_PANEL[e.subcat]}` : ""} · {e.fecha_panel ? new Date(e.fecha_panel).toLocaleString("es-CR", { dateStyle: "short", timeStyle: "medium" }) : e.categoria === "historial" ? "impreso en el historial del panel" : "informe de mantenimiento del panel"}
                         </div>
                       </div>
+                      <button type="button" onClick={() => setInfoEvento({ e, cat: catVer })} title="¿Qué significa este evento y qué hacer?" style={{ flex: "none", background: "transparent", border: "none", cursor: "pointer", color: "#8f8870", padding: 2 }}>
+                        <HelpCircle size={15} />
+                      </button>
                       {esTecnicoSonido && modoSonando > 0 && (
                         <button onClick={detenerSonido} title="Silenciar el sonido de alarma" style={{ flex: "none", background: "transparent", border: "none", cursor: "pointer", color: "#8f8870", padding: 2 }}>
                           <VolumeX size={15} />
@@ -13675,9 +15932,74 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         </div>
       )}
       {esMovilNotifier && <div style={{ height: 54 }} />}
+      {infoEvento && (() => {
+        const ev = infoEvento.e;
+        const g = GUIA_IGNIS.explicar(ev.texto, infoEvento.cat, ETIQUETA_CATEGORIA_PANEL[infoEvento.cat]);
+        const color = CATEGORIA_PANEL_COLOR_DARK[infoEvento.cat] || IGNIS.dim;
+        return (
+          <div onClick={() => setInfoEvento(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+            <div onClick={(x) => x.stopPropagation()} style={{ background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 12, width: "100%", maxWidth: 470, maxHeight: "88vh", overflowY: "auto", padding: "18px 20px", fontFamily: "system-ui,-apple-system,sans-serif" }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ color, fontWeight: 800, fontSize: 17, fontFamily: "ui-monospace,Consolas,monospace" }}>{g.titulo}</div>
+                  {g.tipo && <div style={{ fontSize: 11.5, color: IGNIS.dim, marginTop: 2 }}>{g.tipo}</div>}
+                </div>
+                <button onClick={() => setInfoEvento(null)} style={{ background: "transparent", border: "none", color: IGNIS.dim, cursor: "pointer" }}><X size={18} /></button>
+              </div>
+              <div style={{ background: IGNIS.bg, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: "10px 12px", margin: "12px 0", fontFamily: "ui-monospace,Consolas,monospace", fontSize: 12.5, color: IGNIS.dim, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{ev.texto}</div>
+              {g.nota && <div style={{ background: "rgba(63,185,80,.12)", border: "1px solid rgba(63,185,80,.4)", color: IGNIS.ok, borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10 }}>{g.nota}</div>}
+              <div style={{ fontSize: 11, letterSpacing: 1, textTransform: "uppercase", color: IGNIS.dim, fontWeight: 800 }}>Qué significa</div>
+              <div style={{ fontSize: 14.5, lineHeight: 1.5, margin: "4px 0 12px" }}>{g.desc}</div>
+              {g.accion && <>
+                <div style={{ fontSize: 11, letterSpacing: 1, textTransform: "uppercase", color: IGNIS.dim, fontWeight: 800 }}>Qué hacer</div>
+                <div style={{ fontSize: 14.5, lineHeight: 1.5, margin: "4px 0 12px" }}>{g.accion}</div>
+              </>}
+              <div style={{ borderTop: `1px solid ${IGNIS.border}`, paddingTop: 8, fontSize: 11.5, color: g.guia ? IGNIS.problema : IGNIS.dim }}>{g.fuente}</div>
+            </div>
+          </div>
+        );
+      })()}
+      {diagPedido && (() => {
+        const f = diagFila || {};
+        const res = f.comando_resultado || "";
+        const nuevo = (f.diagnostico && res === "diagnostico enviado") || res.startsWith("DIAG:");
+        const texto = res.startsWith("DIAG:") ? res.slice(5) : (f.diagnostico || "");
+        const esperando = !diagPedido.error && !nuevo;
+        const viejo = (f.version && /^(6\.|[0-5]\.)/.test(String(f.version)));
+        return (
+          <div onClick={() => setDiagPedido(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+            <div onClick={(x) => x.stopPropagation()} style={{ background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 12, width: "100%", maxWidth: 620, maxHeight: "88vh", display: "flex", flexDirection: "column", padding: "16px 18px", fontFamily: "system-ui,-apple-system,sans-serif" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                <Wrench size={18} color={IGNIS.general} />
+                <div style={{ flex: 1, fontWeight: 800, fontSize: 16 }}>Diagnóstico · {diagPedido.sitio}</div>
+                <button onClick={() => setDiagPedido(null)} style={{ background: "transparent", border: "none", color: IGNIS.dim, cursor: "pointer" }}><X size={18} /></button>
+              </div>
+              {diagPedido.error ? (
+                <div style={{ color: IGNIS.alarma, fontSize: 13 }}>No se pudo mandar la orden: {diagPedido.error}</div>
+              ) : esperando ? (
+                <div style={{ fontSize: 13.5, color: IGNIS.dim, lineHeight: 1.6 }}>
+                  Esperando al equipo… ({res || "orden enviada"})<br />
+                  El equipo revisa las órdenes cada 30 segundos aproximadamente.
+                  {viejo && <div style={{ color: IGNIS.problema, marginTop: 8 }}>Este equipo tiene la versión {f.version}: el diagnóstico remoto necesita la 7.0 o más nueva. Actualícelo desde «Actualizar firmware».</div>}
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 11.5, color: IGNIS.dim, marginBottom: 6 }}>Recibido {f.diagnostico_en ? new Date(f.diagnostico_en).toLocaleString("es-CR") : "ahora"} · versión {f.version || "—"}</div>
+                  <pre style={{ flex: 1, overflow: "auto", margin: 0, background: IGNIS.bg, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: 12, fontSize: 12, lineHeight: 1.5, color: "#f2b705", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{texto}</pre>
+                </>
+              )}
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+                <Btn small onClick={() => pedirDiagnostico(diagPedido.sitio)}>Pedir de nuevo</Btn>
+                <Btn small onClick={() => setDiagPedido(null)}>Cerrar</Btn>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {verActualizarFw && (
         <ModalActualizarFirmware dispositivos={dispositivos} sitioInicial={sitioSeleccionado} onCerrar={() => setVerActualizarFw(false)} />
       )}
+      {verCiber && <ModalCiberseguridad dispositivos={dispositivos} onCerrar={() => setVerCiber(false)} />}
       {armarInformeTend && (
         <ModalInformeTendencias
           sitio={sitioSeleccionado}
@@ -14052,6 +16374,146 @@ function GastosTarjeta() {
 
 const ALERTA_KM_MANTENIMIENTO = 300;
 
+// ---- Gráficos de equipos por estado (histogramas) ----
+// Colores por estado en orden fijo (paleta validada para daltonismo); los números van siempre escritos.
+const COLOR_ESTADO_EQUIPO = { "Abierto": "#2a78d6", "En importación": "#eb6834", "Cerrado": "#1baf7a", "Completado": "#eda100" };
+const ESTADOS_GRAFICO = ["Abierto", "En importación", "Cerrado", "Completado"];
+const BINS_SEMANAS = [[0, 2, "0–2"], [2, 4, "2–4"], [4, 6, "4–6"], [6, 8, "6–8"], [8, 12, "8–12"], [12, 26, "12–26"], [26, Infinity, "26+"]];
+function TooltipEquipos({ active, payload, label, sufijo = "" }) {
+  if (!active || !payload || !payload.length) return null;
+  const tot = payload.reduce((a, x) => a + (Number(x.value) || 0), 0);
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${T.line}`, borderRadius: 8, padding: "8px 10px", fontSize: 12, boxShadow: "0 4px 12px rgba(0,0,0,.08)" }}>
+      <div style={{ fontWeight: 800, color: T.ink, marginBottom: 4 }}>{label}{sufijo}</div>
+      {payload.filter((x) => x.value).map((x) => <div key={x.dataKey} style={{ display: "flex", gap: 6, alignItems: "center", color: T.ink }}><span style={{ width: 9, height: 9, borderRadius: 2, background: x.color }} />{x.dataKey}: <b>{x.value}</b></div>)}
+      {payload.length > 1 && <div style={{ color: T.inkSoft, marginTop: 4 }}>Total: <b>{tot}</b></div>}
+    </div>
+  );
+}
+function EquiposEstadisticas() {
+  const [insp] = useClientesArea("inspecciones");
+  const [proy] = useClientesArea("proyectos");
+  const [area, setArea] = useEstadoRecordado("equipos-graf-area", "ambas");
+  const [tipo, setTipo] = useEstadoRecordado("equipos-graf-tipo", "Correctivo");
+  const [verTabla, setVerTabla] = useState(false);
+  const base = (area === "inspecciones" ? insp : area === "proyectos" ? proy : [...insp, ...proy])
+    .filter((r) => (tipo === "todos" || (r.tipoOD || "Normal") === tipo));
+  const sinEquipos = base.filter((r) => r.estatusEquipo === "No lleva equipos").length;
+  const conEquipos = base.filter((r) => r.estatusEquipo !== "No lleva equipos").map((r) => ({ ...r, est: ESTADOS_GRAFICO.includes(r.estatusEquipo) ? r.estatusEquipo : "Abierto" }));
+  const hoy = new Date(todayISO());
+  const semanasPo = (r) => (r.fechaPo ? (hoy - new Date(r.fechaPo)) / (1000 * 60 * 60 * 24 * 7) : null);
+  const pendientes = conEquipos.filter((r) => r.est !== "Completado");
+  const conPo = pendientes.filter((r) => semanasPo(r) !== null);
+  const mas8 = conPo.filter((r) => semanasPo(r) >= 8).length;
+  const promedio = conPo.length ? conPo.reduce((a, r) => a + semanasPo(r), 0) / conPo.length : 0;
+  // 1) cuántos hay en cada estado
+  const porEstado = ESTADOS_GRAFICO.map((e) => ({ estado: e, cantidad: conEquipos.filter((r) => r.est === e).length }));
+  // 2) histograma de antigüedad desde la Fecha PO (pendientes), apilado por estado
+  const estPend = ["Abierto", "En importación", "Cerrado"];
+  const histo = BINS_SEMANAS.map(([a, b, et]) => { const fila = { rango: et }; estPend.forEach((e) => { fila[e] = conPo.filter((r) => r.est === e && semanasPo(r) >= a && semanasPo(r) < b).length; }); return fila; });
+  const sinPo = pendientes.length - conPo.length;
+  // 3) por mes de la Fecha PO (últimos 12 meses), apilado por estado
+  const meses = [];
+  for (let k = 11; k >= 0; k--) { const d = new Date(hoy.getFullYear(), hoy.getMonth() - k, 1); meses.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); }
+  const porMes = meses.map((m) => { const fila = { mes: formatMesAno(m) }; ESTADOS_GRAFICO.forEach((e) => { fila[e] = conEquipos.filter((r) => r.est === e && String(r.fechaPo || "").slice(0, 7) === m).length; }); return fila; });
+  const tile = (titulo, valor, nota, color) => (
+    <div style={{ flex: "1 1 150px", background: "#fff", border: `1px solid ${T.line}`, borderRadius: 12, padding: "12px 14px" }}>
+      <div style={{ fontSize: 11, color: T.inkSoft, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>{titulo}</div>
+      <div style={{ fontSize: 26, fontWeight: 800, color: color || T.ink, lineHeight: 1.2 }}>{valor}</div>
+      {nota && <div style={{ fontSize: 11.5, color: T.inkSoft }}>{nota}</div>}
+    </div>
+  );
+  const leyenda = (lista) => (
+    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12, color: T.ink, marginBottom: 6 }}>
+      {lista.map((e) => <span key={e} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: COLOR_ESTADO_EQUIPO[e] }} />{e}</span>)}
+    </div>
+  );
+  const ejes = { tick: { fontSize: 11, fill: T.inkSoft }, axisLine: { stroke: T.line }, tickLine: false };
+  const barrasApiladas = (lista) => lista.map((e, k) => <Bar key={e} dataKey={e} stackId="a" fill={COLOR_ESTADO_EQUIPO[e]} stroke="#fff" strokeWidth={2} radius={k === lista.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]} isAnimationActive={false} />);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ fontSize: 12, color: T.inkSoft, fontWeight: 700 }}>Área:</span>
+        {[["ambas", "Ambas"], ["inspecciones", "Inspecciones"], ["proyectos", "Proyectos"]].map(([k, t]) => <Btn key={k} small variant={area === k ? "accent" : "ghost"} onClick={() => setArea(k)}>{t}</Btn>)}
+        <span style={{ width: 1, height: 20, background: T.line, margin: "0 6px" }} />
+        <span style={{ fontSize: 12, color: T.inkSoft, fontWeight: 700 }}>Tipo de OD:</span>
+        {[["Correctivo", "Correctivos"], ["Normal", "OD normales"], ["todos", "Todas"]].map(([k, t]) => <Btn key={k} small variant={tipo === k ? "accent" : "ghost"} onClick={() => setTipo(k)}>{t}</Btn>)}
+        <div style={{ flex: 1 }} />
+        <Btn small variant="ghost" onClick={() => setVerTabla(!verTabla)}>{verTabla ? "Ver gráficos" : "Ver como tabla"}</Btn>
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        {tile("OD con equipos", conEquipos.length, sinEquipos ? `${sinEquipos} sin equipos (no se grafican)` : "")}
+        {tile("Pendientes", pendientes.length, "Abierto, En importación o Cerrado")}
+        {tile("Completados", conEquipos.length - pendientes.length, conEquipos.length ? `${Math.round(((conEquipos.length - pendientes.length) / conEquipos.length) * 100)} % del total` : "")}
+        {tile("Pendientes 8+ semanas", mas8, conPo.length ? `Promedio: ${promedio.toFixed(1)} semanas desde la Fecha PO` : "Sin Fecha PO registrada", mas8 ? T.red : T.ink)}
+      </div>
+      {conEquipos.length === 0 ? (
+        <Card><div style={{ color: T.gray, fontSize: 13 }}>No hay OD con equipos para este filtro.</div></Card>
+      ) : verTabla ? (
+        <Card title="Datos por estado">
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead><tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase" }}><th style={{ padding: 6 }}>Semanas desde la Fecha PO</th>{estPend.map((e) => <th key={e}>{e}</th>)}<th>Total</th></tr></thead>
+              <tbody>
+                {histo.map((h) => <tr key={h.rango} style={{ borderTop: `1px solid ${T.line}` }}><td style={{ padding: 6, fontWeight: 700 }}>{h.rango}</td>{estPend.map((e) => <td key={e}>{h[e]}</td>)}<td style={{ fontWeight: 700 }}>{estPend.reduce((a, e) => a + h[e], 0)}</td></tr>)}
+                <tr style={{ borderTop: `1px solid ${T.line}` }}><td style={{ padding: 6, fontWeight: 700 }}>Sin Fecha PO</td><td colSpan={3} /><td style={{ fontWeight: 700 }}>{sinPo}</td></tr>
+              </tbody>
+            </table>
+            <div style={{ height: 14 }} />
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead><tr style={{ textAlign: "left", color: T.inkSoft, fontSize: 11, textTransform: "uppercase" }}><th style={{ padding: 6 }}>Estado</th><th>Cantidad</th></tr></thead>
+              <tbody>{porEstado.map((x) => <tr key={x.estado} style={{ borderTop: `1px solid ${T.line}` }}><td style={{ padding: 6 }}>{x.estado}</td><td style={{ fontWeight: 700 }}>{x.cantidad}</td></tr>)}</tbody>
+            </table>
+          </div>
+        </Card>
+      ) : (
+        <>
+          <Card title="Equipos por estado">
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={porEstado} margin={{ top: 22, right: 10, left: -10, bottom: 0 }}>
+                <CartesianGrid vertical={false} stroke="#eef1f4" />
+                <XAxis dataKey="estado" {...ejes} />
+                <YAxis allowDecimals={false} {...ejes} />
+                <Tooltip cursor={{ fill: "rgba(0,0,0,.04)" }} content={<TooltipEquipos />} />
+                <Bar dataKey="cantidad" radius={[4, 4, 0, 0]} maxBarSize={70} isAnimationActive={false}>
+                  {porEstado.map((x) => <Cell key={x.estado} fill={COLOR_ESTADO_EQUIPO[x.estado]} />)}
+                  <LabelList dataKey="cantidad" position="top" style={{ fontSize: 12, fontWeight: 700, fill: T.ink }} />
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </Card>
+          <Card title="Histograma: semanas desde la Fecha PO (pendientes)">
+            {leyenda(estPend)}
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={histo} margin={{ top: 22, right: 10, left: -10, bottom: 0 }} barCategoryGap={4}>
+                <CartesianGrid vertical={false} stroke="#eef1f4" />
+                <XAxis dataKey="rango" {...ejes} />
+                <YAxis allowDecimals={false} {...ejes} />
+                <Tooltip cursor={{ fill: "rgba(0,0,0,.04)" }} content={<TooltipEquipos sufijo=" semanas" />} />
+                <ReferenceLine x="6–8" stroke={T.amber} strokeDasharray="4 4" label={{ value: "6 sem", position: "top", fontSize: 10, fill: T.inkSoft }} />
+                <ReferenceLine x="8–12" stroke={T.red} strokeDasharray="4 4" label={{ value: "8 sem", position: "top", fontSize: 10, fill: T.inkSoft }} />
+                {barrasApiladas(estPend)}
+              </BarChart>
+            </ResponsiveContainer>
+            <div style={{ fontSize: 11.5, color: T.inkSoft, marginTop: 4 }}>A partir de 6 semanas la tarjeta se pone amarilla y a partir de 8, roja.{sinPo ? ` ${sinPo} pendiente${sinPo > 1 ? "s" : ""} sin Fecha PO no aparece${sinPo > 1 ? "n" : ""} aquí.` : ""}</div>
+          </Card>
+          <Card title="Por mes de la Fecha PO (últimos 12 meses)">
+            {leyenda(ESTADOS_GRAFICO)}
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={porMes} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                <CartesianGrid vertical={false} stroke="#eef1f4" />
+                <XAxis dataKey="mes" {...ejes} />
+                <YAxis allowDecimals={false} {...ejes} />
+                <Tooltip cursor={{ fill: "rgba(0,0,0,.04)" }} content={<TooltipEquipos />} />
+                {barrasApiladas(ESTADOS_GRAFICO)}
+              </BarChart>
+            </ResponsiveContainer>
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}
 const ESTATUS_EQUIPO_OPCIONES = ["Abierto", "En importación", "Cerrado", "Completado", "No lleva equipos"];
 
 function EquiposCorrectivos({ irInicial, onIrConsumido }) {
@@ -14135,21 +16597,31 @@ function EquiposCorrectivos({ irInicial, onIrConsumido }) {
     return { fondo: T.greenSoft, borde: T.green };
   };
 
+  const barraTabs = (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Btn variant={areaActiva === "inspecciones" ? "accent" : "ghost"} onClick={() => { setAreaActiva("inspecciones"); setTipoOdActivo("Correctivo"); }}>Correctivos Inspecciones</Btn>
+          <Btn variant={areaActiva === "proyectos" ? "accent" : "ghost"} onClick={() => setAreaActiva("proyectos")}>Correctivos Proyectos</Btn>
+          {areaActiva === "proyectos" && (
+            <>
+              <div style={{ width: 1, background: T.line, margin: "0 4px" }} />
+              <Btn variant={tipoOdActivo === "Normal" ? "accent" : "ghost"} onClick={() => setTipoOdActivo(tipoOdActivo === "Normal" ? "Correctivo" : "Normal")}>OD Proyectos</Btn>
+            </>
+          )}
+          <div style={{ width: 1, background: T.line, margin: "0 4px" }} />
+          <Btn variant={subTab === "pendientes" ? "accent" : "ghost"} onClick={() => setSubTab("pendientes")}>Pendientes ({pendientes.length})</Btn>
+          <Btn variant={subTab === "completados" ? "accent" : "ghost"} onClick={() => setSubTab("completados")}>Completados ({completados.length})</Btn>
+          <Btn variant={subTab === "graficos" ? "accent" : "ghost"} onClick={() => setSubTab("graficos")}>📊 Gráficos por estado</Btn>
+        </div>
+  );
+  if (subTab === "graficos") return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {barraTabs}
+      <EquiposEstadisticas />
+    </div>
+  );
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <Btn variant={areaActiva === "inspecciones" ? "accent" : "ghost"} onClick={() => { setAreaActiva("inspecciones"); setTipoOdActivo("Correctivo"); }}>Correctivos Inspecciones</Btn>
-        <Btn variant={areaActiva === "proyectos" ? "accent" : "ghost"} onClick={() => setAreaActiva("proyectos")}>Correctivos Proyectos</Btn>
-        {areaActiva === "proyectos" && (
-          <>
-            <div style={{ width: 1, background: T.line, margin: "0 4px" }} />
-            <Btn variant={tipoOdActivo === "Normal" ? "accent" : "ghost"} onClick={() => setTipoOdActivo(tipoOdActivo === "Normal" ? "Correctivo" : "Normal")}>OD Proyectos</Btn>
-          </>
-        )}
-        <div style={{ width: 1, background: T.line, margin: "0 4px" }} />
-        <Btn variant={subTab === "pendientes" ? "accent" : "ghost"} onClick={() => setSubTab("pendientes")}>Pendientes ({pendientes.length})</Btn>
-        <Btn variant={subTab === "completados" ? "accent" : "ghost"} onClick={() => setSubTab("completados")}>Completados ({completados.length})</Btn>
-      </div>
+      {barraTabs}
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <input style={{ ...inputStyle, width: 150 }} value={filtroOd} onChange={(e) => setFiltroOd(e.target.value)} placeholder="Filtrar por OD..." />
@@ -24771,7 +27243,7 @@ function Planilla() {
         <Btn variant={tab === "cortes" ? "accent" : "ghost"} small onClick={() => setTab("cortes")}>Fechas de Corte</Btn>
       </div>
 
-      {tab === "cortes" && <FechasDeCorte isAdmin={isAdmin} confirmar={confirmar} />}
+      {tab === "cortes" && <FechasDeCorte isAdmin={isAdmin || currentUser?.categoria === "asistente"} confirmar={confirmar} />}
 
       {tab === "personal" && (
         <div style={{ display: "grid", gridTemplateColumns: isAdmin ? "1.4fr 1fr" : "1fr", gap: 16 }}>
@@ -24845,6 +27317,7 @@ function Planilla() {
               <Btn variant="accent" onClick={() => reporte2Descargar("inspecciones")}><Download size={14} /> Descargar Inspecciones</Btn>
               <Btn variant="accent" onClick={() => reporte2Descargar("proyectos")}><Download size={14} /> Descargar Proyectos</Btn>
             </div>
+            <div style={{ fontSize: 12.5, color: T.inkSoft }}>Se descarga <b>un solo Excel</b> con una pestaña por OD y quincena (si la quincena cae en dos semanas, una pestaña por semana).</div>
           </div>
         </Card>
       )}
@@ -25880,15 +28353,49 @@ function AppInner() {
   useEffect(() => { if (!esPantallaAngosta) setSidebarAbierto(false); }, [esPantallaAngosta]);
 
   const iniciarSesion = (u) => {
+    setTokenSesion(u?.token || null);
     setUser(u);
     try { localStorage.setItem(CLAVE_SESION, JSON.stringify(u)); } catch {}
   };
-  const cerrarSesion = () => {
-    bajaPushDeEsteDispositivo();
+  const salirSinServidor = (aviso) => {
+    setTokenSesion(null);
     setUser(null);
     setTab(null);
     try { localStorage.removeItem(CLAVE_SESION); } catch {}
+    if (aviso) setTimeout(() => { try { window.alert(aviso); } catch (e) { /* nada */ } }, 50);
   };
+  const cerrarSesion = async () => {
+    try { await bajaPushDeEsteDispositivo(); } catch (e) { /* nada */ }
+    try { if (getTokenSesion()) await supabase.rpc("cerrar_sesion"); } catch (e) { /* nada */ }
+    salirSinServidor();
+  };
+
+  // Revisa con Supabase que la sesión siga vigente (y la alarga 30 días).
+  // Si la base todavía no tiene el SQL de seguridad, no hace nada.
+  useEffect(() => {
+    if (!user) return;
+    let vivo = true;
+    const revisar = async () => {
+      const { data, error } = await supabase.rpc("sesion_validar");
+      if (!vivo) return;
+      if (error) return; // sin internet o base sin el SQL de seguridad: se sigue como antes
+      if (data === false) salirSinServidor("Por seguridad su sesión venció o se cerró desde otro lugar. Ingrese de nuevo con su correo y contraseña.");
+    };
+    revisar();
+    const t = setInterval(revisar, 10 * 60 * 1000);
+    const alVolver = () => { if (document.visibilityState === "visible") revisar(); };
+    document.addEventListener("visibilitychange", alVolver);
+    return () => { vivo = false; clearInterval(t); document.removeEventListener("visibilitychange", alVolver); };
+  }, [user?.id, user?.token]);
+
+  // ¿Es el gerente? (solo admin en la web; se pregunta a Supabase, no se guarda en el navegador)
+  const [esGerente, setEsGerente] = useState(false);
+  useEffect(() => {
+    if (!user?.id || user.categoria !== "admin") { setEsGerente(false); return; }
+    let vivo = true;
+    supabase.rpc("es_gerente", { p_usuario: user.id }).then(({ data }) => { if (vivo) setEsGerente(data === true); });
+    return () => { vivo = false; };
+  }, [user?.id, user?.categoria]);
 
   const visibleAreas = useMemo(() => {
     if (!user) return [];
@@ -25902,10 +28409,10 @@ function AppInner() {
     if (user.categoria === "cliente") return AREAS.filter((a) => a.id === "monitoreo_notifier");
     // En el APK el técnico ve Monitoreo (todos los sitios), Agenda y Entrenamiento.
     if (MODO_CLIENTE && user.categoria === "tecnico") return AREAS.filter((a) => ["monitoreo_notifier", "agenda", "entrenamiento"].includes(a.id));
-    if (user.categoria === "admin") return AREAS;
+    if (user.categoria === "admin") return esGerente ? [...AREAS, AREA_DOCUMENTACION] : AREAS;
     if (user.categoria === "tecnico") return AREAS.filter((a) => a.id !== "admin" && a.id !== "proyectos" && a.id !== "planilla");
     return AREAS.filter((a) => a.id !== "admin");
-  }, [user]);
+  }, [user, esGerente]);
 
   useEffect(() => {
     if (user && !tab) setTab(visibleAreas[0]?.id);
@@ -25918,7 +28425,7 @@ function AppInner() {
 
   if (!user) return <Login onLogin={iniciarSesion} />;
 
-  const current = AREAS.find((a) => a.id === tab);
+  const current = AREAS.find((a) => a.id === tab) || (tab === AREA_DOCUMENTACION.id && esGerente ? AREA_DOCUMENTACION : undefined);
 
   return (
     <CurrentUserContext.Provider value={user}>
@@ -25995,13 +28502,14 @@ function AppInner() {
       <div style={{ flex: 1, minWidth: 0, width: esPantallaAngosta ? "100%" : undefined, padding: tab === "monitoreo_notifier" ? 0 : esPantallaAngosta ? "14px 10px 16px" : "28px 32px", overflowY: "auto" }}>
         {tab !== "monitoreo_notifier" && (
           // En el celular el título va a la par del botón de menú (sin dejar una franja vacía arriba)
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: esPantallaAngosta ? 10 : 22, minHeight: esPantallaAngosta ? 38 : undefined, paddingRight: esPantallaAngosta ? 50 : 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: esPantallaAngosta ? 10 : 22, minHeight: esPantallaAngosta ? 38 : undefined, paddingRight: esPantallaAngosta ? 100 : 56 }}>
             {current && <current.icon size={esPantallaAngosta ? 18 : 20} color={current.color} />}
             <h1 style={{ margin: 0, fontSize: esPantallaAngosta ? 18 : 21, fontWeight: 800, letterSpacing: -0.4 }}>{current?.label}</h1>
           </div>
         )}
 
         {user.categoria !== "cliente" && <AvisoEvaluaciones />}
+        {user.categoria !== "cliente" && user.id && <CampanaMensajes user={user} abajo={tab === "monitoreo_notifier"} angosta={esPantallaAngosta} />}
         {tab === "inspecciones" && <AreaOperativa area="inspecciones" color={T.steel} />}
         {tab === "proyectos" && <AreaOperativa area="proyectos" color={T.green} />}
         {tab === "cotizaciones" && <Cotizaciones />}
@@ -26016,6 +28524,7 @@ function AppInner() {
         {tab === "planilla" && <Planilla />}
         {tab === "entrenamiento" && <ErrorBoundaryEntrenamiento><Entrenamiento /></ErrorBoundaryEntrenamiento>}
         {tab === "admin" && <Administrativo />}
+        {tab === "documentacion" && esGerente && <DocumentacionGerente />}
       </div>
     </div>
     </EquiposNavContext.Provider>
@@ -26382,6 +28891,17 @@ export default function App() {
     const { data } = await supabase.from("app_config").select("value").eq("key", "logo").maybeSingle();
     if (data?.value) setLogoState(data.value);
   };
+
+  // Con sesión nueva (entrar / salir) se vuelven a pedir los datos: sin
+  // sesión la base no entrega datos internos.
+  const [tokenActual, setTokenActual] = useState(() => getTokenSesion());
+  useEffect(() => onTokenSesion(setTokenActual), []);
+  useEffect(() => {
+    if (!tokenActual) { setUsers([]); setClientes({ inspecciones: [], proyectos: [] }); return; }
+    refetchUsers();
+    refetchClientes();
+    refetchFechasCorte();
+  }, [tokenActual]);
 
   useEffect(() => {
     refetchUsers();

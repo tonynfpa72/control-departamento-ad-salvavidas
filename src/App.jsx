@@ -14784,6 +14784,12 @@ function MonitoreoNotifier() {
   const [monClave, setMonClave] = useState("");
   const [lampTest, setLampTest] = useState(false);
   const monActividad = useRef(Date.now());
+  const monClaveRef = useRef("");   // 7.9: la clave queda solo en memoria mientras el Monitor está abierto
+  const firmaMonitor = async () => {
+    const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => b.toString(16).padStart(2, "0")).join("");
+    const dig = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(monClaveRef.current) + "|" + nonce));
+    return nonce + ":" + Array.from(new Uint8Array(dig)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  };
   const drillTimer = useRef(null);
   const termPreRef = useRef(null);
   const [cargando, setCargando] = useState(true);
@@ -15269,6 +15275,7 @@ function MonitoreoNotifier() {
     if (clave === undefined) { setMonClave(""); setMonPedir({ sitio, error: "" }); return; }
     setMonPedir(null); setMonClave("");
     monActividad.current = Date.now();
+    monClaveRef.current = String(clave);
     const ahora = new Date().toISOString();
     // la clave no viaja: se manda sha256(clave|nonce) y el equipo lo compara
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -15282,7 +15289,7 @@ function MonitoreoNotifier() {
     if (error) setTermRemoto({ sitio, desde: Date.now(), error: /terminal_/i.test(error.message || "") ? "Falta correr en Supabase el SQL_monitor_remoto.sql." : error.message });
   };
   const cerrarMonitorRemoto = async () => {
-    const t = termRemoto; setTermRemoto(null); setCfgAbierta(false);
+    const t = termRemoto; setTermRemoto(null); setCfgAbierta(false); monClaveRef.current = "";
     if (t && !t.error) await supabase.from("dispositivos_panel").update({ terminal_tx: "CERRAR", terminal_ping: null }).eq("sitio", t.sitio);
   };
   useEffect(() => {
@@ -15306,7 +15313,7 @@ function MonitoreoNotifier() {
     const inactivo = null;   // 7.8: sin cierre automático (solo se cierra con la X)
     const ping = setInterval(() => {
       supabase.from("dispositivos_panel").update({ terminal_ping: new Date().toISOString() }).eq("sitio", termRemoto.sitio);
-    }, 60000);
+    }, 20000);
     return () => { vivo = false; clearInterval(id); clearInterval(ping); clearInterval(inactivo); try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
   }, [termRemoto]);
   useEffect(() => { if (termPreRef.current) termPreRef.current.scrollTop = termPreRef.current.scrollHeight; }, [termFila && termFila.terminal_txt]);
@@ -15325,7 +15332,8 @@ function MonitoreoNotifier() {
     setTermEnviando("Enviando " + etiqueta + "…");
     const { data } = await supabase.from("dispositivos_panel").select("terminal_tx").eq("sitio", termRemoto.sitio).maybeSingle();
     const previo = data && data.terminal_tx && data.terminal_tx !== "CERRAR" ? String(data.terminal_tx).split("|").pop() : "";
-    const { error } = await supabase.from("dispositivos_panel").update({ terminal_tx: termPin + "|" + (previo + hex).slice(-1024) }).eq("sitio", termRemoto.sitio);
+    const firma = await firmaMonitor();
+    const { error } = await supabase.from("dispositivos_panel").update({ terminal_tx: firma + "|" + (previo + hex).slice(-1024) }).eq("sitio", termRemoto.sitio);
     setTermEnviando(error ? "No se pudo enviar: " + error.message : etiqueta + " enviado (llega al panel en ~1 s)");
   };
   const enviarTextoTerminal = () => {
@@ -15339,8 +15347,9 @@ function MonitoreoNotifier() {
     if (!termRemoto) return;
     const quien = String(currentUser?.name || currentUser?.email || "app").replace(/[|"]/g, " ").slice(0, 40);
     setCrtPend({ accion, desde: Date.now(), msg: "" });
+    const firma = await firmaMonitor();
     const { error } = await supabase.from("dispositivos_panel")
-      .update({ comando: "crt", comando_arg: `${accion}||${quien}`, comando_en: new Date().toISOString(), comando_resultado: "CRT " + accion + ": orden enviada al equipo" })
+      .update({ comando: "crt", comando_arg: `${accion}|${firma}|${quien}`, comando_en: new Date().toISOString(), comando_resultado: "CRT " + accion + ": orden enviada al equipo" })
       .eq("sitio", termRemoto.sitio);
     if (error) setCrtPend({ accion, desde: Date.now(), msg: "No se pudo enviar: " + error.message });
   };
@@ -16271,7 +16280,9 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       : c.ctrlapp !== "1" ? "El control desde la App está deshabilitado en este equipo. Se habilita en el sitio: Config. del equipo → «Permitir control desde la App»."
                       : crtPend && crtPend.msg ? crtPend.msg
                       : crtEsperando ? `➜ ${CRT_NOMBRES[crtPend.accion] || crtPend.accion}: enviado, esperando que el panel confirme…`
-                      : resCrt ? (crtOk ? "✔ " : "⚠ ") + resCrt.replace(/^CRT (\w+):/, (m, a) => (CRT_NOMBRES[a] || a) + ":")
+                      : resCrt ? (crtOk ? "✔ " : "⚠ ") + resCrt.replace(/^CRT (\w+):/, (m, a) => (CRT_NOMBRES[a] || a) + ":") +
+                        (/sin respuesta/i.test(resCrt) ? (/^CRT silenciar/.test(resCrt) ? " — el panel solo responde si hay señales sonando (Signals Silenced ya encendida = ya estaban silenciadas)."
+                          : /^CRT ack/.test(resCrt) ? " — el panel solo responde si hay eventos sin reconocer." : " — revise que el panel no esté imprimiendo un reporte o dentro de un menú.") : "")
                       : c.leds === undefined ? "Las luces necesitan el equipo en versión 7.6." : "Listo: toque un botón y el equipo lo manda al panel de inmediato."}
                   </div>
                   <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>

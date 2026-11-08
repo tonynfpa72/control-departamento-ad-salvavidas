@@ -15277,7 +15277,7 @@ function MonitoreoNotifier() {
     setTermFila(null); setCfgForm(null); setCfgMsg(""); setTermEnviando("");
     setTermRemoto({ sitio, desde: Date.now(), error: "" });
     const { error } = await supabase.from("dispositivos_panel")
-      .update({ comando: "terminal", comando_arg: `3|${nonce}|${hash}`, comando_en: ahora, terminal_ping: ahora, comando_resultado: "esperando que el equipo abra el monitor" })
+      .update({ comando: "terminal", comando_arg: `3|${nonce}|${hash}`, comando_en: ahora, terminal_tx: null, terminal_ping: ahora, comando_resultado: "esperando que el equipo abra el monitor" })
       .eq("sitio", sitio);
     if (error) setTermRemoto({ sitio, desde: Date.now(), error: /terminal_/i.test(error.message || "") ? "Falta correr en Supabase el SQL_monitor_remoto.sql." : error.message });
   };
@@ -15303,14 +15303,7 @@ function MonitoreoNotifier() {
         .subscribe();
     } catch (e) { canal = null; }
     const id = setInterval(leer, 1200);
-    // 1 hora sin usar el Monitor: se cierra y hay que volver a poner la clave
-    const inactivo = setInterval(() => {
-      if (Date.now() - monActividad.current > 3600000) {
-        const sitio = termRemoto.sitio;
-        cerrarMonitorRemoto();
-        setMonClave(""); setMonPedir({ sitio, error: "El Monitor se cerró por 1 hora sin uso. Ingrese la clave otra vez." });
-      }
-    }, 30000);
+    const inactivo = null;   // 7.8: sin cierre automático (solo se cierra con la X)
     const ping = setInterval(() => {
       supabase.from("dispositivos_panel").update({ terminal_ping: new Date().toISOString() }).eq("sitio", termRemoto.sitio);
     }, 60000);
@@ -16195,7 +16188,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               ) : (
                 <>
                   <div style={{ fontSize: 12, color: IGNIS.dim, marginBottom: 8, lineHeight: 1.5 }}>
-                    {abierto ? <span style={{ color: IGNIS.ok || "#3fb950" }}>● Conectado</span> : <span>○ Esperando que el equipo abra el monitor (hasta 30 s)…</span>}
+                    {abierto ? <span style={{ color: IGNIS.ok || "#3fb950" }}>● Conectado</span> : <span>○ Conectando con el equipo (unos segundos)…</span>}
                     {" · "}{f.comando_resultado || ""}
                     {c.tipo !== undefined && <> · Panel: <b style={{ color: IGNIS.text }}>{c.tipo === "3" ? "Notifier CRT" : c.tipo === "2" ? "Simplex Ethernet" : c.tipo === "1" ? "Simplex RS232" : "Notifier RS232"}</b> {c.tipo === "2" ? `(${c.ipactual || c.ethip} → ${c.panelip}:${c.port}, ${c.estado})` : `(${c.baud} ${c.fmt})`}</>}
                     {viejo && <div style={{ color: IGNIS.problema, marginTop: 4 }}>Este equipo tiene la versión {f.version}: el monitor remoto necesita la 7.2. Actualícelo desde «Actualizar firmware».</div>}

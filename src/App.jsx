@@ -12990,6 +12990,73 @@ const CATEGORIAS_PANEL_GENERAL = ["alarma", "problema", "supervision", "segurida
 // Corrige eventos mal clasificados por firmwares viejos: "SYSTEM NORMAL" /
 // "SISTEMA NORMAL" (el panel volvió a normal) y líneas que empiezan con una
 // palabra como "FIRESTONE…" (nombre del sitio) no son alarmas.
+// ---- 8.0: TODOS LOS PUNTOS — el listado que el IgnisMonitor pide al panel por el CRT
+// (opción "Todos Pto") y sube como <sitio>__p.txt al bucket historial_paneles.
+// Cada pedido reemplaza al anterior. ----
+function TodosLosPuntos({ sitio }) {
+  const [texto, setTexto] = useState(null);
+  const [fecha, setFecha] = useState(null);
+  const [cargando, setCargando] = useState(true);
+  const [busca, setBusca] = useState("");
+  const nombre = `${nombreArchivoSitioPanel(sitio)}__p.txt`;
+  const cargar = async () => {
+    setCargando(true);
+    try {
+      const { data } = await supabase.storage.from("historial_paneles").list("", { search: nombre, limit: 20 });
+      const meta = (data || []).find((o) => o.name === nombre);
+      setFecha(meta ? (meta.updated_at || meta.created_at || null) : null);
+      if (!meta) { setTexto(""); return; }
+      const { data: blob } = await supabase.storage.from("historial_paneles").download(nombre);
+      setTexto(blob ? await blob.text() : "");
+    } catch (e) { setTexto(""); }
+    finally { setCargando(false); }
+  };
+  useEffect(() => { cargar(); }, [sitio]);
+  const lineas = String(texto || "").split("\n").map((l) => l.replace(/\r$/, "")).filter((l) => l.trim() && !/^[=*]{2,}.*(Todos los puntos)/i.test(l));
+  const q = busca.trim().toUpperCase();
+  const filtradas = q ? lineas.filter((l) => l.toUpperCase().includes(q)) : lineas;
+  const bajar = (contenido, archivo, tipo) => {
+    const url = URL.createObjectURL(new Blob([contenido], { type: tipo }));
+    const a = document.createElement("a"); a.href = url; a.download = archivo;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+  const base = nombreArchivoSitioPanel(sitio);
+  const csv = () => "﻿" + lineas.map((l) => l.trim().split(/\s{2,}/).map((c) => '"' + c.replace(/"/g, '""') + '"').join(";")).join("\r\n");
+  const boton = { padding: "4px 11px", borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: "pointer", border: "1px solid #888", background: "#fff", color: "#444" };
+  return (
+    <div style={{ background: "#fff", borderRadius: 10, padding: 16, color: "#222" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+        <div style={{ fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: "#888", fontWeight: 700 }}>Todos los puntos — {sitio}</div>
+        <button onClick={cargar} disabled={cargando} style={{ ...boton, border: "1px solid #0e9aa7", color: "#0e7c86" }}>{cargando ? "Cargando..." : "↻ Actualizar"}</button>
+        {!APK_SIN_DESCARGAS && lineas.length > 0 && <>
+          <button style={boton} onClick={() => bajar(texto, `todos_los_puntos_${base}.txt`, "text/plain;charset=utf-8")}>⬇ .txt</button>
+          <button style={boton} onClick={() => bajar(csv(), `todos_los_puntos_${base}.csv`, "text/csv;charset=utf-8")}>⬇ Excel (CSV)</button>
+        </>}
+      </div>
+      {cargando ? <div style={{ color: "#666", fontSize: 13 }}>Cargando listado...</div>
+        : !lineas.length ? (
+          <div style={{ color: "#555", fontSize: 13.5, lineHeight: 1.6 }}>
+            Todavía no hay listado de este sitio.<br />
+            Pídalo desde <b>Monitor serial → Reportes del panel → Todos los puntos</b>. El panel lo imprime y el equipo lo sube aquí cuando termina (unos segundos después de la última línea).
+          </div>
+        ) : (
+          <>
+            <div style={{ fontSize: 12.5, color: "#555", marginBottom: 8 }}>
+              <b>{lineas.length}</b> líneas{fecha ? <> · capturado {new Date(fecha).toLocaleString("es-CR")}</> : null}
+              {APK_SIN_DESCARGAS && <> · para descargar, ábralo desde el navegador</>}
+            </div>
+            <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar punto, dirección o descripción (ej. 1D014, ALMACEN)"
+              style={{ width: "100%", boxSizing: "border-box", padding: "8px 10px", borderRadius: 8, border: "1px solid #ccc", fontSize: 13, marginBottom: 8, fontFamily: "inherit" }} />
+            <pre style={{ margin: 0, maxHeight: "60vh", overflow: "auto", background: "#f7f7f5", border: "1px solid #e3e3e0", borderRadius: 8, padding: 10, fontSize: 12, lineHeight: 1.45, fontFamily: "ui-monospace,Consolas,monospace", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+              {filtradas.join("\n") || "(ningún punto coincide con la búsqueda)"}
+            </pre>
+            {q && <div style={{ fontSize: 12, color: "#777", marginTop: 6 }}>{filtradas.length} de {lineas.length} líneas</div>}
+          </>
+        )}
+    </div>
+  );
+}
+
 const corregirCategoriaEvento = (e) => {
   const t = String((e && e.texto) || "").toUpperCase().trim();
   if (!e || !["alarma", "prealarma", "problema", "supervision", "seguridad"].includes(e.categoria)) return e;
@@ -15193,7 +15260,7 @@ function MonitoreoNotifier() {
 
   // Vuelve a "eventos" si cambian de sitio mientras ven Tendencias (el
   // historial es por sitio — no tiene sentido en "Todos").
-  useEffect(() => { if (sitioSeleccionado === "Todos" && vista === "tendencias") setVista("eventos"); }, [sitioSeleccionado, vista]);
+  useEffect(() => { if (sitioSeleccionado === "Todos" && (vista === "tendencias" || vista === "puntos")) setVista("eventos"); }, [sitioSeleccionado, vista]);
 
   // Baja un .txt del bucket de historiales; si no existe devuelve "".
   const descargarTextoHistorial = async (archivo) => {
@@ -15344,7 +15411,7 @@ function MonitoreoNotifier() {
     setTermTexto("");
   };
   // 7.3: control del panel Notifier por CRT (Reconocer, Silenciar, Reset, Historial, Detectores)
-  const CRT_NOMBRES = { simulacro: "Simulacro", ack: "Reconocer", silenciar: "Silenciar", reset: "Reset", historial: "Historial completo", histalarmas: "Historial de alarmas", detectores: "Reporte de detectores" };
+  const CRT_NOMBRES = { puntos: "Todos los puntos", simulacro: "Simulacro", ack: "Reconocer", silenciar: "Silenciar", reset: "Reset", historial: "Historial completo", histalarmas: "Historial de alarmas", detectores: "Reporte de detectores" };
   const ordenCrt = async (accion) => {
     if (!termRemoto) return;
     const quien = String(currentUser?.name || currentUser?.email || "app").replace(/[|"]/g, " ").slice(0, 40);
@@ -15650,6 +15717,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${IGNIS.border}` }}>
               <button onClick={() => setVista("eventos")} style={{ padding: "7px 12px", fontSize: 12.5, border: "none", cursor: "pointer", background: vista === "eventos" ? IGNIS.panel2 : IGNIS.panel, color: vista === "eventos" ? IGNIS.text : IGNIS.dim, fontWeight: 600 }}>Eventos</button>
               <button onClick={() => setVista("tendencias")} style={{ padding: "7px 12px", fontSize: 12.5, border: "none", cursor: "pointer", background: vista === "tendencias" ? IGNIS.panel2 : IGNIS.panel, color: vista === "tendencias" ? IGNIS.text : IGNIS.dim, fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}><TrendingUp size={13} /> Tendencias</button>
+              <button onClick={() => setVista("puntos")} style={{ padding: "7px 12px", fontSize: 12.5, border: "none", cursor: "pointer", background: vista === "puntos" ? IGNIS.panel2 : IGNIS.panel, color: vista === "puntos" ? IGNIS.text : IGNIS.dim, fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}>📋 Todos los puntos</button>
             </div>
           )}
           {canGestionar && sitioSeleccionado !== "Todos" && (
@@ -15890,7 +15958,10 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
       </div>
       )}
 
-      {sitioSeleccionado !== "Todos" && (!esMovilNotifier || seccionMovil === "eventos" || seccionMovil === "tendencias") && (vista === "tendencias" ? (
+      {sitioSeleccionado !== "Todos" && vista === "puntos" && (!esMovilNotifier || seccionMovil === "puntos") && (
+        <div style={{ padding: esMovilNotifier ? "0 0 80px" : 0 }}><TodosLosPuntos sitio={sitioSeleccionado} /></div>
+      )}
+      {sitioSeleccionado !== "Todos" && vista !== "puntos" && (!esMovilNotifier || seccionMovil === "eventos" || seccionMovil === "tendencias") && (vista === "tendencias" ? (
         // ---- Tendencias: mismo análisis que el Reporte ejecutivo del equipo, sobre papel blanco (igual que allá) ----
         <div style={{ background: "#fff", borderRadius: 10, padding: 16 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
@@ -16060,14 +16131,15 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             { id: "eventos", label: "Eventos", Icono: Search },
             { id: "equipos", label: "Equipos", Icono: Wifi },
             { id: "tendencias", label: "Tendencias", Icono: TrendingUp },
+            { id: "puntos", label: "Puntos", Icono: ClipboardList },
           ].map(({ id, label, Icono }) => {
-            const deshabilitada = id === "tendencias" && sitioSeleccionado === "Todos";
+            const deshabilitada = (id === "tendencias" || id === "puntos") && sitioSeleccionado === "Todos";
             const activa = seccionMovil === id;
             return (
               <button
                 key={id}
                 disabled={deshabilitada}
-                onClick={() => { setSeccionMovil(id); if (id === "eventos") setVista("eventos"); if (id === "tendencias") setVista("tendencias"); }}
+                onClick={() => { setSeccionMovil(id); if (id === "eventos") setVista("eventos"); if (id === "tendencias") setVista("tendencias"); if (id === "puntos") setVista("puntos"); }}
                 style={{
                   flex: 1, border: "none", background: "transparent", padding: "9px 4px 10px", cursor: deshabilitada ? "default" : "pointer",
                   color: deshabilitada ? IGNIS.dim2 : activa ? IGNIS.text : IGNIS.dim, opacity: deshabilitada ? 0.45 : 1,
@@ -16281,6 +16353,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                         q: "¿Pedir el HISTORIAL COMPLETO al panel?\n\nEl panel lo imprime durante varios minutos. Mientras tanto no mande otras órdenes." },
                       { a: "histalarmas", ic: "🚨", t: "Historial de alarmas", d: "Solo las alarmas guardadas en el panel.",
                         q: "¿Pedir el HISTORIAL DE ALARMAS al panel?\n\nMientras imprime no mande otras órdenes." },
+                      { a: "puntos", ic: "📋", t: "Todos los puntos", d: "Estado de cada punto programado. Se guarda en la pestaña «Todos los puntos» y se puede descargar.",
+                        q: "¿Pedir el listado de TODOS LOS PUNTOS al panel?\n\nReemplaza el listado anterior. Mientras imprime no mande otras órdenes." },
                       { a: "detectores", ic: "🛠", t: "Reporte de detectores", d: "Compensación y sensibilidad de cada detector (va a Mantenimiento).",
                         q: "¿Pedir el REPORTE DE DETECTORES al panel?\n\nMientras imprime no mande otras órdenes." },
                     ];

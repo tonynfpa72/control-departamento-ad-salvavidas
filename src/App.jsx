@@ -14780,6 +14780,11 @@ function MonitoreoNotifier() {
   const [cfgMsg, setCfgMsg] = useState("");
   const [crtPin, setCrtPin] = useState("");
   const [crtPend, setCrtPend] = useState(null);           // { accion, desde, msg }
+  const [monPedir, setMonPedir] = useState(null);         // { sitio, error } pide la clave antes de abrir el Monitor
+  const [monClave, setMonClave] = useState("");
+  const [lampTest, setLampTest] = useState(false);
+  const monActividad = useRef(Date.now());
+  const drillTimer = useRef(null);
   const termPreRef = useRef(null);
   const [cargando, setCargando] = useState(true);
   const [sitioSeleccionado, setSitioSeleccionado] = useEstadoRecordado("monitoreo-sitio", () => (esCliente && sitioCliente ? sitioCliente : "Todos"));
@@ -15260,12 +15265,19 @@ function MonitoreoNotifier() {
     String(txt || "").split(";").forEach((p) => { const i = p.indexOf("="); if (i > 0) o[p.slice(0, i)] = p.slice(i + 1); });
     return o;
   };
-  const abrirMonitorRemoto = async (sitio) => {
+  const abrirMonitorRemoto = async (sitio, clave) => {
+    if (clave === undefined) { setMonClave(""); setMonPedir({ sitio, error: "" }); return; }
+    setMonPedir(null); setMonClave("");
+    monActividad.current = Date.now();
     const ahora = new Date().toISOString();
+    // la clave no viaja: se manda sha256(clave|nonce) y el equipo lo compara
+    const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => b.toString(16).padStart(2, "0")).join("");
+    const dig = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(clave) + "|" + nonce));
+    const hash = Array.from(new Uint8Array(dig)).map((b) => b.toString(16).padStart(2, "0")).join("");
     setTermFila(null); setCfgForm(null); setCfgMsg(""); setTermEnviando("");
     setTermRemoto({ sitio, desde: Date.now(), error: "" });
     const { error } = await supabase.from("dispositivos_panel")
-      .update({ comando: "terminal", comando_arg: "3", comando_en: ahora, terminal_ping: ahora, comando_resultado: "esperando que el equipo abra el monitor" })
+      .update({ comando: "terminal", comando_arg: `3|${nonce}|${hash}`, comando_en: ahora, terminal_ping: ahora, comando_resultado: "esperando que el equipo abra el monitor" })
       .eq("sitio", sitio);
     if (error) setTermRemoto({ sitio, desde: Date.now(), error: /terminal_/i.test(error.message || "") ? "Falta correr en Supabase el SQL_monitor_remoto.sql." : error.message });
   };
@@ -15281,11 +15293,19 @@ function MonitoreoNotifier() {
       if (vivo && data) setTermFila(data);
     };
     leer();
-    const id = setInterval(leer, 1000);
+    const id = setInterval(leer, 700);
+    // 1 hora sin usar el Monitor: se cierra y hay que volver a poner la clave
+    const inactivo = setInterval(() => {
+      if (Date.now() - monActividad.current > 3600000) {
+        const sitio = termRemoto.sitio;
+        cerrarMonitorRemoto();
+        setMonClave(""); setMonPedir({ sitio, error: "El Monitor se cerró por 1 hora sin uso. Ingrese la clave otra vez." });
+      }
+    }, 30000);
     const ping = setInterval(() => {
       supabase.from("dispositivos_panel").update({ terminal_ping: new Date().toISOString() }).eq("sitio", termRemoto.sitio);
     }, 60000);
-    return () => { vivo = false; clearInterval(id); clearInterval(ping); };
+    return () => { vivo = false; clearInterval(id); clearInterval(ping); clearInterval(inactivo); };
   }, [termRemoto]);
   useEffect(() => { if (termPreRef.current) termPreRef.current.scrollTop = termPreRef.current.scrollHeight; }, [termFila && termFila.terminal_txt]);
   useEffect(() => {
@@ -15304,7 +15324,7 @@ function MonitoreoNotifier() {
     const { data } = await supabase.from("dispositivos_panel").select("terminal_tx").eq("sitio", termRemoto.sitio).maybeSingle();
     const previo = data && data.terminal_tx && data.terminal_tx !== "CERRAR" ? String(data.terminal_tx).split("|").pop() : "";
     const { error } = await supabase.from("dispositivos_panel").update({ terminal_tx: termPin + "|" + (previo + hex).slice(-1024) }).eq("sitio", termRemoto.sitio);
-    setTermEnviando(error ? "No se pudo enviar: " + error.message : etiqueta + " en cola (el equipo lo manda en ~3 s)");
+    setTermEnviando(error ? "No se pudo enviar: " + error.message : etiqueta + " enviado (llega al panel en ~1 s)");
   };
   const enviarTextoTerminal = () => {
     const fin = termFin === "cr" ? "\r" : termFin === "lf" ? "\n" : termFin === "crlf" ? "\r\n" : "";
@@ -15312,7 +15332,7 @@ function MonitoreoNotifier() {
     setTermTexto("");
   };
   // 7.3: control del panel Notifier por CRT (Reconocer, Silenciar, Reset, Historial, Detectores)
-  const CRT_NOMBRES = { ack: "Reconocer", silenciar: "Silenciar", reset: "Reset", historial: "Historial completo", histalarmas: "Historial de alarmas", detectores: "Reporte de detectores" };
+  const CRT_NOMBRES = { simulacro: "Simulacro", ack: "Reconocer", silenciar: "Silenciar", reset: "Reset", historial: "Historial completo", histalarmas: "Historial de alarmas", detectores: "Reporte de detectores" };
   const ordenCrt = async (accion) => {
     if (!termRemoto) return;
     const quien = String(currentUser?.name || currentUser?.email || "app").replace(/[|"]/g, " ").slice(0, 40);
@@ -16114,9 +16134,26 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           </div>
         );
       })()}
+      {monPedir && (
+        <div onClick={() => setMonPedir(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 61, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div onClick={(x) => x.stopPropagation()}
+            style={{ background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 12, width: "100%", maxWidth: 380, padding: "18px 20px", fontFamily: "system-ui,-apple-system,sans-serif" }}>
+            <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 4 }}>🔒 Monitor serial · {monPedir.sitio}</div>
+            <div style={{ fontSize: 12.5, color: IGNIS.dim, marginBottom: 12, lineHeight: 1.5 }}>Ingrese la clave del Monitor de este equipo (la de «Clave del Monitor en la App» o, si no se definió, la clave de administración del equipo).</div>
+            {monPedir.error && <div style={{ fontSize: 12.5, color: IGNIS.problema, marginBottom: 10 }}>{monPedir.error}</div>}
+            <input type="password" autoFocus value={monClave} onChange={(e) => setMonClave(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && monClave) abrirMonitorRemoto(monPedir.sitio, monClave); }} placeholder="Clave del Monitor"
+              style={{ width: "100%", boxSizing: "border-box", background: IGNIS.bg, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: "10px 12px", fontSize: 14, fontFamily: "inherit" }} />
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+              <Btn small variant="ghost" onClick={() => setMonPedir(null)}>Cancelar</Btn>
+              <Btn small onClick={() => { if (monClave) abrirMonitorRemoto(monPedir.sitio, monClave); }}>Entrar</Btn>
+            </div>
+          </div>
+        </div>
+      )}
       {termRemoto && (() => {
         const f = termFila || {};
-        const abierto = f.comando_resultado === "monitor serial abierto" || (f.terminal_txt && !f.comando);
+        const claveMal = /clave del monitor incorrecta|clave bloqueada|abra el Monitor serial con la clave/i.test(f.comando_resultado || "");
+        const abierto = !claveMal && (f.comando_resultado === "monitor serial abierto" || (f.terminal_txt && !f.comando));
         const c = leerConfigPanel(f.config_panel);
         const viejo = f.version && /^([0-6]\.|7\.[01]$)/.test(String(f.version));
         const resCrt = String(f.comando_resultado || "").startsWith("CRT ") ? String(f.comando_resultado) : "";
@@ -16138,7 +16175,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const red = cfgForm && cfgForm.tipo === "2";
         return (
           <div onClick={cerrarMonitorRemoto} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
-            <div onClick={(x) => x.stopPropagation()} style={{ background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 12, width: "100%", maxWidth: 820, maxHeight: "94vh", display: "flex", flexDirection: "column", padding: "14px 16px", fontFamily: "system-ui,-apple-system,sans-serif", overflow: "auto" }}>
+            <div onClick={(x) => x.stopPropagation()} onPointerDown={() => { monActividad.current = Date.now(); }} onKeyDown={() => { monActividad.current = Date.now(); }} style={{ background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 12, width: "100%", maxWidth: 880, maxHeight: "94vh", display: "flex", flexDirection: "column", padding: "14px 16px", fontFamily: "system-ui,-apple-system,sans-serif", overflow: "auto" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
                 <Settings size={18} color={IGNIS.general} />
                 <div style={{ flex: 1, fontWeight: 800, fontSize: 16 }}>Monitor serial · {termRemoto.sitio}</div>
@@ -16154,31 +16191,84 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     {c.tipo !== undefined && <> · Panel: <b style={{ color: IGNIS.text }}>{c.tipo === "3" ? "Notifier CRT" : c.tipo === "2" ? "Simplex Ethernet" : c.tipo === "1" ? "Simplex RS232" : "Notifier RS232"}</b> {c.tipo === "2" ? `(${c.ipactual || c.ethip} → ${c.panelip}:${c.port}, ${c.estado})` : `(${c.baud} ${c.fmt})`}</>}
                     {viejo && <div style={{ color: IGNIS.problema, marginTop: 4 }}>Este equipo tiene la versión {f.version}: el monitor remoto necesita la 7.2. Actualícelo desde «Actualizar firmware».</div>}
                   </div>
-                  {(
-
-                    <div style={{ border: `1px solid ${IGNIS.problema}66`, borderRadius: 10, padding: "10px 12px", marginBottom: 8 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-                        <b style={{ fontSize: 13.5 }}>Control del panel</b>
-                        <span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 6, border: `1px solid ${IGNIS.border2 || IGNIS.border}`, color: crtEsNotifier ? "#7ee787" : IGNIS.dim }}>{crtEsNotifier ? "Notifier · CRT" : crtSimplex ? "Simplex" : c.tipo === "0" ? "Notifier · impresora" : "sin datos del equipo"}</span>
-                        <span style={{ flex: 1 }} />
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 6 }}>
-                        {bCrt("ack", "✔", "RECONOCER", "#79b8ff")}{bCrt("silenciar", "🔕", "SILENCIAR", "#ffd866")}{bCrt("reset", "⟲", "RESET", "#ff8589")}
-                        {!crtSimplex && <>{bCrt("historial", "📜", "HISTORIAL", "#7fe3ea")}{bCrt("histalarmas", "🚨", "HIST. ALARMAS", "#7fe3ea")}{bCrt("detectores", "🛠", "REPORTE DETECTORES", "#7ee787")}</>}
-                      </div>
-                      <div style={{ marginTop: 8, fontSize: 12.5, color: crtPend && crtPend.msg ? IGNIS.alarma : crtEsperando ? IGNIS.problema : crtOk ? "#9be9a8" : resCrt ? IGNIS.alarma : IGNIS.dim }}>
-                        {!f.config_panel ? (viejo || !f.version ? "Los botones necesitan el equipo en versión 7.4 (Actualizar firmware)." : "El equipo todavía no informa su configuración. Si ya tiene la 7.4, falta correr en Supabase el SQL_monitor_remoto.sql; si no, actualícelo.")
-                          : c.tipo === "0" ? "El equipo está en modo Notifier IMPRESORA: por ahí no se puede controlar el panel. Conéctelo a los bornes PC/CRT del TB12 y cambie abajo «Tipo de panel» a «Notifier · CRT»."
-                          : crtSimplex ? "Comandos Simplex pendientes: los botones quedan desactivados hasta cargar sus códigos."
-                          : c.ctrlapp !== "1" ? "El control desde la App está deshabilitado en este equipo. Se habilita en el sitio: Config. del equipo → «Permitir control desde la App»."
-                          : crtPend && crtPend.msg ? crtPend.msg
-                          : crtEsperando ? `⏳ ${CRT_NOMBRES[crtPend.accion] || crtPend.accion}: esperando la respuesta del panel…`
-                          : resCrt ? (crtOk ? "✔ " : "") + resCrt.replace(/^CRT (\w+):/, (m, a) => (CRT_NOMBRES[a] || a) + ":")
-                          : "Listo: toque un botón y el equipo lo manda al panel de inmediato."}
-                      </div>
+                  {/clave del monitor incorrecta|clave bloqueada/i.test(f.comando_resultado || "") && (
+                    <div style={{ background: IGNIS.alarma + "22", border: `1px solid ${IGNIS.alarma}88`, color: "#ff9a9d", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, marginBottom: 8, display: "flex", gap: 10, alignItems: "center" }}>
+                      🔒 {f.comando_resultado}. <Btn small onClick={() => { const s2 = termRemoto.sitio; cerrarMonitorRemoto(); abrirMonitorRemoto(s2); }}>Volver a poner la clave</Btn>
                     </div>
                   )}
-                  <pre ref={termPreRef} style={{ height: 300, minHeight: 160, overflow: "auto", margin: 0, background: "#05080c", border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: 10, fontSize: 12, lineHeight: 1.45, color: "#7ee787", whiteSpace: "pre-wrap", wordBreak: "break-all", fontFamily: "ui-monospace,Consolas,monospace" }}>{f.terminal_txt || "(todavía no llega nada)"}</pre>
+                  {(() => {
+                    const L = String(c.leds || "");
+                    const on = (k) => lampTest || L.includes(k);
+                    const encendido = abierto || lampTest;
+                    const control = abierto && crtEsNotifier && c.ctrlapp === "1";
+                    const led = (prendido, color) => (
+                      <span style={{ width: 16, height: 10, borderRadius: 2, flex: "none", display: "inline-block",
+                        background: prendido ? color : "#b9bab5", border: `1px solid ${prendido ? color : "#9a9b96"}`,
+                        boxShadow: prendido ? `0 0 9px ${color}, inset 0 0 2px #fff` : "inset 0 1px 2px #0003" }} />);
+                    const VERDE = "#3cff5a", ROJO = "#ff3b3b", AMBAR = "#ffb21f";
+                    const ledIzq = (txt, prendido, color) => (
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, fontWeight: 800, fontSize: 10.5, textAlign: "right", lineHeight: 1.1, textTransform: "uppercase" }}>{txt}{led(prendido, color)}</div>);
+                    const ledAbajo = (txt, prendido, color) => (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, fontWeight: 800, fontSize: 10.5, textAlign: "center", lineHeight: 1.1, textTransform: "uppercase", minWidth: 70 }}>{led(prendido, color)}{txt}</div>);
+                    const habil = control;
+                    const motivo = !abierto ? "Esperando que el equipo abra el monitor" : !crtEsNotifier ? "Solo con panel Notifier por CRT" : c.ctrlapp !== "1" ? "Control desde la App deshabilitado en el equipo" : "";
+                    const boton = (txt, sub, props) => (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, width: 120, textAlign: "center", fontWeight: 800, fontSize: 11.5, textTransform: "uppercase", lineHeight: 1.15 }}>
+                        <button title={motivo} disabled={!habil && !props.siempre} {...props.ev}
+                          style={{ width: 68, height: 42, borderRadius: 7, background: "#e8e8e5", border: "1px solid #9a9b96", padding: 5, display: "flex", cursor: habil || props.siempre ? "pointer" : "not-allowed",
+                            boxShadow: props.activo ? "0 1px 0 #8d8e8a, inset 0 2px 4px #0005" : "0 3px 0 #8d8e8a, 0 4px 6px #0004", transform: props.activo ? "translateY(2px)" : "none", opacity: habil || props.siempre ? 1 : 0.5 }}>
+                          <i style={{ flex: 1, borderRadius: 3, background: "linear-gradient(#ff5a4f,#d8261f)", boxShadow: "inset 0 1px 0 #fff6" }} />
+                        </button>
+                        <span>{txt}</span>{sub && <small style={{ fontSize: 8.5, marginTop: -4 }}>{sub}</small>}
+                      </div>);
+                    const lineas = String(f.terminal_txt || "(todavía no llega nada)").split("\n");
+                    return (
+                      <div style={{ background: "linear-gradient(#d9dad6,#c9cac5)", borderRadius: 12, padding: "14px 16px 16px", color: "#2a2c2f", boxShadow: "inset 0 1px 0 #fff8, 0 2px 8px #0008", marginBottom: 10 }}>
+                        <div style={{ display: "flex", gap: 14, alignItems: "flex-start", flexWrap: "wrap" }}>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 9, width: 118, paddingTop: 10 }}>
+                            {ledIzq(<>Controls<br />Active</>, control || lampTest, VERDE)}
+                            {ledIzq("Power", lampTest || (abierto && !L.includes("X")), VERDE)}
+                            {ledIzq(<>Pre-<br />Discharge</>, lampTest, AMBAR)}
+                            {ledIzq("Discharge", lampTest, ROJO)}
+                          </div>
+                          <pre ref={termPreRef} style={{ flex: 1, minWidth: 260, height: 250, overflow: "auto", margin: 0, background: "#05080c", border: "6px solid #3a3d40", borderRadius: 6, padding: "8px 10px", fontSize: 12, lineHeight: 1.45, color: "#7ee787", whiteSpace: "pre-wrap", wordBreak: "break-all", fontFamily: "ui-monospace,Consolas,monospace", boxShadow: "inset 0 0 12px #000" }}>
+                            {lineas.map((ln, k) => <div key={k} style={{ color: ln.startsWith(">>") ? "#ffd866" : ln.startsWith("---") ? "#8b949e" : undefined, minHeight: "1.45em" }}>{ln}</div>)}
+                          </pre>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 6, margin: "14px 0 4px", paddingLeft: 118 }}>
+                          {ledAbajo(<>Fire<br />Alarm</>, on("A"), ROJO)}
+                          {ledAbajo("Pre-Alarm", on("P"), ROJO)}
+                          {ledAbajo("Security", on("G"), AMBAR)}
+                          {ledAbajo("Supervisory", on("S"), AMBAR)}
+                          {ledAbajo(<>System<br />Trouble</>, on("T"), AMBAR)}
+                          {ledAbajo(<>Signals<br />Silenced</>, on("Q"), AMBAR)}
+                          {ledAbajo(<>Point<br />Disabled</>, on("D"), AMBAR)}
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
+                          {boton("Acknowledge", "Scroll display", { ev: { onClick: () => ordenCrt("ack") }, activo: crtEsperando && crtPend.accion === "ack" })}
+                          {boton(<>Signal<br />Silence</>, null, { ev: { onClick: () => ordenCrt("silenciar") }, activo: crtEsperando && crtPend.accion === "silenciar" })}
+                          {boton(<>System<br />Reset</>, null, { ev: { onClick: () => ordenCrt("reset") }, activo: crtEsperando && crtPend.accion === "reset" })}
+                          {boton("Drill", "Hold 2 seconds", { activo: crtEsperando && crtPend.accion === "simulacro", ev: {
+                            onPointerDown: () => { clearTimeout(drillTimer.current); drillTimer.current = setTimeout(() => {
+                              if (window.confirm("SIMULACRO activa las sirenas del edificio " + termRemoto.sitio + ". ¿Continuar?")) ordenCrt("simulacro"); }, 2000); },
+                            onPointerUp: () => clearTimeout(drillTimer.current), onPointerLeave: () => clearTimeout(drillTimer.current) } })}
+                          {boton(<>Lamp<br />Test</>, null, { siempre: true, ev: { onClick: () => { setLampTest(true); setTimeout(() => setLampTest(false), 3000); } } })}
+                        </div>
+                      </div>);
+                  })()}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(180px,1fr))", gap: 6 }}>
+                    {bCrt("historial", "📜", "HISTORIAL COMPLETO", "#7fe3ea")}{bCrt("histalarmas", "🚨", "HIST. ALARMAS", "#7fe3ea")}{bCrt("detectores", "🛠", "REPORTE DETECTORES", "#7ee787")}
+                  </div>
+                  <div style={{ marginTop: 8, fontSize: 12.5, borderRadius: 8, padding: "8px 11px", border: `1px solid ${IGNIS.border}`, color: crtPend && crtPend.msg ? IGNIS.alarma : crtEsperando ? IGNIS.problema : crtOk ? "#9be9a8" : resCrt ? IGNIS.alarma : IGNIS.dim }}>
+                    {!f.config_panel ? (viejo || !f.version ? "Los botones necesitan el equipo en versión 7.6 (Actualizar firmware)." : "El equipo todavía no informa su configuración. Si ya tiene la 7.6, falta correr en Supabase el SQL_monitor_remoto.sql; si no, actualícelo.")
+                      : c.tipo === "0" ? "El equipo está en modo Notifier IMPRESORA: por ahí no se puede controlar el panel. Conéctelo a los bornes PC/CRT del TB12 y cambie abajo «Tipo de panel» a «Notifier · CRT»."
+                      : crtSimplex ? "Comandos Simplex pendientes: los botones quedan desactivados hasta cargar sus códigos."
+                      : c.ctrlapp !== "1" ? "El control desde la App está deshabilitado en este equipo. Se habilita en el sitio: Config. del equipo → «Permitir control desde la App»."
+                      : crtPend && crtPend.msg ? crtPend.msg
+                      : crtEsperando ? `➜ ${CRT_NOMBRES[crtPend.accion] || crtPend.accion}: enviado, esperando que el panel confirme…`
+                      : resCrt ? (crtOk ? "✔ " : "⚠ ") + resCrt.replace(/^CRT (\w+):/, (m, a) => (CRT_NOMBRES[a] || a) + ":")
+                      : c.leds === undefined ? "Las luces necesitan el equipo en versión 7.6." : "Listo: toque un botón y el equipo lo manda al panel de inmediato."}
+                  </div>
                   <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
                     <input style={{ ...inp, flex: 1, minWidth: 180, width: "auto" }} placeholder="Texto para mandar al panel" value={termTexto} onChange={(e) => setTermTexto(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") enviarTextoTerminal(); }} />
                     <select style={{ ...inp, width: 110 }} value={termFin} onChange={(e) => setTermFin(e.target.value)}>
@@ -16188,7 +16278,6 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                   </div>
                   <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
                     {tecla("ENTER", [13])}{tecla("ESC", [27])}{tecla("↑", [27, 91, 65])}{tecla("↓", [27, 91, 66])}{tecla("←", [27, 91, 68])}{tecla("→", [27, 91, 67])}
-                    <input style={{ ...inp, width: 110 }} placeholder="PIN (si aplica)" value={termPin} onChange={(e) => setTermPin(e.target.value)} />
                     <span style={{ fontSize: 11.5, color: IGNIS.dim }}>{termEnviando}</span>
                   </div>
                   <div style={{ marginTop: 10, borderTop: `1px solid ${IGNIS.border}`, paddingTop: 8 }}>

@@ -15293,7 +15293,16 @@ function MonitoreoNotifier() {
       if (vivo && data) setTermFila(data);
     };
     leer();
-    const id = setInterval(leer, 700);
+    // 7.7: cambios al instante por Supabase Realtime (si la tabla está en la publicación);
+    // la consulta periódica queda de respaldo.
+    let canal = null;
+    try {
+      canal = supabase.channel("monitor-" + termRemoto.sitio + "-" + Date.now())
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "dispositivos_panel", filter: `sitio=eq.${termRemoto.sitio}` },
+          (p) => { if (vivo && p && p.new) setTermFila((prev) => ({ ...(prev || {}), ...p.new })); })
+        .subscribe();
+    } catch (e) { canal = null; }
+    const id = setInterval(leer, 1200);
     // 1 hora sin usar el Monitor: se cierra y hay que volver a poner la clave
     const inactivo = setInterval(() => {
       if (Date.now() - monActividad.current > 3600000) {
@@ -15305,7 +15314,7 @@ function MonitoreoNotifier() {
     const ping = setInterval(() => {
       supabase.from("dispositivos_panel").update({ terminal_ping: new Date().toISOString() }).eq("sitio", termRemoto.sitio);
     }, 60000);
-    return () => { vivo = false; clearInterval(id); clearInterval(ping); clearInterval(inactivo); };
+    return () => { vivo = false; clearInterval(id); clearInterval(ping); clearInterval(inactivo); try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
   }, [termRemoto]);
   useEffect(() => { if (termPreRef.current) termPreRef.current.scrollTop = termPreRef.current.scrollHeight; }, [termFila && termFila.terminal_txt]);
   useEffect(() => {
@@ -16174,8 +16183,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const tecla = (txt, bytes) => (<Btn small onClick={() => enviarAlPanel(bytes, txt)}>{txt}</Btn>);
         const red = cfgForm && cfgForm.tipo === "2";
         return (
-          <div onClick={cerrarMonitorRemoto} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
-            <div onClick={(x) => x.stopPropagation()} onPointerDown={() => { monActividad.current = Date.now(); }} onKeyDown={() => { monActividad.current = Date.now(); }} style={{ background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 12, width: "100%", maxWidth: 880, maxHeight: "94vh", display: "flex", flexDirection: "column", padding: "14px 16px", fontFamily: "system-ui,-apple-system,sans-serif", overflow: "auto" }}>
+          <div onClick={cerrarMonitorRemoto} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: (typeof window !== "undefined" && window.innerWidth < 640) ? 4 : 12 }}>
+            <div onClick={(x) => x.stopPropagation()} onPointerDown={() => { monActividad.current = Date.now(); }} onKeyDown={() => { monActividad.current = Date.now(); }} style={{ background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 12, width: "100%", maxWidth: 880, maxHeight: "94vh", display: "flex", flexDirection: "column", padding: (typeof window !== "undefined" && window.innerWidth < 640) ? "10px 8px" : "14px 16px", fontFamily: "system-ui,-apple-system,sans-serif", overflow: "auto" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
                 <Settings size={18} color={IGNIS.general} />
                 <div style={{ flex: 1, fontWeight: 800, fontSize: 16 }}>Monitor serial · {termRemoto.sitio}</div>
@@ -16206,36 +16215,39 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                         background: prendido ? color : "#b9bab5", border: `1px solid ${prendido ? color : "#9a9b96"}`,
                         boxShadow: prendido ? `0 0 9px ${color}, inset 0 0 2px #fff` : "inset 0 1px 2px #0003" }} />);
                     const VERDE = "#3cff5a", ROJO = "#ff3b3b", AMBAR = "#ffb21f";
-                    const ledIzq = (txt, prendido, color) => (
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, fontWeight: 800, fontSize: 10.5, textAlign: "right", lineHeight: 1.1, textTransform: "uppercase" }}>{txt}{led(prendido, color)}</div>);
+                    const ledIzq = (txt, prendido, color) => (movil
+                      ? <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, fontWeight: 800, fontSize: 8.5, textAlign: "center", lineHeight: 1.05, textTransform: "uppercase" }}>{led(prendido, color)}{txt}</div>
+                      : <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, fontWeight: 800, fontSize: 10.5, textAlign: "right", lineHeight: 1.1, textTransform: "uppercase" }}>{txt}{led(prendido, color)}</div>);
                     const ledAbajo = (txt, prendido, color) => (
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, fontWeight: 800, fontSize: 10.5, textAlign: "center", lineHeight: 1.1, textTransform: "uppercase", minWidth: 70 }}>{led(prendido, color)}{txt}</div>);
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: movil ? 3 : 5, fontWeight: 800, fontSize: movil ? 8.5 : 10.5, textAlign: "center", lineHeight: 1.05, textTransform: "uppercase", minWidth: movil ? 0 : 70 }}>{led(prendido, color)}{txt}</div>);
                     const habil = control;
                     const motivo = !abierto ? "Esperando que el equipo abra el monitor" : !crtEsNotifier ? "Solo con panel Notifier por CRT" : c.ctrlapp !== "1" ? "Control desde la App deshabilitado en el equipo" : "";
                     const boton = (txt, sub, props) => (
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, width: 120, textAlign: "center", fontWeight: 800, fontSize: 11.5, textTransform: "uppercase", lineHeight: 1.15 }}>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: movil ? 4 : 6, width: movil ? "auto" : 120, textAlign: "center", fontWeight: 800, fontSize: movil ? 8.5 : 11.5, textTransform: "uppercase", lineHeight: 1.1 }}>
                         <button title={motivo} disabled={!habil && !props.siempre} {...props.ev}
-                          style={{ width: 68, height: 42, borderRadius: 7, background: "#e8e8e5", border: "1px solid #9a9b96", padding: 5, display: "flex", cursor: habil || props.siempre ? "pointer" : "not-allowed",
+                          style={{ width: movil ? 50 : 68, height: movil ? 34 : 42, touchAction: "manipulation", borderRadius: 7, background: "#e8e8e5", border: "1px solid #9a9b96", padding: 5, display: "flex", cursor: habil || props.siempre ? "pointer" : "not-allowed",
                             boxShadow: props.activo ? "0 1px 0 #8d8e8a, inset 0 2px 4px #0005" : "0 3px 0 #8d8e8a, 0 4px 6px #0004", transform: props.activo ? "translateY(2px)" : "none", opacity: habil || props.siempre ? 1 : 0.5 }}>
                           <i style={{ flex: 1, borderRadius: 3, background: "linear-gradient(#ff5a4f,#d8261f)", boxShadow: "inset 0 1px 0 #fff6" }} />
                         </button>
-                        <span>{txt}</span>{sub && <small style={{ fontSize: 8.5, marginTop: -4 }}>{sub}</small>}
+                        <span>{txt}</span>{sub && !movil && <small style={{ fontSize: 8.5, marginTop: -4 }}>{sub}</small>}
                       </div>);
-                    const lineas = String(f.terminal_txt || "(todavía no llega nada)").split("\n");
+                    const movil = typeof window !== "undefined" && window.innerWidth < 640;
+                    // en el teléfono se juntan los espacios largos para que cada evento quepa en una o dos líneas
+                    const lineas = String(f.terminal_txt || "(todavía no llega nada)").split("\n").map((ln) => (movil ? ln.replace(/ {3,}/g, "  ").replace(/^\.+(?=\S)/, "") : ln));
                     return (
-                      <div style={{ background: "linear-gradient(#d9dad6,#c9cac5)", borderRadius: 12, padding: "14px 16px 16px", color: "#2a2c2f", boxShadow: "inset 0 1px 0 #fff8, 0 2px 8px #0008", marginBottom: 10 }}>
-                        <div style={{ display: "flex", gap: 14, alignItems: "flex-start", flexWrap: "wrap" }}>
-                          <div style={{ display: "flex", flexDirection: "column", gap: 9, width: 118, paddingTop: 10 }}>
+                      <div style={{ background: "linear-gradient(#d9dad6,#c9cac5)", borderRadius: 12, padding: movil ? "10px 8px 12px" : "14px 16px 16px", color: "#2a2c2f", boxShadow: "inset 0 1px 0 #fff8, 0 2px 8px #0008", marginBottom: 10 }}>
+                        <div style={{ display: "flex", gap: movil ? 8 : 14, alignItems: "flex-start", flexDirection: movil ? "column" : "row" }}>
+                          <div style={movil ? { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 4, width: "100%" } : { display: "flex", flexDirection: "column", gap: 9, width: 118, paddingTop: 10 }}>
                             {ledIzq(<>Controls<br />Active</>, control || lampTest, VERDE)}
                             {ledIzq("Power", lampTest || (abierto && !L.includes("X")), VERDE)}
                             {ledIzq(<>Pre-<br />Discharge</>, lampTest, AMBAR)}
                             {ledIzq("Discharge", lampTest, ROJO)}
                           </div>
-                          <pre ref={termPreRef} style={{ flex: 1, minWidth: 260, height: 250, overflow: "auto", margin: 0, background: "#05080c", border: "6px solid #3a3d40", borderRadius: 6, padding: "8px 10px", fontSize: 12, lineHeight: 1.45, color: "#7ee787", whiteSpace: "pre-wrap", wordBreak: "break-all", fontFamily: "ui-monospace,Consolas,monospace", boxShadow: "inset 0 0 12px #000" }}>
+                          <pre ref={termPreRef} style={{ flex: 1, width: movil ? "100%" : undefined, boxSizing: "border-box", minWidth: movil ? 0 : 260, height: movil ? 230 : 250, overflow: "auto", margin: 0, background: "#05080c", border: movil ? "4px solid #3a3d40" : "6px solid #3a3d40", borderRadius: 6, padding: movil ? "6px 7px" : "8px 10px", fontSize: movil ? 10.5 : 12, lineHeight: 1.4, color: "#7ee787", whiteSpace: "pre-wrap", wordBreak: "normal", overflowWrap: "anywhere", fontFamily: "ui-monospace,Consolas,monospace", boxShadow: "inset 0 0 12px #000" }}>
                             {lineas.map((ln, k) => <div key={k} style={{ color: ln.startsWith(">>") ? "#ffd866" : ln.startsWith("---") ? "#8b949e" : undefined, minHeight: "1.45em" }}>{ln}</div>)}
                           </pre>
                         </div>
-                        <div style={{ display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 6, margin: "14px 0 4px", paddingLeft: 118 }}>
+                        <div style={movil ? { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "8px 4px", margin: "10px 0 2px" } : { display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 6, margin: "14px 0 4px", paddingLeft: 118 }}>
                           {ledAbajo(<>Fire<br />Alarm</>, on("A"), ROJO)}
                           {ledAbajo("Pre-Alarm", on("P"), ROJO)}
                           {ledAbajo("Security", on("G"), AMBAR)}
@@ -16244,15 +16256,15 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                           {ledAbajo(<>Signals<br />Silenced</>, on("Q"), AMBAR)}
                           {ledAbajo(<>Point<br />Disabled</>, on("D"), AMBAR)}
                         </div>
-                        <div style={{ display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
-                          {boton("Acknowledge", "Scroll display", { ev: { onClick: () => ordenCrt("ack") }, activo: crtEsperando && crtPend.accion === "ack" })}
-                          {boton(<>Signal<br />Silence</>, null, { ev: { onClick: () => ordenCrt("silenciar") }, activo: crtEsperando && crtPend.accion === "silenciar" })}
-                          {boton(<>System<br />Reset</>, null, { ev: { onClick: () => ordenCrt("reset") }, activo: crtEsperando && crtPend.accion === "reset" })}
+                        <div style={movil ? { display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 4, marginTop: 12 } : { display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
+                          {boton(movil ? "Ack" : "Acknowledge", "Scroll display", { ev: { onClick: () => ordenCrt("ack") }, activo: crtEsperando && crtPend.accion === "ack" })}
+                          {boton(movil ? "Silence" : <>Signal<br />Silence</>, null, { ev: { onClick: () => ordenCrt("silenciar") }, activo: crtEsperando && crtPend.accion === "silenciar" })}
+                          {boton(movil ? "Reset" : <>System<br />Reset</>, null, { ev: { onClick: () => ordenCrt("reset") }, activo: crtEsperando && crtPend.accion === "reset" })}
                           {boton("Drill", "Hold 2 seconds", { activo: crtEsperando && crtPend.accion === "simulacro", ev: {
                             onPointerDown: () => { clearTimeout(drillTimer.current); drillTimer.current = setTimeout(() => {
                               if (window.confirm("SIMULACRO activa las sirenas del edificio " + termRemoto.sitio + ". ¿Continuar?")) ordenCrt("simulacro"); }, 2000); },
                             onPointerUp: () => clearTimeout(drillTimer.current), onPointerLeave: () => clearTimeout(drillTimer.current) } })}
-                          {boton(<>Lamp<br />Test</>, null, { siempre: true, ev: { onClick: () => { setLampTest(true); setTimeout(() => setLampTest(false), 3000); } } })}
+                          {boton(movil ? "Lamp" : <>Lamp<br />Test</>, null, { siempre: true, ev: { onClick: () => { setLampTest(true); setTimeout(() => setLampTest(false), 3000); } } })}
                         </div>
                       </div>);
                   })()}

@@ -14778,6 +14778,8 @@ function MonitoreoNotifier() {
   const [cfgAbierta, setCfgAbierta] = useState(false);
   const [cfgForm, setCfgForm] = useState(null);
   const [cfgMsg, setCfgMsg] = useState("");
+  const [crtPin, setCrtPin] = useState("");
+  const [crtPend, setCrtPend] = useState(null);           // { accion, desde, msg }
   const termPreRef = useRef(null);
   const [cargando, setCargando] = useState(true);
   const [sitioSeleccionado, setSitioSeleccionado] = useEstadoRecordado("monitoreo-sitio", () => (esCliente && sitioCliente ? sitioCliente : "Todos"));
@@ -15308,6 +15310,19 @@ function MonitoreoNotifier() {
     const fin = termFin === "cr" ? "\r" : termFin === "lf" ? "\n" : termFin === "crlf" ? "\r\n" : "";
     enviarAlPanel(new TextEncoder().encode(termTexto + fin), "«" + termTexto + "»");
     setTermTexto("");
+  };
+  // 7.3: control del panel Notifier por CRT (Reconocer, Silenciar, Reset, Historial, Detectores)
+  const CRT_NOMBRES = { ack: "Reconocer", silenciar: "Silenciar", reset: "Reset", historial: "Historial completo", histalarmas: "Historial de alarmas", detectores: "Reporte de detectores" };
+  const ordenCrt = async (accion) => {
+    if (!termRemoto) return;
+    if ((accion === "silenciar" || accion === "reset") && !crtPin) { setCrtPend({ accion, desde: Date.now(), msg: "Escriba el PIN de control del equipo." }); return; }
+    if (accion === "reset" && !window.confirm("¿Hacer RESET (rearme) del panel " + termRemoto.sitio + "?")) return;
+    const quien = String(currentUser?.name || currentUser?.email || "app").replace(/[|"]/g, " ").slice(0, 40);
+    setCrtPend({ accion, desde: Date.now(), msg: "" });
+    const { error } = await supabase.from("dispositivos_panel")
+      .update({ comando: "crt", comando_arg: `${accion}|${crtPin}|${quien}`, comando_en: new Date().toISOString(), comando_resultado: "CRT " + accion + ": orden enviada al equipo" })
+      .eq("sitio", termRemoto.sitio);
+    if (error) setCrtPend({ accion, desde: Date.now(), msg: "No se pudo enviar: " + error.message });
   };
   const aplicarConfigPanel = async () => {
     if (!termRemoto || !cfgForm) return;
@@ -16106,6 +16121,17 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const abierto = f.comando_resultado === "monitor serial abierto" || (f.terminal_txt && !f.comando);
         const c = leerConfigPanel(f.config_panel);
         const viejo = f.version && /^([0-6]\.|7\.[01]$)/.test(String(f.version));
+        const resCrt = String(f.comando_resultado || "").startsWith("CRT ") ? String(f.comando_resultado) : "";
+        const crtOk = /confirmado por el panel/i.test(resCrt);
+        const crtEsperando = crtPend && !crtPend.msg && (!resCrt || /orden enviada|enviado, esperando/i.test(resCrt)) && Date.now() - crtPend.desde < 60000;
+        const crtEsNotifier = c.tipo === "3";
+        const crtSimplex = c.tipo === "1" || c.tipo === "2";
+        const bCrt = (accion, ic, txt, col) => (
+          <button key={accion} disabled={!crtEsNotifier || crtEsperando || c.ctrlapp !== "1"} onClick={() => ordenCrt(accion)}
+            style={{ borderRadius: 9, padding: "10px 6px", border: `1px solid ${col}99`, background: col + "1f", color: col, fontWeight: 800, fontSize: 12.5,
+              cursor: crtEsNotifier && c.ctrlapp === "1" ? "pointer" : "not-allowed", opacity: crtEsNotifier && c.ctrlapp === "1" ? (crtEsperando ? 0.55 : 1) : 0.35, fontFamily: "inherit" }}>
+            <span style={{ fontSize: 16, marginRight: 6 }}>{ic}</span>{txt}
+          </button>);
         const set = (k) => (e) => setCfgForm({ ...cfgForm, [k]: e.target.value });
         const inp = { background: IGNIS.bg, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 6, padding: "6px 8px", fontSize: 12.5, width: "100%", boxSizing: "border-box", fontFamily: "inherit" };
         const lab = { fontSize: 11, color: IGNIS.dim, marginBottom: 3, display: "block" };
@@ -16127,9 +16153,31 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                   <div style={{ fontSize: 12, color: IGNIS.dim, marginBottom: 8, lineHeight: 1.5 }}>
                     {abierto ? <span style={{ color: IGNIS.ok || "#3fb950" }}>● Conectado</span> : <span>○ Esperando que el equipo abra el monitor (hasta 30 s)…</span>}
                     {" · "}{f.comando_resultado || ""}
-                    {c.tipo !== undefined && <> · Panel: <b style={{ color: IGNIS.text }}>{c.tipo === "2" ? "Simplex Ethernet" : c.tipo === "1" ? "Simplex RS232" : "Notifier RS232"}</b> {c.tipo === "2" ? `(${c.ipactual || c.ethip} → ${c.panelip}:${c.port}, ${c.estado})` : `(${c.baud} ${c.fmt})`}</>}
+                    {c.tipo !== undefined && <> · Panel: <b style={{ color: IGNIS.text }}>{c.tipo === "3" ? "Notifier CRT" : c.tipo === "2" ? "Simplex Ethernet" : c.tipo === "1" ? "Simplex RS232" : "Notifier RS232"}</b> {c.tipo === "2" ? `(${c.ipactual || c.ethip} → ${c.panelip}:${c.port}, ${c.estado})` : `(${c.baud} ${c.fmt})`}</>}
                     {viejo && <div style={{ color: IGNIS.problema, marginTop: 4 }}>Este equipo tiene la versión {f.version}: el monitor remoto necesita la 7.2. Actualícelo desde «Actualizar firmware».</div>}
                   </div>
+                  {(crtEsNotifier || crtSimplex) && (
+                    <div style={{ border: `1px solid ${IGNIS.problema}66`, borderRadius: 10, padding: "10px 12px", marginBottom: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                        <b style={{ fontSize: 13.5 }}>Control del panel</b>
+                        <span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 6, border: `1px solid ${IGNIS.border2 || IGNIS.border}`, color: crtEsNotifier ? "#7ee787" : IGNIS.dim }}>{crtEsNotifier ? "Notifier · CRT" : "Simplex"}</span>
+                        <span style={{ flex: 1 }} />
+                        {crtEsNotifier && <input type="password" style={{ ...inp, width: 140 }} placeholder="PIN de control" value={crtPin} onChange={(e) => setCrtPin(e.target.value)} />}
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 6 }}>
+                        {bCrt("ack", "✔", "RECONOCER", "#79b8ff")}{bCrt("silenciar", "🔕", "SILENCIAR", "#ffd866")}{bCrt("reset", "⟲", "RESET", "#ff8589")}
+                        {crtEsNotifier && <>{bCrt("historial", "📜", "HISTORIAL", "#7fe3ea")}{bCrt("histalarmas", "🚨", "HIST. ALARMAS", "#7fe3ea")}{bCrt("detectores", "🛠", "REPORTE DETECTORES", "#7ee787")}</>}
+                      </div>
+                      <div style={{ marginTop: 8, fontSize: 12.5, color: crtPend && crtPend.msg ? IGNIS.alarma : crtEsperando ? IGNIS.problema : crtOk ? "#9be9a8" : resCrt ? IGNIS.alarma : IGNIS.dim }}>
+                        {crtSimplex ? "Comandos Simplex pendientes: los botones quedan desactivados hasta cargar sus códigos."
+                          : c.ctrlapp !== "1" ? "El control desde la App está deshabilitado en este equipo. Se habilita en el sitio: Config. del equipo → «Permitir control desde la App»."
+                          : crtPend && crtPend.msg ? crtPend.msg
+                          : crtEsperando ? `⏳ ${CRT_NOMBRES[crtPend.accion] || crtPend.accion}: esperando la respuesta del panel…`
+                          : resCrt ? (crtOk ? "✔ " : "") + resCrt.replace(/^CRT (\w+):/, (m, a) => (CRT_NOMBRES[a] || a) + ":")
+                          : c.pinctrl === "no" ? "El equipo no tiene PIN de control: Silenciar y Reset quedan bloqueados." : "Listo. Reconocer, Historial y Reporte no piden PIN; Silenciar y Reset sí."}
+                      </div>
+                    </div>
+                  )}
                   <pre ref={termPreRef} style={{ height: 300, minHeight: 160, overflow: "auto", margin: 0, background: "#05080c", border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: 10, fontSize: 12, lineHeight: 1.45, color: "#7ee787", whiteSpace: "pre-wrap", wordBreak: "break-all", fontFamily: "ui-monospace,Consolas,monospace" }}>{f.terminal_txt || "(todavía no llega nada)"}</pre>
                   <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
                     <input style={{ ...inp, flex: 1, minWidth: 180, width: "auto" }} placeholder="Texto para mandar al panel" value={termTexto} onChange={(e) => setTermTexto(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") enviarTextoTerminal(); }} />
@@ -16149,8 +16197,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       <div style={{ fontSize: 12, color: IGNIS.dim, marginTop: 6 }}>Esperando que el equipo informe su configuración (necesita la versión 7.2)…</div>
                     ) : (
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(170px,1fr))", gap: 8, marginTop: 8 }}>
-                        <div><span style={lab}>Tipo de panel</span><select style={inp} value={cfgForm.tipo} onChange={(e) => { const t = e.target.value; setCfgForm({ ...cfgForm, tipo: t, ...(t !== cfgForm.tipo ? (t === "0" ? { baud: "9600", fmt: "7E1" } : { baud: "115200", fmt: "8N1" }) : {}) }); }}>
-                          <option value="0">Notifier · RS232</option><option value="1">Simplex · RS232</option><option value="2">Simplex · Ethernet</option></select></div>
+                        <div><span style={lab}>Tipo de panel</span><select style={inp} value={cfgForm.tipo} onChange={(e) => { const t = e.target.value; setCfgForm({ ...cfgForm, tipo: t, ...(t !== cfgForm.tipo ? (t === "0" ? { baud: "9600", fmt: "7E1" } : t === "3" ? { baud: "9600", fmt: "8N1" } : { baud: "115200", fmt: "8N1" }) : {}) }); }}>
+                          <option value="0">Notifier · RS232 (impresora)</option><option value="3">Notifier · CRT (con control)</option><option value="1">Simplex · RS232</option><option value="2">Simplex · Ethernet</option></select></div>
                         <div><span style={lab}>Velocidad (DB9)</span><select style={inp} value={cfgForm.baud} onChange={set("baud")}>{["300", "1200", "2400", "4800", "9600", "19200", "38400", "57600", "115200"].map((b) => <option key={b} value={b}>{b}</option>)}</select></div>
                         <div><span style={lab}>Formato (DB9)</span><select style={inp} value={cfgForm.fmt} onChange={set("fmt")}>{["7E1", "7O1", "7N2", "8N1", "8E1", "8O1", "8N2"].map((b) => <option key={b} value={b}>{b}</option>)}</select></div>
                         {red && <>

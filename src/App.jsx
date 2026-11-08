@@ -15261,6 +15261,25 @@ function MonitoreoNotifier() {
   // Vuelve a "eventos" si cambian de sitio mientras ven Tendencias (el
   // historial es por sitio — no tiene sentido en "Todos").
   useEffect(() => { if (sitioSeleccionado === "Todos" && (vista === "tendencias" || vista === "puntos")) setVista("eventos"); }, [sitioSeleccionado, vista]);
+  // 8.0: cuántas líneas tiene el último listado de Todos los puntos del sitio (para su tarjeta)
+  const [puntosInfo, setPuntosInfo] = useState(null);   // { lineas, fecha } | null
+  useEffect(() => {
+    if (sitioSeleccionado === "Todos") { setPuntosInfo(null); return; }
+    let vivo = true;
+    (async () => {
+      try {
+        const nombre = `${nombreArchivoSitioPanel(sitioSeleccionado)}__p.txt`;
+        const { data } = await supabase.storage.from("historial_paneles").list("", { search: nombre, limit: 20 });
+        const meta = (data || []).find((o) => o.name === nombre);
+        if (!meta) { if (vivo) setPuntosInfo({ lineas: 0, fecha: null }); return; }
+        const { data: blob } = await supabase.storage.from("historial_paneles").download(nombre);
+        const t = blob ? await blob.text() : "";
+        const n = t.split("\n").filter((l) => l.trim() && !/^[=*]{2,}.*(Todos los puntos)/i.test(l)).length;
+        if (vivo) setPuntosInfo({ lineas: n, fecha: meta.updated_at || meta.created_at || null });
+      } catch (e) { if (vivo) setPuntosInfo({ lineas: 0, fecha: null }); }
+    })();
+    return () => { vivo = false; };
+  }, [sitioSeleccionado, vista]);
 
   // Baja un .txt del bucket de historiales; si no existe devuelve "".
   const descargarTextoHistorial = async (archivo) => {
@@ -15897,6 +15916,18 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             </div>
           );
         })}
+        {/* 8.0: tarjeta Todos los puntos (el listado que se pide por el CRT; se abre en su pestaña con descarga) */}
+        <div
+          onClick={() => { setVista("puntos"); if (esMovilNotifier) setSeccionMovil("puntos"); }}
+          title={puntosInfo && puntosInfo.fecha ? "Último listado: " + new Date(puntosInfo.fecha).toLocaleString("es-CR") : "Pídalo desde Monitor serial → Reportes del panel"}
+          style={{ background: vista === "puntos" ? IGNIS.panel2 : IGNIS.panel, border: `1px solid ${vista === "puntos" ? "#58a6ff" : IGNIS.border}`, borderRadius: 10,
+            padding: "9px 12px", position: "relative", overflow: "hidden", cursor: "pointer", boxShadow: vista === "puntos" ? "0 0 0 1px #58a6ff" : "none" }}>
+          <div style={{ position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: "0 3px 3px 0", background: "#58a6ff" }} />
+          <div style={{ fontSize: 20, fontWeight: 750, lineHeight: 1.1 }}>{puntosInfo ? puntosInfo.lineas : "…"}</div>
+          <div style={{ color: IGNIS.dim, fontSize: 11.5, marginTop: 3, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            <ClipboardList size={13} style={{ opacity: 0.85 }} color="#58a6ff" /> Todos los puntos
+          </div>
+        </div>
       </div>
       )}
 

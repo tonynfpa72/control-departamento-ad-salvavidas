@@ -14576,7 +14576,8 @@ function CampanaMensajes({ user, abajo, angosta }) {
   };
   const pedirPermisoNavegador = async () => { try { await Notification.requestPermission(); setToast(null); } catch {} };
 
-  const posBoton = abajo
+  // En el celular la campana va siempre arriba, a la par del menú (abajo tapaba la barra de Monitoreo)
+  const posBoton = abajo && !angosta
     ? { bottom: 18, right: 18 }
     : angosta ? { top: 10, right: 56 } : { top: 16, right: 22 };
   const lista = (recibidos || []).filter((m) => filtro === "Todos" || (filtro === "Sin atender" ? !m.atendido_en && m.tipo !== "Informacion" : m.tipo === filtro));
@@ -14598,7 +14599,7 @@ function CampanaMensajes({ user, abajo, angosta }) {
 
       {toast && !abierto && (
         <div onClick={() => { setAbierto(true); setVista("recibidos"); setToast(null); marcar(toast, "leido"); }}
-          style={{ position: "fixed", zIndex: 41, ...(abajo ? { bottom: 66, right: 18 } : { top: (angosta ? 56 : 62), right: angosta ? 10 : 22 }), width: angosta ? "calc(100% - 20px)" : 340, cursor: "pointer",
+          style={{ position: "fixed", zIndex: 41, ...(abajo && !angosta ? { bottom: 66, right: 18 } : { top: (angosta ? 56 : 62), right: angosta ? 10 : 22 }), width: angosta ? "calc(100% - 20px)" : 340, cursor: "pointer",
             background: "#fff", borderRadius: 12, boxShadow: "0 12px 34px rgba(0,0,0,.28)", borderLeft: `5px solid ${msgTipo(toast.tipo).c}`, padding: "10px 12px 12px", overflow: "hidden", animation: "ignisCampanaToast .35s cubic-bezier(.2,.9,.3,1.2)" }}>
           <div style={{ position: "absolute", left: 0, bottom: 0, height: 3, width: "100%", background: msgTipo(toast.tipo).c, transformOrigin: "left", animation: "ignisCampanaBarra 9s linear forwards", opacity: 0.7 }} />
           <div style={{ fontSize: 12, fontWeight: 800, color: msgTipo(toast.tipo).c }}>{msgTipo(toast.tipo).icono} {msgTipo(toast.tipo).label || toast.tipo} · {toast.remitente_nombre}</div>

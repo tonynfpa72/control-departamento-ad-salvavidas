@@ -14784,6 +14784,7 @@ function MonitoreoNotifier() {
   const [monPedir, setMonPedir] = useState(null);         // { sitio, error } pide la clave antes de abrir el Monitor
   const [monClave, setMonClave] = useState("");
   const [lampTest, setLampTest] = useState(false);
+  const [reportesAbiertos, setReportesAbiertos] = useState(false);
   const monActividad = useRef(Date.now());
   const monClaveRef = useRef("");   // 7.9: la clave queda solo en memoria mientras el Monitor está abierto
   const firmaMonitor = async () => {
@@ -16272,9 +16273,41 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                         </div>
                       </div>);
                   })()}
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(180px,1fr))", gap: 6 }}>
-                    {bCrt("historial", "📜", "HISTORIAL COMPLETO", "#7fe3ea")}{bCrt("histalarmas", "🚨", "HIST. ALARMAS", "#7fe3ea")}{bCrt("detectores", "🛠", "REPORTE DETECTORES", "#7ee787")}
-                  </div>
+                  {(() => {
+                    // 7.9: reportes en una sección cerrada, como filas con un botón chico "Pedir" y confirmación (difícil de tocar por error)
+                    const habilR = crtEsNotifier && c.ctrlapp === "1";
+                    const REP = [
+                      { a: "historial", ic: "📜", t: "Historial completo", d: "Todos los eventos guardados en el panel. Tarda varios minutos (más de 125 KB).",
+                        q: "¿Pedir el HISTORIAL COMPLETO al panel?\n\nEl panel lo imprime durante varios minutos. Mientras tanto no mande otras órdenes." },
+                      { a: "histalarmas", ic: "🚨", t: "Historial de alarmas", d: "Solo las alarmas guardadas en el panel.",
+                        q: "¿Pedir el HISTORIAL DE ALARMAS al panel?\n\nMientras imprime no mande otras órdenes." },
+                      { a: "detectores", ic: "🛠", t: "Reporte de detectores", d: "Compensación y sensibilidad de cada detector (va a Mantenimiento).",
+                        q: "¿Pedir el REPORTE DE DETECTORES al panel?\n\nMientras imprime no mande otras órdenes." },
+                    ];
+                    return (
+                      <div style={{ border: `1px solid ${IGNIS.border}`, borderRadius: 10, background: IGNIS.bg }}>
+                        <button type="button" onClick={() => setReportesAbiertos(!reportesAbiertos)}
+                          style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, background: "transparent", border: "none", color: IGNIS.text, cursor: "pointer", padding: "10px 12px", fontFamily: "inherit", fontSize: 13.5, fontWeight: 700, textAlign: "left" }}>
+                          <span style={{ color: IGNIS.dim }}>{reportesAbiertos ? "▾" : "▸"}</span> Reportes del panel
+                          <span style={{ fontWeight: 400, fontSize: 12, color: IGNIS.dim }}>historiales y detectores</span>
+                        </button>
+                        {reportesAbiertos && REP.map((r) => (
+                          <div key={r.a} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderTop: `1px solid ${IGNIS.border}` }}>
+                            <span style={{ fontSize: 18 }}>{r.ic}</span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, fontSize: 13 }}>{r.t}</div>
+                              <div style={{ fontSize: 11.5, color: IGNIS.dim, lineHeight: 1.35 }}>{r.d}</div>
+                            </div>
+                            <button type="button" disabled={!habilR} title={habilR ? "" : "Solo con panel Notifier CRT y control habilitado"}
+                              onClick={() => { if (window.confirm(r.q)) ordenCrt(r.a); }}
+                              style={{ flex: "none", padding: "6px 14px", borderRadius: 8, border: `1px solid ${IGNIS.border2 || IGNIS.border}`, background: "transparent", color: habilR ? IGNIS.text : IGNIS.dim, fontWeight: 700, fontSize: 12.5, cursor: habilR ? "pointer" : "not-allowed", fontFamily: "inherit", opacity: habilR ? 1 : 0.5 }}>
+                              Pedir
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                   <div style={{ marginTop: 8, fontSize: 12.5, borderRadius: 8, padding: "8px 11px", border: `1px solid ${IGNIS.border}`, color: crtPend && crtPend.msg ? IGNIS.alarma : crtEsperando ? IGNIS.problema : crtOk ? "#9be9a8" : resCrt ? IGNIS.alarma : IGNIS.dim }}>
                     {!f.config_panel ? (viejo || !f.version ? "Los botones necesitan el equipo en versión 7.6 (Actualizar firmware)." : "El equipo todavía no informa su configuración. Si ya tiene la 7.6, falta correr en Supabase el SQL_monitor_remoto.sql; si no, actualícelo.")
                       : c.tipo === "0" ? "El equipo está en modo Notifier IMPRESORA: por ahí no se puede controlar el panel. Conéctelo a los bornes PC/CRT del TB12 y cambie abajo «Tipo de panel» a «Notifier · CRT»."

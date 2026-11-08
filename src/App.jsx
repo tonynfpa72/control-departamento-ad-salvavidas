@@ -16156,20 +16156,23 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     {c.tipo !== undefined && <> · Panel: <b style={{ color: IGNIS.text }}>{c.tipo === "3" ? "Notifier CRT" : c.tipo === "2" ? "Simplex Ethernet" : c.tipo === "1" ? "Simplex RS232" : "Notifier RS232"}</b> {c.tipo === "2" ? `(${c.ipactual || c.ethip} → ${c.panelip}:${c.port}, ${c.estado})` : `(${c.baud} ${c.fmt})`}</>}
                     {viejo && <div style={{ color: IGNIS.problema, marginTop: 4 }}>Este equipo tiene la versión {f.version}: el monitor remoto necesita la 7.2. Actualícelo desde «Actualizar firmware».</div>}
                   </div>
-                  {(crtEsNotifier || crtSimplex) && (
+                  {(
+
                     <div style={{ border: `1px solid ${IGNIS.problema}66`, borderRadius: 10, padding: "10px 12px", marginBottom: 8 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
                         <b style={{ fontSize: 13.5 }}>Control del panel</b>
-                        <span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 6, border: `1px solid ${IGNIS.border2 || IGNIS.border}`, color: crtEsNotifier ? "#7ee787" : IGNIS.dim }}>{crtEsNotifier ? "Notifier · CRT" : "Simplex"}</span>
+                        <span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 6, border: `1px solid ${IGNIS.border2 || IGNIS.border}`, color: crtEsNotifier ? "#7ee787" : IGNIS.dim }}>{crtEsNotifier ? "Notifier · CRT" : crtSimplex ? "Simplex" : c.tipo === "0" ? "Notifier · impresora" : "sin datos del equipo"}</span>
                         <span style={{ flex: 1 }} />
                         {crtEsNotifier && <input type="password" style={{ ...inp, width: 140 }} placeholder="PIN de control" value={crtPin} onChange={(e) => setCrtPin(e.target.value)} />}
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 6 }}>
                         {bCrt("ack", "✔", "RECONOCER", "#79b8ff")}{bCrt("silenciar", "🔕", "SILENCIAR", "#ffd866")}{bCrt("reset", "⟲", "RESET", "#ff8589")}
-                        {crtEsNotifier && <>{bCrt("historial", "📜", "HISTORIAL", "#7fe3ea")}{bCrt("histalarmas", "🚨", "HIST. ALARMAS", "#7fe3ea")}{bCrt("detectores", "🛠", "REPORTE DETECTORES", "#7ee787")}</>}
+                        {!crtSimplex && <>{bCrt("historial", "📜", "HISTORIAL", "#7fe3ea")}{bCrt("histalarmas", "🚨", "HIST. ALARMAS", "#7fe3ea")}{bCrt("detectores", "🛠", "REPORTE DETECTORES", "#7ee787")}</>}
                       </div>
                       <div style={{ marginTop: 8, fontSize: 12.5, color: crtPend && crtPend.msg ? IGNIS.alarma : crtEsperando ? IGNIS.problema : crtOk ? "#9be9a8" : resCrt ? IGNIS.alarma : IGNIS.dim }}>
-                        {crtSimplex ? "Comandos Simplex pendientes: los botones quedan desactivados hasta cargar sus códigos."
+                        {!f.config_panel ? (viejo || !f.version ? "Los botones necesitan el equipo en versión 7.4 (Actualizar firmware)." : "El equipo todavía no informa su configuración. Si ya tiene la 7.4, falta correr en Supabase el SQL_monitor_remoto.sql; si no, actualícelo.")
+                          : c.tipo === "0" ? "El equipo está en modo Notifier IMPRESORA: por ahí no se puede controlar el panel. Conéctelo a los bornes PC/CRT del TB12 y cambie abajo «Tipo de panel» a «Notifier · CRT»."
+                          : crtSimplex ? "Comandos Simplex pendientes: los botones quedan desactivados hasta cargar sus códigos."
                           : c.ctrlapp !== "1" ? "El control desde la App está deshabilitado en este equipo. Se habilita en el sitio: Config. del equipo → «Permitir control desde la App»."
                           : crtPend && crtPend.msg ? crtPend.msg
                           : crtEsperando ? `⏳ ${CRT_NOMBRES[crtPend.accion] || crtPend.accion}: esperando la respuesta del panel…`

@@ -15281,7 +15281,7 @@ function MonitoreoNotifier() {
       if (vivo && data) setTermFila(data);
     };
     leer();
-    const id = setInterval(leer, 2000);
+    const id = setInterval(leer, 1000);
     const ping = setInterval(() => {
       supabase.from("dispositivos_panel").update({ terminal_ping: new Date().toISOString() }).eq("sitio", termRemoto.sitio);
     }, 60000);
@@ -15315,12 +15315,10 @@ function MonitoreoNotifier() {
   const CRT_NOMBRES = { ack: "Reconocer", silenciar: "Silenciar", reset: "Reset", historial: "Historial completo", histalarmas: "Historial de alarmas", detectores: "Reporte de detectores" };
   const ordenCrt = async (accion) => {
     if (!termRemoto) return;
-    if ((accion === "silenciar" || accion === "reset") && !crtPin) { setCrtPend({ accion, desde: Date.now(), msg: "Escriba el PIN de control del equipo." }); return; }
-    if (accion === "reset" && !window.confirm("¿Hacer RESET (rearme) del panel " + termRemoto.sitio + "?")) return;
     const quien = String(currentUser?.name || currentUser?.email || "app").replace(/[|"]/g, " ").slice(0, 40);
     setCrtPend({ accion, desde: Date.now(), msg: "" });
     const { error } = await supabase.from("dispositivos_panel")
-      .update({ comando: "crt", comando_arg: `${accion}|${crtPin}|${quien}`, comando_en: new Date().toISOString(), comando_resultado: "CRT " + accion + ": orden enviada al equipo" })
+      .update({ comando: "crt", comando_arg: `${accion}||${quien}`, comando_en: new Date().toISOString(), comando_resultado: "CRT " + accion + ": orden enviada al equipo" })
       .eq("sitio", termRemoto.sitio);
     if (error) setCrtPend({ accion, desde: Date.now(), msg: "No se pudo enviar: " + error.message });
   };
@@ -16127,9 +16125,9 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const crtEsNotifier = c.tipo === "3";
         const crtSimplex = c.tipo === "1" || c.tipo === "2";
         const bCrt = (accion, ic, txt, col) => (
-          <button key={accion} disabled={!crtEsNotifier || crtEsperando || c.ctrlapp !== "1"} onClick={() => ordenCrt(accion)}
+          <button key={accion} disabled={!crtEsNotifier || c.ctrlapp !== "1"} onClick={() => ordenCrt(accion)}
             style={{ borderRadius: 9, padding: "10px 6px", border: `1px solid ${col}99`, background: col + "1f", color: col, fontWeight: 800, fontSize: 12.5,
-              cursor: crtEsNotifier && c.ctrlapp === "1" ? "pointer" : "not-allowed", opacity: crtEsNotifier && c.ctrlapp === "1" ? (crtEsperando ? 0.55 : 1) : 0.35, fontFamily: "inherit" }}>
+              cursor: crtEsNotifier && c.ctrlapp === "1" ? "pointer" : "not-allowed", opacity: crtEsNotifier && c.ctrlapp === "1" ? (crtEsperando && crtPend && crtPend.accion === accion ? 0.7 : 1) : 0.35, fontFamily: "inherit" }}>
             <span style={{ fontSize: 16, marginRight: 6 }}>{ic}</span>{txt}
           </button>);
         const set = (k) => (e) => setCfgForm({ ...cfgForm, [k]: e.target.value });
@@ -16163,7 +16161,6 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                         <b style={{ fontSize: 13.5 }}>Control del panel</b>
                         <span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 6, border: `1px solid ${IGNIS.border2 || IGNIS.border}`, color: crtEsNotifier ? "#7ee787" : IGNIS.dim }}>{crtEsNotifier ? "Notifier · CRT" : crtSimplex ? "Simplex" : c.tipo === "0" ? "Notifier · impresora" : "sin datos del equipo"}</span>
                         <span style={{ flex: 1 }} />
-                        {crtEsNotifier && <input type="password" style={{ ...inp, width: 140 }} placeholder="PIN de control" value={crtPin} onChange={(e) => setCrtPin(e.target.value)} />}
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 6 }}>
                         {bCrt("ack", "✔", "RECONOCER", "#79b8ff")}{bCrt("silenciar", "🔕", "SILENCIAR", "#ffd866")}{bCrt("reset", "⟲", "RESET", "#ff8589")}
@@ -16177,7 +16174,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                           : crtPend && crtPend.msg ? crtPend.msg
                           : crtEsperando ? `⏳ ${CRT_NOMBRES[crtPend.accion] || crtPend.accion}: esperando la respuesta del panel…`
                           : resCrt ? (crtOk ? "✔ " : "") + resCrt.replace(/^CRT (\w+):/, (m, a) => (CRT_NOMBRES[a] || a) + ":")
-                          : c.pinctrl === "no" ? "El equipo no tiene PIN de control: Silenciar y Reset quedan bloqueados." : "Listo. Reconocer, Historial y Reporte no piden PIN; Silenciar y Reset sí."}
+                          : "Listo: toque un botón y el equipo lo manda al panel de inmediato."}
                       </div>
                     </div>
                   )}

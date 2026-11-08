@@ -16262,10 +16262,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                           {boton(movil ? "Ack" : "Acknowledge", "Scroll display", { ev: { onClick: () => ordenCrt("ack") }, activo: crtEsperando && crtPend.accion === "ack" })}
                           {boton(movil ? "Silence" : <>Signal<br />Silence</>, null, { ev: { onClick: () => ordenCrt("silenciar") }, activo: crtEsperando && crtPend.accion === "silenciar" })}
                           {boton(movil ? "Reset" : <>System<br />Reset</>, null, { ev: { onClick: () => ordenCrt("reset") }, activo: crtEsperando && crtPend.accion === "reset" })}
-                          {boton("Drill", "Hold 2 seconds", { activo: crtEsperando && crtPend.accion === "simulacro", ev: {
-                            onPointerDown: () => { clearTimeout(drillTimer.current); drillTimer.current = setTimeout(() => {
-                              if (window.confirm("SIMULACRO activa las sirenas del edificio " + termRemoto.sitio + ". ¿Continuar?")) ordenCrt("simulacro"); }, 2000); },
-                            onPointerUp: () => clearTimeout(drillTimer.current), onPointerLeave: () => clearTimeout(drillTimer.current) } })}
+                          {boton("Drill", c.drill === "1" ? "Pide confirmación" : "Bloqueado", { activo: crtEsperando && crtPend.accion === "simulacro", ev: {
+                            onClick: () => {
+                              if (c.drill !== "1") { window.alert("El Simulacro está bloqueado en este equipo.\n\nSe habilita una sola vez en el sitio: ignismonitor.local → Configuración → Panel contra incendio → «Permitir Simulacro: Sí»."); return; }
+                              if (window.confirm("⚠ SIMULACRO (DRILL)\n\nActiva las sirenas y luces de todo el edificio " + termRemoto.sitio + ".\n\n¿Confirma que quiere activar el simulacro?")) ordenCrt("simulacro");
+                            } } })}
                           {boton(movil ? "Lamp" : <>Lamp<br />Test</>, null, { siempre: true, ev: { onClick: () => { setLampTest(true); setTimeout(() => setLampTest(false), 3000); } } })}
                         </div>
                       </div>);

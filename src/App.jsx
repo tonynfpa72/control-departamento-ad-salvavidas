@@ -16433,7 +16433,13 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     <Btn small onClick={enviarTextoTerminal}><Send size={13} /> Enviar</Btn>
                   </div>
                   <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
-                    {tecla("ENTER", [13])}{tecla("ESC", [27])}{tecla("↑", [27, 91, 65])}{tecla("↓", [27, 91, 66])}{tecla("←", [27, 91, 68])}{tecla("→", [27, 91, 67])}
+                    {tecla("ENTER", [13])}{tecla("ESC", [27])}{tecla("Ctrl+C", [3])}
+                    <Btn small variant={c.hex === "1" ? undefined : "ghost"} onClick={async () => {
+                      const v = c.hex === "1" ? "0" : "1";
+                      await supabase.from("dispositivos_panel").update({ comando: "config", comando_arg: "hexterm=" + v, comando_en: new Date().toISOString() }).eq("sitio", termRemoto.sitio);
+                    }} title="Muestra los caracteres invisibles que llegan del panel como <1B>, <00>... para diagnosticar «basura»">
+                      {c.hex === "1" ? "Ocultar códigos" : "Ver códigos ocultos"}
+                    </Btn>{tecla("↑", [27, 91, 65])}{tecla("↓", [27, 91, 66])}{tecla("←", [27, 91, 68])}{tecla("→", [27, 91, 67])}
                     <span style={{ fontSize: 11.5, color: IGNIS.dim }}>{termEnviando}</span>
                   </div>
                   <div style={{ marginTop: 10, borderTop: `1px solid ${IGNIS.border}`, paddingTop: 8 }}>

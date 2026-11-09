@@ -16305,6 +16305,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     {abierto ? <span style={{ color: IGNIS.ok || "#3fb950" }}>● Conectado</span> : <span>○ Conectando con el equipo (unos segundos)…</span>}
                     {" · "}{f.comando_resultado || ""}
                     {c.tipo !== undefined && <> · Panel: <b style={{ color: IGNIS.text }}>{c.tipo === "3" ? "Notifier CRT" : c.tipo === "2" ? "Simplex Ethernet" : c.tipo === "1" ? "Simplex RS232" : "Notifier RS232"}</b> {c.tipo === "2" ? `(${c.ipactual || c.ethip} → ${c.panelip}:${c.port}, ${c.estado})` : `(${c.baud} ${c.fmt})`}</>}
+                    {Number(c.ruido) > 0 && <> · <span title="Bytes con el 8.º bit encendido: ruido eléctrico en la línea, descartado por el equipo">ruido filtrado: {c.ruido} bytes</span></>}
                     {viejo && <div style={{ color: IGNIS.problema, marginTop: 4 }}>Este equipo tiene la versión {f.version}: el monitor remoto necesita la 7.2. Actualícelo desde «Actualizar firmware».</div>}
                   </div>
                   {/clave del monitor incorrecta|clave bloqueada/i.test(f.comando_resultado || "") && (

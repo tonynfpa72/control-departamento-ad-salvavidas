@@ -16321,7 +16321,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       <span style={{ width: 16, height: 10, borderRadius: 2, flex: "none", display: "inline-block",
                         background: prendido ? color : "#b9bab5", border: `1px solid ${prendido ? color : "#9a9b96"}`,
                         boxShadow: prendido ? `0 0 9px ${color}, inset 0 0 2px #fff` : "inset 0 1px 2px #0003" }} />);
-                    const VERDE = "#3cff5a", ROJO = "#ff3b3b", AMBAR = "#ffb21f";
+                    const VERDE = "#3cff5a", ROJO = "#ff3b3b", AMBAR = "#ffb21f", AZUL = "#3b9bff";
                     const ledIzq = (txt, prendido, color) => (movil
                       ? <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, fontWeight: 800, fontSize: 8.5, textAlign: "center", lineHeight: 1.05, textTransform: "uppercase" }}>{led(prendido, color)}{txt}</div>
                       : <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, fontWeight: 800, fontSize: 10.5, textAlign: "right", lineHeight: 1.1, textTransform: "uppercase" }}>{txt}{led(prendido, color)}</div>);
@@ -16357,7 +16357,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                         <div style={movil ? { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "8px 4px", margin: "10px 0 2px" } : { display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 6, margin: "14px 0 4px", paddingLeft: 118 }}>
                           {ledAbajo(<>Fire<br />Alarm</>, on("A"), ROJO)}
                           {ledAbajo("Pre-Alarm", on("P"), ROJO)}
-                          {ledAbajo("Security", on("G"), AMBAR)}
+                          {ledAbajo("Security", on("G"), AZUL)}
                           {ledAbajo("Supervisory", on("S"), AMBAR)}
                           {ledAbajo(<>System<br />Trouble</>, on("T"), AMBAR)}
                           {ledAbajo(<>Signals<br />Silenced</>, on("Q"), AMBAR)}

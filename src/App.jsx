@@ -16468,7 +16468,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     // en el teléfono se juntan los espacios largos para que cada evento quepa en una o dos líneas
                     // 8.8: la línea con que el panel contesta al ESC ("<sitio> - NFS-640 comunicacion, conectada.")
                     // y los "." sueltos del prompt no se muestran: no son eventos.
-                    const lineas = String(f.terminal_txt || "(todavía no llega nada)").split("\n")
+                    const lineas = String(f.terminal_txt || "(todavía no llega nada)").replace(/~[\s\S]?/g, "").replace(/<[0-9A-F]{2}>/gi, "").split("\n")
                       .filter((ln) => !/comunicacion\s*,?\s*conectada/i.test(ln) && !/^[.\s!|]+$/.test(ln))
                       .map((ln) => (movil ? ln.replace(/ {3,}/g, "  ").replace(/^\.+(?=\S)/, "") : ln));
                     return (
@@ -16564,12 +16564,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                   </div>
                   <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
                     {tecla("ENTER", [13])}{tecla("ESC", [27])}{tecla("Ctrl+C", [3])}
-                    <Btn small variant={c.hex === "1" ? undefined : "ghost"} onClick={async () => {
-                      const v = c.hex === "1" ? "0" : "1";
-                      await supabase.from("dispositivos_panel").update({ comando: "config", comando_arg: "hexterm=" + v, comando_en: new Date().toISOString() }).eq("sitio", termRemoto.sitio);
-                    }} title="Muestra los caracteres invisibles que llegan del panel como <1B>, <00>... para diagnosticar «basura»">
-                      {c.hex === "1" ? "Ocultar códigos" : "Ver códigos ocultos"}
-                    </Btn>{tecla("↑", [27, 91, 65])}{tecla("↓", [27, 91, 66])}{tecla("←", [27, 91, 68])}{tecla("→", [27, 91, 67])}
+                    {tecla("↑", [27, 91, 65])}{tecla("↓", [27, 91, 66])}{tecla("←", [27, 91, 68])}{tecla("→", [27, 91, 67])}
                     <span style={{ fontSize: 11.5, color: IGNIS.dim }}>{termEnviando}</span>
                   </div>
                   <div style={{ marginTop: 10, borderTop: `1px solid ${IGNIS.border}`, paddingTop: 8 }}>

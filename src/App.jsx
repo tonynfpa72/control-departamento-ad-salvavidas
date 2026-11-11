@@ -16335,6 +16335,14 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const viejo = f.version && /^([0-6]\.|7\.[01]$)/.test(String(f.version));
         const resCrt = String(f.comando_resultado || "").startsWith("CRT ") ? String(f.comando_resultado) : "";
         const crtOk = /confirmado por el panel|enviado al panel/i.test(resCrt);   // 8.8: mandar y listo
+        // 8.9: cronómetro — cuánto tardó desde el toque hasta que la App supo que salió al panel / que el panel confirmó
+        if (crtPend && !crtPend.msg && resCrt.startsWith("CRT " + crtPend.accion)) {
+          if (!crtPend.tEnv && /enviado al panel|confirmado por el panel/i.test(resCrt)) crtPend.tEnv = Date.now() - crtPend.desde;
+          if (!crtPend.tConf && /confirmado por el panel/i.test(resCrt)) crtPend.tConf = Date.now() - crtPend.desde;
+        }
+        const crono = crtPend && (crtPend.tEnv || crtPend.tConf)
+          ? ` · ⏱ salió al panel en ${((crtPend.tEnv || crtPend.tConf) / 1000).toFixed(1)} s` + (crtPend.tConf ? `, confirmado en ${(crtPend.tConf / 1000).toFixed(1)} s` : "")
+          : "";
         const crtEsperando = crtPend && !crtPend.msg && (!resCrt || /orden enviada|enviado, esperando/i.test(resCrt)) && Date.now() - crtPend.desde < 60000;
         const crtEsNotifier = c.tipo === "3";
         const crtSimplex = c.tipo === "1" || c.tipo === "2";
@@ -16501,7 +16509,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       : c.ctrlapp !== "1" ? "El control desde la App está deshabilitado en este equipo. Se habilita en el sitio: Config. del equipo → «Permitir control desde la App»."
                       : crtPend && crtPend.msg ? crtPend.msg
                       : crtEsperando ? `➜ ${CRT_NOMBRES[crtPend.accion] || crtPend.accion}: enviado, esperando que el panel confirme…`
-                      : resCrt ? (/confirmado por el panel/i.test(resCrt) ? "✔ " : crtOk ? "➜ " : "⚠ ") + resCrt.replace(/^CRT (\w+):/, (m, a) => (CRT_NOMBRES[a] || a) + ":") +
+                      : resCrt ? (/confirmado por el panel/i.test(resCrt) ? "✔ " : crtOk ? "➜ " : "⚠ ") + crono.replace(/^ · /, "") + (crono ? " — " : "") + resCrt.replace(/^CRT (\w+):/, (m, a) => (CRT_NOMBRES[a] || a) + ":") +
                         (/sin respuesta/i.test(resCrt) ? (/^CRT silenciar/.test(resCrt) ? " — el panel solo responde si hay señales sonando (Signals Silenced ya encendida = ya estaban silenciadas)."
                           : /^CRT ack/.test(resCrt) ? " — el panel solo responde si hay eventos sin reconocer." : " — revise que el panel no esté imprimiendo un reporte o dentro de un menú.") : "")
                       : c.leds === undefined ? "Las luces necesitan el equipo en versión 7.6." : "Listo: toque un botón y el equipo lo manda al panel de inmediato."}

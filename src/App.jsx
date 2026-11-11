@@ -15107,6 +15107,10 @@ function MonitoreoNotifier() {
   // Al cambiar de sitio, reiniciamos desde dónde contamos "nuevo" — así no
   // se arrastra ni se mezcla el estado de sonido de un sitio con el de otro.
   useEffect(() => { ultimoEventoVistoRef.current = null; }, [sitioSeleccionado]);
+  // 8.6: con el Monitor serial abierto en este sitio, el sonido lo da el Monitor (más rápido);
+  // así un evento no vuelve a sonar tarde después de haberlo confirmado.
+  const monitorSitioRef = React.useRef(null);
+  useEffect(() => { monitorSitioRef.current = termRemoto ? termRemoto.sitio : null; }, [termRemoto]);
 
   // Detecta eventos NUEVOS del sitio que se está viendo ahora mismo (no los
   // que ya existían al abrir la página, y NO los de otros sitios aunque
@@ -15127,6 +15131,7 @@ function MonitoreoNotifier() {
     if (mayorId <= ultimoEventoVistoRef.current) return;
     const nuevos = delSitio.filter((e) => idNum(e) > ultimoEventoVistoRef.current);
     ultimoEventoVistoRef.current = mayorId;
+    if (monitorSitioRef.current && nuevos.every((e) => e.sitio === monitorSitioRef.current)) return;
     const cats = (e) => [e.categoria, e.subcat];   // la subcategoría también cuenta (ej. "general" + "problema")
     if (nuevos.some((e) => cats(e).some((c) => c === "alarma" || c === "prealarma"))) sonar(2);
     else if (nuevos.some((e) => cats(e).some((c) => c === "supervision"))) sonar(3, 6000);
@@ -15427,23 +15432,34 @@ function MonitoreoNotifier() {
     return () => { vivo = false; clearInterval(id); clearInterval(ping); clearInterval(inactivo); try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
   }, [termRemoto]);
   useEffect(() => { if (termPreRef.current) termPreRef.current.scrollTop = termPreRef.current.scrollHeight; }, [termFila && termFila.terminal_txt]);
-  // 8.4: sonido dentro del Monitor serial. Con el Monitor abierto, el equipo informa al instante
-  // (tiempo real) cuántos puntos hay activos y qué luces están encendidas: si entra algo nuevo,
-  // suena igual que en Monitoreo (alarma = tono continuo; falla/supervisión/seguridad = pulsos 6 s).
-  const ledsMonitorPrevRef = useRef(null);
+  // 8.6: sonido dentro del Monitor serial, directo de las líneas que imprime el panel (lo más
+  // rápido que hay: llegan con la pantalla del monitor). Cada evento nuevo vuelve a sonar,
+  // aunque se haya confirmado el anterior. No suena con historiales ni reportes.
+  const termTotalPrevRef = useRef(null);
   useEffect(() => {
-    if (!termRemoto) { ledsMonitorPrevRef.current = null; return; }
-    const c = leerConfigPanel(termFila && termFila.config_panel);
-    if (c.leds === undefined) return;
-    const ahora = { L: String(c.leds || ""), n: Number(c.nact) || 0 };
-    const prev = ledsMonitorPrevRef.current;
-    ledsMonitorPrevRef.current = ahora;
-    if (!prev) return;   // recién abierto: no suena por lo que ya estaba activo
-    const nueva = (k) => ahora.L.includes(k) && !prev.L.includes(k);
-    const subio = ahora.n > prev.n;
-    if (nueva("A") || nueva("P") || (subio && /[AP]/.test(ahora.L))) sonar(2);   // con alarma activa, lo nuevo suena como alarma
-    else if (nueva("S")) sonar(3, 6000);
-    else if (nueva("T") || nueva("G") || nueva("X") || subio) sonar(1, 6000);
+    if (!termRemoto || !termFila) { termTotalPrevRef.current = null; return; }
+    const total = Number(termFila.terminal_total) || 0;
+    const prev = termTotalPrevRef.current;
+    termTotalPrevRef.current = total;
+    if (prev === null || total <= prev) return;
+    const c = leerConfigPanel(termFila.config_panel);
+    if (c.volc === "1") return;   // el panel está imprimiendo un historial / reporte
+    const txt = String(termFila.terminal_txt || "");
+    const nuevo = txt.slice(-Math.min(txt.length, total - prev));
+    const rango = { 0: 0, 1: 1, 3: 2, 2: 3 };
+    let modo = 0;
+    nuevo.split("\n").forEach((ln) => {
+      if (/^\s*(>>|---)/.test(ln)) return;
+      const u = ln.replace(/^[^A-Za-z0-9*#]+/, "").toUpperCase();
+      if (!u || /^(BR|CLR)\b/.test(u) || /HIST|LISTADO|NORMAL|RESTAUR|SILENCIAD|CONFIRMAR|REARME/.test(u)) return;
+      let m = 0;
+      if (/^(PRE-?ALARM|ALARMA|ALARM|FIRE|FUEGO|INCENDIO)/.test(u)) m = 2;
+      else if (/SUPERV/.test(u)) m = 3;
+      else if (/^(AVERIA|PRB|PROBLEMA|FALLA|TROUBL|FAULT|SEGURIDAD|SECURITY)/.test(u)) m = 1;
+      if (rango[m] > rango[modo]) modo = m;
+    });
+    if (modo === 2) sonar(2);
+    else if (modo) sonar(modo, 6000);
   }, [termFila, termRemoto]);
   useEffect(() => {
     if (termFila && !cfgForm && termFila.config_panel) {
@@ -16351,6 +16367,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     {" · "}{f.comando_resultado || ""}
                     {c.tipo !== undefined && <> · Panel: <b style={{ color: IGNIS.text }}>{c.tipo === "3" ? "Notifier CRT" : c.tipo === "2" ? "Simplex Ethernet" : c.tipo === "1" ? "Simplex RS232" : "Notifier RS232"}</b> {c.tipo === "2" ? `(${c.ipactual || c.ethip} → ${c.panelip}:${c.port}, ${c.estado})` : `(${c.baud} ${c.fmt})`}</>}
                     {Number(c.ruido) > 0 && <> · <span title="Bytes con el 8.º bit encendido: ruido eléctrico en la línea, descartado por el equipo">ruido filtrado: {c.ruido} bytes</span></>}
+                    {c.lat !== undefined && Number(c.lat) > 0 && <> · <span title="Demora del último evento desde que el panel lo imprimió hasta que la nube lo recibió (peor caso entre paréntesis), y lo que tardó la conexión">panel→nube {(Number(c.lat) / 1000).toFixed(1)} s (máx {(Number(c.latmax) / 1000).toFixed(1)} s) · red {c.red} ms</span></>}
                     {viejo && <div style={{ color: IGNIS.problema, marginTop: 4 }}>Este equipo tiene la versión {f.version}: el monitor remoto necesita la 7.2. Actualícelo desde «Actualizar firmware».</div>}
                   </div>
                   {esTecnicoSonido && modoSonando > 0 && (

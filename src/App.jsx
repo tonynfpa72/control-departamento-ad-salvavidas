@@ -16157,8 +16157,9 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 <input
                   style={{ ...selectEstilo, paddingLeft: 28, width: esMovilNotifier ? 180 : 230 }}
                   placeholder="Buscar por texto o sitio..."
+                  type="search" name="buscar_eventos_ignis" autoComplete="off" autoCorrect="off" spellCheck={false} data-lpignore="true" data-form-type="other"
                   value={busqueda}
-                  onChange={(e) => setBusqueda(e.target.value)}
+                  onChange={(e) => setBusqueda(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.target.value) && !busqueda ? "" : e.target.value)}
                 />
               </div>
 {(<>

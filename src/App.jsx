@@ -16544,6 +16544,38 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       </div>
                     );
                   })()}
+                  {(() => {
+                    // 9.7: Anular / Habilitar ZONA 50 (Cambio de Estado del panel)
+                    const habZ = crtEsNotifier && c.ctrlapp === "1";
+                    const tieneClave = c.cpan === "1";
+                    const zbtn = (accion, texto, color, pregunta) => (
+                      <button type="button" disabled={!habZ || !tieneClave}
+                        onClick={() => { if (window.confirm(pregunta)) ordenCrt(accion); }}
+                        style={{ flex: 1, minWidth: 140, padding: "9px 12px", borderRadius: 9, border: `1px solid ${color}99`, background: color + "1f", color, fontWeight: 800, fontSize: 13, cursor: habZ && tieneClave ? "pointer" : "not-allowed", opacity: habZ && tieneClave ? 1 : 0.45, fontFamily: "inherit" }}>
+                        {texto}
+                      </button>);
+                    return (
+                      <div style={{ marginTop: 8, border: `1px solid ${IGNIS.border}`, borderRadius: 10, background: IGNIS.bg, padding: "10px 12px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 700, fontSize: 13.5 }}>🚫 Zona 50</span>
+                          <span style={{ fontSize: 12, color: IGNIS.dim }}>{tieneClave ? "clave del panel guardada en el equipo" : f.config_panel && c.cpan === undefined ? "necesita el firmware 9.7" : "falta guardar la clave del panel"}</span>
+                          <span style={{ flex: 1 }} />
+                          <button type="button" disabled={!habZ} onClick={async () => {
+                            const v = window.prompt("Clave de Cambio de Estado del panel (solo números).\nQueda guardada en el IgnisMonitor, no en la App.\nEscriba - para borrarla.");
+                            if (v === null) return;
+                            const t = v.trim();
+                            if (t !== "-" && !/^\d{1,8}$/.test(t)) { window.alert("La clave son solo números (hasta 8)."); return; }
+                            await supabase.from("dispositivos_panel").update({ comando: "config", comando_arg: "clavepanel=" + (t === "-" ? "" : t), comando_en: new Date().toISOString() }).eq("sitio", termRemoto.sitio);
+                          }} style={{ padding: "4px 10px", borderRadius: 7, border: `1px solid ${IGNIS.border}`, background: "transparent", color: IGNIS.dim, fontSize: 11.5, cursor: "pointer", fontFamily: "inherit" }}>
+                            {tieneClave ? "Cambiar clave del panel" : "Guardar clave del panel"}
+                          </button>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          {zbtn("anular:Z50", "DESHABILITAR ZONA 50", "#ff8c3d", "⚠ DESHABILITAR ZONA 50\n\nLa zona 50 queda anulada en el panel " + termRemoto.sitio + " hasta que se vuelva a habilitar.\n\n¿Confirma?")}
+                          {zbtn("habilitar:Z50", "HABILITAR ZONA 50", "#3fb950", "HABILITAR ZONA 50\n\nLa zona 50 vuelve a quedar activa en el panel " + termRemoto.sitio + ".\n\n¿Confirma?")}
+                        </div>
+                      </div>);
+                  })()}
                   <div style={{ marginTop: 8, fontSize: 12.5, borderRadius: 8, padding: "8px 11px", border: `1px solid ${IGNIS.border}`, color: crtPend && crtPend.msg ? IGNIS.alarma : crtEsperando ? IGNIS.problema : crtOk ? "#9be9a8" : resCrt ? IGNIS.alarma : IGNIS.dim }}>
                     {!f.config_panel ? (viejo || !f.version ? "Los botones necesitan el equipo en versión 7.6 (Actualizar firmware)." : "El equipo todavía no informa su configuración. Si ya tiene la 7.6, falta correr en Supabase el SQL_monitor_remoto.sql; si no, actualícelo.")
                       : c.tipo === "0" ? "El equipo está en modo Notifier IMPRESORA: por ahí no se puede controlar el panel. Conéctelo a los bornes PC/CRT del TB12 y cambie abajo «Tipo de panel» a «Notifier · CRT»."

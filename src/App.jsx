@@ -14855,6 +14855,13 @@ function MonitoreoNotifier() {
   const monActividad = useRef(Date.now());
   const monClaveRef = useRef("");
   const monAbiertoRef = useRef(false);   // 7.9: la clave queda solo en memoria mientras el Monitor está abierto
+  // 9.3: firma con un id dado y, para el canal en vivo, atada a la acción: sha256(clave|id|accion)
+  const firmaCon = async (nonce, extra) => {
+    const dig = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(monClaveRef.current) + "|" + nonce + (extra ? "|" + extra : "")));
+    return nonce + ":" + Array.from(new Uint8Array(dig)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  };
+  const canalVivoRef = useRef(null);
+  const lineasSonadasRef = useRef(new Map());   // texto -> hora: una línea no suena dos veces (canal en vivo + base)
   const firmaMonitor = async () => {
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => b.toString(16).padStart(2, "0")).join("");
     const dig = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(monClaveRef.current) + "|" + nonce));
@@ -15425,11 +15432,31 @@ function MonitoreoNotifier() {
         .subscribe();
     } catch (e) { canal = null; }
     const id = setInterval(leer, 600);   // respaldo si el tiempo real no está activo
+    // 9.3: canal en vivo con el equipo (respuestas del panel y cada línea nueva, al instante)
+    let canalVivo = null;
+    try {
+      canalVivo = supabase.channel("ignis_" + nombreArchivoSitioPanel(termRemoto.sitio), { config: { broadcast: { self: false } } })
+        .on("broadcast", { event: "respuesta" }, ({ payload }) => {
+          if (vivo && payload && payload.r) setTermFila((prev) => ({ ...(prev || {}), comando_resultado: payload.r, comando: null }));
+        })
+        .on("broadcast", { event: "linea" }, ({ payload }) => {
+          if (!vivo || !payload || !payload.t) return;
+          setTermFila((prev) => {
+            const p = prev || {};
+            const cfg = String(p.config_panel || "").replace(/;leds=[^;]*/, ";leds=" + (payload.l || "")).replace(/;nact=[^;]*/, ";nact=" + (payload.n ?? ""));
+            return { ...p, terminal_txt: (String(p.terminal_txt || "") + "\n" + payload.t).slice(-6000),
+              terminal_total: (Number(p.terminal_total) || 0) + String(payload.t).length + 1, config_panel: cfg };
+          });
+        })
+        .subscribe();
+      canalVivoRef.current = canalVivo;
+    } catch (e) { canalVivo = null; }
     const inactivo = null;   // 7.8: sin cierre automático (solo se cierra con la X)
     const ping = setInterval(() => {
       supabase.from("dispositivos_panel").update({ terminal_ping: new Date().toISOString() }).eq("sitio", termRemoto.sitio);
     }, 20000);
-    return () => { vivo = false; clearInterval(id); clearInterval(ping); clearInterval(inactivo); try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
+    return () => { vivo = false; clearInterval(id); clearInterval(ping); clearInterval(inactivo); canalVivoRef.current = null;
+      try { if (canal) supabase.removeChannel(canal); } catch (e) {} try { if (canalVivo) supabase.removeChannel(canalVivo); } catch (e) {} };
   }, [termRemoto]);
   useEffect(() => { if (termPreRef.current) termPreRef.current.scrollTop = termPreRef.current.scrollHeight; }, [termFila && termFila.terminal_txt]);
   // 8.6: sonido dentro del Monitor serial, directo de las líneas que imprime el panel (lo más
@@ -15452,6 +15479,11 @@ function MonitoreoNotifier() {
       if (/^\s*(>>|---)/.test(ln)) return;
       const u = ln.replace(/^[^A-Za-z0-9*#]+/, "").toUpperCase();
       if (!u || /^(BR|CLR)\b/.test(u) || /HIST|LISTADO|NORMAL|RESTAUR|SILENCIAD|CONFIRMAR|REARME/.test(u)) return;
+      const clave = u.replace(/\s+/g, " ").trim();
+      const ya = lineasSonadasRef.current.get(clave);
+      if (ya && Date.now() - ya < 20000) return;   // ya sonó (llegó por el canal en vivo y después por la base)
+      lineasSonadasRef.current.set(clave, Date.now());
+      if (lineasSonadasRef.current.size > 200) lineasSonadasRef.current.clear();
       let m = 0;
       if (/^(PRE-?ALARM|ALARMA|ALARM|FIRE|FUEGO|INCENDIO)/.test(u)) m = 2;
       else if (/SUPERV/.test(u)) m = 3;
@@ -15493,7 +15525,16 @@ function MonitoreoNotifier() {
     if ((accion === "ack" || accion === "silenciar") && modoSonandoRef.current > 0) detenerSonido();
     const quien = String(currentUser?.name || currentUser?.email || "app").replace(/[|"]/g, " ").slice(0, 40);
     setCrtPend({ accion, desde: Date.now(), msg: "" });
-    const firma = await firmaMonitor();
+    const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => b.toString(16).padStart(2, "0")).join("");
+    // 9.3: primero por el CANAL EN VIVO (llega al equipo al instante)…
+    try {
+      if (canalVivoRef.current) {
+        const firmaVivo = await firmaCon(nonce, accion);
+        canalVivoRef.current.send({ type: "broadcast", event: "orden", payload: { accion, firma: firmaVivo, quien, id: nonce } });
+      }
+    } catch (e) {}
+    // …y por la base de datos como respaldo (el equipo descarta la repetida: mismo id)
+    const firma = await firmaCon(nonce);
     const { error } = await supabase.from("dispositivos_panel")
       .update({ comando: "crt", comando_arg: `${accion}|${firma}|${quien}`, comando_en: new Date().toISOString(), comando_resultado: "CRT " + accion + ": orden enviada al equipo" })
       .eq("sitio", termRemoto.sitio);

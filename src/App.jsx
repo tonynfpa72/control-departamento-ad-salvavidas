@@ -15025,7 +15025,7 @@ function MonitoreoNotifier() {
     ganancia.connect(ctx.destination);
     const osc = ctx.createOscillator();
     osc.type = "square";
-    osc.frequency.value = 2800; // tono agudo tipo sirena, igual que el equipo
+    osc.frequency.value = 520;  // 8.4: tono de 520 Hz (más grave, elegido por Anthony)
     osc.connect(ganancia);
     osc.start();
     audioCtxRef.current = ctx;
@@ -15061,7 +15061,9 @@ function MonitoreoNotifier() {
         volumen(0.5);
       } else {
         let on = false;
-        pulsoTimerRef.current = setInterval(() => { on = !on; volumen(on ? 0.5 : 0); }, 200);
+        // modo 1 = problema (pulsos de 1/2 s) · modo 3 = supervisión (pulsos de 1/8 s, muy seguidos)
+        volumen(0.5); on = true;
+        pulsoTimerRef.current = setInterval(() => { on = !on; volumen(on ? 0.5 : 0); }, modo === 3 ? 125 : 500);
       }
       if (duracionMs) {
         setTimeout(() => { if (modoSonandoRef.current === modo) detenerSonido(); }, duracionMs);
@@ -15109,7 +15111,8 @@ function MonitoreoNotifier() {
     ultimoEventoVistoRef.current = mayorId;
     const cats = (e) => [e.categoria, e.subcat];   // la subcategoría también cuenta (ej. "general" + "problema")
     if (nuevos.some((e) => cats(e).some((c) => c === "alarma" || c === "prealarma"))) sonar(2);
-    else if (nuevos.some((e) => cats(e).some((c) => ["problema", "supervision", "seguridad"].includes(c)))) sonar(1, 6000);
+    else if (nuevos.some((e) => cats(e).some((c) => c === "supervision"))) sonar(3, 6000);
+    else if (nuevos.some((e) => cats(e).some((c) => ["problema", "seguridad"].includes(c)))) sonar(1, 6000);
   }, [eventos, esTecnicoSonido, sonidoOn, sitioSeleccionado]);
 
   useEffect(() => { sonidoOnRef.current = sonidoOn; }, [sonidoOn]);
@@ -15405,6 +15408,24 @@ function MonitoreoNotifier() {
     return () => { vivo = false; clearInterval(id); clearInterval(ping); clearInterval(inactivo); try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
   }, [termRemoto]);
   useEffect(() => { if (termPreRef.current) termPreRef.current.scrollTop = termPreRef.current.scrollHeight; }, [termFila && termFila.terminal_txt]);
+  // 8.4: sonido dentro del Monitor serial. Con el Monitor abierto, el equipo informa al instante
+  // (tiempo real) cuántos puntos hay activos y qué luces están encendidas: si entra algo nuevo,
+  // suena igual que en Monitoreo (alarma = tono continuo; falla/supervisión/seguridad = pulsos 6 s).
+  const ledsMonitorPrevRef = useRef(null);
+  useEffect(() => {
+    if (!termRemoto) { ledsMonitorPrevRef.current = null; return; }
+    const c = leerConfigPanel(termFila && termFila.config_panel);
+    if (c.leds === undefined) return;
+    const ahora = { L: String(c.leds || ""), n: Number(c.nact) || 0 };
+    const prev = ledsMonitorPrevRef.current;
+    ledsMonitorPrevRef.current = ahora;
+    if (!prev) return;   // recién abierto: no suena por lo que ya estaba activo
+    const nueva = (k) => ahora.L.includes(k) && !prev.L.includes(k);
+    const subio = ahora.n > prev.n;
+    if (nueva("A") || nueva("P") || (subio && /[AP]/.test(ahora.L))) sonar(2);   // con alarma activa, lo nuevo suena como alarma
+    else if (nueva("S")) sonar(3, 6000);
+    else if (nueva("T") || nueva("G") || nueva("X") || subio) sonar(1, 6000);
+  }, [termFila, termRemoto]);
   useEffect(() => {
     if (termFila && !cfgForm && termFila.config_panel) {
       const c = leerConfigPanel(termFila.config_panel);
@@ -15433,6 +15454,8 @@ function MonitoreoNotifier() {
   const CRT_NOMBRES = { puntos: "Todos los puntos", simulacro: "Simulacro", ack: "Reconocer", silenciar: "Silenciar", reset: "Reset", historial: "Historial completo", histalarmas: "Historial de alarmas", detectores: "Reporte de detectores" };
   const ordenCrt = async (accion) => {
     if (!termRemoto) return;
+    // 8.4: Acknowledge o Signal Silence en el Monitor también callan el sonido de la App
+    if ((accion === "ack" || accion === "silenciar") && modoSonandoRef.current > 0) detenerSonido();
     const quien = String(currentUser?.name || currentUser?.email || "app").replace(/[|"]/g, " ").slice(0, 40);
     setCrtPend({ accion, desde: Date.now(), msg: "" });
     const firma = await firmaMonitor();
@@ -15833,7 +15856,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           background: modoSonando === 2 ? "rgba(229,72,77,.18)" : "rgba(242,183,5,.18)", border: `1px solid ${modoSonando === 2 ? IGNIS.alarma : IGNIS.problema}`,
           color: modoSonando === 2 ? "#ffb3b5" : "#ffe08a", fontWeight: 700, fontSize: 13,
         }}>
-          <span>{modoSonando === 2 ? "🔥 ALARMA" : "⚠️ EVENTO NUEVO"}</span>
+          <span>{modoSonando === 2 ? "🔥 ALARMA" : modoSonando === 3 ? "👁 SUPERVISIÓN" : "⚠️ EVENTO NUEVO"}</span>
           <Btn small onClick={detenerSonido}><VolumeX size={13} /> Silenciar</Btn>
         </div>
       )}
@@ -16308,6 +16331,20 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     {Number(c.ruido) > 0 && <> · <span title="Bytes con el 8.º bit encendido: ruido eléctrico en la línea, descartado por el equipo">ruido filtrado: {c.ruido} bytes</span></>}
                     {viejo && <div style={{ color: IGNIS.problema, marginTop: 4 }}>Este equipo tiene la versión {f.version}: el monitor remoto necesita la 7.2. Actualícelo desde «Actualizar firmware».</div>}
                   </div>
+                  {esTecnicoSonido && modoSonando > 0 && (
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, borderRadius: 9, padding: "8px 12px", marginBottom: 8,
+                      background: modoSonando === 2 ? "rgba(229,72,77,.18)" : "rgba(242,183,5,.18)", border: `1px solid ${modoSonando === 2 ? IGNIS.alarma : IGNIS.problema}`,
+                      color: modoSonando === 2 ? "#ffb3b5" : "#ffe08a", fontWeight: 700, fontSize: 13 }}>
+                      <span>{modoSonando === 2 ? "🔥 ALARMA" : modoSonando === 3 ? "👁 SUPERVISIÓN" : "⚠️ EVENTO NUEVO"}</span>
+                      <Btn small onClick={detenerSonido}><VolumeX size={13} /> Silenciar sonido</Btn>
+                    </div>
+                  )}
+                  {esTecnicoSonido && sonidoOn && sonidoBloqueado && (
+                    <div onClick={() => { const ctx = prepararAudio(); if (ctx && ctx.state !== "running") ctx.resume().then(() => setSonidoBloqueado(false)).catch(() => {}); else setSonidoBloqueado(false); }}
+                      style={{ background: "#1a2a3a", border: `1px solid ${IGNIS.seguridad}`, color: "#9dc6ff", borderRadius: 9, padding: "8px 12px", fontSize: 12.5, cursor: "pointer", marginBottom: 8 }}>
+                      🔈 Toque aquí para habilitar el sonido de alarmas en este dispositivo.
+                    </div>
+                  )}
                   {/clave del monitor incorrecta|clave bloqueada/i.test(f.comando_resultado || "") && (
                     <div style={{ background: IGNIS.alarma + "22", border: `1px solid ${IGNIS.alarma}88`, color: "#ff9a9d", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, marginBottom: 8, display: "flex", gap: 10, alignItems: "center" }}>
                       🔒 {f.comando_resultado}. <Btn small onClick={() => { const s2 = termRemoto.sitio; cerrarMonitorRemoto(); abrirMonitorRemoto(s2); }}>Volver a poner la clave</Btn>

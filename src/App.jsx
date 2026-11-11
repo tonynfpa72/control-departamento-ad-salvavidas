@@ -14853,7 +14853,8 @@ function MonitoreoNotifier() {
   const [lampTest, setLampTest] = useState(false);
   const [reportesAbiertos, setReportesAbiertos] = useState(false);
   const monActividad = useRef(Date.now());
-  const monClaveRef = useRef("");   // 7.9: la clave queda solo en memoria mientras el Monitor está abierto
+  const monClaveRef = useRef("");
+  const monAbiertoRef = useRef(false);   // 7.9: la clave queda solo en memoria mientras el Monitor está abierto
   const firmaMonitor = async () => {
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => b.toString(16).padStart(2, "0")).join("");
     const dig = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(monClaveRef.current) + "|" + nonce));
@@ -15367,6 +15368,7 @@ function MonitoreoNotifier() {
     setMonPedir(null); setMonClave("");
     monActividad.current = Date.now();
     monClaveRef.current = String(clave);
+    monAbiertoRef.current = false;
     const ahora = new Date().toISOString();
     // la clave no viaja: se manda sha256(clave|nonce) y el equipo lo compara
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -15380,7 +15382,7 @@ function MonitoreoNotifier() {
     if (error) setTermRemoto({ sitio, desde: Date.now(), error: /terminal_/i.test(error.message || "") ? "Falta correr en Supabase el SQL_monitor_remoto.sql." : error.message });
   };
   const cerrarMonitorRemoto = async () => {
-    const t = termRemoto; setTermRemoto(null); setCfgAbierta(false); monClaveRef.current = "";
+    const t = termRemoto; setTermRemoto(null); setCfgAbierta(false); monClaveRef.current = ""; monAbiertoRef.current = false;
     if (t && !t.error) await supabase.from("dispositivos_panel").update({ terminal_tx: "CERRAR", terminal_ping: null }).eq("sitio", t.sitio);
   };
   useEffect(() => {
@@ -15400,7 +15402,7 @@ function MonitoreoNotifier() {
           (p) => { if (vivo && p && p.new) setTermFila((prev) => ({ ...(prev || {}), ...p.new })); })
         .subscribe();
     } catch (e) { canal = null; }
-    const id = setInterval(leer, 1200);
+    const id = setInterval(leer, 600);   // respaldo si el tiempo real no está activo
     const inactivo = null;   // 7.8: sin cierre automático (solo se cierra con la X)
     const ping = setInterval(() => {
       supabase.from("dispositivos_panel").update({ terminal_ping: new Date().toISOString() }).eq("sitio", termRemoto.sitio);
@@ -16292,7 +16294,10 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
       {termRemoto && (() => {
         const f = termFila || {};
         const claveMal = /clave del monitor incorrecta|clave bloqueada|abra el Monitor serial con la clave/i.test(f.comando_resultado || "");
-        const abierto = !claveMal && (f.comando_resultado === "monitor serial abierto" || (f.terminal_txt && !f.comando));
+        // 8.4: una vez abierto, el Monitor QUEDA abierto: una orden en curso (comando pendiente) ya no
+        // apaga los botones ni vuelve a "Conectando…" (eso era lo que se sentía lento).
+        if (!claveMal && (f.comando_resultado === "monitor serial abierto" || (f.terminal_txt && !f.comando))) monAbiertoRef.current = true;
+        const abierto = !claveMal && monAbiertoRef.current;
         const c = leerConfigPanel(f.config_panel);
         const viejo = f.version && /^([0-6]\.|7\.[01]$)/.test(String(f.version));
         const resCrt = String(f.comando_resultado || "").startsWith("CRT ") ? String(f.comando_resultado) : "";

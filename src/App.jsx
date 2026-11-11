@@ -16334,7 +16334,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const c = leerConfigPanel(f.config_panel);
         const viejo = f.version && /^([0-6]\.|7\.[01]$)/.test(String(f.version));
         const resCrt = String(f.comando_resultado || "").startsWith("CRT ") ? String(f.comando_resultado) : "";
-        const crtOk = /confirmado por el panel/i.test(resCrt);
+        const crtOk = /confirmado por el panel|enviado al panel/i.test(resCrt);   // 8.8: mandar y listo
         const crtEsperando = crtPend && !crtPend.msg && (!resCrt || /orden enviada|enviado, esperando/i.test(resCrt)) && Date.now() - crtPend.desde < 60000;
         const crtEsNotifier = c.tipo === "3";
         const crtSimplex = c.tipo === "1" || c.tipo === "2";
@@ -16417,7 +16417,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       </div>);
                     const movil = typeof window !== "undefined" && window.innerWidth < 640;
                     // en el teléfono se juntan los espacios largos para que cada evento quepa en una o dos líneas
-                    const lineas = String(f.terminal_txt || "(todavía no llega nada)").split("\n").map((ln) => (movil ? ln.replace(/ {3,}/g, "  ").replace(/^\.+(?=\S)/, "") : ln));
+                    // 8.8: la línea con que el panel contesta al ESC ("<sitio> - NFS-640 comunicacion, conectada.")
+                    // y los "." sueltos del prompt no se muestran: no son eventos.
+                    const lineas = String(f.terminal_txt || "(todavía no llega nada)").split("\n")
+                      .filter((ln) => !/comunicacion\s*,?\s*conectada/i.test(ln) && !/^[.\s!|]+$/.test(ln))
+                      .map((ln) => (movil ? ln.replace(/ {3,}/g, "  ").replace(/^\.+(?=\S)/, "") : ln));
                     return (
                       <div style={{ background: "linear-gradient(#d9dad6,#c9cac5)", borderRadius: 12, padding: movil ? "10px 8px 12px" : "14px 16px 16px", color: "#2a2c2f", boxShadow: "inset 0 1px 0 #fff8, 0 2px 8px #0008", marginBottom: 10 }}>
                         <div style={{ display: "flex", gap: movil ? 8 : 14, alignItems: "flex-start", flexDirection: movil ? "column" : "row" }}>
@@ -16497,7 +16501,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       : c.ctrlapp !== "1" ? "El control desde la App está deshabilitado en este equipo. Se habilita en el sitio: Config. del equipo → «Permitir control desde la App»."
                       : crtPend && crtPend.msg ? crtPend.msg
                       : crtEsperando ? `➜ ${CRT_NOMBRES[crtPend.accion] || crtPend.accion}: enviado, esperando que el panel confirme…`
-                      : resCrt ? (crtOk ? "✔ " : "⚠ ") + resCrt.replace(/^CRT (\w+):/, (m, a) => (CRT_NOMBRES[a] || a) + ":") +
+                      : resCrt ? (/confirmado por el panel/i.test(resCrt) ? "✔ " : crtOk ? "➜ " : "⚠ ") + resCrt.replace(/^CRT (\w+):/, (m, a) => (CRT_NOMBRES[a] || a) + ":") +
                         (/sin respuesta/i.test(resCrt) ? (/^CRT silenciar/.test(resCrt) ? " — el panel solo responde si hay señales sonando (Signals Silenced ya encendida = ya estaban silenciadas)."
                           : /^CRT ack/.test(resCrt) ? " — el panel solo responde si hay eventos sin reconocer." : " — revise que el panel no esté imprimiendo un reporte o dentro de un menú.") : "")
                       : c.leds === undefined ? "Las luces necesitan el equipo en versión 7.6." : "Listo: toque un botón y el equipo lo manda al panel de inmediato."}

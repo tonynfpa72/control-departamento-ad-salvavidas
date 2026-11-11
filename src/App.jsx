@@ -14986,12 +14986,29 @@ function MonitoreoNotifier() {
     // además se revisa cada 1 s por si el aviso no llega (red del celular).
     let canal = null;
     try {
+      // 8.5: un evento NUEVO entra directo a la lista (sin volver a bajar los 500), y los cambios
+      // de un equipo (que con el Monitor abierto llegan varias veces por segundo) solo actualizan
+      // esa fila. Antes cada cambio recargaba todo y los eventos nuevos esperaban en la fila.
+      const permitido = (sitio) => !esCliente || sitiosCliente.includes(sitio);
       canal = supabase.channel(`eventos-vivo-${Math.random().toString(36).slice(2)}`)
-        .on("postgres_changes", { event: "*", schema: "public", table: "eventos_panel" }, () => cargar())
-        .on("postgres_changes", { event: "*", schema: "public", table: "dispositivos_panel" }, () => cargar())
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "eventos_panel" }, (p) => {
+          const n = p && p.new;
+          if (!n || !permitido(n.sitio)) return;
+          if (n.id && ultimoBorradoRef.current && Date.now() - ultimoBorradoRef.current < 3000) return;
+          setEventos((prev) => (prev.some((e) => e.id === n.id) ? prev : [corregirCategoriaEvento(n), ...prev].slice(0, 500)));
+        })
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "eventos_panel" }, () => cargar())
+        .on("postgres_changes", { event: "DELETE", schema: "public", table: "eventos_panel" }, () => cargar())
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "dispositivos_panel" }, (p) => {
+          const n = p && p.new;
+          if (!n || !permitido(n.sitio)) return;
+          setDispositivos((prev) => (prev.some((d) => d.sitio === n.sitio) ? prev.map((d) => (d.sitio === n.sitio ? { ...d, ...n } : d)) : prev));
+        })
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "dispositivos_panel" }, () => cargar())
+        .on("postgres_changes", { event: "DELETE", schema: "public", table: "dispositivos_panel" }, () => cargar())
         .subscribe();
     } catch (e) { canal = null; }
-    const intervalo = setInterval(cargar, 1000);
+    const intervalo = setInterval(cargar, 2500);   // respaldo por si el aviso en tiempo real no llega
     return () => { clearInterval(intervalo); try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
   }, []);
 

@@ -13466,6 +13466,16 @@ const TEND_INFORME_DEF = {
   periodos: ["todo"], rangos: [], agrupar: "auto", cats: ["alarma", "problema", "supervision"],
   sec: { resumen: true, tiempo: true, hora: true, dia: true, repetidas: true, recurrentes: true, lista: false }, mant: true,
 };
+// 11.3: fecha de una línea impresa por el panel ("02:24P 111126" = mes día año); null si no trae
+function fechaLineaPanel(linea) {
+  const m = tNormal(String(linea || "")).match(TENDENCIAS_RE_FECHA);
+  if (!m) return null;
+  let h = (+m[1]) % 12; if (m[3].toUpperCase() === "P") h += 12;
+  let mes = +m[4], dia = +m[5];
+  if (mes > 12 && dia <= 12) { const x = mes; mes = dia; dia = x; }
+  const d = new Date(2000 + +m[6], mes - 1, dia, h, +m[2]);
+  return isNaN(d) ? null : d;
+}
 function tendenciasUltimaFecha(texto) {
   const fs = tendenciasAnalizar(texto).ev.filter((e) => e.fecha).map((e) => +e.fecha);
   return fs.length ? new Date(Math.max(...fs)) : null;
@@ -14886,6 +14896,17 @@ function MonitoreoNotifier() {
   const [busqueda, setBusqueda] = useState("");
   const [borrando, setBorrando] = useState(false);
   const [vista, setVista] = useEstadoRecordado("monitoreo-vista", "eventos"); // "eventos" | "tendencias"
+  // 11.3: período elegido (Desde / Hasta) para la lista, las tarjetas, el Reporte PDF y las Tendencias
+  const [rangoDesde, setRangoDesde] = useState("");
+  const [rangoHasta, setRangoHasta] = useState("");
+  const rangoD = rangoDesde ? new Date(rangoDesde + "T00:00:00") : null;
+  const rangoH = rangoHasta ? new Date(rangoHasta + "T23:59:59") : null;
+  const hayRango = !!(rangoD || rangoH);
+  const enRango = (d) => !hayRango || (!!d && !isNaN(d) && (!rangoD || d >= rangoD) && (!rangoH || d <= rangoH));
+  const evEnRango = (e) => !hayRango || enRango(e.fecha_panel ? new Date(e.fecha_panel) : (e.texto ? fechaLineaPanel(e.texto) : null));
+  const rangoRef = useRef({ desde: null, hasta: null });
+  rangoRef.current = { desde: rangoD, hasta: rangoH };
+  const textoRango = hayRango ? `del ${rangoD ? rangoD.toLocaleDateString("es-CR") : "inicio"} al ${rangoH ? rangoH.toLocaleDateString("es-CR") : "hoy"}` : "";
   const [historialHtml, setHistorialHtml] = useState("");
   const [cargandoHistorial, setCargandoHistorial] = useState(false);
   const [mantLineas, setMantLineas] = useState([]); // informe de mantenimiento subido por el equipo
@@ -15238,7 +15259,7 @@ function MonitoreoNotifier() {
         setHistArchivos(res.map((r) => ({ sitio: r.sitio, texto: r.texto })));
         setMantArchivos(res.map((r) => ({ sitio: r.sitio, texto: r.textoMant })));
         if (sitioSeleccionado !== "Todos") {
-          setHistorialHtml(generarHtmlTendenciasPanel(res[0].texto));
+          setHistorialHtml(generarHtmlTendenciasPanel(res[0].texto, rangoRef.current));
           setMantLineas(res[0].textoMant ? res[0].textoMant.split(/\r?\n/) : []);
         }
         setCargandoHistorial(false);
@@ -15253,6 +15274,12 @@ function MonitoreoNotifier() {
     return () => { cancelado = true; clearInterval(intervalo); recargarHistRef.current = null; };
   }, [sitioSeleccionado, sitioSeleccionado === "Todos" ? sitiosClave : ""]);
 
+  useEffect(() => {
+    if (sitioSeleccionado === "Todos" || !histArchivos.length) return;
+    const t = (histArchivos.find((h) => h.sitio === sitioSeleccionado) || histArchivos[0] || {}).texto || "";
+    setHistorialHtml(generarHtmlTendenciasPanel(t, { desde: rangoD, hasta: rangoH }));
+  }, [rangoDesde, rangoHasta]);
+
   // Líneas del historial / informe de mantenimiento como "eventos" para
   // mostrarlas en la bitácora al tocar sus tarjetas. Cada línea del
   // historial se clasifica igual que en Tendencias (Alarma / Problema /
@@ -15262,7 +15289,7 @@ function MonitoreoNotifier() {
     unicas(texto).map((linea, i) => {
       const u = tNormal(linea).replace(/^#?\d{1,5}[.:)]?\s+(?=[A-Z])/, "");
       const subcat = /^(BR|CLR)\b/.test(u) ? "borrado" : tendenciasCategoria(u) || "otro";
-      return { id: `hist-${a}-${i}`, categoria: "historial", subcat, texto: linea, sitio, fecha_panel: null };
+      return { id: `hist-${a}-${i}`, categoria: "historial", subcat, texto: linea, sitio, fecha_panel: null, fechaLinea: fechaLineaPanel(linea) };
     })), [histArchivos]);
   const lineasMantenimiento = useMemo(() => mantArchivos.flatMap(({ sitio, texto }, a) =>
     unicas(texto)
@@ -15272,9 +15299,9 @@ function MonitoreoNotifier() {
 
   const eventosFiltrados = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
-    let lista = eventosDelSitio;
+    let lista = eventosDelSitio.filter(evEnRango);
     if (categoriaSeleccionada === "historial" || categoriaSeleccionada === "mantenimiento") {
-      let base = categoriaSeleccionada === "historial" ? lineasHistorial : lineasMantenimiento;
+      let base = categoriaSeleccionada === "historial" ? lineasHistorial.filter((e) => enRango(e.fechaLinea)) : lineasMantenimiento;
       if (categoriaSeleccionada === "historial" && histSubcat) base = base.filter((e) => e.subcat === histSubcat);
       return q ? base.filter((e) => e.texto.toLowerCase().includes(q)) : base;
     }
@@ -15283,7 +15310,7 @@ function MonitoreoNotifier() {
     }
     if (!q) return lista;
     return lista.filter((e) => (e.texto || "").toLowerCase().includes(q) || (e.sitio || "").toLowerCase().includes(q));
-  }, [eventosDelSitio, busqueda, categoriaSeleccionada, lineasHistorial, lineasMantenimiento, histSubcat]);
+  }, [eventosDelSitio, busqueda, categoriaSeleccionada, lineasHistorial, lineasMantenimiento, histSubcat, rangoDesde, rangoHasta]);
 
   // Si cambian de sitio o se borra la categoría visible, quita el filtro de tarjeta.
   useEffect(() => { setCategoriaSeleccionada(null); }, [sitioSeleccionado]);
@@ -15291,12 +15318,12 @@ function MonitoreoNotifier() {
   const conteos = useMemo(() => {
     const c = {};
     CATEGORIAS_PANEL_TILES.forEach((cat) => { c[cat] = 0; });
-    eventosDelSitio.forEach((e) => { if (c[e.categoria] !== undefined) c[e.categoria]++; else c.otro = (c.otro || 0) + 1; });
+    eventosDelSitio.filter(evEnRango).forEach((e) => { if (c[e.categoria] !== undefined) c[e.categoria]++; else c.otro = (c.otro || 0) + 1; });
     c.general = CATEGORIAS_PANEL_GENERAL.reduce((t, k) => t + (c[k] || 0), 0);
-    c.historial = lineasHistorial.length;
+    c.historial = hayRango ? lineasHistorial.filter((e) => enRango(e.fechaLinea)).length : lineasHistorial.length;
     c.mantenimiento = lineasMantenimiento.length;
     return c;
-  }, [eventosDelSitio, lineasHistorial, lineasMantenimiento]);
+  }, [eventosDelSitio, lineasHistorial, lineasMantenimiento, rangoDesde, rangoHasta]);
 
   // Vuelve a "eventos" si cambian de sitio mientras ven Tendencias (el
   // historial es por sitio — no tiene sentido en "Todos").
@@ -15697,7 +15724,7 @@ function MonitoreoNotifier() {
     // Arma el informe con lo elegido en "Armar informe": cada período es un bloque
     const texto = (histArchivos.find((h) => h.sitio === sitioSeleccionado) || histArchivos[0] || {}).texto || "";
     const cfg = cfgInformeTend.current || TEND_INFORME_DEF;
-    const periodos = tendenciasPeriodosElegidos(cfg, texto);
+    const periodos = hayRango ? [{ titulo: "Período " + textoRango, desde: rangoD, hasta: rangoH }] : tendenciasPeriodosElegidos(cfg, texto);
     const escH = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const pintar = "-webkit-print-color-adjust:exact;print-color-adjust:exact";
     let cuerpo = `<div style="border-bottom:3px solid #c62828;padding-bottom:8px;margin-bottom:10px;${pintar}"><div style="font-size:21px;font-weight:800">Tendencias del historial — ${escH(sitioSeleccionado)}</div>` +
@@ -15735,7 +15762,7 @@ function MonitoreoNotifier() {
       const pintar = "-webkit-print-color-adjust:exact;print-color-adjust:exact";
       const chipCat = (cat) => `<span class="cat" style="background:${CATEGORIA_PANEL_COLOR_DARK[cat] || "#888"}">${esc(ETIQUETA_CATEGORIA_PANEL[cat] || cat || "Otro")}</span>`;
       const q = busqueda.trim().toLowerCase();
-      const pasaFiltro = (e) =>
+      const pasaFiltro = (e) => evEnRango(e) &&
         (categoriaSeleccionada === "historial" || categoriaSeleccionada === "mantenimiento" || coincideCategoriaPanel(e, categoriaSeleccionada)) &&
         (!q || (e.texto || "").toLowerCase().includes(q));
       const listaSitios = sitioSeleccionado === "Todos" ? sitios : [sitioSeleccionado];
@@ -15753,7 +15780,7 @@ function MonitoreoNotifier() {
 
       const secciones = await Promise.all(listaSitios.map(async (sitio) => {
         const { texto: hist, textoMant: mant } = await descargarHistorialSitio(sitio);
-        const evs = eventos.filter((e) => e.sitio === sitio);
+        const evs = eventos.filter((e) => e.sitio === sitio && evEnRango(e));
         const evsFiltrados = evs.filter(pasaFiltro);
         const equipos = dispositivos.filter((d) => d.sitio === sitio);
         const mantFilas = analizarMantenimientoPanel([...(mant ? mant.split(/\r?\n/) : []), ...evs.map((e) => e.texto).reverse()]);
@@ -15771,7 +15798,7 @@ function MonitoreoNotifier() {
           ? `<table><thead><tr><th style="width:150px">Fecha</th><th>Evento</th></tr></thead><tbody>` +
             problemas.map((e) => `<tr><td>${fecha(e.fecha_panel)}</td><td class="txt">${esc(e.texto)}</td></tr>`).join("") + `</tbody></table>`
           : `<p class="vacio">No hay problemas registrados.</p>`);
-        h += `<h2>5. Tendencias e histogramas del historial</h2><div class="tend">${generarHtmlTendenciasPanel(hist)}</div>`;
+        h += `<h2>5. Tendencias e histogramas del historial${hayRango ? " (" + esc(textoRango) + ")" : ""}</h2><div class="tend">${generarHtmlTendenciasPanel(hist, hayRango ? { desde: rangoD, hasta: rangoH } : {})}</div>`;
         h += `<h2>6. Bitácora de eventos (${evsFiltrados.length})</h2>` + (evsFiltrados.length
           ? `<table><thead><tr><th style="width:150px">Fecha</th><th style="width:110px">Categoría</th><th>Evento</th></tr></thead><tbody>` +
             evsFiltrados.map((e) => `<tr><td>${fecha(e.fecha_panel)}</td><td>${chipCat(e.categoria)}</td><td class="txt">${esc(e.texto)}</td></tr>`).join("") + `</tbody></table>`
@@ -15781,6 +15808,7 @@ function MonitoreoNotifier() {
       }));
 
       const filtros = [
+        hayRango ? `Período: ${textoRango}` : "",
         categoriaSeleccionada ? `Bitácora filtrada: ${ETIQUETA_CATEGORIA_PANEL[categoriaSeleccionada] || categoriaSeleccionada}` : "",
         busqueda.trim() ? `Búsqueda: "${busqueda.trim()}"` : "",
       ].filter(Boolean).join(" · ");
@@ -15863,6 +15891,18 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               <button onClick={() => setVista("puntos")} style={{ padding: "7px 12px", fontSize: 12.5, border: "none", cursor: "pointer", background: vista === "puntos" ? IGNIS.panel2 : IGNIS.panel, color: vista === "puntos" ? IGNIS.text : IGNIS.dim, fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}>📋 Todos los puntos</button>
             </div>
           )}
+          {/* 11.3: período Desde / Hasta — filtra la lista, las tarjetas, el Reporte PDF y las Tendencias */}
+          <div title="Período: filtra la lista de eventos, las tarjetas, el Reporte PDF y las Tendencias / histogramas"
+            style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 8px", borderRadius: 8, border: `1px solid ${hayRango ? "#0e9aa7" : IGNIS.border}`, background: IGNIS.panel, fontSize: 12, color: IGNIS.dim }}>
+            <span>Desde</span>
+            <input type="date" value={rangoDesde} max={rangoHasta || undefined} onChange={(e) => setRangoDesde(e.target.value)}
+              style={{ background: IGNIS.bg, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 6, padding: "3px 5px", fontSize: 12, fontFamily: "inherit", colorScheme: "dark" }} />
+            <span>Hasta</span>
+            <input type="date" value={rangoHasta} min={rangoDesde || undefined} onChange={(e) => setRangoHasta(e.target.value)}
+              style={{ background: IGNIS.bg, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 6, padding: "3px 5px", fontSize: 12, fontFamily: "inherit", colorScheme: "dark" }} />
+            {hayRango && <button type="button" onClick={() => { setRangoDesde(""); setRangoHasta(""); }} title="Quitar el período"
+              style={{ background: "transparent", border: "none", color: IGNIS.text, cursor: "pointer", fontSize: 13, padding: "0 2px" }}>✕</button>}
+          </div>
           {canGestionar && sitioSeleccionado !== "Todos" && (
             <Btn small onClick={() => pedirDiagnostico(sitioSeleccionado)} title="Pide al equipo su diagnóstico (red, señal, memoria, reinicios, caídas de WiFi) sin ir al sitio">
               <Wrench size={13} /> Diagnóstico

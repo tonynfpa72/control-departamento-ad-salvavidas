@@ -14136,7 +14136,7 @@ function ModalActualizarFirmware({ dispositivos, sitioInicial, onCerrar }) {
     setAviso(""); setArchivo(null);
     if (!f) return;
     if (!/\.bin$/i.test(f.name)) { setAviso("Elija el archivo .bin del firmware (no el .ino)."); return; }
-    if (f.size < 200000 || f.size > 1500000) { setAviso(`El archivo pesa ${Math.round(f.size / 1024)} KB: no parece un firmware del IgnisMonitor ESP32.`); return; }
+    if (f.size < 200000 || f.size > 1507328) { setAviso(`El archivo pesa ${Math.round(f.size / 1024)} KB: no parece un firmware del IgnisMonitor ESP32.`); return; }
     const b = new Uint8Array(await f.slice(0, 1).arrayBuffer());
     if (b[0] !== 0xe9) { setAviso("Ese archivo no es un firmware de ESP32 (use el .bin que le envió Claude o el de Exportar binario compilado)."); return; }
     setArchivo(f);

@@ -15463,7 +15463,7 @@ function MonitoreoNotifier() {
     return () => { vivo = false; clearInterval(id); clearInterval(ping); clearInterval(inactivo); canalVivoRef.current = null;
       try { if (canal) supabase.removeChannel(canal); } catch (e) {} try { if (canalVivo) supabase.removeChannel(canalVivo); } catch (e) {} };
   }, [termRemoto]);
-  useEffect(() => { if (termPreRef.current) termPreRef.current.scrollTop = termPreRef.current.scrollHeight; }, [termFila && termFila.terminal_txt]);
+  useEffect(() => { if (termPreRef.current) termPreRef.current.scrollTop = 0; }, [termFila && termFila.terminal_txt]);
   // 8.6: sonido dentro del Monitor serial, directo de las líneas que imprime el panel (lo más
   // rápido que hay: llegan con la pantalla del monitor). Cada evento nuevo vuelve a sonar,
   // aunque se haya confirmado el anterior. No suena con historiales ni reportes.
@@ -16550,7 +16550,14 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     // texto del puerto, que solo guarda los últimos ~2 KB); si todavía no hay, usa el texto.
                     const hoyTxt = new Date().toDateString();
                     const evSitio = eventos.filter((e) => e.sitio === termRemoto.sitio)
-                      .sort((a, b) => new Date(b.fecha_panel || b.created_at || 0) - new Date(a.fecha_panel || a.created_at || 0)).slice(0, 120);
+                      // el más nuevo arriba: por hora del panel y, dentro del mismo minuto, por orden de llegada (id)
+                      .sort((a, b) => {
+                        const ta = Date.parse(a.fecha_panel || a.created_at || 0) || 0, tb = Date.parse(b.fecha_panel || b.created_at || 0) || 0;
+                        if (tb !== ta) return tb - ta;
+                        const ia = Number(a.id), ib = Number(b.id);
+                        if (!isNaN(ia) && !isNaN(ib)) return ib - ia;
+                        return String(b.id || "").localeCompare(String(a.id || ""));
+                      }).slice(0, 120);
                     const filasEv = evSitio.map((e) => {
                       const r = parsear(e.texto);
                       if (!r) return null;
@@ -16670,7 +16677,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                           <div style={{ flex: 1, position: "relative", minWidth: movil ? 0 : 260, width: movil ? "100%" : undefined, display: "flex" }}>
                           <button type="button" onClick={() => setPantallaCruda(false)} style={{ position: "absolute", right: 14, top: 10, zIndex: 2, background: "#161e27", border: "1px solid #30363d", color: "#c9d1d9", borderRadius: 6, fontSize: 10.5, padding: "2px 8px", cursor: "pointer", fontFamily: "inherit" }}>Vista moderna</button>
                           <pre ref={termPreRef} style={{ flex: 1, width: movil ? "100%" : undefined, boxSizing: "border-box", minWidth: movil ? 0 : 260, height: movil ? 230 : 390, overflow: "auto", margin: 0, background: "#05080c", border: movil ? "4px solid #3a3d40" : "6px solid #3a3d40", borderRadius: 6, padding: movil ? "6px 7px" : "8px 10px", fontSize: movil ? 10.5 : 12, lineHeight: 1.4, color: "#7ee787", whiteSpace: "pre-wrap", wordBreak: "normal", overflowWrap: "anywhere", fontFamily: "ui-monospace,Consolas,monospace", boxShadow: "inset 0 0 12px #000" }}>
-                            {lineas.map((ln, k) => <div key={k} style={{ color: ln.startsWith(">>") ? "#ffd866" : ln.startsWith("---") ? "#8b949e" : undefined, minHeight: "1.45em" }}>{ln}</div>)}
+                            {[...lineas].reverse().map((ln, k) => <div key={k} style={{ color: ln.startsWith(">>") ? "#ffd866" : ln.startsWith("---") ? "#8b949e" : undefined, minHeight: "1.45em" }}>{ln}</div>)}
                           </pre>
                           </div>
                           ) : (

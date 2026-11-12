@@ -14855,6 +14855,8 @@ function MonitoreoNotifier() {
   const [anunEdit, setAnunEdit] = useState(null);        // 10.9: filas del anunciador mientras se configuran
   const [anunMsg, setAnunMsg] = useState("");
   const [pantallaCruda, setPantallaCruda] = useState(false);   // 10.9: ver el texto tal como lo manda el panel
+  const [, setTicPantalla] = useState(0);   // 11.1: refresca la pantalla para que los avisos de un momento se quiten solos
+  useEffect(() => { if (!termRemoto) return; const id = setInterval(() => setTicPantalla((x) => x + 1), 4000); return () => clearInterval(id); }, [termRemoto]);
   const monActividad = useRef(Date.now());
   const monClaveRef = useRef("");
   const monAbiertoRef = useRef(false);   // 7.9: la clave queda solo en memoria mientras el Monitor está abierto
@@ -16584,6 +16586,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       if (r.chip === "BORRADO" || r.normal) return false;
                       if (r.chip === "HABILITADA") return false;
                       if (r.chip === "ANULADO" || r.chip === "ANULADA") return anulInfo ? anulados.includes(String(r.dir || "").toUpperCase()) : !(claveFila(r, r.chip) in brHora);
+                      // 11.1: los avisos de un momento (Confirmar, Rearme, Silenciar, órdenes…) entran y salen solos
+                      if (["CONFIRMADO", "REARME", "SILENCIADO", "ORDEN", "SIRENAS", "AVISO"].includes(r.chip))
+                        return filasEv.length ? Date.now() - r.t < 15000 : todas.indexOf(r) < 3;
+                      // el simulacro sigue en pantalla hasta el siguiente rearme
+                      if (r.chip === "SIMULACRO") return !todas.some((x) => x.chip === "REARME" && x.t >= r.t);
                       const k = claveFila(r, r.chip);
                       if (k in brHora && brHora[k] >= r.t) return false;   // su borrado llegó después (o en el mismo segundo)
                       return true;

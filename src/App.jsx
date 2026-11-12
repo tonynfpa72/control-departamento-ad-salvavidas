@@ -16574,6 +16574,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     // 11.1: la pantalla muestra solo lo que sigue ACTIVO. Un evento solo sale de la pantalla
                     // con SU PROPIO borrado (BR / NORMAL) — el rearme no quita nada. HABILITADA no se muestra,
                     // y los ANULADO/ANULADA solo salen si el equipo dice que siguen anulados.
+                    const anulados = String(c.anul || "").toUpperCase().split(",").filter(Boolean);
                     const todas = (filasEv.length ? filasEv : lineas.map(parsear).filter(Boolean).reverse().map((r, k, arr) => ({ ...r, t: arr.length - k })));
                     const claveFila = (r, chip) => chip + "|" + (r.dir || String(r.sub || r.nombre || "").toUpperCase());
                     const brHora = {};   // clave -> hora del borrado más nuevo

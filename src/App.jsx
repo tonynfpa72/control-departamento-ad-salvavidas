@@ -14855,7 +14855,8 @@ function MonitoreoNotifier() {
   const [anunEdit, setAnunEdit] = useState(null);        // 10.9: filas del anunciador mientras se configuran
   const [anunMsg, setAnunMsg] = useState("");
   const [pantallaCruda, setPantallaCruda] = useState(false);   // 10.9: ver el texto tal como lo manda el panel
-  const vistoPantallaRef = useRef(new Map());   // 11.1: id del evento -> cuándo lo vio llegar la App
+  const vistoPantallaRef = useRef(new Map());
+  const vivoRef = useRef({ lineas: [], leds: null });   // 11.2: lo que llega por el canal en vivo (no se pierde si la base viene atrasada)   // 11.1: id del evento -> cuándo lo vio llegar la App
   const [, setTicPantalla] = useState(0);   // 11.1: refresca la pantalla para que los avisos de un momento se quiten solos
   useEffect(() => { if (!termRemoto) return; const id = setInterval(() => setTicPantalla((x) => x + 1), 4000); return () => clearInterval(id); }, [termRemoto]);
   const monActividad = useRef(Date.now());
@@ -15449,6 +15450,9 @@ function MonitoreoNotifier() {
         })
         .on("broadcast", { event: "linea" }, ({ payload }) => {
           if (!vivo || !payload || !payload.t) return;
+          vivoRef.current.lineas.push({ t: String(payload.t), at: Date.now() });
+          if (vivoRef.current.lineas.length > 80) vivoRef.current.lineas.splice(0, vivoRef.current.lineas.length - 80);
+          vivoRef.current.leds = { l: String(payload.l || ""), at: Date.now() };
           setTermFila((prev) => {
             const p = prev || {};
             const cfg = String(p.config_panel || "").replace(/;leds=[^;]*/, ";leds=" + (payload.l || "")).replace(/;nact=[^;]*/, ";nact=" + (payload.n ?? ""));
@@ -16461,7 +16465,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     </div>
                   )}
                   {(() => {
-                    const L = String(c.leds || "");
+                    const vl = vivoRef.current.leds;
+                    const L = String(vl && Date.now() - vl.at < 70000 ? vl.l : (c.leds || ""));
                     const on = (k) => lampTest || L.includes(k);
                     const encendido = abierto || lampTest;
                     const control = abierto && crtEsNotifier && c.ctrlapp === "1";
@@ -16493,6 +16498,10 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     const lineas = String(f.terminal_txt || "(todavía no llega nada)").replace(/~[\s\S]?/g, "").replace(/<[0-9A-F]{2}>/gi, "").split("\n")
                       .filter((ln) => !/comunicacion\s*,?\s*conectada/i.test(ln) && !/^[.\s!|]+$/.test(ln))
                       .map((ln) => (movil ? ln.replace(/ {3,}/g, "  ").replace(/^\.+(?=\S)/, "") : ln));
+                    // 11.2: líneas que llegaron por el canal en vivo y todavía no están en el texto guardado
+                    const txtDb = String(f.terminal_txt || "");
+                    const vivoLineas = vivoRef.current.lineas.filter((x) => Date.now() - x.at < 600000 && !txtDb.includes(x.t.trim()));
+                    vivoLineas.forEach((x) => lineas.push(x.t));
                     // 10.9: vista moderna de la pantalla — cada línea del panel como una fila con etiqueta de color
                     const ST = {
                       alarma: { background: "#e5484d22", color: "#ff8589", border: "1px solid #e5484d77" },
@@ -16577,6 +16586,15 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       if (e.borrado || e.categoria === "borrado") { if (r.chip !== "BORRADO") r.base = r.chip; r.chip = "BORRADO"; r.st = ST.gris; r.fondo = "transparent"; r.tachado = true; }
                       return r;
                     }).filter(Boolean);
+                    const textosEv = new Set(evSitio.map((e) => String(e.texto || "").trim()));
+                    vivoRef.current.lineas.filter((x) => Date.now() - x.at < 600000 && !textosEv.has(x.t.trim())).forEach((x) => {
+                      const r = parsear(x.t);
+                      if (!r) return;
+                      r.t = x.at; r.visto = x.at;
+                      r.hora = new Date(x.at).toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" });
+                      filasEv.push(r);
+                    });
+                    filasEv.sort((a, b) => (b.t || 0) - (a.t || 0));
                     // 11.1: la pantalla muestra solo lo que sigue ACTIVO. Un evento solo sale de la pantalla
                     // con SU PROPIO borrado (BR / NORMAL) — el rearme no quita nada. HABILITADA no se muestra,
                     // y los ANULADO/ANULADA solo salen si el equipo dice que siguen anulados.
@@ -16590,39 +16608,18 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     const estadoZona = {};
                     todas.forEach((r) => { if ((r.chip === "ANULADA" || r.chip === "HABILITADA") && r.dir && !(r.dir in estadoZona)) estadoZona[r.dir] = r.chip === "ANULADA" ? { a: true, t: r.t } : { a: false, t: r.t }; });
                     const ultHabil = Math.max(0, ...todas.filter((r) => r.chip === "HABILITADA").map((r) => r.t || 0));
-                    const filasPantalla = todas.filter((r) => {
-                      if (r.chip === "BORRADO" || r.normal) return false;
-                      if (r.chip === "HABILITADA") return false;
-                      if (r.chip === "ANULADA") return !!(estadoZona[r.dir] && estadoZona[r.dir].a && estadoZona[r.dir].t === r.t) || (!estadoZona[r.dir] && anulados.includes(String(r.dir || "").toUpperCase()));
-                      if (r.chip === "ANULADO") {
-                        const kb = claveFila(r, r.chip);
-                        if (kb in brHora && brHora[kb] >= r.t) return false;
-                        if (ultHabil && ultHabil >= r.t) return anulados.includes(String(r.dir || "").toUpperCase()) && Date.now() - ultHabil > 70000;
-                        return true;
-                      }
-                      // 11.1: los avisos de un momento (Confirmar, Rearme, Silenciar, órdenes…) entran y salen solos
-                      // Solo estos son de un momento. Todo lo demás (fallas, activaciones, avisos del panel…)
-                      // se queda hasta que llegue SU borrado.
-                      if (["CONFIRMADO", "REARME", "SILENCIADO", "ORDEN", "SIRENAS"].includes(r.chip))
-                        // 8 s desde que la App lo recibió; los que ya estaban al abrir el Monitor no se muestran
-                        return filasEv.length ? (Date.now() - r.visto < 8000 && r.visto - ((termRemoto && termRemoto.desde) || 0) > 1500) : todas.indexOf(r) < 3;
-                      // las alarmas y el simulacro quedan enclavados en el panel hasta el REARME (el panel no les
-                      // manda BR): salen con un rearme que llegó DESPUÉS (2 s o más; si siguen activas, el panel las reimprime)
-                      if (["ALARMA", "PREALARMA", "SIMULACRO"].includes(r.chip) && todas.some((x) => x.chip === "REARME" && x.t - r.t >= 2000)) return false;
-                      if (r.chip === "SIMULACRO") return true;
-                      const k = claveFila(r, r.chip);
-                      if (k in brHora && brHora[k] >= r.t) return false;   // su borrado llegó después (o en el mismo segundo)
-                      return true;
-                    }).slice(0, 80);
+                    // 11.2 (a pedido): por ahora NO se quita nada de la pantalla: se ven todos los eventos,
+                    // el más nuevo arriba; los BR salen tachados.
+                    const filasPantalla = todas.slice(0, 80);
                     const resumenPantalla = [];
                     if (L.includes("A")) resumenPantalla.push({ t: "Alarma", st: ST.alarma });
                     if (L.includes("S")) resumenPantalla.push({ t: "Supervisión", st: ST.superv });
                     if (L.includes("D")) resumenPantalla.push({ t: "Anulados", st: ST.anulado });
                     if (L.includes("T")) resumenPantalla.push({ t: "Falla", st: ST.falla });
                     if (!resumenPantalla.length && abierto) resumenPantalla.push({ t: "Normal", st: ST.verde });
-                    // 10.9 / 11.1: ANUNCIADOR — 8 interruptores configurables por sitio (columna dispositivos_panel.anunciador)
-                    const ANUN_DEF = [{ t: "Anular todas las Sirenas", a: "anular", d: "Z50" }, { t: "Habilitar todas las Sirenas", a: "habilitar", d: "Z50" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }];
-                    const anunFilas = (Array.isArray(f.anunciador) && f.anunciador.length ? [...f.anunciador, ...ANUN_DEF.slice(2)].slice(0, 8) : ANUN_DEF);
+                    // 10.9 / 11.1: ANUNCIADOR — 10 interruptores configurables por sitio (columna dispositivos_panel.anunciador)
+                    const ANUN_DEF = [{ t: "Anular todas las Sirenas", a: "anular", d: "Z50" }, { t: "Habilitar todas las Sirenas", a: "habilitar", d: "Z50" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }];
+                    const anunFilas = (Array.isArray(f.anunciador) && f.anunciador.length ? [...f.anunciador, ...ANUN_DEF.slice(2)].slice(0, 10) : ANUN_DEF);
                     const habZ = crtEsNotifier && c.ctrlapp === "1";
                     const tieneClave = c.cpan === "1";
                     const tocarAnun = async (fila) => {

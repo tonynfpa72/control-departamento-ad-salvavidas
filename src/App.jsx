@@ -15397,7 +15397,9 @@ function MonitoreoNotifier() {
     setMonPedir(null); setMonClave("");
     monActividad.current = Date.now();
     monClaveRef.current = String(clave);
-    monAbiertoRef.current = false;
+    // 10.7: los botones quedan activos apenas se pone la clave (cada orden lleva su propia firma);
+    // antes esperaban a que el equipo contestara «monitor serial abierto» y a veces quedaban apagados
+    monAbiertoRef.current = true;
     const ahora = new Date().toISOString();
     // la clave no viaja: se manda sha256(clave|nonce) y el equipo lo compara
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => b.toString(16).padStart(2, "0")).join("");

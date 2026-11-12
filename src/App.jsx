@@ -14853,7 +14853,15 @@ function MonitoreoNotifier() {
   const [lampTest, setLampTest] = useState(false);
   const [reportesAbiertos, setReportesAbiertos] = useState(false);
   const monActividad = useRef(Date.now());
-  const monClaveRef = useRef("");   // 7.9: la clave queda solo en memoria mientras el Monitor está abierto
+  const monClaveRef = useRef("");
+  const monAbiertoRef = useRef(false);   // 7.9: la clave queda solo en memoria mientras el Monitor está abierto
+  // 9.3: firma con un id dado y, para el canal en vivo, atada a la acción: sha256(clave|id|accion)
+  const firmaCon = async (nonce, extra) => {
+    const dig = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(monClaveRef.current) + "|" + nonce + (extra ? "|" + extra : "")));
+    return nonce + ":" + Array.from(new Uint8Array(dig)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  };
+  const canalVivoRef = useRef(null);
+  const lineasSonadasRef = useRef(new Map());   // texto -> hora: una línea no suena dos veces (canal en vivo + base)
   const firmaMonitor = async () => {
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => b.toString(16).padStart(2, "0")).join("");
     const dig = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(monClaveRef.current) + "|" + nonce));
@@ -14985,12 +14993,29 @@ function MonitoreoNotifier() {
     // además se revisa cada 1 s por si el aviso no llega (red del celular).
     let canal = null;
     try {
+      // 8.5: un evento NUEVO entra directo a la lista (sin volver a bajar los 500), y los cambios
+      // de un equipo (que con el Monitor abierto llegan varias veces por segundo) solo actualizan
+      // esa fila. Antes cada cambio recargaba todo y los eventos nuevos esperaban en la fila.
+      const permitido = (sitio) => !esCliente || sitiosCliente.includes(sitio);
       canal = supabase.channel(`eventos-vivo-${Math.random().toString(36).slice(2)}`)
-        .on("postgres_changes", { event: "*", schema: "public", table: "eventos_panel" }, () => cargar())
-        .on("postgres_changes", { event: "*", schema: "public", table: "dispositivos_panel" }, () => cargar())
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "eventos_panel" }, (p) => {
+          const n = p && p.new;
+          if (!n || !permitido(n.sitio)) return;
+          if (n.id && ultimoBorradoRef.current && Date.now() - ultimoBorradoRef.current < 3000) return;
+          setEventos((prev) => (prev.some((e) => e.id === n.id) ? prev : [corregirCategoriaEvento(n), ...prev].slice(0, 500)));
+        })
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "eventos_panel" }, () => cargar())
+        .on("postgres_changes", { event: "DELETE", schema: "public", table: "eventos_panel" }, () => cargar())
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "dispositivos_panel" }, (p) => {
+          const n = p && p.new;
+          if (!n || !permitido(n.sitio)) return;
+          setDispositivos((prev) => (prev.some((d) => d.sitio === n.sitio) ? prev.map((d) => (d.sitio === n.sitio ? { ...d, ...n } : d)) : prev));
+        })
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "dispositivos_panel" }, () => cargar())
+        .on("postgres_changes", { event: "DELETE", schema: "public", table: "dispositivos_panel" }, () => cargar())
         .subscribe();
     } catch (e) { canal = null; }
-    const intervalo = setInterval(cargar, 1000);
+    const intervalo = setInterval(cargar, 2500);   // respaldo por si el aviso en tiempo real no llega
     return () => { clearInterval(intervalo); try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
   }, []);
 
@@ -15025,7 +15050,7 @@ function MonitoreoNotifier() {
     ganancia.connect(ctx.destination);
     const osc = ctx.createOscillator();
     osc.type = "square";
-    osc.frequency.value = 2800; // tono agudo tipo sirena, igual que el equipo
+    osc.frequency.value = 520;  // 8.4: tono de 520 Hz (más grave, elegido por Anthony)
     osc.connect(ganancia);
     osc.start();
     audioCtxRef.current = ctx;
@@ -15061,7 +15086,9 @@ function MonitoreoNotifier() {
         volumen(0.5);
       } else {
         let on = false;
-        pulsoTimerRef.current = setInterval(() => { on = !on; volumen(on ? 0.5 : 0); }, 200);
+        // modo 1 = problema (pulsos de 1/2 s) · modo 3 = supervisión (pulsos de 1/8 s, muy seguidos)
+        volumen(0.5); on = true;
+        pulsoTimerRef.current = setInterval(() => { on = !on; volumen(on ? 0.5 : 0); }, modo === 3 ? 125 : 500);
       }
       if (duracionMs) {
         setTimeout(() => { if (modoSonandoRef.current === modo) detenerSonido(); }, duracionMs);
@@ -15087,6 +15114,10 @@ function MonitoreoNotifier() {
   // Al cambiar de sitio, reiniciamos desde dónde contamos "nuevo" — así no
   // se arrastra ni se mezcla el estado de sonido de un sitio con el de otro.
   useEffect(() => { ultimoEventoVistoRef.current = null; }, [sitioSeleccionado]);
+  // 8.6: con el Monitor serial abierto en este sitio, el sonido lo da el Monitor (más rápido);
+  // así un evento no vuelve a sonar tarde después de haberlo confirmado.
+  const monitorSitioRef = React.useRef(null);
+  useEffect(() => { monitorSitioRef.current = termRemoto ? termRemoto.sitio : null; }, [termRemoto]);
 
   // Detecta eventos NUEVOS del sitio que se está viendo ahora mismo (no los
   // que ya existían al abrir la página, y NO los de otros sitios aunque
@@ -15107,9 +15138,11 @@ function MonitoreoNotifier() {
     if (mayorId <= ultimoEventoVistoRef.current) return;
     const nuevos = delSitio.filter((e) => idNum(e) > ultimoEventoVistoRef.current);
     ultimoEventoVistoRef.current = mayorId;
+    if (monitorSitioRef.current && nuevos.every((e) => e.sitio === monitorSitioRef.current)) return;
     const cats = (e) => [e.categoria, e.subcat];   // la subcategoría también cuenta (ej. "general" + "problema")
     if (nuevos.some((e) => cats(e).some((c) => c === "alarma" || c === "prealarma"))) sonar(2);
-    else if (nuevos.some((e) => cats(e).some((c) => ["problema", "supervision", "seguridad"].includes(c)))) sonar(1, 6000);
+    else if (nuevos.some((e) => cats(e).some((c) => c === "supervision"))) sonar(3, 6000);
+    else if (nuevos.some((e) => cats(e).some((c) => ["problema", "seguridad"].includes(c)))) sonar(1, 6000);
   }, [eventos, esTecnicoSonido, sonidoOn, sitioSeleccionado]);
 
   useEffect(() => { sonidoOnRef.current = sonidoOn; }, [sonidoOn]);
@@ -15364,6 +15397,7 @@ function MonitoreoNotifier() {
     setMonPedir(null); setMonClave("");
     monActividad.current = Date.now();
     monClaveRef.current = String(clave);
+    monAbiertoRef.current = false;
     const ahora = new Date().toISOString();
     // la clave no viaja: se manda sha256(clave|nonce) y el equipo lo compara
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -15377,7 +15411,7 @@ function MonitoreoNotifier() {
     if (error) setTermRemoto({ sitio, desde: Date.now(), error: /terminal_/i.test(error.message || "") ? "Falta correr en Supabase el SQL_monitor_remoto.sql." : error.message });
   };
   const cerrarMonitorRemoto = async () => {
-    const t = termRemoto; setTermRemoto(null); setCfgAbierta(false); monClaveRef.current = "";
+    const t = termRemoto; setTermRemoto(null); setCfgAbierta(false); monClaveRef.current = ""; monAbiertoRef.current = false;
     if (t && !t.error) await supabase.from("dispositivos_panel").update({ terminal_tx: "CERRAR", terminal_ping: null }).eq("sitio", t.sitio);
   };
   useEffect(() => {
@@ -15397,14 +15431,78 @@ function MonitoreoNotifier() {
           (p) => { if (vivo && p && p.new) setTermFila((prev) => ({ ...(prev || {}), ...p.new })); })
         .subscribe();
     } catch (e) { canal = null; }
-    const id = setInterval(leer, 1200);
+    const id = setInterval(leer, 600);   // respaldo si el tiempo real no está activo
+    // 9.3: canal en vivo con el equipo (respuestas del panel y cada línea nueva, al instante)
+    let canalVivo = null;
+    try {
+      canalVivo = supabase.channel("ignis_" + nombreArchivoSitioPanel(termRemoto.sitio), { config: { broadcast: { self: false } } })
+        .on("broadcast", { event: "respuesta" }, ({ payload }) => {
+          if (vivo && payload && payload.r) setTermFila((prev) => ({ ...(prev || {}), comando_resultado: payload.r, comando: null }));
+        })
+        .on("broadcast", { event: "linea" }, ({ payload }) => {
+          if (!vivo || !payload || !payload.t) return;
+          setTermFila((prev) => {
+            const p = prev || {};
+            const cfg = String(p.config_panel || "").replace(/;leds=[^;]*/, ";leds=" + (payload.l || "")).replace(/;nact=[^;]*/, ";nact=" + (payload.n ?? ""));
+            return { ...p, terminal_txt: (String(p.terminal_txt || "") + "\n" + payload.t).slice(-6000),
+              terminal_total: (Number(p.terminal_total) || 0) + String(payload.t).length + 1, config_panel: cfg };
+          });
+        })
+        .subscribe();
+      canalVivoRef.current = canalVivo;
+    } catch (e) { canalVivo = null; }
     const inactivo = null;   // 7.8: sin cierre automático (solo se cierra con la X)
     const ping = setInterval(() => {
       supabase.from("dispositivos_panel").update({ terminal_ping: new Date().toISOString() }).eq("sitio", termRemoto.sitio);
     }, 20000);
-    return () => { vivo = false; clearInterval(id); clearInterval(ping); clearInterval(inactivo); try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
+    return () => { vivo = false; clearInterval(id); clearInterval(ping); clearInterval(inactivo); canalVivoRef.current = null;
+      try { if (canal) supabase.removeChannel(canal); } catch (e) {} try { if (canalVivo) supabase.removeChannel(canalVivo); } catch (e) {} };
   }, [termRemoto]);
   useEffect(() => { if (termPreRef.current) termPreRef.current.scrollTop = termPreRef.current.scrollHeight; }, [termFila && termFila.terminal_txt]);
+  // 8.6: sonido dentro del Monitor serial, directo de las líneas que imprime el panel (lo más
+  // rápido que hay: llegan con la pantalla del monitor). Cada evento nuevo vuelve a sonar,
+  // aunque se haya confirmado el anterior. No suena con historiales ni reportes.
+  const termTotalPrevRef = useRef(null);
+  useEffect(() => {
+    if (!termRemoto || !termFila) { termTotalPrevRef.current = null; return; }
+    const total = Number(termFila.terminal_total) || 0;
+    const prev = termTotalPrevRef.current;
+    termTotalPrevRef.current = total;
+    if (prev === null || total <= prev) return;
+    const c = leerConfigPanel(termFila.config_panel);
+    if (c.volc === "1") return;   // el panel está imprimiendo un historial / reporte
+    const txt = String(termFila.terminal_txt || "");
+    const nuevo = txt.slice(-Math.min(txt.length, total - prev));
+    const rango = { 0: 0, 1: 1, 3: 2, 2: 3 };
+    let modo = 0;
+    nuevo.split("\n").forEach((ln) => {
+      if (/^\s*(>>|---)/.test(ln)) return;
+      const u = ln.replace(/^[^A-Za-z0-9*#]+/, "").toUpperCase();
+      if (!u || /^(BR|CLR)\b/.test(u) || /HIST|LISTADO|NORMAL|RESTAUR|SILENCIAD|CONFIRMAR|REARME/.test(u)) return;
+      const clave = u.replace(/\s+/g, " ").trim();
+      const ya = lineasSonadasRef.current.get(clave);
+      if (ya && Date.now() - ya < 20000) return;   // ya sonó (llegó por el canal en vivo y después por la base)
+      lineasSonadasRef.current.set(clave, Date.now());
+      if (lineasSonadasRef.current.size > 200) lineasSonadasRef.current.clear();
+      let m = 0;
+      if (/^(PRE-?ALARM|ALARMA|ALARM|FIRE|FUEGO|INCENDIO)/.test(u)) m = 2;
+      else if (/SUPERV/.test(u)) m = 3;
+      else if (/^(AVERIA|PRB|PROBLEMA|FALLA|TROUBL|FAULT|SEGURIDAD|SECURITY)/.test(u)) m = 1;
+      else if (/ANULAD|DESHABIL|DISABL/.test(u)) m = 1;   // 10.5: punto/zona anulada = falla (suena como problema)
+      if (rango[m] > rango[modo]) modo = m;
+    });
+    if (modo === 2) sonar(2);
+    else if (modo) sonar(modo, 6000);
+  }, [termFila, termRemoto]);
+  // 10.5: si se enciende Point Disabled (zona anulada) suena el tono de falla, aunque el panel no imprima la línea
+  const ledsPrevRef = useRef(null);
+  useEffect(() => {
+    if (!termFila || !termFila.config_panel) { ledsPrevRef.current = null; return; }
+    const l = String(leerConfigPanel(termFila.config_panel).leds || "");
+    const antes = ledsPrevRef.current;
+    ledsPrevRef.current = l;
+    if (antes !== null && l.includes("D") && !antes.includes("D") && modoSonandoRef.current === 0) sonar(1, 6000);
+  }, [termFila]);
   useEffect(() => {
     if (termFila && !cfgForm && termFila.config_panel) {
       const c = leerConfigPanel(termFila.config_panel);
@@ -15433,9 +15531,20 @@ function MonitoreoNotifier() {
   const CRT_NOMBRES = { puntos: "Todos los puntos", simulacro: "Simulacro", ack: "Reconocer", silenciar: "Silenciar", reset: "Reset", historial: "Historial completo", histalarmas: "Historial de alarmas", detectores: "Reporte de detectores" };
   const ordenCrt = async (accion) => {
     if (!termRemoto) return;
+    // 8.4: Acknowledge o Signal Silence en el Monitor también callan el sonido de la App
+    if ((accion === "ack" || accion === "silenciar") && modoSonandoRef.current > 0) detenerSonido();
     const quien = String(currentUser?.name || currentUser?.email || "app").replace(/[|"]/g, " ").slice(0, 40);
     setCrtPend({ accion, desde: Date.now(), msg: "" });
-    const firma = await firmaMonitor();
+    const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => b.toString(16).padStart(2, "0")).join("");
+    // 9.3: primero por el CANAL EN VIVO (llega al equipo al instante)…
+    try {
+      if (canalVivoRef.current) {
+        const firmaVivo = await firmaCon(nonce, accion);
+        canalVivoRef.current.send({ type: "broadcast", event: "orden", payload: { accion, firma: firmaVivo, quien, id: nonce } });
+      }
+    } catch (e) {}
+    // …y por la base de datos como respaldo (el equipo descarta la repetida: mismo id)
+    const firma = await firmaCon(nonce);
     const { error } = await supabase.from("dispositivos_panel")
       .update({ comando: "crt", comando_arg: `${accion}|${firma}|${quien}`, comando_en: new Date().toISOString(), comando_resultado: "CRT " + accion + ": orden enviada al equipo" })
       .eq("sitio", termRemoto.sitio);
@@ -15833,7 +15942,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           background: modoSonando === 2 ? "rgba(229,72,77,.18)" : "rgba(242,183,5,.18)", border: `1px solid ${modoSonando === 2 ? IGNIS.alarma : IGNIS.problema}`,
           color: modoSonando === 2 ? "#ffb3b5" : "#ffe08a", fontWeight: 700, fontSize: 13,
         }}>
-          <span>{modoSonando === 2 ? "🔥 ALARMA" : "⚠️ EVENTO NUEVO"}</span>
+          <span>{modoSonando === 2 ? "🔥 ALARMA" : modoSonando === 3 ? "👁 SUPERVISIÓN" : "⚠️ EVENTO NUEVO"}</span>
           <Btn small onClick={detenerSonido}><VolumeX size={13} /> Silenciar</Btn>
         </div>
       )}
@@ -16058,8 +16167,9 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 <input
                   style={{ ...selectEstilo, paddingLeft: 28, width: esMovilNotifier ? 180 : 230 }}
                   placeholder="Buscar por texto o sitio..."
+                  type="search" name="buscar_eventos_ignis" autoComplete="off" autoCorrect="off" spellCheck={false} data-lpignore="true" data-form-type="other"
                   value={busqueda}
-                  onChange={(e) => setBusqueda(e.target.value)}
+                  onChange={(e) => setBusqueda(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.target.value) && !busqueda ? "" : e.target.value)}
                 />
               </div>
 {(<>
@@ -16269,11 +16379,22 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
       {termRemoto && (() => {
         const f = termFila || {};
         const claveMal = /clave del monitor incorrecta|clave bloqueada|abra el Monitor serial con la clave/i.test(f.comando_resultado || "");
-        const abierto = !claveMal && (f.comando_resultado === "monitor serial abierto" || (f.terminal_txt && !f.comando));
+        // 8.4: una vez abierto, el Monitor QUEDA abierto: una orden en curso (comando pendiente) ya no
+        // apaga los botones ni vuelve a "Conectando…" (eso era lo que se sentía lento).
+        if (!claveMal && (f.comando_resultado === "monitor serial abierto" || (f.terminal_txt && !f.comando))) monAbiertoRef.current = true;
+        const abierto = !claveMal && monAbiertoRef.current;
         const c = leerConfigPanel(f.config_panel);
         const viejo = f.version && /^([0-6]\.|7\.[01]$)/.test(String(f.version));
         const resCrt = String(f.comando_resultado || "").startsWith("CRT ") ? String(f.comando_resultado) : "";
-        const crtOk = /confirmado por el panel/i.test(resCrt);
+        const crtOk = /confirmado por el panel|enviado al panel/i.test(resCrt);   // 8.8: mandar y listo
+        // 8.9: cronómetro — cuánto tardó desde el toque hasta que la App supo que salió al panel / que el panel confirmó
+        if (crtPend && !crtPend.msg && resCrt.startsWith("CRT " + crtPend.accion)) {
+          if (!crtPend.tEnv && /enviado al panel|confirmado por el panel/i.test(resCrt)) crtPend.tEnv = Date.now() - crtPend.desde;
+          if (!crtPend.tConf && /confirmado por el panel/i.test(resCrt)) crtPend.tConf = Date.now() - crtPend.desde;
+        }
+        const crono = crtPend && (crtPend.tEnv || crtPend.tConf)
+          ? ` · ⏱ salió al panel en ${((crtPend.tEnv || crtPend.tConf) / 1000).toFixed(1)} s` + (crtPend.tConf ? `, confirmado en ${(crtPend.tConf / 1000).toFixed(1)} s` : "")
+          : "";
         const crtEsperando = crtPend && !crtPend.msg && (!resCrt || /orden enviada|enviado, esperando/i.test(resCrt)) && Date.now() - crtPend.desde < 60000;
         const crtEsNotifier = c.tipo === "3";
         const crtSimplex = c.tipo === "1" || c.tipo === "2";
@@ -16305,8 +16426,24 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     {abierto ? <span style={{ color: IGNIS.ok || "#3fb950" }}>● Conectado</span> : <span>○ Conectando con el equipo (unos segundos)…</span>}
                     {" · "}{f.comando_resultado || ""}
                     {c.tipo !== undefined && <> · Panel: <b style={{ color: IGNIS.text }}>{c.tipo === "3" ? "Notifier CRT" : c.tipo === "2" ? "Simplex Ethernet" : c.tipo === "1" ? "Simplex RS232" : "Notifier RS232"}</b> {c.tipo === "2" ? `(${c.ipactual || c.ethip} → ${c.panelip}:${c.port}, ${c.estado})` : `(${c.baud} ${c.fmt})`}</>}
+                    {Number(c.ruido) > 0 && <> · <span title="Bytes con el 8.º bit encendido: ruido eléctrico en la línea, descartado por el equipo">ruido filtrado: {c.ruido} bytes</span></>}
+                    {c.lat !== undefined && Number(c.lat) > 0 && <> · <span title="Demora del último evento desde que el panel lo imprimió hasta que la nube lo recibió (peor caso entre paréntesis), y lo que tardó la conexión">panel→nube {(Number(c.lat) / 1000).toFixed(1)} s (máx {(Number(c.latmax) / 1000).toFixed(1)} s) · red {c.red} ms</span></>}
                     {viejo && <div style={{ color: IGNIS.problema, marginTop: 4 }}>Este equipo tiene la versión {f.version}: el monitor remoto necesita la 7.2. Actualícelo desde «Actualizar firmware».</div>}
                   </div>
+                  {esTecnicoSonido && modoSonando > 0 && (
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, borderRadius: 9, padding: "8px 12px", marginBottom: 8,
+                      background: modoSonando === 2 ? "rgba(229,72,77,.18)" : "rgba(242,183,5,.18)", border: `1px solid ${modoSonando === 2 ? IGNIS.alarma : IGNIS.problema}`,
+                      color: modoSonando === 2 ? "#ffb3b5" : "#ffe08a", fontWeight: 700, fontSize: 13 }}>
+                      <span>{modoSonando === 2 ? "🔥 ALARMA" : modoSonando === 3 ? "👁 SUPERVISIÓN" : "⚠️ EVENTO NUEVO"}</span>
+                      <Btn small onClick={detenerSonido}><VolumeX size={13} /> Silenciar sonido</Btn>
+                    </div>
+                  )}
+                  {esTecnicoSonido && sonidoOn && sonidoBloqueado && (
+                    <div onClick={() => { const ctx = prepararAudio(); if (ctx && ctx.state !== "running") ctx.resume().then(() => setSonidoBloqueado(false)).catch(() => {}); else setSonidoBloqueado(false); }}
+                      style={{ background: "#1a2a3a", border: `1px solid ${IGNIS.seguridad}`, color: "#9dc6ff", borderRadius: 9, padding: "8px 12px", fontSize: 12.5, cursor: "pointer", marginBottom: 8 }}>
+                      🔈 Toque aquí para habilitar el sonido de alarmas en este dispositivo.
+                    </div>
+                  )}
                   {/clave del monitor incorrecta|clave bloqueada/i.test(f.comando_resultado || "") && (
                     <div style={{ background: IGNIS.alarma + "22", border: `1px solid ${IGNIS.alarma}88`, color: "#ff9a9d", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, marginBottom: 8, display: "flex", gap: 10, alignItems: "center" }}>
                       🔒 {f.comando_resultado}. <Btn small onClick={() => { const s2 = termRemoto.sitio; cerrarMonitorRemoto(); abrirMonitorRemoto(s2); }}>Volver a poner la clave</Btn>
@@ -16321,7 +16458,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       <span style={{ width: 16, height: 10, borderRadius: 2, flex: "none", display: "inline-block",
                         background: prendido ? color : "#b9bab5", border: `1px solid ${prendido ? color : "#9a9b96"}`,
                         boxShadow: prendido ? `0 0 9px ${color}, inset 0 0 2px #fff` : "inset 0 1px 2px #0003" }} />);
-                    const VERDE = "#3cff5a", ROJO = "#ff3b3b", AMBAR = "#ffb21f";
+                    const VERDE = "#3cff5a", ROJO = "#ff3b3b", AMBAR = "#ffb21f", AZUL = "#3b9bff";
                     const ledIzq = (txt, prendido, color) => (movil
                       ? <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, fontWeight: 800, fontSize: 8.5, textAlign: "center", lineHeight: 1.05, textTransform: "uppercase" }}>{led(prendido, color)}{txt}</div>
                       : <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, fontWeight: 800, fontSize: 10.5, textAlign: "right", lineHeight: 1.1, textTransform: "uppercase" }}>{txt}{led(prendido, color)}</div>);
@@ -16340,7 +16477,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       </div>);
                     const movil = typeof window !== "undefined" && window.innerWidth < 640;
                     // en el teléfono se juntan los espacios largos para que cada evento quepa en una o dos líneas
-                    const lineas = String(f.terminal_txt || "(todavía no llega nada)").split("\n").map((ln) => (movil ? ln.replace(/ {3,}/g, "  ").replace(/^\.+(?=\S)/, "") : ln));
+                    // 8.8: la línea con que el panel contesta al ESC ("<sitio> - NFS-640 comunicacion, conectada.")
+                    // y los "." sueltos del prompt no se muestran: no son eventos.
+                    const lineas = String(f.terminal_txt || "(todavía no llega nada)").replace(/~[\s\S]?/g, "").replace(/<[0-9A-F]{2}>/gi, "").split("\n")
+                      .filter((ln) => !/comunicacion\s*,?\s*conectada/i.test(ln) && !/^[.\s!|]+$/.test(ln))
+                      .map((ln) => (movil ? ln.replace(/ {3,}/g, "  ").replace(/^\.+(?=\S)/, "") : ln));
                     return (
                       <div style={{ background: "linear-gradient(#d9dad6,#c9cac5)", borderRadius: 12, padding: movil ? "10px 8px 12px" : "14px 16px 16px", color: "#2a2c2f", boxShadow: "inset 0 1px 0 #fff8, 0 2px 8px #0008", marginBottom: 10 }}>
                         <div style={{ display: "flex", gap: movil ? 8 : 14, alignItems: "flex-start", flexDirection: movil ? "column" : "row" }}>
@@ -16357,7 +16498,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                         <div style={movil ? { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "8px 4px", margin: "10px 0 2px" } : { display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 6, margin: "14px 0 4px", paddingLeft: 118 }}>
                           {ledAbajo(<>Fire<br />Alarm</>, on("A"), ROJO)}
                           {ledAbajo("Pre-Alarm", on("P"), ROJO)}
-                          {ledAbajo("Security", on("G"), AMBAR)}
+                          {ledAbajo("Security", on("G"), AZUL)}
                           {ledAbajo("Supervisory", on("S"), AMBAR)}
                           {ledAbajo(<>System<br />Trouble</>, on("T"), AMBAR)}
                           {ledAbajo(<>Signals<br />Silenced</>, on("Q"), AMBAR)}
@@ -16413,6 +16554,38 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       </div>
                     );
                   })()}
+                  {(() => {
+                    // 9.7: Anular / Habilitar ZONA 50 (Cambio de Estado del panel)
+                    const habZ = crtEsNotifier && c.ctrlapp === "1";
+                    const tieneClave = c.cpan === "1";
+                    const zbtn = (accion, texto, color, pregunta) => (
+                      <button type="button" disabled={!habZ || !tieneClave}
+                        onClick={() => { if (window.confirm(pregunta)) ordenCrt(accion); }}
+                        style={{ flex: 1, minWidth: 140, padding: "9px 12px", borderRadius: 9, border: `1px solid ${color}99`, background: color + "1f", color, fontWeight: 800, fontSize: 13, cursor: habZ && tieneClave ? "pointer" : "not-allowed", opacity: habZ && tieneClave ? 1 : 0.45, fontFamily: "inherit" }}>
+                        {texto}
+                      </button>);
+                    return (
+                      <div style={{ marginTop: 8, border: `1px solid ${IGNIS.border}`, borderRadius: 10, background: IGNIS.bg, padding: "10px 12px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 700, fontSize: 13.5 }}>🚫 Zona 50</span>
+                          <span style={{ fontSize: 12, color: IGNIS.dim }}>{tieneClave ? "clave del panel guardada en el equipo" : f.config_panel && c.cpan === undefined ? "necesita el firmware 9.7" : "falta guardar la clave del panel"}</span>
+                          <span style={{ flex: 1 }} />
+                          <button type="button" disabled={!habZ} onClick={async () => {
+                            const v = window.prompt("Clave de Cambio de Estado del panel (solo números).\nQueda guardada en el IgnisMonitor, no en la App.\nEscriba - para borrarla.");
+                            if (v === null) return;
+                            const t = v.trim();
+                            if (t !== "-" && !/^\d{1,8}$/.test(t)) { window.alert("La clave son solo números (hasta 8)."); return; }
+                            await supabase.from("dispositivos_panel").update({ comando: "config", comando_arg: "clavepanel=" + (t === "-" ? "" : t), comando_en: new Date().toISOString() }).eq("sitio", termRemoto.sitio);
+                          }} style={{ padding: "4px 10px", borderRadius: 7, border: `1px solid ${IGNIS.border}`, background: "transparent", color: IGNIS.dim, fontSize: 11.5, cursor: "pointer", fontFamily: "inherit" }}>
+                            {tieneClave ? "Cambiar clave del panel" : "Guardar clave del panel"}
+                          </button>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          {zbtn("anular:Z50", "DESHABILITAR ZONA 50", "#ff8c3d", "⚠ DESHABILITAR ZONA 50\n\nLa zona 50 queda anulada en el panel " + termRemoto.sitio + " hasta que se vuelva a habilitar.\n\n¿Confirma?")}
+                          {zbtn("habilitar:Z50", "HABILITAR ZONA 50", "#3fb950", "HABILITAR ZONA 50\n\nLa zona 50 vuelve a quedar activa en el panel " + termRemoto.sitio + ".\n\n¿Confirma?")}
+                        </div>
+                      </div>);
+                  })()}
                   <div style={{ marginTop: 8, fontSize: 12.5, borderRadius: 8, padding: "8px 11px", border: `1px solid ${IGNIS.border}`, color: crtPend && crtPend.msg ? IGNIS.alarma : crtEsperando ? IGNIS.problema : crtOk ? "#9be9a8" : resCrt ? IGNIS.alarma : IGNIS.dim }}>
                     {!f.config_panel ? (viejo || !f.version ? "Los botones necesitan el equipo en versión 7.6 (Actualizar firmware)." : "El equipo todavía no informa su configuración. Si ya tiene la 7.6, falta correr en Supabase el SQL_monitor_remoto.sql; si no, actualícelo.")
                       : c.tipo === "0" ? "El equipo está en modo Notifier IMPRESORA: por ahí no se puede controlar el panel. Conéctelo a los bornes PC/CRT del TB12 y cambie abajo «Tipo de panel» a «Notifier · CRT»."
@@ -16420,7 +16593,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       : c.ctrlapp !== "1" ? "El control desde la App está deshabilitado en este equipo. Se habilita en el sitio: Config. del equipo → «Permitir control desde la App»."
                       : crtPend && crtPend.msg ? crtPend.msg
                       : crtEsperando ? `➜ ${CRT_NOMBRES[crtPend.accion] || crtPend.accion}: enviado, esperando que el panel confirme…`
-                      : resCrt ? (crtOk ? "✔ " : "⚠ ") + resCrt.replace(/^CRT (\w+):/, (m, a) => (CRT_NOMBRES[a] || a) + ":") +
+                      : resCrt ? (/confirmado por el panel/i.test(resCrt) ? "✔ " : crtOk ? "➜ " : "⚠ ") + crono.replace(/^ · /, "") + (crono ? " — " : "") + resCrt.replace(/^CRT (\w+):/, (m, a) => (CRT_NOMBRES[a] || a) + ":") +
                         (/sin respuesta/i.test(resCrt) ? (/^CRT silenciar/.test(resCrt) ? " — el panel solo responde si hay señales sonando (Signals Silenced ya encendida = ya estaban silenciadas)."
                           : /^CRT ack/.test(resCrt) ? " — el panel solo responde si hay eventos sin reconocer." : " — revise que el panel no esté imprimiendo un reporte o dentro de un menú.") : "")
                       : c.leds === undefined ? "Las luces necesitan el equipo en versión 7.6." : "Listo: toque un botón y el equipo lo manda al panel de inmediato."}
@@ -16433,7 +16606,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     <Btn small onClick={enviarTextoTerminal}><Send size={13} /> Enviar</Btn>
                   </div>
                   <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
-                    {tecla("ENTER", [13])}{tecla("ESC", [27])}{tecla("↑", [27, 91, 65])}{tecla("↓", [27, 91, 66])}{tecla("←", [27, 91, 68])}{tecla("→", [27, 91, 67])}
+                    {tecla("ENTER", [13])}{tecla("ESC", [27])}{tecla("Ctrl+C", [3])}
+                    {tecla("↑", [27, 91, 65])}{tecla("↓", [27, 91, 66])}{tecla("←", [27, 91, 68])}{tecla("→", [27, 91, 67])}
                     <span style={{ fontSize: 11.5, color: IGNIS.dim }}>{termEnviando}</span>
                   </div>
                   <div style={{ marginTop: 10, borderTop: `1px solid ${IGNIS.border}`, paddingTop: 8 }}>

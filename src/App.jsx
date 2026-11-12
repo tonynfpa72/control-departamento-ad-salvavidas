@@ -14852,6 +14852,9 @@ function MonitoreoNotifier() {
   const [monClave, setMonClave] = useState("");
   const [lampTest, setLampTest] = useState(false);
   const [reportesAbiertos, setReportesAbiertos] = useState(false);
+  const [anunEdit, setAnunEdit] = useState(null);        // 10.9: filas del anunciador mientras se configuran
+  const [anunMsg, setAnunMsg] = useState("");
+  const [pantallaCruda, setPantallaCruda] = useState(false);   // 10.9: ver el texto tal como lo manda el panel
   const monActividad = useRef(Date.now());
   const monClaveRef = useRef("");
   const monAbiertoRef = useRef(false);   // 7.9: la clave queda solo en memoria mientras el Monitor está abierto
@@ -15531,12 +15534,15 @@ function MonitoreoNotifier() {
   };
   // 7.3: control del panel Notifier por CRT (Reconocer, Silenciar, Reset, Historial, Detectores)
   const CRT_NOMBRES = { puntos: "Todos los puntos", simulacro: "Simulacro", ack: "Reconocer", silenciar: "Silenciar", reset: "Reset", historial: "Historial completo", histalarmas: "Historial de alarmas", detectores: "Reporte de detectores" };
-  const ordenCrt = async (accion) => {
+  const ordenCrt = async (accion, extra) => {
     if (!termRemoto) return;
+    // 10.8: "extra" va pegado a la orden (huella de la clave del panel); en pantalla solo se ve la acción
+    const accionVis = accion;
+    if (extra) accion = accion + ":" + extra;
     // 8.4: Acknowledge o Signal Silence en el Monitor también callan el sonido de la App
     if ((accion === "ack" || accion === "silenciar") && modoSonandoRef.current > 0) detenerSonido();
     const quien = String(currentUser?.name || currentUser?.email || "app").replace(/[|"]/g, " ").slice(0, 40);
-    setCrtPend({ accion, desde: Date.now(), msg: "" });
+    setCrtPend({ accion: accionVis, desde: Date.now(), msg: "" });
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => b.toString(16).padStart(2, "0")).join("");
     // 9.3: primero por el CANAL EN VIVO (llega al equipo al instante)…
     try {
@@ -15548,9 +15554,9 @@ function MonitoreoNotifier() {
     // …y por la base de datos como respaldo (el equipo descarta la repetida: mismo id)
     const firma = await firmaCon(nonce);
     const { error } = await supabase.from("dispositivos_panel")
-      .update({ comando: "crt", comando_arg: `${accion}|${firma}|${quien}`, comando_en: new Date().toISOString(), comando_resultado: "CRT " + accion + ": orden enviada al equipo" })
+      .update({ comando: "crt", comando_arg: `${accion}|${firma}|${quien}`, comando_en: new Date().toISOString(), comando_resultado: "CRT " + accionVis + ": orden enviada al equipo" })
       .eq("sitio", termRemoto.sitio);
-    if (error) setCrtPend({ accion, desde: Date.now(), msg: "No se pudo enviar: " + error.message });
+    if (error) setCrtPend({ accion: accionVis, desde: Date.now(), msg: "No se pudo enviar: " + error.message });
   };
   const aplicarConfigPanel = async () => {
     if (!termRemoto || !cfgForm) return;
@@ -16414,7 +16420,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const red = cfgForm && cfgForm.tipo === "2";
         return (
           <div onClick={cerrarMonitorRemoto} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: (typeof window !== "undefined" && window.innerWidth < 640) ? 4 : 12 }}>
-            <div onClick={(x) => x.stopPropagation()} onPointerDown={() => { monActividad.current = Date.now(); }} onKeyDown={() => { monActividad.current = Date.now(); }} style={{ background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 12, width: "100%", maxWidth: 880, maxHeight: "94vh", display: "flex", flexDirection: "column", padding: (typeof window !== "undefined" && window.innerWidth < 640) ? "10px 8px" : "14px 16px", fontFamily: "system-ui,-apple-system,sans-serif", overflow: "auto" }}>
+            <div onClick={(x) => x.stopPropagation()} onPointerDown={() => { monActividad.current = Date.now(); }} onKeyDown={() => { monActividad.current = Date.now(); }} style={{ background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 12, width: "100%", maxWidth: (typeof window !== "undefined" && window.innerWidth < 640) ? 880 : "min(1500px, 97vw)", maxHeight: (typeof window !== "undefined" && window.innerWidth < 640) ? "94vh" : "97vh", display: "flex", flexDirection: "column", padding: (typeof window !== "undefined" && window.innerWidth < 640) ? "10px 8px" : "16px 20px", fontFamily: "system-ui,-apple-system,sans-serif", overflow: "auto" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
                 <Settings size={18} color={IGNIS.general} />
                 <div style={{ flex: 1, fontWeight: 800, fontSize: 16 }}>Monitor serial · {termRemoto.sitio}</div>
@@ -16484,8 +16490,157 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     const lineas = String(f.terminal_txt || "(todavía no llega nada)").replace(/~[\s\S]?/g, "").replace(/<[0-9A-F]{2}>/gi, "").split("\n")
                       .filter((ln) => !/comunicacion\s*,?\s*conectada/i.test(ln) && !/^[.\s!|]+$/.test(ln))
                       .map((ln) => (movil ? ln.replace(/ {3,}/g, "  ").replace(/^\.+(?=\S)/, "") : ln));
+                    // 10.9: vista moderna de la pantalla — cada línea del panel como una fila con etiqueta de color
+                    const ST = {
+                      alarma: { background: "#e5484d22", color: "#ff8589", border: "1px solid #e5484d77" },
+                      anulado: { background: "#ff8c3d22", color: "#ffad6b", border: "1px solid #ff8c3d66" },
+                      falla: { background: "#f2b70522", color: "#ffd866", border: "1px solid #f2b70566" },
+                      superv: { background: "#ff8c3d22", color: "#ffb36b", border: "1px solid #ff8c3d66" },
+                      azul: { background: "#2f81f722", color: "#79b8ff", border: "1px solid #2f81f766" },
+                      verde: { background: "#3fb95022", color: "#7ee787", border: "1px solid #3fb95066" },
+                      gris: { background: "#30363d", color: "#8b949e", border: "1px solid #484f58" },
+                    };
+                    const ESTADOS = { "NO RES": "No responde", "ANULAD": "Anulado", "ABIERT": "Abierto", "CORTO": "Corto", "TIERRA": "Falla a tierra", "SUCIO": "Sucio", "INVREP": "Tipo incorrecto", "ACTIVO": "Activo", "NORMAL": "Normal" };
+                    const titulo = (t) => String(t || "").toLowerCase().replace(/(^|[\s/(.-])([a-záéíóúñ])/g, (x, p, l) => p + l.toUpperCase()).replace(/\.(?=[A-Za-zÁÉÍÓÚÑáéíóúñ])/g, ". ").replace(/\bNum\b/g, "núm").replace(/\bCto\b/g, "Cto").replace(/\bSys\.initialization\b/i, "Sys. Initialization").replace(/\s(En|De|Del|La|El|Los|Las|Y|A)\b/g, (m) => m.toLowerCase()).replace(/^Prb\b/, "Problema").replace(/^Averia\b/, "Avería");
+                    const parsear = (crudo) => {
+                      let t = String(crudo || "").replace(/^[.\s]+/, "").replace(/\s+$/, "");
+                      if (!t || /^---/.test(t) || /comunicacion\s*,?\s*conectada/i.test(t)) return null;
+                      const U = t.toUpperCase();
+                      if ((U.length <= 7 && !/\s/.test(U)) || /PULSE|^1=ANULAR|^ANULAR\/HAB|INTRODUZCA CLAVE|ENTRADA INVALIDA|^LEER PTO|ANULAR\/HAB PUNTO/.test(U)) return null;
+                      if (/^>>/.test(t)) return { chip: "ORDEN", st: ST.azul, nombre: t.replace(/^>>\s*\[?|\]$/g, ""), sub: "enviada desde la App", fondo: "#2f81f710" };
+                      let hora = "";
+                      const mh = t.match(/(\d{1,2})[:;](\d{2})([AP])\s*(\d{6})?(\s+(DOM|LUN|MAR|MIE|JUE|VIE|SAB|SUN|MON|TUE|WED|THU|FRI|SAT))?/i);
+                      if (mh) { hora = Number(mh[1]) + ":" + mh[2] + (mh[3].toUpperCase() === "P" ? " p.m." : " a.m."); t = (t.slice(0, mh.index) + " " + t.slice(mh.index + mh[0].length)).replace(/\s+$/, ""); }
+                      const partes = t.split(/\s{2,}/).map((x) => x.trim()).filter(Boolean);
+                      let dir = "";
+                      const ult = partes.length > 1 ? partes[partes.length - 1] : "";
+                      if (/^[A-Z0-9]{2,8}$/i.test(ult) && /\d/.test(ult)) { dir = ult.toUpperCase(); partes.pop(); }
+                      let sub = "";
+                      const pen = partes.length > 1 ? partes[partes.length - 1].toUpperCase() : "";
+                      if (ESTADOS[pen]) { sub = ESTADOS[pen]; partes.pop(); }
+                      const tipo = (partes[0] || "").toUpperCase();
+                      const desc = partes.slice(1).join(" ");
+                      const borr = /^(BR|CLR)\b/.test(tipo);
+                      const T2 = borr ? tipo.replace(/^(BR|CLR)\s*/, "") : tipo;
+                      let chip = "AVISO", st = ST.gris, fondo = "transparent", nombre = titulo(desc || T2);
+                      if (/^CAMBIO ESTADO/.test(U) && /HABILITADA/.test(U)) {
+                        const si = /\bSI\s+HABILITADA/.test(U);
+                        chip = si ? "ANULADA" : "HABILITADA"; st = si ? ST.anulado : ST.verde; fondo = si ? "#ff8c3d10" : "#3fb95010";
+                        nombre = (/^Z\d+$/.test(dir) ? "Zona " + dir.slice(1) : "Punto " + dir); sub = si ? "Anulación activa" : "Vuelve a estar activa";
+                      } else if (/SIMULACION|DRILL/.test(T2)) { chip = "SIMULACRO"; st = ST.alarma; fondo = "#e5484d14"; nombre = "Simulacro activado"; }
+                      else if (/PRE-?ALARM/.test(T2)) { chip = "PREALARMA"; st = ST.alarma; fondo = "#e5484d14"; }
+                      else if (/^(ALARMA|ALARM|FIRE|FUEGO|INCENDIO)/.test(T2)) { chip = "ALARMA"; st = ST.alarma; fondo = "#e5484d14"; }
+                      else if (/SUPERV/.test(T2)) { chip = "SUPERVISIÓN"; st = ST.superv; fondo = "#ff8c3d10"; }
+                      else if (/SEGURIDAD|SECURITY/.test(T2)) { chip = "SEGURIDAD"; st = ST.azul; }
+                      else if (/^ANULAR|ANULAD|DESHABIL|DISABL/.test(T2)) { chip = "ANULADO"; st = ST.anulado; fondo = "#ff8c3d10"; }
+                      else if (/^(AVERIA|PRB|PROBLEMA|FALLA|TROUBL|FAULT)/.test(T2)) { chip = "FALLA"; st = ST.falla; fondo = "#f2b70510"; }
+                      else if (/REARME|RESET/.test(T2)) { chip = "REARME"; st = ST.azul; nombre = "Rearme del sistema"; }
+                      else if (/CONFIRMAR|ACKNOWLEDGE/.test(T2)) { chip = "CONFIRMADO"; st = ST.gris; nombre = "Eventos confirmados"; }
+                      else if (/SENAL SILENCIADA|SIGNAL SILENCED/.test(T2)) { chip = "SILENCIADO"; st = ST.falla; nombre = "Señales silenciadas"; }
+                      else if (/REACTIVAR/.test(T2)) { chip = "SIRENAS"; st = ST.alarma; nombre = "Sirenas reactivadas"; }
+                      if (/EN SISTEMA$/.test(T2) && desc) { nombre = titulo(T2); sub = sub || titulo(desc); }
+                      if (chip === "ALARMA" && !desc) nombre = titulo(T2.replace(/^(ALARMA|ALARM|FIRE|FUEGO|INCENDIO)\s*:?\s*/, "")) || "Alarma";
+                      if (borr) { chip = "BORRADO"; st = ST.gris; fondo = "transparent"; }
+                      if (!desc && !/^CAMBIO ESTADO/.test(U) && nombre === titulo(T2)) nombre = titulo(T2);
+                      return { chip, st, fondo, nombre: nombre || titulo(t), sub, dir, hora, tachado: borr };
+                    };
+                    const filasPantalla = lineas.map(parsear).filter(Boolean).reverse().slice(0, 80);
+                    const resumenPantalla = [];
+                    if (L.includes("A")) resumenPantalla.push({ t: "Alarma", st: ST.alarma });
+                    if (L.includes("S")) resumenPantalla.push({ t: "Supervisión", st: ST.superv });
+                    if (L.includes("D")) resumenPantalla.push({ t: "Anulados", st: ST.anulado });
+                    if (L.includes("T")) resumenPantalla.push({ t: "Falla", st: ST.falla });
+                    if (!resumenPantalla.length && abierto) resumenPantalla.push({ t: "Normal", st: ST.verde });
+                    // 10.9: ANUNCIADOR — 6 interruptores configurables por sitio (columna dispositivos_panel.anunciador)
+                    const ANUN_DEF = [{ t: "Anular todas las Sirenas", a: "anular", d: "Z50" }, { t: "Habilitar todas las Sirenas", a: "habilitar", d: "Z50" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }];
+                    const anunFilas = (Array.isArray(f.anunciador) && f.anunciador.length ? [...f.anunciador, ...ANUN_DEF.slice(2)].slice(0, 6) : ANUN_DEF);
+                    const anulados = String(c.anul || "").toUpperCase().split(",").filter(Boolean);
+                    const habZ = crtEsNotifier && c.ctrlapp === "1";
+                    const tieneClave = c.cpan === "1";
+                    const tocarAnun = async (fila) => {
+                      if (!fila.t || !fila.d) return;
+                      if (!habZ) { window.alert("Solo con panel Notifier por CRT y el control desde la App habilitado."); return; }
+                      if (!tieneClave) { window.alert("Primero guarde la clave del panel en el equipo (⚙ del anunciador)."); return; }
+                      const inp = document.getElementById("clave_panel_anun");
+                      const v = String((inp && inp.value) || "").trim();
+                      if (!/^\d{1,8}$/.test(v)) { window.alert("Escriba la clave del panel para «" + fila.t + "»."); if (inp) inp.focus(); return; }
+                      const dig = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("panel|" + v));
+                      const h = Array.from(new Uint8Array(dig)).map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 16);
+                      if (inp) inp.value = "";
+                      ordenCrt(fila.a + ":" + String(fila.d).toUpperCase(), h);
+                    };
+                    const guardarAnun = async () => {
+                      const filas = anunEdit.map((r) => ({ t: String(r.t || "").trim().slice(0, 40), a: r.a === "habilitar" ? "habilitar" : "anular", d: String(r.d || "").trim().toUpperCase().slice(0, 7) }));
+                      for (const r of filas) if (r.t && !/^[A-Z0-9]{2,7}$/.test(r.d)) { setAnunMsg("Revise la zona/punto de «" + r.t + "» (ej. Z50, B01, 1D045)."); return; }
+                      const { error } = await supabase.from("dispositivos_panel").update({ anunciador: filas }).eq("sitio", termRemoto.sitio);
+                      if (error) { setAnunMsg(/anunciador/i.test(error.message || "") ? "Falta correr en Supabase el SQL_anunciador.sql." : error.message); return; }
+                      setAnunEdit(null); setAnunMsg("");
+                    };
+                    const cambiarClavePanel = async () => {
+                      const v = window.prompt("Clave de Cambio de Estado del panel (solo números).\nQueda guardada en el IgnisMonitor, no en la App.\nEscriba - para borrarla.");
+                      if (v === null) return;
+                      const t = v.trim();
+                      if (t !== "-" && !/^\d{1,8}$/.test(t)) { window.alert("La clave son solo números (hasta 8)."); return; }
+                      await supabase.from("dispositivos_panel").update({ comando: "config", comando_arg: "clavepanel=" + (t === "-" ? "" : t), comando_en: new Date().toISOString() }).eq("sitio", termRemoto.sitio);
+                    };
+                    const inpSt = { padding: "6px 7px", border: "1px solid #999", borderRadius: 6, fontSize: 12, background: "#fff", color: "#222", width: "100%", boxSizing: "border-box", fontFamily: "inherit" };
+                    const anunciador = (
+                      <div style={{ width: movil ? "auto" : (anunEdit ? 400 : 270), flex: "none", background: "linear-gradient(#d4d5d1,#c4c5c0)", borderRadius: 12, padding: movil ? "10px 8px" : "12px 10px", color: "#2a2c2f", boxShadow: "inset 0 1px 0 #fff8, 0 2px 8px #0008", display: "flex", flexDirection: "column" }}>
+                        <div style={{ position: "relative", textAlign: "center", fontWeight: 800, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8, minHeight: 24, lineHeight: "24px" }}>
+                          {anunEdit ? "Configurar anunciador" : "Anunciador · Control"}
+                          {!anunEdit && <button type="button" title="Configurar" onClick={() => { setAnunMsg(""); setAnunEdit(anunFilas.map((r) => ({ ...r }))); }}
+                            style={{ position: "absolute", right: 0, top: 0, fontSize: 14, background: "#e8e8e5", border: "1px solid #999", borderRadius: 6, padding: "0 7px", cursor: "pointer", lineHeight: "22px" }}>⚙</button>}
+                        </div>
+                        {anunEdit ? (
+                          <div>
+                            <div style={{ display: "grid", gridTemplateColumns: "16px 1fr 92px 62px", gap: 5, alignItems: "center", fontSize: 11 }}>
+                              <b>#</b><b>Etiqueta</b><b>Acción</b><b>Zona/punto</b>
+                              {anunEdit.map((r, k) => (
+                                <React.Fragment key={k}>
+                                  <b>{k + 1}</b>
+                                  <input value={r.t} placeholder="(vacío)" maxLength={40} autoComplete="off" onChange={(e) => setAnunEdit(anunEdit.map((x, i) => (i === k ? { ...x, t: e.target.value } : x)))} style={inpSt} />
+                                  <select value={r.a} onChange={(e) => setAnunEdit(anunEdit.map((x, i) => (i === k ? { ...x, a: e.target.value } : x)))} style={inpSt}><option value="anular">Anular</option><option value="habilitar">Habilitar</option></select>
+                                  <input value={r.d} placeholder="Z01" maxLength={7} autoComplete="off" onChange={(e) => setAnunEdit(anunEdit.map((x, i) => (i === k ? { ...x, d: e.target.value.toUpperCase() } : x)))} style={inpSt} />
+                                </React.Fragment>))}
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                              <button type="button" onClick={cambiarClavePanel} style={{ padding: "6px 10px", borderRadius: 7, border: "1px solid #999", background: "transparent", fontSize: 11.5, cursor: "pointer", fontFamily: "inherit" }}>{tieneClave ? "Cambiar clave del panel" : "Guardar clave del panel"}</button>
+                              <span style={{ flex: 1 }} />
+                              <button type="button" onClick={() => { setAnunEdit(null); setAnunMsg(""); }} style={{ padding: "6px 12px", borderRadius: 7, border: "1px solid #999", background: "transparent", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Cancelar</button>
+                              <button type="button" onClick={guardarAnun} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: "#2b4a6f", color: "#fff", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Guardar</button>
+                            </div>
+                            {anunMsg && <div style={{ marginTop: 6, fontSize: 11.5, color: "#b3261e" }}>{anunMsg}</div>}
+                          </div>
+                        ) : (
+                          <>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 6, background: "#dfe0dc", border: "1px solid #a5a6a1", borderRadius: 10, padding: 8 }}>
+                              {anunFilas.map((r, k) => {
+                                if (movil && !r.t) return null;
+                                const luz = r.t && r.a === "anular" && anulados.includes(String(r.d).toUpperCase());
+                                const enviando = crtEsperando && crtPend && crtPend.accion === r.a + ":" + String(r.d).toUpperCase();
+                                return (
+                                  <div key={k} style={{ display: "flex", alignItems: "center", gap: 6, height: 40 }}>
+                                    <div style={{ flex: 1, height: "100%", boxSizing: "border-box", background: r.t ? "#fff" : "#f3f3f1", border: `1px solid ${r.t ? "#888" : "#bbb"}`, borderRadius: 2, fontSize: 12, fontWeight: 600, lineHeight: 1.15, padding: "4px 7px", display: "flex", alignItems: "center", overflow: "hidden" }}>{r.t}</div>
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                      <span style={{ width: 11, height: 6, borderRadius: 1, background: luz || lampTest ? "#ffb21f" : "#b9bab5", border: "1px solid #999", boxShadow: luz || lampTest ? "0 0 7px #ffb21f" : "none" }} />
+                                      <span style={{ width: 11, height: 6, borderRadius: 1, background: lampTest ? "#ffb21f" : "#b9bab5", border: "1px solid #999" }} />
+                                    </div>
+                                    <button type="button" disabled={!r.t || !r.d} onClick={() => tocarAnun(r)} title={r.t ? r.t + " (" + r.d + ")" : ""}
+                                      style={{ width: 32, height: 32, borderRadius: 5, background: "#e8e8e5", border: "1px solid #888", display: "flex", padding: 4, cursor: r.t ? "pointer" : "default", touchAction: "manipulation",
+                                        boxShadow: enviando ? "0 1px 0 #888, inset 0 2px 3px #0005" : "0 2px 0 #888", transform: enviando ? "translateY(1px)" : "none" }}>
+                                      <i style={{ flex: 1, borderRadius: 3, background: "#1f1f1f", boxShadow: luz ? "inset 0 0 0 2px #ff8c3d" : "none" }} />
+                                    </button>
+                                  </div>);
+                              })}
+                            </div>
+                            <input id="clave_panel_anun" type="password" inputMode="numeric" autoComplete="new-password" name="clave_panel_anun_ignis" data-lpignore="true" placeholder="Clave del panel"
+                              style={{ marginTop: 8, padding: "8px 10px", borderRadius: 7, border: "1px solid #999", fontSize: 13, background: "#fff", color: "#222", fontFamily: "inherit" }} />
+                          </>
+                        )}
+                      </div>);
                     return (
-                      <div style={{ background: "linear-gradient(#d9dad6,#c9cac5)", borderRadius: 12, padding: movil ? "10px 8px 12px" : "14px 16px 16px", color: "#2a2c2f", boxShadow: "inset 0 1px 0 #fff8, 0 2px 8px #0008", marginBottom: 10 }}>
+                      <div style={{ display: "flex", flexDirection: movil ? "column" : "row", gap: 10, alignItems: "stretch", marginBottom: 10 }}>
+                      <div style={{ flex: 1, minWidth: 0, background: "linear-gradient(#d9dad6,#c9cac5)", borderRadius: 12, padding: movil ? "10px 8px 12px" : "14px 16px 16px", color: "#2a2c2f", boxShadow: "inset 0 1px 0 #fff8, 0 2px 8px #0008" }}>
                         <div style={{ display: "flex", gap: movil ? 8 : 14, alignItems: "flex-start", flexDirection: movil ? "column" : "row" }}>
                           <div style={movil ? { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 4, width: "100%" } : { display: "flex", flexDirection: "column", gap: 9, width: 118, paddingTop: 10 }}>
                             {ledIzq(<>Controls<br />Active</>, control || lampTest, VERDE)}
@@ -16493,9 +16648,35 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                             {ledIzq(<>Pre-<br />Discharge</>, lampTest, AMBAR)}
                             {ledIzq("Discharge", lampTest, ROJO)}
                           </div>
-                          <pre ref={termPreRef} style={{ flex: 1, width: movil ? "100%" : undefined, boxSizing: "border-box", minWidth: movil ? 0 : 260, height: movil ? 230 : 250, overflow: "auto", margin: 0, background: "#05080c", border: movil ? "4px solid #3a3d40" : "6px solid #3a3d40", borderRadius: 6, padding: movil ? "6px 7px" : "8px 10px", fontSize: movil ? 10.5 : 12, lineHeight: 1.4, color: "#7ee787", whiteSpace: "pre-wrap", wordBreak: "normal", overflowWrap: "anywhere", fontFamily: "ui-monospace,Consolas,monospace", boxShadow: "inset 0 0 12px #000" }}>
+                          {pantallaCruda ? (
+                          <div style={{ flex: 1, position: "relative", minWidth: movil ? 0 : 260, width: movil ? "100%" : undefined, display: "flex" }}>
+                          <button type="button" onClick={() => setPantallaCruda(false)} style={{ position: "absolute", right: 14, top: 10, zIndex: 2, background: "#161e27", border: "1px solid #30363d", color: "#c9d1d9", borderRadius: 6, fontSize: 10.5, padding: "2px 8px", cursor: "pointer", fontFamily: "inherit" }}>Vista moderna</button>
+                          <pre ref={termPreRef} style={{ flex: 1, width: movil ? "100%" : undefined, boxSizing: "border-box", minWidth: movil ? 0 : 260, height: movil ? 230 : 390, overflow: "auto", margin: 0, background: "#05080c", border: movil ? "4px solid #3a3d40" : "6px solid #3a3d40", borderRadius: 6, padding: movil ? "6px 7px" : "8px 10px", fontSize: movil ? 10.5 : 12, lineHeight: 1.4, color: "#7ee787", whiteSpace: "pre-wrap", wordBreak: "normal", overflowWrap: "anywhere", fontFamily: "ui-monospace,Consolas,monospace", boxShadow: "inset 0 0 12px #000" }}>
                             {lineas.map((ln, k) => <div key={k} style={{ color: ln.startsWith(">>") ? "#ffd866" : ln.startsWith("---") ? "#8b949e" : undefined, minHeight: "1.45em" }}>{ln}</div>)}
                           </pre>
+                          </div>
+                          ) : (
+                            <div style={{ flex: 1, width: movil ? "100%" : undefined, boxSizing: "border-box", minWidth: movil ? 0 : 260, height: movil ? 260 : 390, overflow: "hidden", display: "flex", flexDirection: "column", background: "linear-gradient(#0e141b,#0a0f14)", border: movil ? "4px solid #3a3d40" : "6px solid #3a3d40", borderRadius: 8, color: "#e6edf3", fontFamily: "Inter, system-ui, 'Segoe UI', Roboto, sans-serif" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: movil ? "6px 8px" : "7px 12px", borderBottom: "1px solid #1f2933", fontSize: 11.5, color: "#8b949e", flexWrap: "wrap" }}>
+                                <b style={{ color: "#e6edf3", fontSize: movil ? 11.5 : 12.5 }}>{termRemoto.sitio}</b><span>· NFS2-640</span><span style={{ flex: 1 }} />
+                                {resumenPantalla.map((r) => <span key={r.t} style={{ padding: "2px 8px", borderRadius: 99, fontSize: 10.5, fontWeight: 700, ...r.st }}>{r.t}</span>)}
+                                <button type="button" onClick={() => setPantallaCruda(true)} title="Ver el texto tal como lo manda el panel" style={{ background: "transparent", border: "1px solid #30363d", color: "#8b949e", borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>Texto</button>
+                              </div>
+                              <div style={{ flex: 1, overflow: "auto" }}>
+                                {filasPantalla.length === 0 && <div style={{ padding: 14, fontSize: 12, color: "#8b949e" }}>Todavía no llega nada del panel.</div>}
+                                {filasPantalla.map((r, k) => (
+                                  <div key={k} style={{ display: "grid", gridTemplateColumns: movil ? "66px 1fr auto" : "92px 1fr auto 84px", gap: movil ? 7 : 12, alignItems: "center", padding: movil ? "6px 8px" : "8px 14px", borderBottom: "1px solid #161e27", background: k === 0 ? r.fondo : "transparent" }}>
+                                    <span style={{ fontSize: movil ? 9 : 11.5, fontWeight: 800, padding: movil ? "3px 0" : "4px 0", borderRadius: 6, textAlign: "center", letterSpacing: 0.3, ...r.st }}>{r.chip}</span>
+                                    <span style={{ minWidth: 0 }}>
+                                      <span style={{ display: "block", fontWeight: 600, fontSize: movil ? 11.5 : 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: r.tachado ? "#8b949e" : "#e6edf3", textDecoration: r.tachado ? "line-through" : "none" }}>{r.nombre}</span>
+                                      {(r.sub || movil) && <span style={{ display: "block", fontSize: movil ? 10 : 12, color: "#8b949e", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.sub}{movil && r.hora ? (r.sub ? " · " : "") + r.hora : ""}</span>}
+                                    </span>
+                                    {r.dir ? <span style={{ fontFamily: "'JetBrains Mono', Consolas, monospace", fontSize: movil ? 10.5 : 11.5, color: "#c9d1d9", background: "#161e27", padding: "2px 7px", borderRadius: 5 }}>{r.dir}</span> : <span />}
+                                    {!movil && <span style={{ fontSize: 12.5, color: "#8b949e", textAlign: "right", whiteSpace: "nowrap" }}>{r.hora}</span>}
+                                  </div>))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                         <div style={movil ? { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "8px 4px", margin: "10px 0 2px" } : { display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 6, margin: "14px 0 4px", paddingLeft: 118 }}>
                           {ledAbajo(<>Fire<br />Alarm</>, on("A"), ROJO)}
@@ -16517,6 +16698,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                             } } })}
                           {boton(movil ? "Lamp" : <>Lamp<br />Test</>, null, { siempre: true, ev: { onClick: () => { setLampTest(true); setTimeout(() => setLampTest(false), 3000); } } })}
                         </div>
+                      </div>
+                      {anunciador}
                       </div>);
                   })()}
                   {(() => {
@@ -16555,38 +16738,6 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                         ))}
                       </div>
                     );
-                  })()}
-                  {(() => {
-                    // 9.7: Anular / Habilitar ZONA 50 (Cambio de Estado del panel)
-                    const habZ = crtEsNotifier && c.ctrlapp === "1";
-                    const tieneClave = c.cpan === "1";
-                    const zbtn = (accion, texto, color, pregunta) => (
-                      <button type="button" disabled={!habZ || !tieneClave}
-                        onClick={() => { if (window.confirm(pregunta)) ordenCrt(accion); }}
-                        style={{ flex: 1, minWidth: 140, padding: "9px 12px", borderRadius: 9, border: `1px solid ${color}99`, background: color + "1f", color, fontWeight: 800, fontSize: 13, cursor: habZ && tieneClave ? "pointer" : "not-allowed", opacity: habZ && tieneClave ? 1 : 0.45, fontFamily: "inherit" }}>
-                        {texto}
-                      </button>);
-                    return (
-                      <div style={{ marginTop: 8, border: `1px solid ${IGNIS.border}`, borderRadius: 10, background: IGNIS.bg, padding: "10px 12px" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-                          <span style={{ fontWeight: 700, fontSize: 13.5 }}>🚫 Zona 50</span>
-                          <span style={{ fontSize: 12, color: IGNIS.dim }}>{tieneClave ? "clave del panel guardada en el equipo" : f.config_panel && c.cpan === undefined ? "necesita el firmware 9.7" : "falta guardar la clave del panel"}</span>
-                          <span style={{ flex: 1 }} />
-                          <button type="button" disabled={!habZ} onClick={async () => {
-                            const v = window.prompt("Clave de Cambio de Estado del panel (solo números).\nQueda guardada en el IgnisMonitor, no en la App.\nEscriba - para borrarla.");
-                            if (v === null) return;
-                            const t = v.trim();
-                            if (t !== "-" && !/^\d{1,8}$/.test(t)) { window.alert("La clave son solo números (hasta 8)."); return; }
-                            await supabase.from("dispositivos_panel").update({ comando: "config", comando_arg: "clavepanel=" + (t === "-" ? "" : t), comando_en: new Date().toISOString() }).eq("sitio", termRemoto.sitio);
-                          }} style={{ padding: "4px 10px", borderRadius: 7, border: `1px solid ${IGNIS.border}`, background: "transparent", color: IGNIS.dim, fontSize: 11.5, cursor: "pointer", fontFamily: "inherit" }}>
-                            {tieneClave ? "Cambiar clave del panel" : "Guardar clave del panel"}
-                          </button>
-                        </div>
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          {zbtn("anular:Z50", "DESHABILITAR ZONA 50", "#ff8c3d", "⚠ DESHABILITAR ZONA 50\n\nLa zona 50 queda anulada en el panel " + termRemoto.sitio + " hasta que se vuelva a habilitar.\n\n¿Confirma?")}
-                          {zbtn("habilitar:Z50", "HABILITAR ZONA 50", "#3fb950", "HABILITAR ZONA 50\n\nLa zona 50 vuelve a quedar activa en el panel " + termRemoto.sitio + ".\n\n¿Confirma?")}
-                        </div>
-                      </div>);
                   })()}
                   <div style={{ marginTop: 8, fontSize: 12.5, borderRadius: 8, padding: "8px 11px", border: `1px solid ${IGNIS.border}`, color: crtPend && crtPend.msg ? IGNIS.alarma : crtEsperando ? IGNIS.problema : crtOk ? "#9be9a8" : resCrt ? IGNIS.alarma : IGNIS.dim }}>
                     {!f.config_panel ? (viejo || !f.version ? "Los botones necesitan el equipo en versión 7.6 (Actualizar firmware)." : "El equipo todavía no informa su configuración. Si ya tiene la 7.6, falta correr en Supabase el SQL_monitor_remoto.sql; si no, actualícelo.")

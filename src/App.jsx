@@ -16507,6 +16507,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       if (!t || /^---/.test(t) || /comunicacion\s*,?\s*conectada/i.test(t)) return null;
                       const U = t.toUpperCase();
                       if ((U.length <= 7 && !/\s/.test(U)) || /PULSE|^1=ANULAR|^ANULAR\/HAB|INTRODUZCA CLAVE|ENTRADA INVALIDA|^LEER PTO|ANULAR\/HAB PUNTO/.test(U)) return null;
+                      // pedazo de línea (el principio quedó fuera del búfer): "126 Mie", "10:43P 1111"...
+                      if (/^[\d\s:;.APM]*(DOM|LUN|MAR|MIE|JUE|VIE|SAB|SUN|MON|TUE|WED|THU|FRI|SAT)?$/i.test(t)) return null;
                       if (/^>>/.test(t)) return { chip: "ORDEN", st: ST.azul, nombre: t.replace(/^>>\s*\[?|\]$/g, ""), sub: "enviada desde la App", fondo: "#2f81f710" };
                       let hora = "";
                       const mh = t.match(/(\d{1,2})[:;](\d{2})([AP])\s*(\d{6})?(\s+(DOM|LUN|MAR|MIE|JUE|VIE|SAB|SUN|MON|TUE|WED|THU|FRI|SAT))?/i);
@@ -16544,7 +16546,23 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       if (!desc && !/^CAMBIO ESTADO/.test(U) && nombre === titulo(T2)) nombre = titulo(T2);
                       return { chip, st, fondo, nombre: nombre || titulo(t), sub, dir, hora, tachado: borr };
                     };
-                    const filasPantalla = lineas.map(parsear).filter(Boolean).reverse().slice(0, 80);
+                    // 10.9: la vista moderna usa los EVENTOS guardados del sitio (no se pierden como en el
+                    // texto del puerto, que solo guarda los últimos ~2 KB); si todavía no hay, usa el texto.
+                    const hoyTxt = new Date().toDateString();
+                    const evSitio = eventos.filter((e) => e.sitio === termRemoto.sitio)
+                      .sort((a, b) => new Date(b.fecha_panel || b.created_at || 0) - new Date(a.fecha_panel || a.created_at || 0)).slice(0, 120);
+                    const filasEv = evSitio.map((e) => {
+                      const r = parsear(e.texto);
+                      if (!r) return null;
+                      const fe = new Date(e.fecha_panel || e.created_at || Date.now());
+                      if (!isNaN(fe)) {
+                        const h = fe.toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" });
+                        r.hora = fe.toDateString() === hoyTxt ? h : fe.toLocaleDateString("es-CR", { day: "2-digit", month: "2-digit" }) + " " + h;
+                      }
+                      if (e.borrado || e.categoria === "borrado") { r.chip = "BORRADO"; r.st = ST.gris; r.fondo = "transparent"; r.tachado = true; }
+                      return r;
+                    }).filter(Boolean);
+                    const filasPantalla = (filasEv.length ? filasEv : lineas.map(parsear).filter(Boolean).reverse()).slice(0, 80);
                     const resumenPantalla = [];
                     if (L.includes("A")) resumenPantalla.push({ t: "Alarma", st: ST.alarma });
                     if (L.includes("S")) resumenPantalla.push({ t: "Supervisión", st: ST.superv });

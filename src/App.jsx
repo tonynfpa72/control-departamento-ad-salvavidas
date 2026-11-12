@@ -16601,9 +16601,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                         return true;
                       }
                       // 11.1: los avisos de un momento (Confirmar, Rearme, Silenciar, órdenes…) entran y salen solos
-                      if (["CONFIRMADO", "REARME", "SILENCIADO", "ORDEN", "SIRENAS", "AVISO"].includes(r.chip))
-                        // al menos 8 s desde que la App lo recibió (y nada de más de 1 min de antigüedad)
-                        return filasEv.length ? (Date.now() - r.visto < 8000 && Date.now() - r.t < 60000) : todas.indexOf(r) < 3;
+                      // Solo estos son de un momento. Todo lo demás (fallas, activaciones, avisos del panel…)
+                      // se queda hasta que llegue SU borrado.
+                      if (["CONFIRMADO", "REARME", "SILENCIADO", "ORDEN", "SIRENAS"].includes(r.chip))
+                        // 8 s desde que la App lo recibió; los que ya estaban al abrir el Monitor no se muestran
+                        return filasEv.length ? (Date.now() - r.visto < 8000 && r.visto - ((termRemoto && termRemoto.desde) || 0) > 1500) : todas.indexOf(r) < 3;
                       // las alarmas y el simulacro quedan enclavados en el panel hasta el REARME (el panel no les
                       // manda BR): salen con un rearme que llegó DESPUÉS (2 s o más; si siguen activas, el panel las reimprime)
                       if (["ALARMA", "PREALARMA", "SIMULACRO"].includes(r.chip) && todas.some((x) => x.chip === "REARME" && x.t - r.t >= 2000)) return false;

@@ -16563,6 +16563,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       const r = parsear(e.texto);
                       if (!r) return null;
                       const fe = new Date(e.fecha_panel || e.created_at || Date.now());
+                      r.t = fe.getTime() || 0;
                       if (!isNaN(fe)) {
                         const h = fe.toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" });
                         r.hora = fe.toDateString() === hoyTxt ? h : fe.toLocaleDateString("es-CR", { day: "2-digit", month: "2-digit" }) + " " + h;
@@ -16570,24 +16571,20 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       if (e.borrado || e.categoria === "borrado") { if (r.chip !== "BORRADO") r.base = r.chip; r.chip = "BORRADO"; r.st = ST.gris; r.fondo = "transparent"; r.tachado = true; }
                       return r;
                     }).filter(Boolean);
-                    // 11.1: la pantalla muestra solo lo que sigue ACTIVO. Se recorre del más nuevo al más viejo:
-                    //  - un BORRADO (BR) o NORMAL quita de la pantalla el evento que borra (y no se muestra él mismo);
-                    //  - un REARME deja fuera las alarmas/fallas/supervisiones anteriores (el panel vuelve a
-                    //    imprimir las que siguen activas después del rearme);
-                    //  - HABILITADA no se muestra, y los ANULADO/ANULADA solo salen si el equipo dice que siguen anulados.
-                    const anulados = String(c.anul || "").toUpperCase().split(",").filter(Boolean);
-                    const todas = filasEv.length ? filasEv : lineas.map(parsear).filter(Boolean).reverse();
+                    // 11.1: la pantalla muestra solo lo que sigue ACTIVO. Un evento solo sale de la pantalla
+                    // con SU PROPIO borrado (BR / NORMAL) — el rearme no quita nada. HABILITADA no se muestra,
+                    // y los ANULADO/ANULADA solo salen si el equipo dice que siguen anulados.
+                    const todas = (filasEv.length ? filasEv : lineas.map(parsear).filter(Boolean).reverse().map((r, k, arr) => ({ ...r, t: arr.length - k })));
                     const claveFila = (r, chip) => chip + "|" + (r.dir || String(r.sub || r.nombre || "").toUpperCase());
-                    const borradas = new Set();
-                    let trasRearme = false;
+                    const brHora = {};   // clave -> hora del borrado más nuevo
+                    todas.forEach((r) => { if (r.chip === "BORRADO" || r.normal) { const k = claveFila(r, r.base || r.chip); if (!(k in brHora) || r.t > brHora[k]) brHora[k] = r.t; } });
                     const anulInfo = c.anul !== undefined;
                     const filasPantalla = todas.filter((r) => {
-                      if (r.chip === "BORRADO" || r.normal) { borradas.add(claveFila(r, r.base || r.chip)); return false; }
+                      if (r.chip === "BORRADO" || r.normal) return false;
                       if (r.chip === "HABILITADA") return false;
-                      if (r.chip === "ANULADO" || r.chip === "ANULADA") return anulInfo ? anulados.includes(String(r.dir || "").toUpperCase()) : !borradas.has(claveFila(r, r.chip));
-                      const activo = ["ALARMA", "PREALARMA", "FALLA", "SUPERVISIÓN", "SEGURIDAD", "SIMULACRO"].includes(r.chip);
-                      if (activo && (trasRearme || borradas.has(claveFila(r, r.chip)))) return false;
-                      if (r.chip === "REARME") trasRearme = true;
+                      if (r.chip === "ANULADO" || r.chip === "ANULADA") return anulInfo ? anulados.includes(String(r.dir || "").toUpperCase()) : !(claveFila(r, r.chip) in brHora);
+                      const k = claveFila(r, r.chip);
+                      if (k in brHora && brHora[k] >= r.t) return false;   // su borrado llegó después (o en el mismo segundo)
                       return true;
                     }).slice(0, 80);
                     const resumenPantalla = [];

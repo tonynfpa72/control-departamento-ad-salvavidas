@@ -16542,9 +16542,10 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       else if (/REACTIVAR/.test(T2)) { chip = "SIRENAS"; st = ST.alarma; nombre = "Sirenas reactivadas"; }
                       if (/EN SISTEMA$/.test(T2) && desc) { nombre = titulo(T2); sub = sub || titulo(desc); }
                       if (chip === "ALARMA" && !desc) nombre = titulo(T2.replace(/^(ALARMA|ALARM|FIRE|FUEGO|INCENDIO)\s*:?\s*/, "")) || "Alarma";
+                      const base = chip;   // 11.1: lo que esta línea borra (FALLA, ALARMA…) cuando es un BR
                       if (borr) { chip = "BORRADO"; st = ST.gris; fondo = "transparent"; }
                       if (!desc && !/^CAMBIO ESTADO/.test(U) && nombre === titulo(T2)) nombre = titulo(T2);
-                      return { chip, st, fondo, nombre: nombre || titulo(t), sub, dir, hora, tachado: borr };
+                      return { chip, base, st, fondo, nombre: nombre || titulo(t), sub, dir, hora, tachado: borr, normal: /NORMAL|RESTAUR/.test(T2) };
                     };
                     // 10.9: la vista moderna usa los EVENTOS guardados del sitio (no se pierden como en el
                     // texto del puerto, que solo guarda los últimos ~2 KB); si todavía no hay, usa el texto.
@@ -16566,10 +16567,29 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                         const h = fe.toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" });
                         r.hora = fe.toDateString() === hoyTxt ? h : fe.toLocaleDateString("es-CR", { day: "2-digit", month: "2-digit" }) + " " + h;
                       }
-                      if (e.borrado || e.categoria === "borrado") { r.chip = "BORRADO"; r.st = ST.gris; r.fondo = "transparent"; r.tachado = true; }
+                      if (e.borrado || e.categoria === "borrado") { if (r.chip !== "BORRADO") r.base = r.chip; r.chip = "BORRADO"; r.st = ST.gris; r.fondo = "transparent"; r.tachado = true; }
                       return r;
                     }).filter(Boolean);
-                    const filasPantalla = (filasEv.length ? filasEv : lineas.map(parsear).filter(Boolean).reverse()).slice(0, 80);
+                    // 11.1: la pantalla muestra solo lo que sigue ACTIVO. Se recorre del más nuevo al más viejo:
+                    //  - un BORRADO (BR) o NORMAL quita de la pantalla el evento que borra (y no se muestra él mismo);
+                    //  - un REARME deja fuera las alarmas/fallas/supervisiones anteriores (el panel vuelve a
+                    //    imprimir las que siguen activas después del rearme);
+                    //  - HABILITADA no se muestra, y los ANULADO/ANULADA solo salen si el equipo dice que siguen anulados.
+                    const anulados = String(c.anul || "").toUpperCase().split(",").filter(Boolean);
+                    const todas = filasEv.length ? filasEv : lineas.map(parsear).filter(Boolean).reverse();
+                    const claveFila = (r, chip) => chip + "|" + (r.dir || String(r.sub || r.nombre || "").toUpperCase());
+                    const borradas = new Set();
+                    let trasRearme = false;
+                    const anulInfo = c.anul !== undefined;
+                    const filasPantalla = todas.filter((r) => {
+                      if (r.chip === "BORRADO" || r.normal) { borradas.add(claveFila(r, r.base || r.chip)); return false; }
+                      if (r.chip === "HABILITADA") return false;
+                      if (r.chip === "ANULADO" || r.chip === "ANULADA") return anulInfo ? anulados.includes(String(r.dir || "").toUpperCase()) : !borradas.has(claveFila(r, r.chip));
+                      const activo = ["ALARMA", "PREALARMA", "FALLA", "SUPERVISIÓN", "SEGURIDAD", "SIMULACRO"].includes(r.chip);
+                      if (activo && (trasRearme || borradas.has(claveFila(r, r.chip)))) return false;
+                      if (r.chip === "REARME") trasRearme = true;
+                      return true;
+                    }).slice(0, 80);
                     const resumenPantalla = [];
                     if (L.includes("A")) resumenPantalla.push({ t: "Alarma", st: ST.alarma });
                     if (L.includes("S")) resumenPantalla.push({ t: "Supervisión", st: ST.superv });
@@ -16579,7 +16599,6 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     // 10.9: ANUNCIADOR — 6 interruptores configurables por sitio (columna dispositivos_panel.anunciador)
                     const ANUN_DEF = [{ t: "Anular todas las Sirenas", a: "anular", d: "Z50" }, { t: "Habilitar todas las Sirenas", a: "habilitar", d: "Z50" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }];
                     const anunFilas = (Array.isArray(f.anunciador) && f.anunciador.length ? [...f.anunciador, ...ANUN_DEF.slice(2)].slice(0, 6) : ANUN_DEF);
-                    const anulados = String(c.anul || "").toUpperCase().split(",").filter(Boolean);
                     const habZ = crtEsNotifier && c.ctrlapp === "1";
                     const tieneClave = c.cpan === "1";
                     const tocarAnun = async (fila) => {
@@ -16688,7 +16707,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                                 <button type="button" onClick={() => setPantallaCruda(true)} title="Ver el texto tal como lo manda el panel" style={{ background: "transparent", border: "1px solid #30363d", color: "#8b949e", borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>Texto</button>
                               </div>
                               <div style={{ flex: 1, overflow: "auto" }}>
-                                {filasPantalla.length === 0 && <div style={{ padding: 14, fontSize: 12, color: "#8b949e" }}>Todavía no llega nada del panel.</div>}
+                                {filasPantalla.length === 0 && <div style={{ padding: 14, fontSize: 13, color: "#7ee787" }}>Sin eventos activos · sistema normal</div>}
                                 {filasPantalla.map((r, k) => (
                                   <div key={k} style={{ display: "grid", gridTemplateColumns: movil ? "66px 1fr auto" : "92px 1fr auto 84px", gap: movil ? 7 : 12, alignItems: "center", padding: movil ? "6px 8px" : "8px 14px", borderBottom: "1px solid #161e27", background: k === 0 ? r.fondo : "transparent" }}>
                                     <span style={{ fontSize: movil ? 9 : 11.5, fontWeight: 800, padding: movil ? "3px 0" : "4px 0", borderRadius: 6, textAlign: "center", letterSpacing: 0.3, ...r.st }}>{r.chip}</span>

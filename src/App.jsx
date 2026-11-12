@@ -14855,6 +14855,7 @@ function MonitoreoNotifier() {
   const [anunEdit, setAnunEdit] = useState(null);        // 10.9: filas del anunciador mientras se configuran
   const [anunMsg, setAnunMsg] = useState("");
   const [pantallaCruda, setPantallaCruda] = useState(false);   // 10.9: ver el texto tal como lo manda el panel
+  const vistoPantallaRef = useRef(new Map());   // 11.1: id del evento -> cuándo lo vio llegar la App
   const [, setTicPantalla] = useState(0);   // 11.1: refresca la pantalla para que los avisos de un momento se quiten solos
   useEffect(() => { if (!termRemoto) return; const id = setInterval(() => setTicPantalla((x) => x + 1), 4000); return () => clearInterval(id); }, [termRemoto]);
   const monActividad = useRef(Date.now());
@@ -16566,6 +16567,9 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       if (!r) return null;
                       const fe = new Date(e.fecha_panel || e.created_at || Date.now());
                       r.t = fe.getTime() || 0;
+                      const kv = String(e.id || e.texto);
+                      if (!vistoPantallaRef.current.has(kv)) vistoPantallaRef.current.set(kv, Date.now());
+                      r.visto = vistoPantallaRef.current.get(kv);
                       if (!isNaN(fe)) {
                         const h = fe.toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" });
                         r.hora = fe.toDateString() === hoyTxt ? h : fe.toLocaleDateString("es-CR", { day: "2-digit", month: "2-digit" }) + " " + h;
@@ -16581,16 +16585,29 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     const claveFila = (r, chip) => chip + "|" + (r.dir || String(r.sub || r.nombre || "").toUpperCase());
                     const brHora = {};   // clave -> hora del borrado más nuevo
                     todas.forEach((r) => { if (r.chip === "BORRADO" || r.normal) { const k = claveFila(r, r.base || r.chip); if (!(k in brHora) || r.t > brHora[k]) brHora[k] = r.t; } });
-                    const anulInfo = c.anul !== undefined;
+                    // 11.1: estado de cada zona según el último CAMBIO ESTADO recibido (más rápido que la lista
+                    // del equipo, que llega con el aviso de cada minuto)
+                    const estadoZona = {};
+                    todas.forEach((r) => { if ((r.chip === "ANULADA" || r.chip === "HABILITADA") && r.dir && !(r.dir in estadoZona)) estadoZona[r.dir] = r.chip === "ANULADA" ? { a: true, t: r.t } : { a: false, t: r.t }; });
+                    const ultHabil = Math.max(0, ...todas.filter((r) => r.chip === "HABILITADA").map((r) => r.t || 0));
                     const filasPantalla = todas.filter((r) => {
                       if (r.chip === "BORRADO" || r.normal) return false;
                       if (r.chip === "HABILITADA") return false;
-                      if (r.chip === "ANULADO" || r.chip === "ANULADA") return anulInfo ? anulados.includes(String(r.dir || "").toUpperCase()) : !(claveFila(r, r.chip) in brHora);
+                      if (r.chip === "ANULADA") return !!(estadoZona[r.dir] && estadoZona[r.dir].a && estadoZona[r.dir].t === r.t) || (!estadoZona[r.dir] && anulados.includes(String(r.dir || "").toUpperCase()));
+                      if (r.chip === "ANULADO") {
+                        const kb = claveFila(r, r.chip);
+                        if (kb in brHora && brHora[kb] >= r.t) return false;
+                        if (ultHabil && ultHabil >= r.t) return anulados.includes(String(r.dir || "").toUpperCase()) && Date.now() - ultHabil > 70000;
+                        return true;
+                      }
                       // 11.1: los avisos de un momento (Confirmar, Rearme, Silenciar, órdenes…) entran y salen solos
                       if (["CONFIRMADO", "REARME", "SILENCIADO", "ORDEN", "SIRENAS", "AVISO"].includes(r.chip))
-                        return filasEv.length ? Date.now() - r.t < 15000 : todas.indexOf(r) < 3;
-                      // el simulacro sigue en pantalla hasta el siguiente rearme
-                      if (r.chip === "SIMULACRO") return !todas.some((x) => x.chip === "REARME" && x.t >= r.t);
+                        // al menos 8 s desde que la App lo recibió (y nada de más de 1 min de antigüedad)
+                        return filasEv.length ? (Date.now() - r.visto < 8000 && Date.now() - r.t < 60000) : todas.indexOf(r) < 3;
+                      // las alarmas y el simulacro quedan enclavados en el panel hasta el REARME (el panel no les
+                      // manda BR): salen con un rearme que llegó DESPUÉS (2 s o más; si siguen activas, el panel las reimprime)
+                      if (["ALARMA", "PREALARMA", "SIMULACRO"].includes(r.chip) && todas.some((x) => x.chip === "REARME" && x.t - r.t >= 2000)) return false;
+                      if (r.chip === "SIMULACRO") return true;
                       const k = claveFila(r, r.chip);
                       if (k in brHora && brHora[k] >= r.t) return false;   // su borrado llegó después (o en el mismo segundo)
                       return true;
@@ -16601,9 +16618,9 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     if (L.includes("D")) resumenPantalla.push({ t: "Anulados", st: ST.anulado });
                     if (L.includes("T")) resumenPantalla.push({ t: "Falla", st: ST.falla });
                     if (!resumenPantalla.length && abierto) resumenPantalla.push({ t: "Normal", st: ST.verde });
-                    // 10.9: ANUNCIADOR — 6 interruptores configurables por sitio (columna dispositivos_panel.anunciador)
-                    const ANUN_DEF = [{ t: "Anular todas las Sirenas", a: "anular", d: "Z50" }, { t: "Habilitar todas las Sirenas", a: "habilitar", d: "Z50" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }];
-                    const anunFilas = (Array.isArray(f.anunciador) && f.anunciador.length ? [...f.anunciador, ...ANUN_DEF.slice(2)].slice(0, 6) : ANUN_DEF);
+                    // 10.9 / 11.1: ANUNCIADOR — 8 interruptores configurables por sitio (columna dispositivos_panel.anunciador)
+                    const ANUN_DEF = [{ t: "Anular todas las Sirenas", a: "anular", d: "Z50" }, { t: "Habilitar todas las Sirenas", a: "habilitar", d: "Z50" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }];
+                    const anunFilas = (Array.isArray(f.anunciador) && f.anunciador.length ? [...f.anunciador, ...ANUN_DEF.slice(2)].slice(0, 8) : ANUN_DEF);
                     const habZ = crtEsNotifier && c.ctrlapp === "1";
                     const tieneClave = c.cpan === "1";
                     const tocarAnun = async (fila) => {
@@ -16665,7 +16682,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                             <div style={{ display: "flex", flexDirection: "column", gap: 6, background: "#dfe0dc", border: "1px solid #a5a6a1", borderRadius: 10, padding: 8 }}>
                               {anunFilas.map((r, k) => {
                                 if (movil && !r.t) return null;
-                                const luz = r.t && r.a === "anular" && anulados.includes(String(r.d).toUpperCase());
+                                const dz = String(r.d).toUpperCase();
+                                const luz = r.t && r.a === "anular" && (estadoZona[dz] ? estadoZona[dz].a : anulados.includes(dz));
                                 const enviando = crtEsperando && crtPend && crtPend.accion === r.a + ":" + String(r.d).toUpperCase();
                                 return (
                                   <div key={k} style={{ display: "flex", alignItems: "center", gap: 6, height: 40 }}>
@@ -16712,7 +16730,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                                 <button type="button" onClick={() => setPantallaCruda(true)} title="Ver el texto tal como lo manda el panel" style={{ background: "transparent", border: "1px solid #30363d", color: "#8b949e", borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>Texto</button>
                               </div>
                               <div style={{ flex: 1, overflow: "auto" }}>
-                                {filasPantalla.length === 0 && <div style={{ padding: 14, fontSize: 13, color: "#7ee787" }}>Sin eventos activos · sistema normal</div>}
+                                
                                 {filasPantalla.map((r, k) => (
                                   <div key={k} style={{ display: "grid", gridTemplateColumns: movil ? "66px 1fr auto" : "92px 1fr auto 84px", gap: movil ? 7 : 12, alignItems: "center", padding: movil ? "6px 8px" : "8px 14px", borderBottom: "1px solid #161e27", background: k === 0 ? r.fondo : "transparent" }}>
                                     <span style={{ fontSize: movil ? 9 : 11.5, fontWeight: 800, padding: movil ? "3px 0" : "4px 0", borderRadius: 6, textAlign: "center", letterSpacing: 0.3, ...r.st }}>{r.chip}</span>

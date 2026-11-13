@@ -196,6 +196,20 @@ const sitiosDeTexto = (t) => String(t || "").split(SEP_SITIOS).map((x) => x.trim
 // Dentro del APK (WebView de Android) no hay ventanas nuevas ni descargas de
 // archivos: el CSV se oculta ahí, y para imprimir/PDF se usa el puente nativo
 // de la APK v2 (window.SalvavidasAndroid, ver abrirImpresion).
+// 11.6: ícono de "panel contra incendio" (blanco y negro: usa el color del texto), para el botón Control
+function IconoPanelIncendio({ size = 17 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2.5" y="2.5" width="19" height="19" rx="2.2" />
+      <rect x="5.5" y="5.5" width="13" height="5" rx="0.8" />
+      <circle cx="6.7" cy="13.6" r="0.75" fill="currentColor" stroke="none" />
+      <circle cx="9.6" cy="13.6" r="0.75" fill="currentColor" stroke="none" />
+      <circle cx="12.5" cy="13.6" r="0.75" fill="currentColor" stroke="none" />
+      <rect x="5.3" y="16.2" width="3.4" height="2.6" rx="0.5" fill="currentColor" stroke="none" />
+      <rect x="10.3" y="16.2" width="3.4" height="2.6" rx="0.5" fill="currentColor" stroke="none" />
+      <rect x="15.3" y="16.2" width="3.4" height="2.6" rx="0.5" fill="currentColor" stroke="none" />
+    </svg>);
+}
 const EN_APK = typeof navigator !== "undefined" && /SalvavidasAPK/.test(navigator.userAgent || "");
 
 // ---- Imprimir / guardar PDF en PC, celular (navegador) y APK ----
@@ -16355,9 +16369,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             { id: "eventos", label: "Eventos", Icono: Search },
             { id: "equipos", label: "Equipos", Icono: Wifi },
             { id: "tendencias", label: "Tendencias", Icono: TrendingUp },
-            { id: "puntos", label: "Puntos", Icono: ClipboardList },
-            // 11.6: Control del panel también en la barra de abajo (cliente incluido)
-            ...((canGestionar || esCliente) ? [{ id: "control", label: "Control", Icono: Settings }] : []),
+            // 11.6: «Puntos» sale de la barra (queda como tarjeta). Control del panel con ícono de panel.
+            ...((canGestionar || esCliente) ? [{ id: "control", label: "Control", Icono: IconoPanelIncendio }] : []),
           ].map(({ id, label, Icono }) => {
             const deshabilitada = (id === "tendencias" || id === "puntos") && sitioSeleccionado === "Todos";
             const activa = id === "control" ? !!termRemoto : seccionMovil === id;

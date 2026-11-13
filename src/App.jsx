@@ -15625,19 +15625,21 @@ function MonitoreoNotifier() {
   const borrarEventosDelSitio = async () => {
     if (sitioSeleccionado === "Todos") return;
     const sitio = sitioSeleccionado;
-    if (!(await confirmar(`¿Borrar TODO el monitoreo de "${sitio}"?\n\n• Eventos del app y de Supabase\n• Historial y mantenimiento guardados en Supabase\n• La memoria del equipo IgnisMonitor (bitácora, historial y mantenimiento), si está conectado\n\nEl sitio sigue en la lista. Esto no se puede deshacer.`, { confirmLabel: "Sí, borrar todo", variant: "danger" }))) return;
+    if (!(await confirmar(`¿Borrar TODO el monitoreo de "${sitio}"?\n\n• Eventos del app y de Supabase\n• Historial, mantenimiento y Todos los puntos guardados en Supabase\n• La memoria del equipo IgnisMonitor (bitácora, historial y mantenimiento), si está conectado\n\nEl sitio sigue en la lista. Esto no se puede deshacer.`, { confirmLabel: "Sí, borrar todo", variant: "danger" }))) return;
     setBorrando(true);
     const { todos } = await archivosDelSitio(sitio);
+    const archivosBorrar = [...todos, `${nombreArchivoSitioPanel(sitio)}__p.txt`];   // 11.4: también el listado de Todos los puntos
     const [{ error }, resArch, avisoEquipo] = await Promise.all([
       supabase.from("eventos_panel").delete().eq("sitio", sitio),
-      todos.length ? supabase.storage.from("historial_paneles").remove(todos) : Promise.resolve({}),
+      supabase.storage.from("historial_paneles").remove(archivosBorrar),
       pedirBorradoEquipo(sitio),
     ]);
     ultimoBorradoRef.current = Date.now();
     setBorrando(false);
     if (!error) setEventos((prev) => prev.filter((e) => e.sitio !== sitio));
     setHistorialHtml(""); setHistArchivos([]); setMantArchivos([]); setMantLineas([]);
-    if (vista === "tendencias") setVista("eventos");
+    setPuntosInfo({ lineas: 0, fecha: null });
+    if (vista === "tendencias" || vista === "puntos") setVista("eventos");
     const problemas = [
       error ? `Eventos: ${error.message}` : "",
       resArch?.error ? `Historial/mantenimiento: ${resArch.error.message}` : "",
@@ -15645,7 +15647,7 @@ function MonitoreoNotifier() {
     ].filter(Boolean);
     await confirmar(problemas.length
       ? `Se borró lo que se pudo, pero hubo problemas:\n\n${problemas.join("\n")}`
-      : `Listo. Se borraron los eventos, el historial y el mantenimiento de "${sitio}". El equipo IgnisMonitor borrará su memoria en menos de 1 minuto (si está encendido y con internet).`,
+      : `Listo. Se borraron los eventos, el historial, el mantenimiento y Todos los puntos de "${sitio}". El equipo IgnisMonitor borrará su memoria en menos de 1 minuto (si está encendido y con internet).`,
       { confirmLabel: "Entendido", soloAviso: true, variant: problemas.length ? "danger" : "info" });
   };
 

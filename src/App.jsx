@@ -15669,23 +15669,23 @@ function MonitoreoNotifier() {
   const eliminarSitio = async () => {
     if (sitioSeleccionado === "Todos") return;
     const sitio = sitioSeleccionado;
-    if (!(await confirmar(`¿ELIMINAR el sitio "${sitio}" de la lista?\n\nSe borran sus eventos, historial, mantenimiento y la ficha del equipo, y se le pide al IgnisMonitor que borre su memoria.\n\nÚselo para equipos que ya no están instalados o que cambiaron de nombre: si el equipo sigue encendido con ese nombre, volverá a aparecer vacío al reportarse.`, { confirmLabel: "Sí, eliminar sitio", variant: "danger" }))) return;
-    if (!(await confirmar(`Confirme otra vez: eliminar "${sitio}". No se puede deshacer.`, { confirmLabel: "Eliminar definitivamente", variant: "danger" }))) return;
+    // 11.5: UNA sola confirmación y sin esperar 45 s. Al equipo se le manda «baja»: borra su memoria y
+    // olvida el nombre del sitio, así deja de reportar y el sitio NO vuelve a aparecer en la lista.
+    if (!(await confirmar(`¿ELIMINAR el sitio "${sitio}"?\n\nSe borran sus eventos, historial, mantenimiento, Todos los puntos y la ficha del equipo. El IgnisMonitor borra su memoria y deja de reportar (para volver a usarlo hay que ponerle nombre de sitio en su página de configuración).\n\nNo se puede deshacer.`, { confirmLabel: "Eliminar definitivamente", variant: "danger" }))) return;
     setBorrando(true);
-    const { todos } = await archivosDelSitio(sitio);
-    const avisoEquipo = await pedirBorradoEquipo(sitio);
-    const [{ error: e1 }, resArch] = await Promise.all([
-      supabase.from("eventos_panel").delete().eq("sitio", sitio),
-      todos.length ? supabase.storage.from("historial_paneles").remove(todos) : Promise.resolve({}),
-    ]);
-    // Si el equipo está en línea, se espera (hasta 45 s) a que lea la orden y
-    // borre su memoria; si no, la ficha se borra de una vez.
     const ficha = dispositivos.find((d) => d.sitio === sitio);
     const enLinea = ficha?.actualizado_en && Date.now() - new Date(ficha.actualizado_en).getTime() < 3 * 60000;
+    await supabase.from("dispositivos_panel").update({ comando: "baja", comando_en: new Date().toISOString() }).eq("sitio", sitio);
+    const { todos } = await archivosDelSitio(sitio);
+    const [{ error: e1 }, resArch] = await Promise.all([
+      supabase.from("eventos_panel").delete().eq("sitio", sitio),
+      supabase.storage.from("historial_paneles").remove([...todos, `${nombreArchivoSitioPanel(sitio)}__p.txt`]),
+    ]);
+    // si está en línea, se le dan hasta 8 s para que lea la orden (lo normal es 1–2 s)
     let equipoCumplio = false;
-    if (enLinea && !avisoEquipo) {
-      for (let i = 0; i < 15 && !equipoCumplio; i++) {
-        await new Promise((r) => setTimeout(r, 3000));
+    if (enLinea) {
+      for (let i = 0; i < 4 && !equipoCumplio; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
         const { data } = await supabase.from("dispositivos_panel").select("comando").eq("sitio", sitio);
         equipoCumplio = Array.isArray(data) && data.length > 0 && !data[0].comando;
       }
@@ -15696,10 +15696,13 @@ function MonitoreoNotifier() {
     setEventos((prev) => prev.filter((e) => e.sitio !== sitio));
     setDispositivos((prev) => prev.filter((d) => d.sitio !== sitio));
     setHistorialHtml(""); setHistArchivos([]); setMantArchivos([]); setMantLineas([]);
+    setPuntosInfo({ lineas: 0, fecha: null });
     setVista("eventos");
     setSitioSeleccionado("Todos");
-    const problemas = [e1 ? `Eventos: ${e1.message}` : "", resArch?.error ? `Historial: ${resArch.error.message}` : "", e2 ? `Ficha del equipo: ${e2.message}` : ""].filter(Boolean);
-    const notaEquipo = !enLinea ? "\n\nEl equipo no estaba en línea: su memoria no se pudo borrar a distancia." : equipoCumplio ? "\n\nEl equipo IgnisMonitor ya borró su memoria." : avisoEquipo ? `\n\n${avisoEquipo}` : "\n\nEl equipo no confirmó a tiempo el borrado de su memoria.";
+    const problemas = [e1 ? `Eventos: ${e1.message}` : "", resArch?.error ? `Archivos: ${resArch.error.message}` : "", e2 ? `Ficha del equipo: ${e2.message}` : ""].filter(Boolean);
+    const notaEquipo = equipoCumplio ? "\n\nEl IgnisMonitor ya borró su memoria y dejó de reportar."
+      : enLinea ? "\n\nEl IgnisMonitor no contestó a tiempo. Si tiene la versión 11.5 o más nueva, deja de reportar al leer la orden; con una versión anterior el sitio puede volver a aparecer."
+      : "\n\nEl equipo no estaba en línea. Si se vuelve a conectar, el sitio puede reaparecer: elimínelo otra vez cuando esté en línea.";
     await confirmar(problemas.length ? `Hubo problemas al eliminar:\n\n${problemas.join("\n")}` : `Se eliminó el sitio "${sitio}".${notaEquipo}`,
       { confirmLabel: "Entendido", soloAviso: true, variant: problemas.length ? "danger" : "info" });
   };
@@ -15938,7 +15941,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             </Btn>
           )}
           {(canGestionar || esCliente) && sitioSeleccionado !== "Todos" && (
-            <Btn small onClick={() => abrirMonitorRemoto(sitioSeleccionado)} title="Monitor serial del IgnisMonitor y configuración del puerto (Notifier/Simplex, RS232/Ethernet) desde la app">
+            <Btn small onClick={() => abrirMonitorRemoto(sitioSeleccionado)} title="Control del panel: pantalla, luces, botones y anunciador del panel desde la app">
               <Settings size={13} /> Control del panel
             </Btn>
           )}
@@ -16357,14 +16360,16 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             { id: "equipos", label: "Equipos", Icono: Wifi },
             { id: "tendencias", label: "Tendencias", Icono: TrendingUp },
             { id: "puntos", label: "Puntos", Icono: ClipboardList },
+            // 11.6: Control del panel también en la barra de abajo (cliente incluido)
+            ...((canGestionar || esCliente) ? [{ id: "control", label: "Control", Icono: Settings }] : []),
           ].map(({ id, label, Icono }) => {
             const deshabilitada = (id === "tendencias" || id === "puntos") && sitioSeleccionado === "Todos";
-            const activa = seccionMovil === id;
+            const activa = id === "control" ? !!termRemoto : seccionMovil === id;
             return (
               <button
                 key={id}
                 disabled={deshabilitada}
-                onClick={() => { setSeccionMovil(id); if (id === "eventos") setVista("eventos"); if (id === "tendencias") setVista("tendencias"); if (id === "puntos") setVista("puntos"); }}
+                onClick={() => { if (id === "control") { abrirMonitorRemoto(sitioSeleccionado); return; } setSeccionMovil(id); if (id === "eventos") setVista("eventos"); if (id === "tendencias") setVista("tendencias"); if (id === "puntos") setVista("puntos"); }}
                 style={{
                   flex: 1, border: "none", background: "transparent", padding: "9px 4px 10px", cursor: deshabilitada ? "default" : "pointer",
                   color: deshabilitada ? IGNIS.dim2 : activa ? IGNIS.text : IGNIS.dim, opacity: deshabilitada ? 0.45 : 1,

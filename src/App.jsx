@@ -15597,10 +15597,11 @@ function MonitoreoNotifier() {
     setTermTexto("");
   };
   // 7.3: control del panel Notifier por CRT (Reconocer, Silenciar, Reset, Historial, Detectores)
-  const CRT_NOMBRES = { puntos: "Todos los puntos", simulacro: "Simulacro", ack: "Reconocer", silenciar: "Silenciar", reset: "Reset", historial: "Historial completo", histalarmas: "Historial de alarmas", detectores: "Reporte de detectores" };
+  const CRT_NOMBRES = { puntos: "Todos los puntos", simulacro: "Simulacro", ack: "Reconocer", silenciar: "Silenciar", reset: "Reset", historial: "Historial completo", histalarmas: "Historial de alarmas", detectores: "Reporte de detectores", sx_aack: "Alarm Ack", sx_sack: "Supv Ack", sx_tack: "Trbl Ack" };
   // 11.4: queda registrado en eventos (categoría General) quién manipuló el panel desde la App
   const NOMBRE_ORDEN = { ack: "Reconocer", silenciar: "Silenciar", reset: "Rearme", simulacro: "Simulacro (Drill)", historial: "Pedir historial completo",
-    histalarmas: "Pedir historial de alarmas", puntos: "Pedir todos los puntos", detectores: "Pedir reporte de detectores" };
+    histalarmas: "Pedir historial de alarmas", puntos: "Pedir todos los puntos", detectores: "Pedir reporte de detectores",
+    sx_aack: "Confirmar alarmas (Alarm Ack)", sx_sack: "Confirmar supervisiones (Supv Ack)", sx_tack: "Confirmar fallas (Trbl Ack)" };
   const registrarManipulacion = (sitio, que) => {
     try {
       const quien = [currentUser?.name, currentUser?.email ? "(" + currentUser.email + ")" : ""].filter(Boolean).join(" ") || "usuario";
@@ -15614,7 +15615,7 @@ function MonitoreoNotifier() {
     const accionVis = accion;
     if (extra) accion = accion + ":" + extra;
     // 8.4: Acknowledge o Signal Silence en el Monitor también callan el sonido de la App
-    if (accion === "ack" && modoSonandoRef.current > 0) detenerSonido();   // 11.4: solo Confirmar apaga el sonido
+    if ((accion === "ack" || /^sx_[ast]ack$/.test(accion)) && modoSonandoRef.current > 0) detenerSonido();   // 11.7: los Ack de Simplex también confirman   // 11.4: solo Confirmar apaga el sonido
     const quien = String(currentUser?.name || currentUser?.email || "app").replace(/[|"]/g, " ").slice(0, 40);
     setCrtPend({ accion: accionVis, desde: Date.now(), msg: "" });
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -16496,6 +16497,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const crtEsperando = crtPend && !crtPend.msg && (!resCrt || /orden enviada|enviado, esperando/i.test(resCrt)) && Date.now() - crtPend.desde < 60000;
         const crtEsNotifier = c.tipo === "3";
         const crtSimplex = c.tipo === "1" || c.tipo === "2";
+        const sxListo = crtSimplex && c.sxcmd === "1";   // 11.7: el equipo avisa cuando ya tiene cargados los comandos Simplex
         const bCrt = (accion, ic, txt, col) => (
           <button key={accion} disabled={!crtEsNotifier || c.ctrlapp !== "1"} onClick={() => ordenCrt(accion)}
             style={{ borderRadius: 9, padding: "10px 6px", border: `1px solid ${col}99`, background: col + "1f", color: col, fontWeight: 800, fontSize: 12.5,
@@ -16552,7 +16554,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     const L = String(vl && Date.now() - vl.at < 70000 ? vl.l : (c.leds || ""));
                     const on = (k) => lampTest || L.includes(k);
                     const encendido = abierto || lampTest;
-                    const control = abierto && crtEsNotifier && c.ctrlapp === "1";
+                    const control = abierto && (crtEsNotifier || sxListo) && c.ctrlapp === "1";
                     const led = (prendido, color) => (
                       <span style={{ width: 16, height: 10, borderRadius: 2, flex: "none", display: "inline-block",
                         background: prendido ? color : "#b9bab5", border: `1px solid ${prendido ? color : "#9a9b96"}`,
@@ -16564,7 +16566,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     const ledAbajo = (txt, prendido, color) => (
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: movil ? 3 : 5, fontWeight: 800, fontSize: movil ? 8.5 : 10.5, textAlign: "center", lineHeight: 1.05, textTransform: "uppercase", minWidth: movil ? 0 : 70 }}>{led(prendido, color)}{txt}</div>);
                     const habil = control;
-                    const motivo = !abierto ? "Esperando que el equipo abra el monitor" : !crtEsNotifier ? "Solo con panel Notifier por CRT" : c.ctrlapp !== "1" ? "Control desde la App deshabilitado en el equipo" : "";
+                    const motivo = !abierto ? "Esperando que el equipo abra el monitor" : !(crtEsNotifier || sxListo) ? (crtSimplex ? "Comandos Simplex pendientes en el equipo" : "Solo con panel Notifier por CRT") : c.ctrlapp !== "1" ? "Control desde la App deshabilitado en el equipo" : "";
                     const boton = (txt, sub, props) => (
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: movil ? 4 : 6, width: movil ? "auto" : 120, textAlign: "center", fontWeight: 800, fontSize: movil ? 8.5 : 11.5, textTransform: "uppercase", lineHeight: 1.1 }}>
                         <button title={motivo} disabled={!habil && !props.siempre} {...props.ev}
@@ -16735,7 +16737,10 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     // contador: lo que está PRESENTE (no le afecta «Limpiar»)
                     const presentes = todas.filter((r) => GRUPO[r.chip] && reglaActiva(r));
                     const cuenta = (g) => presentes.filter((r) => GRUPO[r.chip] === g).length;
-                    const filasPantalla = todas.filter((r) => !(limpio && (r.visto || 0) <= limpio) && reglaActiva(r) && (!filtroPantalla || GRUPO[r.chip] === filtroPantalla)).slice(0, 80);
+                    // 11.7: en la máscara Simplex TRBL junta fallas y anulados; un filtro que no es de esta máscara se ignora
+                    const filtroV = (crtSimplex ? ["alarma", "segur", "superv", "trbl"] : ["alarma", "superv", "falla", "anulado", "segur"]).includes(filtroPantalla) ? filtroPantalla : null;
+                    const enFiltro = (r) => !filtroV || (filtroV === "trbl" ? (GRUPO[r.chip] === "falla" || GRUPO[r.chip] === "anulado") : GRUPO[r.chip] === filtroV);
+                    const filasPantalla = todas.filter((r) => !(limpio && (r.visto || 0) <= limpio) && reglaActiva(r) && enFiltro(r)).slice(0, 80);
                     const CONTADORES = [
                       { g: "alarma", ic: "🔥", t: "Alarmas", st: ST.alarma },
                       { g: "superv", ic: "⚙", t: movil ? "Superv." : "Supervisiones", st: ST.superv },
@@ -16751,11 +16756,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     // 10.9 / 11.1: ANUNCIADOR — 10 interruptores configurables por sitio (columna dispositivos_panel.anunciador)
                     const ANUN_DEF = [{ t: "Anular todas las Sirenas", a: "anular", d: "Z50" }, { t: "Habilitar todas las Sirenas", a: "habilitar", d: "Z50" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }];
                     const anunFilas = (Array.isArray(f.anunciador) && f.anunciador.length ? [...f.anunciador, ...ANUN_DEF.slice(2)].slice(0, 10) : ANUN_DEF);
-                    const habZ = crtEsNotifier && c.ctrlapp === "1";
+                    const habZ = (crtEsNotifier || sxListo) && c.ctrlapp === "1";
                     const tieneClave = c.cpan === "1";
                     const tocarAnun = async (fila) => {
                       if (!fila.t || !fila.d) return;
-                      if (!habZ) { window.alert("Solo con panel Notifier por CRT y el control desde la App habilitado."); return; }
+                      if (!habZ) { window.alert(crtSimplex ? "Los comandos Simplex todavía no están cargados en el equipo." : "Solo con panel Notifier por CRT y el control desde la App habilitado."); return; }
                       if (!tieneClave) { window.alert("Primero guarde la clave del panel en el equipo (⚙ del anunciador)."); return; }
                       const inp = document.getElementById("clave_panel_anun");
                       const v = String((inp && inp.value) || "").trim();
@@ -16766,8 +16771,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       ordenCrt(fila.a + ":" + String(fila.d).toUpperCase(), h);
                     };
                     const guardarAnun = async () => {
-                      const filas = anunEdit.map((r) => ({ t: String(r.t || "").trim().slice(0, 40), a: r.a === "habilitar" ? "habilitar" : "anular", d: String(r.d || "").trim().toUpperCase().slice(0, 7) }));
-                      for (const r of filas) if (r.t && !/^[A-Z0-9]{2,7}$/.test(r.d)) { setAnunMsg("Revise la zona/punto de «" + r.t + "» (ej. Z50, B01, 1D045)."); return; }
+                      const filas = anunEdit.map((r) => ({ t: String(r.t || "").trim().slice(0, 40), a: r.a === "habilitar" ? "habilitar" : "anular", d: String(r.d || "").trim().toUpperCase().slice(0, 12) }));
+                      for (const r of filas) if (r.t && !(crtSimplex ? /^[A-Z0-9][A-Z0-9-]{1,11}$/ : /^[A-Z0-9]{2,7}$/).test(r.d)) { setAnunMsg("Revise la zona/punto de «" + r.t + "» (ej. " + (crtSimplex ? "Z2, M1-14" : "Z50, B01, 1D045") + ")."); return; }
                       const { error } = await supabase.from("dispositivos_panel").update({ anunciador: filas }).eq("sitio", termRemoto.sitio);
                       if (error) { setAnunMsg(/anunciador/i.test(error.message || "") ? "Falta correr en Supabase el SQL_anunciador.sql." : error.message); return; }
                       setAnunEdit(null); setAnunMsg("");
@@ -16796,7 +16801,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                                   <b>{k + 1}</b>
                                   <input value={r.t} placeholder="(vacío)" maxLength={40} autoComplete="off" onChange={(e) => setAnunEdit(anunEdit.map((x, i) => (i === k ? { ...x, t: e.target.value } : x)))} style={inpSt} />
                                   <select value={r.a} onChange={(e) => setAnunEdit(anunEdit.map((x, i) => (i === k ? { ...x, a: e.target.value } : x)))} style={inpSt}><option value="anular">Anular</option><option value="habilitar">Habilitar</option></select>
-                                  <input value={r.d} placeholder="Z01" maxLength={7} autoComplete="off" onChange={(e) => setAnunEdit(anunEdit.map((x, i) => (i === k ? { ...x, d: e.target.value.toUpperCase() } : x)))} style={inpSt} />
+                                  <input value={r.d} placeholder="Z01" maxLength={crtSimplex ? 12 : 7} autoComplete="off" onChange={(e) => setAnunEdit(anunEdit.map((x, i) => (i === k ? { ...x, d: e.target.value.toUpperCase() } : x)))} style={inpSt} />
                                 </React.Fragment>))}
                             </div>
                             <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
@@ -16839,7 +16844,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       <div style={{ display: "flex", flexDirection: movil ? "column" : "row", gap: 10, alignItems: "stretch", marginBottom: 10 }}>
                       <div style={{ flex: 1, minWidth: 0, background: "linear-gradient(#d9dad6,#c9cac5)", borderRadius: 12, padding: movil ? "10px 8px 12px" : "14px 16px 16px", color: "#2a2c2f", boxShadow: "inset 0 1px 0 #fff8, 0 2px 8px #0008" }}>
                         <div style={{ display: "flex", gap: movil ? 8 : 14, alignItems: "flex-start", flexDirection: movil ? "column" : "row" }}>
-                          {!movil && (
+                          {!movil && !crtSimplex && (
                           <div style={{ display: "flex", flexDirection: "column", gap: 9, width: 118, paddingTop: 10 }}>
                             {ledIzq(<>Controls<br />Active</>, control || lampTest, VERDE)}
                             {ledIzq("Power", lampTest || (abierto && !L.includes("X")), VERDE)}
@@ -16863,7 +16868,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                           ) : (
                             <div style={{ flex: 1, width: movil ? "100%" : undefined, boxSizing: "border-box", minWidth: movil ? 0 : 260, height: "auto", overflow: "hidden", display: "flex", flexDirection: "column", background: "linear-gradient(#0e141b,#0a0f14)", border: movil ? "4px solid #3a3d40" : "6px solid #3a3d40", borderRadius: 8, color: "#e6edf3", fontFamily: "Inter, system-ui, 'Segoe UI', Roboto, sans-serif" }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, padding: movil ? "6px 8px" : "7px 12px", borderBottom: "1px solid #1f2933", fontSize: 11.5, color: "#8b949e", flexWrap: "wrap" }}>
-                                <b style={{ color: "#e6edf3", fontSize: movil ? 11.5 : 12.5 }}>{termRemoto.sitio}</b><span>· NFS2-640</span><span style={{ flex: 1 }} />
+                                <b style={{ color: "#e6edf3", fontSize: movil ? 11.5 : 12.5 }}>{termRemoto.sitio}</b><span>{crtSimplex ? "· Simplex" : "· NFS2-640"}</span><span style={{ flex: 1 }} />
                                 
                                 {!esCliente && <button type="button" onClick={async () => {
                                   // 11.4: pide confirmar y BORRA de Supabase los eventos que se ven en esta pantalla
@@ -16882,9 +16887,9 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                                 }} title="Quitar de la pantalla todo lo que se ve ahora (no borra nada del panel ni del historial)" style={{ background: "transparent", border: "1px solid #30363d", color: "#8b949e", borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>Limpiar</button>}
                                 <button type="button" onClick={() => setPantallaCruda(true)} title="Ver el texto tal como lo manda el panel" style={{ background: "transparent", border: "1px solid #30363d", color: "#8b949e", borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>Texto</button>
                               </div>
-                              <div style={{ display: "flex", gap: movil ? 4 : 6, padding: movil ? "5px 6px" : "6px 12px", borderBottom: "1px solid #1f2933", background: "#0c1218" }}>
+                              {!crtSimplex && <div style={{ display: "flex", gap: movil ? 4 : 6, padding: movil ? "5px 6px" : "6px 12px", borderBottom: "1px solid #1f2933", background: "#0c1218" }}>
                                 {CONTADORES.map((k) => {
-                                  const sel = filtroPantalla === k.g;
+                                  const sel = filtroV === k.g;
                                   return (
                                     <button key={k.g} type="button" onClick={() => setFiltroPantalla(sel ? null : k.g)} title={sel ? "Ver todos" : "Ver solo " + k.t.toLowerCase()}
                                       style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", gap: movil ? 3 : 6, padding: movil ? "3px 0" : "4px 0", borderRadius: 6, cursor: "pointer", fontFamily: "inherit",
@@ -16892,7 +16897,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                                       <span>{k.ic}</span>{!movil || true ? <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{k.t}</span> : null}<b style={{ fontSize: movil ? 12 : 15 }}>{cuenta(k.g)}</b>
                                     </button>);
                                 })}
-                              </div>
+                              </div>}
                               <div style={{ height: (movil ? 34 : 50) * 6, flex: "none", overflowY: "auto", overflowX: "hidden", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", touchAction: "pan-y" }}>
                                 
                                 {filasPantalla.map((r, k) => (
@@ -16909,6 +16914,51 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                             </div>
                           )}
                         </div>
+                        {crtSimplex ? (
+                          // 11.7: MÁSCARA SIMPLEX — contadores FIRE/PRI2/SUPV/TRBL (filtran la pantalla), Ack de alarmas,
+                          // supervisiones y fallas, Silence y Reset (mismo tamaño), y luces AC / TRBL / SILENCED.
+                          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: movil ? 6 : 8, marginTop: movil ? 10 : 14 }}>
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0,1fr))", gap: movil ? 5 : 8, flex: movil ? "1 1 100%" : "0 0 auto", width: movil ? "100%" : 300 }}>
+                              {[
+                                { g: "alarma", t: "FIRE", n: cuenta("alarma"), fo: "#ffd5d5", bo: "#d65a5a", co: "#a3191c" },
+                                { g: "segur", t: "PRI2", n: cuenta("segur"), fo: "#d6e7ff", bo: "#4f8fe0", co: "#1b4f99" },
+                                { g: "superv", t: "SUPV", n: cuenta("superv"), fo: "#ffe4c7", bo: "#e08a3c", co: "#8f4a0c" },
+                                { g: "trbl", t: "TRBL", n: cuenta("falla") + cuenta("anulado"), fo: "#fff1bf", bo: "#d9a514", co: "#7a5a00" },
+                              ].map((k) => {
+                                const sel = filtroV === k.g, act = k.n > 0 || lampTest;
+                                return (
+                                  <button key={k.g} type="button" onClick={() => setFiltroPantalla(sel ? null : k.g)} title={sel ? "Ver todos" : "Ver solo " + k.t}
+                                    style={{ height: movil ? 40 : 46, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", lineHeight: 1.05, touchAction: "manipulation",
+                                      background: act ? k.fo : "#e9eaea", border: `2px solid ${sel ? "#1f6fd8" : act ? k.bo : "#a9aaa5"}`, boxShadow: sel ? "0 0 0 2px #1f6fd8" : "0 2px 0 #9a9b96", color: act ? k.co : "#555" }}>
+                                    <span style={{ fontWeight: 800, fontSize: movil ? 10 : 11.5 }}>{k.t}</span>
+                                    <b style={{ fontSize: movil ? 14 : 16 }}>{k.n}</b>
+                                  </button>);
+                              })}
+                            </div>
+                            <div style={{ display: movil ? "grid" : "flex", gridTemplateColumns: "repeat(5, minmax(0,1fr))", gap: movil ? 5 : 8, flex: movil ? "1 1 100%" : "0 0 auto" }}>
+                              {[
+                                ["sx_aack", "Alarm Ack", "Confirmar"], ["sx_sack", "Supv Ack", "Confirmar"], ["sx_tack", "Trbl Ack", "Confirmar"],
+                                ["silenciar", movil ? "Silence" : "Alarm Silence", ""], ["reset", movil ? "Reset" : "System Reset", ""],
+                              ].map(([acc, t, s2]) => {
+                                const act = crtEsperando && crtPend && crtPend.accion === acc;
+                                return (
+                                  <button key={acc} type="button" disabled={!habil} title={motivo || ""} onClick={() => ordenCrt(acc)}
+                                    style={{ width: movil ? "100%" : 70, height: movil ? 40 : 42, boxSizing: "border-box", padding: "0 2px", borderRadius: 8, fontFamily: "inherit", touchAction: "manipulation",
+                                      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", lineHeight: 1.05, whiteSpace: s2 ? "nowrap" : "normal", textAlign: "center",
+                                      color: "#fff", fontWeight: 800, fontSize: movil ? 9.5 : 10.5, background: "linear-gradient(#6b737c,#3f464e)", border: "2px solid #2b3036",
+                                      cursor: habil ? "pointer" : "not-allowed", opacity: habil ? 1 : 0.5,
+                                      boxShadow: act ? "inset 0 2px 4px #0007" : "0 2px 0 #23272c", transform: act ? "translateY(1px)" : "none" }}>
+                                    <span>{t}</span>{s2 && <small style={{ fontSize: movil ? 7.5 : 8, fontWeight: 700, opacity: 0.9 }}>{s2}</small>}
+                                  </button>);
+                              })}
+                            </div>
+                            <div style={{ display: "flex", gap: movil ? 14 : 12, alignItems: "center", justifyContent: "center", flex: movil ? "1 1 100%" : "1 1 auto", marginTop: movil ? 4 : 0 }}>
+                              {ledAbajo("AC", lampTest || (abierto && !L.includes("X")), VERDE)}
+                              {ledAbajo("TRBL", on("T") || on("D"), AMBAR)}
+                              {ledAbajo("Silenced", on("Q"), AMBAR)}
+                            </div>
+                          </div>
+                        ) : (<>
                         {movil ? (
                           // 11.4: APK / teléfono — las 11 luces en una cuadrícula pareja de 3 columnas (luz + nombre en una línea)
                           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: "7px 6px", margin: "10px 2px 2px", padding: "8px 8px", background: "#d2d3cf", borderRadius: 8, border: "1px solid #b5b6b1" }}>
@@ -16963,6 +17013,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                               <span>{r.t}</span>
                             </div>))}
                         </div>
+                        </>)}
                       </div>
                       {anunciador}
                       </div>);
@@ -16970,7 +17021,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                   <div style={{ marginTop: 8, fontSize: 12.5, borderRadius: 8, padding: "8px 11px", border: `1px solid ${IGNIS.border}`, color: crtPend && crtPend.msg ? IGNIS.alarma : crtEsperando ? IGNIS.problema : crtOk ? "#9be9a8" : resCrt ? IGNIS.alarma : IGNIS.dim }}>
                     {!f.config_panel ? (viejo || !f.version ? "Los botones necesitan el equipo en versión 7.6 (Actualizar firmware)." : "El equipo todavía no informa su configuración. Si ya tiene la 7.6, falta correr en Supabase el SQL_monitor_remoto.sql; si no, actualícelo.")
                       : c.tipo === "0" ? "El equipo está en modo Notifier IMPRESORA: por ahí no se puede controlar el panel. Conéctelo a los bornes PC/CRT del TB12 y cambie abajo «Tipo de panel» a «Notifier · CRT»."
-                      : crtSimplex ? "Comandos Simplex pendientes: los botones quedan desactivados hasta cargar sus códigos."
+                      : crtSimplex && c.sxcmd !== "1" ? "Máscara Simplex. Comandos Simplex pendientes en el equipo: los botones quedan desactivados hasta cargarlos (los filtros FIRE / PRI2 / SUPV / TRBL sí funcionan)."
                       : c.ctrlapp !== "1" ? "El control desde la App está deshabilitado en este equipo. Se habilita en el sitio: Config. del equipo → «Permitir control desde la App»."
                       : crtPend && crtPend.msg ? crtPend.msg
                       : crtEsperando ? `➜ ${CRT_NOMBRES[crtPend.accion] || crtPend.accion}: enviado, esperando que el panel confirme…`

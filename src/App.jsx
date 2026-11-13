@@ -15969,11 +15969,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               <X size={13} /> {borrando ? "Eliminando..." : "Eliminar sitio"}
             </Btn>
           )}
-          {esCliente && sitioSeleccionado !== "Todos" && (
-            <Btn small variant="danger" onClick={borrarEventosCliente} disabled={borrando}>
-              <Trash2 size={13} /> {borrando ? "Borrando..." : "Borrar eventos"}
-            </Btn>
-          )}
+          {/* 11.6: el cliente no borra eventos (se quitó su botón «Borrar eventos») */}
           {pushEstado !== "cargando" && (
             <button
               onClick={pushEstado === "activo" ? desactivarPush : activarPush}

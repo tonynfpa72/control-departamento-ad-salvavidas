@@ -14867,7 +14867,9 @@ function MonitoreoNotifier() {
   const [pantallaCruda, setPantallaCruda] = useState(false);   // 10.9: ver el texto tal como lo manda el panel
   const vistoPantallaRef = useRef(new Map());
   const vivoRef = useRef({ lineas: [], leds: null });   // 11.2: lo que llega por el canal en vivo (no se pierde si la base viene atrasada)   // 11.1: id del evento -> cuándo lo vio llegar la App
-  const [limpiadoEn, setLimpiadoEn] = useState({});   // 11.3: sitio -> hora en que se limpió la pantalla
+  const [limpiadoEn, setLimpiadoEn] = useState({});
+  const [filtroPantalla, setFiltroPantalla] = useState(null);   // 11.4: tocar un contador filtra la pantalla
+  const [textoLimpio, setTextoLimpio] = useState({});   // 11.4: sitio -> { en, corte } al limpiar la vista «Texto»   // 11.3: sitio -> hora en que se limpió la pantalla
   const [, setTicPantalla] = useState(0);   // 11.1: refresca la pantalla para que los avisos de un momento se quiten solos
   useEffect(() => { if (!termRemoto) return; const id = setInterval(() => setTicPantalla((x) => x + 1), 1000); return () => clearInterval(id); }, [termRemoto]);
   const monActividad = useRef(Date.now());
@@ -15078,7 +15080,7 @@ function MonitoreoNotifier() {
     ganancia.gain.value = 0;
     ganancia.connect(ctx.destination);
     const osc = ctx.createOscillator();
-    osc.type = "square";
+    osc.type = "sine";          // 11.3: onda suave (la cuadrada sonaba áspera / "ruido")
     osc.frequency.value = 520;  // 8.4: tono de 520 Hz (más grave, elegido por Anthony)
     osc.connect(ganancia);
     osc.start();
@@ -15089,7 +15091,7 @@ function MonitoreoNotifier() {
 
   const volumen = (v) => {
     const ctx = audioCtxRef.current, ganancia = gananciaRef.current;
-    if (ctx && ganancia) ganancia.gain.setTargetAtTime(v, ctx.currentTime, 0.005);
+    if (ctx && ganancia) ganancia.gain.setTargetAtTime(v, ctx.currentTime, 0.012);   // 11.3: entrada/salida suave (sin "clic")
   };
 
   const detenerSonido = () => {
@@ -15102,6 +15104,9 @@ function MonitoreoNotifier() {
 
   const sonar = (modo, duracionMs) => {
     if (!esTecnicoSonido || !sonidoOnRef.current) return;
+    // 11.3: no se baja de una alarma a una falla mientras siga sonando
+    const RANGO_SON = { 0: 0, 1: 1, 3: 2, 2: 3 };
+    if ((RANGO_SON[modoSonandoRef.current] || 0) > (RANGO_SON[modo] || 0)) return;
     const ctx = prepararAudio();
     if (!ctx) return;
     const reproducir = () => {
@@ -15111,13 +15116,14 @@ function MonitoreoNotifier() {
       pulsoTimerRef.current = null;
       modoSonandoRef.current = modo;
       setModoSonando(modo);
+      const NIVEL = 0.22;   // 11.3: más bajo que antes (0.5)
       if (modo === 2) {
-        volumen(0.5);
+        volumen(NIVEL);
       } else {
         let on = false;
         // modo 1 = problema (pulsos de 1/2 s) · modo 3 = supervisión (pulsos de 1/8 s, muy seguidos)
-        volumen(0.5); on = true;
-        pulsoTimerRef.current = setInterval(() => { on = !on; volumen(on ? 0.5 : 0); }, modo === 3 ? 125 : 500);
+        volumen(NIVEL); on = true;
+        pulsoTimerRef.current = setInterval(() => { on = !on; volumen(on ? NIVEL : 0); }, modo === 3 ? 125 : 500);
       }
       if (duracionMs) {
         setTimeout(() => { if (modoSonandoRef.current === modo) detenerSonido(); }, duracionMs);
@@ -15167,11 +15173,13 @@ function MonitoreoNotifier() {
     if (mayorId <= ultimoEventoVistoRef.current) return;
     const nuevos = delSitio.filter((e) => idNum(e) > ultimoEventoVistoRef.current);
     ultimoEventoVistoRef.current = mayorId;
+    // 11.3: el sonido sigue hasta que ALGÚN usuario confirme (el panel imprime CONFIRMAR, SEÑAL SILENCIADA o REARME)
+    if (nuevos.some((e) => /CONFIRMAR|SILENCIAD|REARME|ACKNOWLEDG|SIGNALS? SILENCED|SYSTEM RESET/i.test(String(e.texto || "")))) detenerSonido();
     if (monitorSitioRef.current && nuevos.every((e) => e.sitio === monitorSitioRef.current)) return;
     const cats = (e) => [e.categoria, e.subcat];   // la subcategoría también cuenta (ej. "general" + "problema")
     if (nuevos.some((e) => cats(e).some((c) => c === "alarma" || c === "prealarma"))) sonar(2);
-    else if (nuevos.some((e) => cats(e).some((c) => c === "supervision"))) sonar(3, 6000);
-    else if (nuevos.some((e) => cats(e).some((c) => ["problema", "seguridad"].includes(c)))) sonar(1, 6000);
+    else if (nuevos.some((e) => cats(e).some((c) => c === "supervision"))) sonar(3);
+    else if (nuevos.some((e) => cats(e).some((c) => ["problema", "seguridad"].includes(c)))) sonar(1);
   }, [eventos, esTecnicoSonido, sonidoOn, sitioSeleccionado]);
 
   useEffect(() => { sonidoOnRef.current = sonidoOn; }, [sonidoOn]);
@@ -15518,6 +15526,7 @@ function MonitoreoNotifier() {
     nuevo.split("\n").forEach((ln) => {
       if (/^\s*(>>|---)/.test(ln)) return;
       const u = ln.replace(/^[^A-Za-z0-9*#]+/, "").toUpperCase();
+      if (/^(CONFIRMAR|SENAL SILENCIADA|REARME DEL SISTEMA)/.test(u)) { detenerSonido(); return; }   // 11.3: alguien confirmó
       if (!u || /^(BR|CLR)\b/.test(u) || /HIST|LISTADO|NORMAL|RESTAUR|SILENCIAD|CONFIRMAR|REARME/.test(u)) return;
       const clave = u.replace(/\s+/g, " ").trim();
       const ya = lineasSonadasRef.current.get(clave);
@@ -15532,7 +15541,7 @@ function MonitoreoNotifier() {
       if (rango[m] > rango[modo]) modo = m;
     });
     if (modo === 2) sonar(2);
-    else if (modo) sonar(modo, 6000);
+    else if (modo) sonar(modo);
   }, [termFila, termRemoto]);
   // 10.5: si se enciende Point Disabled (zona anulada) suena el tono de falla, aunque el panel no imprima la línea
   const ledsPrevRef = useRef(null);
@@ -15541,7 +15550,7 @@ function MonitoreoNotifier() {
     const l = String(leerConfigPanel(termFila.config_panel).leds || "");
     const antes = ledsPrevRef.current;
     ledsPrevRef.current = l;
-    if (antes !== null && l.includes("D") && !antes.includes("D") && modoSonandoRef.current === 0) sonar(1, 6000);
+    if (antes !== null && l.includes("D") && !antes.includes("D") && modoSonandoRef.current === 0) sonar(1);
   }, [termFila]);
   useEffect(() => {
     if (termFila && !cfgForm && termFila.config_panel) {
@@ -16536,12 +16545,19 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     // en el teléfono se juntan los espacios largos para que cada evento quepa en una o dos líneas
                     // 8.8: la línea con que el panel contesta al ESC ("<sitio> - NFS-640 comunicacion, conectada.")
                     // y los "." sueltos del prompt no se muestran: no son eventos.
-                    const lineas = String(f.terminal_txt || "(todavía no llega nada)").replace(/~[\s\S]?/g, "").replace(/<[0-9A-F]{2}>/gi, "").split("\n")
+                    const tl = textoLimpio[termRemoto.sitio];
+                    let txtTerminal = String(f.terminal_txt || "");
+                    if (tl) {   // 11.4: después de «Limpiar» solo se muestra lo que llegó después
+                      const p = tl.corte ? txtTerminal.lastIndexOf(tl.corte) : -1;
+                      if (p >= 0) txtTerminal = txtTerminal.slice(p + tl.corte.length);
+                      else if (tl.corte && Date.now() - tl.en < 15000) txtTerminal = "";
+                    }
+                    const lineas = String(txtTerminal || (tl ? "" : "(todavía no llega nada)")).replace(/~[\s\S]?/g, "").replace(/<[0-9A-F]{2}>/gi, "").split("\n")
                       .filter((ln) => !/comunicacion\s*,?\s*conectada/i.test(ln) && !/^[.\s!|]+$/.test(ln))
                       .map((ln) => (movil ? ln.replace(/ {3,}/g, "  ").replace(/^\.+(?=\S)/, "") : ln));
                     // 11.2: líneas que llegaron por el canal en vivo y todavía no están en el texto guardado
                     const txtDb = String(f.terminal_txt || "");
-                    const vivoLineas = vivoRef.current.lineas.filter((x) => Date.now() - x.at < 600000 && !txtDb.includes(x.t.trim()));
+                    const vivoLineas = vivoRef.current.lineas.filter((x) => Date.now() - x.at < 600000 && !txtDb.includes(x.t.trim()) && !(tl && x.at <= tl.en));
                     vivoLineas.forEach((x) => lineas.push(x.t));
                     // 10.9: vista moderna de la pantalla — cada línea del panel como una fila con etiqueta de color
                     const ST = {
@@ -16624,6 +16640,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                         vistoPantallaRef.current.set(kv, vv ? Math.min(vv.at, Date.now()) : Date.now());
                       }
                       r.visto = vistoPantallaRef.current.get(kv);
+                      r.idEv = e.id;
                       if (!isNaN(fe)) {
                         const h = fe.toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" });
                         r.hora = fe.toDateString() === hoyTxt ? h : fe.toLocaleDateString("es-CR", { day: "2-digit", month: "2-digit" }) + " " + h;
@@ -16670,8 +16687,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     todas.forEach((r) => { if (r.chip === "BORRADO" || r.normal) { const k = claveFila(r, r.base || r.chip); if (!brUlt[k] || (r.t || 0) > (brUlt[k].t || 0)) brUlt[k] = r; } });
                     const habils = todas.filter((r) => r.chip === "HABILITADA");
                     const rearmes = todas.filter((r) => r.chip === "REARME");
-                    const filasPantalla = todas.filter((r) => {
-                      if (limpio && (r.visto || 0) <= limpio) return false;
+                    const GRUPO = { ALARMA: "alarma", PREALARMA: "alarma", SIMULACRO: "alarma", "SUPERVISIÓN": "superv", FALLA: "falla", ANULADO: "anulado", ANULADA: "anulado", SEGURIDAD: "segur" };
+                    const reglaActiva = (r) => {
                       if (["CONFIRMADO", "REARME", "SILENCIADO", "ORDEN", "SIRENAS", "HABILITADA"].includes(r.chip)) return cinco(r);
                       if (r.chip === "BORRADO" || r.normal) return cinco(r);
                       if (r.chip === "ANULADA") return !habils.some((h) => h.dir === r.dir && (h.t || 0) >= (r.t || 0));
@@ -16680,7 +16697,18 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       const br = brUlt[claveFila(r, r.chip)];
                       if (br && (br.t || 0) >= (r.t || 0) && !cinco(br)) return false;   // su borrado ya cumplió los 5 s
                       return true;
-                    }).slice(0, 80);
+                    };
+                    // contador: lo que está PRESENTE (no le afecta «Limpiar»)
+                    const presentes = todas.filter((r) => GRUPO[r.chip] && reglaActiva(r));
+                    const cuenta = (g) => presentes.filter((r) => GRUPO[r.chip] === g).length;
+                    const filasPantalla = todas.filter((r) => !(limpio && (r.visto || 0) <= limpio) && reglaActiva(r) && (!filtroPantalla || GRUPO[r.chip] === filtroPantalla)).slice(0, 80);
+                    const CONTADORES = [
+                      { g: "alarma", ic: "🔥", t: "Alarmas", st: ST.alarma },
+                      { g: "superv", ic: "⚙", t: movil ? "Superv." : "Supervisiones", st: ST.superv },
+                      { g: "falla", ic: "⚠", t: "Fallas", st: ST.falla },
+                      { g: "anulado", ic: "🚫", t: "Anulados", st: ST.gris },
+                      ...(cuenta("segur") ? [{ g: "segur", ic: "🛡", t: "Seguridad", st: ST.azul }] : []),
+                    ];
                     const resumenPantalla = [];
                     if (L.includes("A")) resumenPantalla.push({ t: "Alarma", st: ST.alarma });
                     if (L.includes("S")) resumenPantalla.push({ t: "Supervisión", st: ST.superv });
@@ -16777,14 +16805,22 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       <div style={{ display: "flex", flexDirection: movil ? "column" : "row", gap: 10, alignItems: "stretch", marginBottom: 10 }}>
                       <div style={{ flex: 1, minWidth: 0, background: "linear-gradient(#d9dad6,#c9cac5)", borderRadius: 12, padding: movil ? "10px 8px 12px" : "14px 16px 16px", color: "#2a2c2f", boxShadow: "inset 0 1px 0 #fff8, 0 2px 8px #0008" }}>
                         <div style={{ display: "flex", gap: movil ? 8 : 14, alignItems: "flex-start", flexDirection: movil ? "column" : "row" }}>
-                          <div style={movil ? { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 4, width: "100%" } : { display: "flex", flexDirection: "column", gap: 9, width: 118, paddingTop: 10 }}>
+                          {!movil && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 9, width: 118, paddingTop: 10 }}>
                             {ledIzq(<>Controls<br />Active</>, control || lampTest, VERDE)}
                             {ledIzq("Power", lampTest || (abierto && !L.includes("X")), VERDE)}
                             {ledIzq(<>Pre-<br />Discharge</>, lampTest, AMBAR)}
                             {ledIzq("Discharge", lampTest, ROJO)}
-                          </div>
+                          </div>)}
                           {pantallaCruda ? (
                           <div style={{ flex: 1, position: "relative", minWidth: movil ? 0 : 260, width: movil ? "100%" : undefined, display: "flex" }}>
+                          <button type="button" onClick={async () => {
+                            // 11.4: limpia SOLO la vista «Texto» (pide confirmar y borra el texto guardado en Supabase)
+                            if (!window.confirm("¿Limpiar la vista «Texto»?\n\nSe borra el texto guardado del puerto en Supabase. Los eventos de la vista moderna no se tocan.")) return;
+                            const t = String(f.terminal_txt || "");
+                            setTextoLimpio((x) => ({ ...x, [termRemoto.sitio]: { en: Date.now(), corte: t.slice(-160) } }));
+                            await supabase.from("dispositivos_panel").update({ terminal_txt: "", terminal_tx: "LIMPIAR" }).eq("sitio", termRemoto.sitio);
+                          }} style={{ position: "absolute", right: 118, top: 10, zIndex: 2, background: "#161e27", border: "1px solid #30363d", color: "#c9d1d9", borderRadius: 6, fontSize: 10.5, padding: "2px 8px", cursor: "pointer", fontFamily: "inherit" }}>Limpiar</button>
                           <button type="button" onClick={() => setPantallaCruda(false)} style={{ position: "absolute", right: 14, top: 10, zIndex: 2, background: "#161e27", border: "1px solid #30363d", color: "#c9d1d9", borderRadius: 6, fontSize: 10.5, padding: "2px 8px", cursor: "pointer", fontFamily: "inherit" }}>Vista moderna</button>
                           <pre ref={termPreRef} style={{ flex: 1, width: movil ? "100%" : undefined, boxSizing: "border-box", minWidth: movil ? 0 : 260, height: movil ? 230 : 390, overflow: "auto", margin: 0, background: "#05080c", border: movil ? "4px solid #3a3d40" : "6px solid #3a3d40", borderRadius: 6, padding: movil ? "6px 7px" : "8px 10px", fontSize: movil ? 10.5 : 12, lineHeight: 1.4, color: "#7ee787", whiteSpace: "pre-wrap", wordBreak: "normal", overflowWrap: "anywhere", fontFamily: "ui-monospace,Consolas,monospace", boxShadow: "inset 0 0 12px #000" }}>
                             {[...lineas].reverse().map((ln, k) => <div key={k} style={{ color: ln.startsWith(">>") ? "#ffd866" : ln.startsWith("---") ? "#8b949e" : undefined, minHeight: "1.45em" }}>{ln}</div>)}
@@ -16794,14 +16830,39 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                             <div style={{ flex: 1, width: movil ? "100%" : undefined, boxSizing: "border-box", minWidth: movil ? 0 : 260, height: "auto", overflow: "hidden", display: "flex", flexDirection: "column", background: "linear-gradient(#0e141b,#0a0f14)", border: movil ? "4px solid #3a3d40" : "6px solid #3a3d40", borderRadius: 8, color: "#e6edf3", fontFamily: "Inter, system-ui, 'Segoe UI', Roboto, sans-serif" }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, padding: movil ? "6px 8px" : "7px 12px", borderBottom: "1px solid #1f2933", fontSize: 11.5, color: "#8b949e", flexWrap: "wrap" }}>
                                 <b style={{ color: "#e6edf3", fontSize: movil ? 11.5 : 12.5 }}>{termRemoto.sitio}</b><span>· NFS2-640</span><span style={{ flex: 1 }} />
-                                {resumenPantalla.map((r) => <span key={r.t} style={{ padding: "2px 8px", borderRadius: 99, fontSize: 10.5, fontWeight: 700, ...r.st }}>{r.t}</span>)}
-                                <button type="button" onClick={() => setLimpiadoEn((x) => ({ ...x, [termRemoto.sitio]: Date.now() }))} title="Quitar de la pantalla todo lo que se ve ahora (no borra nada del panel ni del historial)" style={{ background: "transparent", border: "1px solid #30363d", color: "#8b949e", borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>Limpiar</button>
+                                
+                                <button type="button" onClick={async () => {
+                                  // 11.4: pide confirmar y BORRA de Supabase los eventos que se ven en esta pantalla
+                                  const ids = filasPantalla.map((r) => r.idEv).filter((x) => x !== undefined && x !== null);
+                                  if (!window.confirm("¿Limpiar la pantalla?\n\nSe borran de Supabase los " + ids.length + " evento(s) que se ven ahora en esta pantalla. No se pueden recuperar.\n(La vista «Texto» no se toca.)")) return;
+                                  const ahoraL = Date.now();
+                                  setLimpiadoEn((x) => ({ ...x, [termRemoto.sitio]: ahoraL }));
+                                  if (ids.length) {
+                                    ultimoBorradoRef.current = ahoraL;
+                                    setEventos((prev) => prev.filter((e) => !ids.includes(e.id)));
+                                    for (let i = 0; i < ids.length; i += 100) {
+                                      const { error } = await supabase.from("eventos_panel").delete().in("id", ids.slice(i, i + 100));
+                                      if (error) { window.alert("No se pudieron borrar de Supabase: " + error.message); break; }
+                                    }
+                                  }
+                                }} title="Quitar de la pantalla todo lo que se ve ahora (no borra nada del panel ni del historial)" style={{ background: "transparent", border: "1px solid #30363d", color: "#8b949e", borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>Limpiar</button>
                                 <button type="button" onClick={() => setPantallaCruda(true)} title="Ver el texto tal como lo manda el panel" style={{ background: "transparent", border: "1px solid #30363d", color: "#8b949e", borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>Texto</button>
                               </div>
-                              <div style={{ height: (movil ? 38 : 56) * 6, flex: "none", overflowY: "auto", overflowX: "hidden", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", touchAction: "pan-y" }}>
+                              <div style={{ display: "flex", gap: movil ? 4 : 6, padding: movil ? "5px 6px" : "6px 12px", borderBottom: "1px solid #1f2933", background: "#0c1218" }}>
+                                {CONTADORES.map((k) => {
+                                  const sel = filtroPantalla === k.g;
+                                  return (
+                                    <button key={k.g} type="button" onClick={() => setFiltroPantalla(sel ? null : k.g)} title={sel ? "Ver todos" : "Ver solo " + k.t.toLowerCase()}
+                                      style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", gap: movil ? 3 : 6, padding: movil ? "3px 0" : "4px 0", borderRadius: 6, cursor: "pointer", fontFamily: "inherit",
+                                        fontWeight: 800, fontSize: movil ? 10 : 12, whiteSpace: "nowrap", ...k.st, boxShadow: sel ? "0 0 0 2px #e6edf3" : "none" }}>
+                                      <span>{k.ic}</span>{!movil || true ? <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{k.t}</span> : null}<b style={{ fontSize: movil ? 12 : 15 }}>{cuenta(k.g)}</b>
+                                    </button>);
+                                })}
+                              </div>
+                              <div style={{ height: (movil ? 34 : 50) * 6, flex: "none", overflowY: "auto", overflowX: "hidden", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", touchAction: "pan-y" }}>
                                 
                                 {filasPantalla.map((r, k) => (
-                                  <div key={k} style={{ display: "grid", gridTemplateColumns: movil ? "66px 1fr auto" : "92px 1fr auto 84px", gap: movil ? 7 : 12, alignItems: "center", padding: movil ? "0 8px" : "0 14px", height: movil ? 38 : 56, boxSizing: "border-box", overflow: "hidden", borderBottom: "1px solid #161e27", background: k === 0 ? r.fondo : "transparent" }}>
+                                  <div key={k} style={{ display: "grid", gridTemplateColumns: movil ? "66px 1fr auto" : "92px 1fr auto 84px", gap: movil ? 7 : 12, alignItems: "center", padding: movil ? "0 8px" : "0 14px", height: movil ? 34 : 50, boxSizing: "border-box", overflow: "hidden", borderBottom: "1px solid #161e27", background: k === 0 ? r.fondo : "transparent" }}>
                                     <span style={{ fontSize: movil ? 9 : 11.5, fontWeight: 800, padding: movil ? "3px 0" : "4px 0", borderRadius: 6, textAlign: "center", letterSpacing: 0.3, ...r.st }}>{r.chip}</span>
                                     <span style={{ minWidth: 0 }}>
                                       <span style={{ display: "block", fontWeight: 600, fontSize: movil ? 11.5 : 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: r.tachado ? "#8b949e" : "#e6edf3", textDecoration: r.tachado ? "line-through" : "none" }}>{r.nombre}</span>
@@ -16814,7 +16875,21 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                             </div>
                           )}
                         </div>
-                        <div style={movil ? { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "8px 4px", margin: "10px 0 2px" } : { display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 6, margin: "14px 0 4px", paddingLeft: 118 }}>
+                        {movil ? (
+                          // 11.4: APK / teléfono — las 11 luces en una cuadrícula pareja de 3 columnas (luz + nombre en una línea)
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: "7px 6px", margin: "10px 2px 2px", padding: "8px 8px", background: "#d2d3cf", borderRadius: 8, border: "1px solid #b5b6b1" }}>
+                            {[
+                              ["Ctrl. Active", control || lampTest, VERDE], ["Power", lampTest || (abierto && !L.includes("X")), VERDE], ["Fire Alarm", on("A"), ROJO],
+                              ["Pre-Alarm", on("P"), ROJO], ["Security", on("G"), AZUL], ["Supervisory", on("S"), AMBAR],
+                              ["Sys. Trouble", on("T"), AMBAR], ["Silenced", on("Q"), AMBAR], ["Pt. Disabled", on("D"), AMBAR],
+                              ["Pre-Discharge", lampTest, AMBAR], ["Discharge", lampTest, ROJO],
+                            ].map(([n, p, col]) => (
+                              <div key={n} style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, fontWeight: 800, fontSize: 9.5, textTransform: "uppercase", letterSpacing: 0.2, color: "#2a2c2f" }}>
+                                {led(p, col)}<span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{n}</span>
+                              </div>))}
+                          </div>
+                        ) : (
+                        <div style={{ display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 6, margin: "14px 0 4px", paddingLeft: 118 }}>
                           {ledAbajo(<>Fire<br />Alarm</>, on("A"), ROJO)}
                           {ledAbajo("Pre-Alarm", on("P"), ROJO)}
                           {ledAbajo("Security", on("G"), AZUL)}
@@ -16823,6 +16898,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                           {ledAbajo(<>Signals<br />Silenced</>, on("Q"), AMBAR)}
                           {ledAbajo(<>Point<br />Disabled</>, on("D"), AMBAR)}
                         </div>
+                        )}
                         <div style={movil ? { display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 4, marginTop: 12 } : { display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
                           {boton(movil ? "Ack" : "Acknowledge", "Scroll display", { ev: { onClick: () => ordenCrt("ack") }, activo: crtEsperando && crtPend.accion === "ack" })}
                           {boton(movil ? "Silence" : <>Signal<br />Silence</>, null, { ev: { onClick: () => ordenCrt("silenciar") }, activo: crtEsperando && crtPend.accion === "silenciar" })}
@@ -16834,46 +16910,28 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                             } } })}
                           {boton(movil ? "Lamp" : <>Lamp<br />Test</>, null, { siempre: true, ev: { onClick: () => { setLampTest(true); setTimeout(() => setLampTest(false), 3000); } } })}
                         </div>
+                        {/* 11.4: reportes del panel como botones chicos del display (piden confirmar) */}
+                        <div style={{ height: 1, background: "#a9aaa5", margin: movil ? "12px 4px 2px" : "14px 10px 2px" }} />
+                        <div style={{ fontSize: movil ? 8.5 : 10, fontWeight: 800, letterSpacing: 0.8, textTransform: "uppercase", color: "#555", textAlign: "center", marginTop: 6 }}>Reportes del panel</div>
+                        <div style={{ display: "flex", justifyContent: "center", gap: movil ? 6 : 30, marginTop: 6, flexWrap: "wrap" }}>
+                          {[
+                            { a: "historial", t: <>Historial<br />completo</>, c: "linear-gradient(#5aa8ff,#1f6fd8)", q: "¿Pedir el HISTORIAL COMPLETO al panel?\n\nEl panel lo imprime durante varios minutos. Mientras tanto no mande otras órdenes." },
+                            { a: "histalarmas", t: <>Historial<br />de alarmas</>, c: "linear-gradient(#5aa8ff,#1f6fd8)", q: "¿Pedir el HISTORIAL DE ALARMAS al panel?\n\nMientras imprime no mande otras órdenes." },
+                            { a: "puntos", t: <>Todos los<br />puntos</>, c: "linear-gradient(#5f6670,#3a3f46)", q: "¿Pedir el listado de TODOS LOS PUNTOS al panel?\n\nReemplaza el listado anterior. Mientras imprime no mande otras órdenes." },
+                            { a: "detectores", t: <>Reporte<br />detectores</>, c: "linear-gradient(#4fd16b,#1f9a3c)", q: "¿Pedir el REPORTE DE DETECTORES al panel?\n\nMientras imprime no mande otras órdenes." },
+                          ].map((r) => (
+                            <div key={r.a} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, width: movil ? 70 : 92, textAlign: "center", fontWeight: 800, fontSize: movil ? 8 : 9.5, textTransform: "uppercase", lineHeight: 1.1 }}>
+                              <button type="button" disabled={!habil} title={motivo || ""} onClick={() => { if (window.confirm(r.q)) ordenCrt(r.a); }}
+                                style={{ width: movil ? 38 : 44, height: movil ? 24 : 26, borderRadius: 5, background: "#e8e8e5", border: "1px solid #9a9b96", padding: 3, display: "flex", cursor: habil ? "pointer" : "not-allowed", opacity: habil ? 1 : 0.5, touchAction: "manipulation",
+                                  boxShadow: crtEsperando && crtPend && crtPend.accion === r.a ? "inset 0 2px 3px #0005" : "0 2px 0 #8d8e8a" }}>
+                                <i style={{ flex: 1, borderRadius: 3, background: r.c }} />
+                              </button>
+                              <span>{r.t}</span>
+                            </div>))}
+                        </div>
                       </div>
                       {anunciador}
                       </div>);
-                  })()}
-                  {(() => {
-                    // 7.9: reportes en una sección cerrada, como filas con un botón chico "Pedir" y confirmación (difícil de tocar por error)
-                    const habilR = crtEsNotifier && c.ctrlapp === "1";
-                    const REP = [
-                      { a: "historial", ic: "📜", t: "Historial completo", d: "Todos los eventos guardados en el panel. Tarda varios minutos (más de 125 KB).",
-                        q: "¿Pedir el HISTORIAL COMPLETO al panel?\n\nEl panel lo imprime durante varios minutos. Mientras tanto no mande otras órdenes." },
-                      { a: "histalarmas", ic: "🚨", t: "Historial de alarmas", d: "Solo las alarmas guardadas en el panel.",
-                        q: "¿Pedir el HISTORIAL DE ALARMAS al panel?\n\nMientras imprime no mande otras órdenes." },
-                      { a: "puntos", ic: "📋", t: "Todos los puntos", d: "Estado de cada punto programado. Se guarda en la pestaña «Todos los puntos» y se puede descargar.",
-                        q: "¿Pedir el listado de TODOS LOS PUNTOS al panel?\n\nReemplaza el listado anterior. Mientras imprime no mande otras órdenes." },
-                      { a: "detectores", ic: "🛠", t: "Reporte de detectores", d: "Compensación y sensibilidad de cada detector (va a Mantenimiento).",
-                        q: "¿Pedir el REPORTE DE DETECTORES al panel?\n\nMientras imprime no mande otras órdenes." },
-                    ];
-                    return (
-                      <div style={{ border: `1px solid ${IGNIS.border}`, borderRadius: 10, background: IGNIS.bg }}>
-                        <button type="button" onClick={() => setReportesAbiertos(!reportesAbiertos)}
-                          style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, background: "transparent", border: "none", color: IGNIS.text, cursor: "pointer", padding: "10px 12px", fontFamily: "inherit", fontSize: 13.5, fontWeight: 700, textAlign: "left" }}>
-                          <span style={{ color: IGNIS.dim }}>{reportesAbiertos ? "▾" : "▸"}</span> Reportes del panel
-                          <span style={{ fontWeight: 400, fontSize: 12, color: IGNIS.dim }}>historiales y detectores</span>
-                        </button>
-                        {reportesAbiertos && REP.map((r) => (
-                          <div key={r.a} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderTop: `1px solid ${IGNIS.border}` }}>
-                            <span style={{ fontSize: 18 }}>{r.ic}</span>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 700, fontSize: 13 }}>{r.t}</div>
-                              <div style={{ fontSize: 11.5, color: IGNIS.dim, lineHeight: 1.35 }}>{r.d}</div>
-                            </div>
-                            <button type="button" disabled={!habilR} title={habilR ? "" : "Solo con panel Notifier CRT y control habilitado"}
-                              onClick={() => { if (window.confirm(r.q)) ordenCrt(r.a); }}
-                              style={{ flex: "none", padding: "6px 14px", borderRadius: 8, border: `1px solid ${IGNIS.border2 || IGNIS.border}`, background: "transparent", color: habilR ? IGNIS.text : IGNIS.dim, fontWeight: 700, fontSize: 12.5, cursor: habilR ? "pointer" : "not-allowed", fontFamily: "inherit", opacity: habilR ? 1 : 0.5 }}>
-                              Pedir
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    );
                   })()}
                   <div style={{ marginTop: 8, fontSize: 12.5, borderRadius: 8, padding: "8px 11px", border: `1px solid ${IGNIS.border}`, color: crtPend && crtPend.msg ? IGNIS.alarma : crtEsperando ? IGNIS.problema : crtOk ? "#9be9a8" : resCrt ? IGNIS.alarma : IGNIS.dim }}>
                     {!f.config_panel ? (viejo || !f.version ? "Los botones necesitan el equipo en versión 7.6 (Actualizar firmware)." : "El equipo todavía no informa su configuración. Si ya tiene la 7.6, falta correr en Supabase el SQL_monitor_remoto.sql; si no, actualícelo.")

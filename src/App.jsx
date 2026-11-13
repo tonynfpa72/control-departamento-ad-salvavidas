@@ -14894,7 +14894,8 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   const [centralFiltro, setCentralFiltro] = useEstadoRecordado("monitoreo-central-filtro", "todos");
   const [centralTam, setCentralTam] = useEstadoRecordado("monitoreo-central-tam", "normal");   // "grande" | "normal" | "compacto"
   const [centralCompleta, setCentralCompleta] = useState(false);
-  const [centralVista, setCentralVista] = useEstadoRecordado("monitoreo-central-vista", "atencion");   // "atencion" (solo lo que necesita atención) | "matriz"   // pantalla completa del navegador
+  const [centralVista, setCentralVista] = useEstadoRecordado("monitoreo-central-vista", "atencion");
+  const [centralOkAbierto, setCentralOkAbierto] = useState(false);   // "atencion" (solo lo que necesita atención) | "matriz"   // pantalla completa del navegador
   const centralScrollRef = useRef(null);
   const [, setTicCentral] = useState(0);
   useEffect(() => { if (!centralAbierta) return; const id = setInterval(() => setTicCentral((x) => x + 1), 2000); return () => clearInterval(id); }, [centralAbierta]);
@@ -16621,7 +16622,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             <style>{".ignis-raiz-central>:not(.ignis-central):not([style*='position: fixed']){display:none!important}.ignis-raiz-central{gap:0!important}@keyframes ignisCentralNuevo{0%,100%{box-shadow:0 0 0 3px #1f6fd8,0 0 16px #1f6fd8aa}50%{box-shadow:0 0 0 3px #79b8ff,0 0 3px #1f6fd855}}"}</style>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: movilC ? "10px 10px" : "10px 18px", borderBottom: `1px solid ${IGNIS.border}`, background: "#05080b" }}>
               <div style={{ fontSize: movilC ? 14 : 15, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase" }}>Centro de Monitoreo</div>
-              <span style={{ fontSize: 12, color: IGNIS.dim }}>{sitiosC.length} sitios</span>
+              <span style={{ fontSize: 12, color: IGNIS.dim }}>{sitiosC.length} {sitiosC.length === 1 ? "sitio" : "sitios"}</span>
               {esTecnicoSonido && sonidoOn && sonidoBloqueado && (
                 <button type="button" onClick={() => { const ctx = prepararAudio(); if (ctx && ctx.state !== "running") ctx.resume().then(() => setSonidoBloqueado(false)).catch(() => {}); else setSonidoBloqueado(false); }}
                   style={{ background: "#1a2a3a", border: `1px solid ${IGNIS.seguridad}`, color: "#9dc6ff", borderRadius: 8, padding: "5px 11px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>🔈 Toque para activar el sonido</button>)}
@@ -16668,19 +16669,24 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 12, padding: movilC ? 10 : "12px 18px" }}>
                   <div style={{ background: "#0e141b", border: "1px solid #1d3b29", borderRadius: 12, padding: "8px 14px", display: "flex", alignItems: "center", gap: 14, flexWrap: movilC ? "wrap" : "nowrap" }}>
                     <b style={{ color: "#3fd17a", fontSize: 22 }}>{okL.length}</b>
-                    <span style={{ fontSize: 12, color: "#7ee2a6", fontWeight: 800, lineHeight: 1.2 }}>sitios<br />sin eventos</span>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 3, flex: 1, minWidth: 0, maxHeight: 44, overflow: "hidden" }}>
+                    <span style={{ fontSize: 12, color: "#7ee2a6", fontWeight: 800, lineHeight: 1.2 }}>{okL.length === 1 ? "sitio" : "sitios"}<br />sin eventos</span>
+                    {/* los sitios sin eventos se ven por nombre (pequeños); con muchos, se ven 2 filas y «más» abre la lista */}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, flex: 1, minWidth: 0, maxHeight: centralOkAbierto ? 220 : 52, overflow: centralOkAbierto ? "auto" : "hidden", alignContent: "flex-start" }}>
                       {okL.map((x) => (
-                        <button key={x.sitio} type="button" onClick={() => abrirSitio(x.sitio)} title={(x.cliente ? x.cliente + " · " : "") + x.sitio + " · tocar: abrir el panel"}
-                          style={{ width: 10, height: 10, padding: 0, borderRadius: 2, border: "none", background: "#1f4a31", cursor: "pointer" }} />))}
+                        <button key={x.sitio} type="button" onClick={() => abrirSitio(x.sitio)} title={(x.cliente ? x.cliente + " · " : "") + x.sitio + (x.simplex ? " · Simplex" : " · Notifier") + " · tocar: abrir el panel"}
+                          style={{ height: 22, padding: "0 8px", borderRadius: 5, border: "1px solid #1d3b29", background: "#132a1d", color: "#8fc4a3", fontSize: 10.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", maxWidth: 190, overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {x.sitio}{x.simplex ? " · SX" : ""}{sitiosMudos.includes(x.sitio) ? " 🔕" : ""}
+                        </button>))}
                     </div>
+                    {okL.length > 12 && <button type="button" onClick={() => setCentralOkAbierto(!centralOkAbierto)}
+                      style={{ background: "transparent", border: `1px solid ${IGNIS.border}`, color: IGNIS.dim, borderRadius: 6, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>{centralOkAbierto ? "menos ▴" : "más ▾"}</button>}
                     <input value={centralBusca} onChange={(e) => setCentralBusca(e.target.value)} placeholder="Buscar…" autoComplete="off" name="central_busca_ignis2" data-lpignore="true"
                       style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 7, padding: "5px 10px", width: movilC ? "100%" : 160, fontSize: 12.5, fontFamily: "inherit", boxSizing: "border-box" }} />
                     <button type="button" onClick={() => setCentralVista("matriz")}
                       style={{ background: "transparent", border: "none", color: "#79b8ff", fontWeight: 800, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>Ver lista ▸</button>
                   </div>
                   <div ref={centralScrollRef} style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-                    {!cola.length && <div style={{ color: "#3fd17a", textAlign: "center", padding: "60px 10px", fontSize: 16, fontWeight: 800 }}>Ningún sitio necesita atención</div>}
+                    {!cola.length && <div style={{ color: "#3fd17a", textAlign: "center", padding: "40px 10px", fontSize: 15, fontWeight: 800 }}>Ningún sitio necesita atención<div style={{ fontSize: 12, color: IGNIS.dim, fontWeight: 600, marginTop: 6 }}>Los sitios sin eventos están arriba; toque uno para abrir su panel.</div></div>}
                     <div style={{ display: "grid", gridTemplateColumns: movilC ? "1fr" : "repeat(auto-fill, minmax(300px, 1fr))", gap: 10 }}>
                       {cola.map((x, k) => {
                         const grande = k === 0 && !movilC && cola.length > 1;

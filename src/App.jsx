@@ -16582,7 +16582,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const CHIP = { alarma: ["ALARMA", "#e5484d33", "#ff8f92"], superv: ["SUPERV.", "#ff8c3d22", "#ffb27a"], falla: ["FALLA", "#f2b70522", "#f2d06b"], anulado: ["ANULADO", "#ff8c3d22", "#ffad6b"], sinconex: ["SIN CONEX.", "#30363d", "#aab3bd"], sinequipo: ["SIN EQUIPO", "#30363d", "#aab3bd"] };
         const cuentaC = (k) => sitiosC.filter((x) => x.est === k).length;
         const qC = esCorreoC(centralBusca) ? "" : centralBusca.trim().toLowerCase();   // el navegador a veces mete el correo del usuario: se ignora
-        const pasa = (x) => (!qC || x.sitio.toLowerCase().includes(qC) || x.cliente.toLowerCase().includes(qC))
+        // búsqueda + marca (Notifier / Simplex); el filtro por estado (los contadores de arriba) va aparte
+        const pasaBusca = (x) => (!qC || x.sitio.toLowerCase().includes(qC) || x.cliente.toLowerCase().includes(qC))
+          && (centralFiltro === "notifier" ? !x.simplex : centralFiltro === "simplex" ? x.simplex : true);
+        const filtroEstado = ["alarma", "superv", "falla", "sinconex", "normal"].includes(centralFiltro) ? centralFiltro : null;
+        const pasa = (x) => pasaBusca(x)
           && (centralFiltro === "todos" ? true : centralFiltro === "notifier" ? !x.simplex : centralFiltro === "simplex" ? x.simplex
             : centralFiltro === "sinconex" ? (x.est === "sinconex" || x.est === "sinequipo") : centralFiltro === "falla" ? (x.est === "falla" || x.est === "anulado") : x.est === centralFiltro);
         const agrupar = centralTam === "cliente";
@@ -16645,10 +16649,16 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 8, padding: "5px 12px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 5 }}><X size={14} /> Cerrar</button>}
               <b style={{ fontSize: 14 }}>{new Date(ahoraC).toLocaleTimeString("es-CR", { hour: "2-digit", minute: "2-digit" })}</b>
             </div>
+            {(filtroEstado || qC || centralFiltro === "notifier" || centralFiltro === "simplex") && (
+              <div style={{ margin: movilC ? "8px 10px 0" : "10px 18px 0", padding: "6px 12px", borderRadius: 8, background: "#1f6fd81a", border: "1px solid #1f6fd866", color: "#9cc3ff", fontSize: 12.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                Mostrando solo: {[filtroEstado && { alarma: "Alarma", superv: "Supervisión", falla: "Falla / anulado", sinconex: "Sin conexión", normal: "OK" }[filtroEstado], centralFiltro === "notifier" && "Notifier", centralFiltro === "simplex" && "Simplex", qC && "«" + centralBusca.trim() + "»"].filter(Boolean).join(" · ")}
+                <button type="button" onClick={() => { setCentralFiltro("todos"); setCentralBusca(""); }}
+                  style={{ marginLeft: "auto", background: "#1f6fd8", border: "none", color: "#fff", borderRadius: 6, padding: "3px 10px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Ver todos ✕</button>
+              </div>)}
             {vistaF && (() => {
               // 11.7: VISTA «ATENCIÓN» — arriba una franja con los sitios sin eventos (un punto por sitio) y en grande
               // solo los monitores de los sitios con algo activo; el del último evento toma el lugar grande.
-              const okL = sitiosC.filter((x) => x.est === "normal" && pasa(x)).sort((a, b) => a.sitio.localeCompare(b.sitio, "es"));
+              const okL = sitiosC.filter((x) => x.est === "normal" && pasaBusca(x)).sort((a, b) => a.sitio.localeCompare(b.sitio, "es"));
               const ultimos = [];
               Object.values(porSitio).forEach((l) => l.slice(0, 6).forEach((e) => ultimos.push(e)));
               ultimos.sort((a, b) => tEv(b) - tEv(a));

@@ -14884,9 +14884,45 @@ function MonitoreoNotifier() {
   const vistoPantallaRef = useRef(new Map());
   const vivoRef = useRef({ lineas: [], leds: null });   // 11.2: lo que llega por el canal en vivo (no se pierde si la base viene atrasada)   // 11.1: id del evento -> cuándo lo vio llegar la App
   const [limpiadoEn, setLimpiadoEn] = useState({});
-  const [centralAbierta, setCentralAbierta] = useState(false);   // 11.7: Central de Monitoreo (todos los sitios, solo personal interno)
+  // 11.7: Central de Monitoreo (todos los sitios, solo personal interno). Se recuerda en la pestaña:
+  // si la pantalla de la pared se recarga, vuelve a abrir la Central con el mismo filtro y tamaño.
+  const [centralAbierta, setCentralAbierta] = useEstadoRecordado("monitoreo-central", false);
   const [centralBusca, setCentralBusca] = useState("");
-  const [centralFiltro, setCentralFiltro] = useState("todos");
+  const [centralFiltro, setCentralFiltro] = useEstadoRecordado("monitoreo-central-filtro", "todos");
+  const [centralTam, setCentralTam] = useEstadoRecordado("monitoreo-central-tam", "normal");   // "grande" | "normal" | "compacto"
+  const [centralCompleta, setCentralCompleta] = useState(false);   // pantalla completa del navegador
+  const centralScrollRef = useRef(null);
+  const [, setTicCentral] = useState(0);
+  useEffect(() => { if (!centralAbierta) return; const id = setInterval(() => setTicCentral((x) => x + 1), 2000); return () => clearInterval(id); }, [centralAbierta]);
+  // la pantalla no se apaga sola mientras la Central está abierta (si el navegador lo permite)
+  useEffect(() => {
+    if (!centralAbierta || esCliente || typeof navigator === "undefined" || !navigator.wakeLock) return;
+    let lock = null, vivo = true;
+    const pedir = () => { if (!vivo || document.visibilityState !== "visible") return; navigator.wakeLock.request("screen").then((l) => { if (vivo) lock = l; else l.release(); }, () => {}); };
+    pedir();
+    document.addEventListener("visibilitychange", pedir);
+    return () => { vivo = false; document.removeEventListener("visibilitychange", pedir); try { if (lock) lock.release(); } catch (e) {} };
+  }, [centralAbierta]);
+  useEffect(() => {
+    const f = () => setCentralCompleta(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", f);
+    return () => document.removeEventListener("fullscreenchange", f);
+  }, []);
+  const alternarCompleta = () => {
+    try { if (document.fullscreenElement) document.exitFullscreen(); else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen(); } catch (e) {}
+  };
+  // eventos ya ordenados por sitio (se calcula solo cuando cambian los eventos, no en cada refresco)
+  const centralPorSitio = useMemo(() => {
+    if (!centralAbierta) return {};
+    const tE = (e) => Date.parse(e.fecha_panel || e.created_at || 0) || 0;
+    const m = {};
+    eventos.forEach((e) => { if (!e || !e.sitio || /^\s*\[APP\]/.test(String(e.texto || ""))) return; (m[e.sitio] = m[e.sitio] || []).push(e); });
+    Object.values(m).forEach((l) => l.sort((a, b) => tE(b) - tE(a) || (Number(b.id) || 0) - (Number(a.id) || 0)));
+    return m;
+  }, [eventos, centralAbierta]);
+  // cuando entra un evento nuevo, la lista vuelve arriba para ver el sitio que pasó al primer lugar
+  const centralUlt = useMemo(() => Math.max(0, ...Object.values(centralPorSitio).map((l) => Date.parse((l[0] && (l[0].fecha_panel || l[0].created_at)) || 0) || 0)), [centralPorSitio]);
+  useEffect(() => { if (centralAbierta && centralScrollRef.current) try { centralScrollRef.current.scrollTo({ top: 0, behavior: "smooth" }); } catch (e) {} }, [centralUlt]);
   const [desdeCentral, setDesdeCentral] = useState(false);
   const [centralClientes, setCentralClientes] = useState([]);   // nombres de cliente de las OD de IPM
   const [centralEditCli, setCentralEditCli] = useState(null);   // { sitio, valor, msg, guardando }
@@ -14897,6 +14933,12 @@ function MonitoreoNotifier() {
       setCentralClientes(u);
     }, () => {});
   }, [centralAbierta]);
+  useEffect(() => {
+    if (!centralAbierta) return;
+    const k = (e) => { if (e.key === "Escape" && !termRemoto && !monPedir && !centralEditCli && !document.fullscreenElement) setCentralAbierta(false); };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [centralAbierta, termRemoto, monPedir, centralEditCli]);
   const guardarClienteSitio = async () => {
     const ed = centralEditCli; if (!ed) return;
     const v = String(ed.valor || "").trim().slice(0, 80);
@@ -16511,8 +16553,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const movilC = typeof window !== "undefined" && window.innerWidth < 700;
         const ahoraC = Date.now();
         const tEv = (e) => Date.parse(e.fecha_panel || e.created_at || 0) || 0;
-        const porSitio = {};
-        eventos.forEach((e) => { if (!e || !e.sitio) return; (porSitio[e.sitio] = porSitio[e.sitio] || []).push(e); });
+        const porSitio = centralPorSitio;
         const nombres = Array.from(new Set([...dispositivos.map((d) => d.sitio).filter(Boolean), ...Object.keys(porSitio)]));
         const chipDe = (e) => {
           const t = String(e.texto || "").toUpperCase().replace(/^[.\s]+/, "");
@@ -16531,7 +16572,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           const cc = d ? leerConfigPanel(d.config_panel) : {};
           const Lc = String(cc.leds || "").toUpperCase();
           const enLinea = !!(d && d.actualizado_en && (ahoraC - new Date(d.actualizado_en).getTime()) / 1000 < 200);
-          const evs = (porSitio[sitio] || []).filter((e) => !/^\s*\[APP\]/.test(String(e.texto || ""))).sort((a, b) => tEv(b) - tEv(a) || (Number(b.id) || 0) - (Number(a.id) || 0));
+          const evs = porSitio[sitio] || [];
           const simplex = cc.tipo === "1" || cc.tipo === "2";
           const est = !d ? "sinequipo" : !enLinea ? "sinconex" : Lc.includes("A") ? "alarma" : Lc.includes("S") ? "superv" : Lc.includes("T") ? "falla" : Lc.includes("D") ? "anulado" : "normal";
           return { sitio, cliente: String((d && d.cliente) || "").trim(), d, cc, Lc, enLinea, evs, simplex, est, ult: evs.length ? tEv(evs[0]) : 0 };
@@ -16553,6 +16594,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           <button key={k} type="button" onClick={() => setCentralFiltro(k)}
             style={{ border: `1px solid ${centralFiltro === k ? "#1f6fd8" : IGNIS.border}`, background: centralFiltro === k ? "#1f6fd822" : "transparent", color: centralFiltro === k ? "#9cc3ff" : IGNIS.dim,
               borderRadius: 999, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>{t}</button>);
+        const TAM = { grande: { col: 440, alto: 230, n: 7, f: 12.5 }, normal: { col: 320, alto: 150, n: 5, f: 11 }, compacto: { col: 240, alto: 92, n: 3, f: 10 } }[centralTam] || { col: 320, alto: 150, n: 5, f: 11 };
+        const haceTxt = (t) => { const m = Math.round((ahoraC - t) / 60000); return m < 1 ? "ahora" : m < 60 ? "hace " + m + " min" : m < 1440 ? "hace " + Math.round(m / 60) + " h" : "hace " + Math.round(m / 1440) + " d"; };
         const ledC = (on, col) => (<span style={{ width: 14, height: 7, borderRadius: 2, display: "inline-block", background: on ? col : "#b9bab5", border: "1px solid #888", boxShadow: on ? `0 0 5px ${col}` : "none" }} />);
         return (
           <div style={{ position: "fixed", inset: 0, zIndex: 55, background: "#0b0f14", color: IGNIS.text, display: "flex", flexDirection: "column", fontFamily: "system-ui,-apple-system,sans-serif" }}>
@@ -16561,14 +16604,29 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 <div style={{ fontSize: movilC ? 14 : 16, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase" }}>Central de Monitoreo</div>
                 <div style={{ fontSize: 12, color: IGNIS.dim }}>Salvavidas · monitores en vivo de todos los clientes</div>
               </div>
+              {esTecnicoSonido && sonidoOn && sonidoBloqueado && (
+                <button type="button" onClick={() => { const ctx = prepararAudio(); if (ctx && ctx.state !== "running") ctx.resume().then(() => setSonidoBloqueado(false)).catch(() => {}); else setSonidoBloqueado(false); }}
+                  style={{ background: "#1a2a3a", border: `1px solid ${IGNIS.seguridad}`, color: "#9dc6ff", borderRadius: 8, padding: "6px 12px", fontWeight: 800, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>
+                  🔈 Toque para activar el sonido
+                </button>)}
               {esTecnicoSonido && modoSonando > 0 && (
                 <button type="button" onClick={detenerSonido} title="Apagar el sonido en este dispositivo"
                   style={{ background: modoSonando === 2 ? "#e5484d22" : "#f2b70522", border: `1px solid ${modoSonando === 2 ? IGNIS.alarma : IGNIS.problema}`, color: modoSonando === 2 ? "#ff8f92" : "#ffe08a",
                     borderRadius: 8, padding: "6px 12px", fontWeight: 800, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>
                   🔊 {modoSonando === 2 ? "ALARMA" : modoSonando === 3 ? "SUPERVISIÓN" : "EVENTO NUEVO"} · Silenciar sonido
                 </button>)}
-              <button type="button" onClick={() => setCentralAbierta(false)}
-                style={{ marginLeft: "auto", background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 8, padding: "7px 14px", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <div style={{ marginLeft: "auto", display: "flex", gap: 4, background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: 3 }} title="Tamaño de los monitores">
+                {[["grande", "Grande"], ["normal", "Normal"], ["compacto", "Compacto"]].map(([k, t]) => (
+                  <button key={k} type="button" onClick={() => setCentralTam(k)}
+                    style={{ border: "none", borderRadius: 6, padding: "4px 9px", fontSize: 11.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", background: centralTam === k ? "#1f6fd8" : "transparent", color: centralTam === k ? "#fff" : IGNIS.dim }}>{t}</button>))}
+              </div>
+              {!movilC && typeof document !== "undefined" && document.documentElement && document.documentElement.requestFullscreen && (
+                <button type="button" onClick={alternarCompleta} title="Pantalla completa (para una pantalla en la pared)"
+                  style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 8, padding: "7px 12px", fontWeight: 800, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>
+                  {centralCompleta ? "⤡ Salir de pantalla completa" : "⤢ Pantalla completa"}
+                </button>)}
+              <button type="button" onClick={() => { try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) {} setCentralAbierta(false); }}
+                style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 8, padding: "7px 14px", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}>
                 <X size={15} /> Cerrar central
               </button>
             </div>
@@ -16586,21 +16644,23 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               {chipF("todos", "Todos")}{chipF("eventos", "Con eventos")}{chipF("notifier", "Notifier")}{chipF("simplex", "Simplex")}{chipF("sinconex", "Sin conexión")}
               {!movilC && <span style={{ marginLeft: "auto", fontSize: 11.5, color: IGNIS.dim }}>El último sitio con un evento queda primero · toque un monitor para entrar a ese cliente</span>}
             </div>
-            <div style={{ flex: 1, overflow: "auto", padding: movilC ? "0 10px 14px" : "0 20px 20px" }}>
+            <style>{"@keyframes ignisCentralNuevo{0%,100%{box-shadow:0 0 0 3px #1f6fd8,0 0 18px #1f6fd8aa}50%{box-shadow:0 0 0 3px #79b8ff,0 0 4px #1f6fd855}}"}</style>
+            <div ref={centralScrollRef} style={{ flex: 1, overflow: "auto", padding: movilC ? "0 10px 14px" : "0 20px 20px" }}>
               {!visibles.length && <div style={{ color: IGNIS.dim, textAlign: "center", padding: 40 }}>{sitiosC.length ? "Ningún sitio coincide." : "Todavía no hay equipos reportando."}</div>}
-              <div style={{ display: "grid", gridTemplateColumns: movilC ? "1fr" : "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: movilC ? (centralTam === "compacto" ? "1fr 1fr" : "1fr") : `repeat(auto-fill, minmax(${TAM.col}px, 1fr))`, gap: centralTam === "compacto" ? 8 : 12 }}>
                 {visibles.map((x) => {
                   const apagado = x.est === "sinconex" || x.est === "sinequipo";
                   const brillo = x.est === "alarma" ? "0 0 0 3px #e5484d, 0 0 22px #e5484d88" : x.est === "superv" ? "0 0 0 2px #ff8c3d" : "none";
                   const minS = x.d && x.d.actualizado_en ? Math.round((ahoraC - new Date(x.d.actualizado_en).getTime()) / 60000) : null;
-                  const lineasC = x.evs.slice(0, 5);
+                  const lineasC = x.evs.slice(0, TAM.n);
+                  const nuevo = !apagado && x.ult && ahoraC - x.ult < 10000;   // evento de hace menos de 10 s: el monitor parpadea en azul
                   const leds = x.simplex
                     ? [["Fire", "A", "#ff3b3b"], ["Pri2", "G", "#ff3b3b"], ["Supv", "S", "#ffb21f"], ["Trbl", "T", "#ffb21f"], ["Silenced", "Q", "#ffb21f"]]
                     : [["Alarm", "A", "#ff3b3b"], ["Superv", "S", "#ffb21f"], ["Trouble", "T", "#ffb21f"], ["Disabled", "D", "#ffb21f"], ["Silenced", "Q", "#ffb21f"]];
                   return (
                     <div key={x.sitio} role="button" tabIndex={0} title={"Abrir " + x.sitio + " (igual que entrar directo al cliente)"}
                       onClick={() => abrirDesdeCentral(x.sitio)} onKeyDown={(e) => { if (e.key === "Enter") abrirDesdeCentral(x.sitio); }}
-                      style={{ background: x.simplex ? "linear-gradient(#d6dbe1,#b8c0ca)" : "linear-gradient(#d9dad6,#c9cac5)", borderRadius: 10, padding: 7, cursor: "pointer", boxShadow: brillo, opacity: apagado ? 0.62 : 1, minWidth: 0 }}>
+                      style={{ background: x.simplex ? "linear-gradient(#d6dbe1,#b8c0ca)" : "linear-gradient(#d9dad6,#c9cac5)", borderRadius: 10, padding: 7, cursor: "pointer", boxShadow: brillo, opacity: apagado ? 0.62 : 1, minWidth: 0, animation: nuevo && x.est !== "alarma" ? "ignisCentralNuevo 1s ease-in-out infinite" : "none" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#1d2126", fontWeight: 800, fontSize: 12.5, padding: "0 2px 6px", minWidth: 0 }}>
                         <span style={{ width: 8, height: 8, borderRadius: "50%", flex: "none", background: apagado ? "#888" : "#2fbf5f" }} />
                         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, lineHeight: 1.15 }}>
@@ -16614,11 +16674,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                           {sitiosMudos.includes(x.sitio) ? "🔕" : "🔔"}
                         </button>
                       </div>
-                      <div style={{ background: "#0a0f14", border: "4px solid #3a3d40", borderRadius: 6, height: 150, overflow: "hidden", color: "#e6edf3" }}>
+                      <div style={{ background: "#0a0f14", border: "4px solid #3a3d40", borderRadius: 6, height: TAM.alto, overflow: "hidden", color: "#e6edf3" }}>
                         {apagado ? (
-                          <div style={{ color: "#5b6673", textAlign: "center", paddingTop: 60, fontSize: 12 }}>{x.est === "sinequipo" ? "Sin equipo reportando" : "Sin conexión" + (minS !== null ? " hace " + (minS >= 60 ? Math.round(minS / 60) + " h" : minS + " min") : "")}</div>
+                          <div style={{ color: "#5b6673", textAlign: "center", paddingTop: Math.max(20, TAM.alto / 2 - 12), fontSize: 12 }}>{x.est === "sinequipo" ? "Sin equipo reportando" : "Sin conexión" + (minS !== null ? " hace " + (minS >= 60 ? Math.round(minS / 60) + " h" : minS + " min") : "")}</div>
                         ) : !lineasC.length ? (
-                          <div style={{ color: "#5b6673", textAlign: "center", paddingTop: 60, fontSize: 12 }}>Sistema normal</div>
+                          <div style={{ color: "#5b6673", textAlign: "center", paddingTop: Math.max(20, TAM.alto / 2 - 12), fontSize: 12 }}>Sistema normal</div>
                         ) : lineasC.map((e, k) => {
                           const [ct, bg, col] = chipDe(e);
                           const fe = new Date(tEv(e));
@@ -16626,14 +16686,17 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                           return (
                             <div key={e.id || k} style={{ display: "grid", gridTemplateColumns: "64px 1fr auto", gap: 6, padding: "5px 7px", borderBottom: "1px solid #161e27", alignItems: "center", background: k === 0 && ahoraC - tEv(e) < 60000 ? "#ffffff0d" : "transparent" }}>
                               <span style={{ fontSize: 8.5, fontWeight: 800, textAlign: "center", padding: "2px 0", borderRadius: 4, background: bg, color: col, border: `1px solid ${col}66` }}>{ct}</span>
-                              <span style={{ fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: ct === "BORRADO" ? "line-through" : "none", color: ct === "BORRADO" ? "#8b949e" : "#e6edf3" }}>{String(e.texto || "").replace(/^[.\s]+/, "").replace(/\s{2,}/g, " · ")}</span>
+                              <span style={{ fontSize: TAM.f, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: ct === "BORRADO" ? "line-through" : "none", color: ct === "BORRADO" ? "#8b949e" : "#e6edf3" }}>{String(e.texto || "").replace(/^[.\s]+/, "").replace(/\s{2,}/g, " · ")}</span>
                               <span style={{ fontSize: 9.5, color: "#8b949e" }}>{hh}</span>
                             </div>);
                         })}
                       </div>
                       <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 2px 0", color: "#2a2c2f", fontSize: 8.5, fontWeight: 800, textTransform: "uppercase" }}>
                         {leds.map(([n, k, col]) => (<span key={n} style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 2 }}>{ledC(!apagado && x.Lc.includes(k), col)}{n}</span>))}
-                        {!apagado && <span style={{ marginLeft: "auto", color: "#1a7f3c", fontSize: 9 }}>● EN VIVO</span>}
+                        <span style={{ marginLeft: "auto", textAlign: "right", fontSize: 9, lineHeight: 1.2 }}>
+                          {!apagado && <span style={{ color: "#1a7f3c", display: "block", whiteSpace: "nowrap" }}>● EN VIVO</span>}
+                          {x.ult > 0 && centralTam !== "compacto" && <span title="Último evento" style={{ color: "#4a4f55", fontWeight: 700, textTransform: "none", whiteSpace: "nowrap" }}>{haceTxt(x.ult)}</span>}
+                        </span>
                       </div>
                     </div>);
                 })}

@@ -16655,7 +16655,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           const habils = filas.filter((r) => r.chip === "HABILITADA");
           const rearmes = filas.filter((r) => r.chip === "REARME");
           const ya = new Set();
-          return filas.filter((r) => {
+          const uH = Math.max(0, ...habils.map((h) => h.t)), uA = Math.max(0, ...filas.filter((r) => r.chip === "ANULADA" || r.chip === "ANULADO").map((r) => r.t));
+          const lista = filas.filter((r) => {
             if (!ACT.includes(r.chip) || r.normal) return false;
             if (limpio && r.t <= limpio) return false;
             if (r.chip === "ANULADA" && habils.some((h) => h.dir === r.dir && h.t >= r.t)) return false;
@@ -16667,6 +16668,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             ya.add(k);
             return true;
           });
+          lista.dApag = uH > 0 && uH >= uA && !lista.some((r) => r.chip === "ANULADA" || r.chip === "ANULADO");   // ya se habilitó todo
+          return lista;
         };
         const GR = { ALARMA: "alarma", PREALARMA: "alarma", SIMULACRO: "alarma", "SUPERVISIÓN": "superv", FALLA: "falla", SEGURIDAD: "falla", ANULADO: "anulado", ANULADA: "anulado" };
         const PRI = ["alarma", "superv", "falla", "anulado", "normal"];
@@ -16679,8 +16682,9 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           const evs = porSitio[sitio] || [];
           const simplex = cc.tipo === "1" || cc.tipo === "2";
           const activos = activosDe(evs, sitio);
+          const LcR = activos.dApag ? Lc.replace("D", "") : Lc;   // Point Disabled apagado apenas se habilita todo
           // estado: lo más grave entre las luces del panel y sus eventos activos
-          const estLed = Lc.includes("A") ? "alarma" : Lc.includes("S") ? "superv" : Lc.includes("T") ? "falla" : Lc.includes("D") ? "anulado" : "normal";
+          const estLed = LcR.includes("A") ? "alarma" : LcR.includes("S") ? "superv" : LcR.includes("T") && !(activos.dApag && Lc.includes("D") && !activos.length) ? "falla" : LcR.includes("D") ? "anulado" : "normal";
           const estAct = activos.reduce((m, r) => (PRI.indexOf(GR[r.chip]) < PRI.indexOf(m) ? GR[r.chip] : m), "normal");
           const est = !d ? "sinequipo" : !enLinea ? "sinconex" : PRI.indexOf(estAct) < PRI.indexOf(estLed) ? estAct : estLed;
           const ultEv = evs.length ? tEv(evs[0]) : 0;
@@ -16688,7 +16692,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           const motivo = activos[0] ? activos[0].e : null;
           // en la cola: el sitio del evento más nuevo va arriba (un equipo que se cae cuenta desde que dejó de reportar)
           const orden = est === "sinconex" ? Math.max(ultEv, visto + 200000) : (ultAct || ultEv);
-          return { sitio, cliente: String((d && d.cliente) || "").trim(), d, Lc, enLinea, visto, evs, simplex, est, ult: ultEv, motivo, orden, activos };
+          return { sitio, cliente: String((d && d.cliente) || "").trim(), d, Lc: LcR, enLinea, visto, evs, simplex, est, ult: ultEv, motivo, orden, activos };
         });
         const COLOR = { alarma: "#e5484d", superv: "#ff8c3d", falla: "#f2b705", anulado: "#b8641f", sinconex: "#6e7681", sinequipo: "#6e7681" };
         const CHIP = { alarma: ["ALARMA", "#e5484d33", "#ff8f92"], superv: ["SUPERV.", "#ff8c3d22", "#ffb27a"], falla: ["FALLA", "#f2b70522", "#f2d06b"], anulado: ["ANULADO", "#ff8c3d22", "#ffad6b"], sinconex: ["SIN CONEX.", "#30363d", "#aab3bd"], sinequipo: ["SIN EQUIPO", "#30363d", "#aab3bd"] };
@@ -17248,6 +17252,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     const estadoZona = {};
                     todas.forEach((r) => { if ((r.chip === "ANULADA" || r.chip === "HABILITADA") && r.dir && !(r.dir in estadoZona)) estadoZona[r.dir] = r.chip === "ANULADA" ? { a: true, t: r.t } : { a: false, t: r.t }; });
                     const ultHabil = Math.max(0, ...todas.filter((r) => r.chip === "HABILITADA").map((r) => r.t || 0));
+                    // 11.7: Point Disabled se apaga apenas se habilita todo lo anulado (la última HABILITADA es más nueva
+                    // que la última anulación y ninguna zona quedó anulada), aunque el equipo todavía no lo haya actualizado
+                    const ultAnul = Math.max(0, ...todas.filter((r) => r.chip === "ANULADA" || r.chip === "ANULADO").map((r) => r.t || 0));
+                    const dApagado = ultHabil > 0 && ultHabil >= ultAnul && !Object.values(estadoZona).some((z) => z.a);
+                    const onD = () => lampTest || (L.includes("D") && !dApagado);
                     // 11.2 (a pedido): por ahora NO se quita nada de la pantalla: se ven todos los eventos,
                     // el más nuevo arriba; los BR salen tachados.
                     // 11.3: reglas de la pantalla (a pedido)
@@ -17293,7 +17302,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     const resumenPantalla = [];
                     if (L.includes("A")) resumenPantalla.push({ t: "Alarma", st: ST.alarma });
                     if (L.includes("S")) resumenPantalla.push({ t: "Supervisión", st: ST.superv });
-                    if (L.includes("D")) resumenPantalla.push({ t: "Anulados", st: ST.anulado });
+                    if (onD()) resumenPantalla.push({ t: "Anulados", st: ST.anulado });
                     if (L.includes("T")) resumenPantalla.push({ t: "Falla", st: ST.falla });
                     // 10.9 / 11.1: ANUNCIADOR — 10 interruptores configurables por sitio (columna dispositivos_panel.anunciador)
                     const ANUN_DEF = [{ t: "Anular todas las Sirenas", a: "anular", d: "Z50" }, { t: "Habilitar todas las Sirenas", a: "habilitar", d: "Z50" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }];
@@ -17533,7 +17542,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                             <div style={{ display: "flex", gap: movil ? 12 : 4, alignItems: "center", justifyContent: movil ? "center" : "flex-end", flex: movil ? "1 1 100%" : "1 1 auto", marginTop: movil ? 4 : 0 }}>
                               {[
                                 ["AC", lampTest || (abierto && !L.includes("X")), VERDE], ["Fire", on("A"), ROJO], ["Pri2", on("G"), ROJO],
-                                ["Supv", on("S"), AMBAR], ["Trbl", on("T") || on("D"), AMBAR], ["Silenced", on("Q"), AMBAR],
+                                ["Supv", on("S"), AMBAR], ["Trbl", on("T") || onD(), AMBAR], ["Silenced", on("Q"), AMBAR],
                               ].map(([n, p, col]) => (
                                 <div key={n} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: movil ? 3 : 5, fontWeight: 800, fontSize: movil ? 8.5 : 10, textTransform: "uppercase", minWidth: movil ? 0 : 50 }}>{led(p, col)}{n}</div>))}
                             </div>
@@ -17545,7 +17554,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                             {[
                               ["Ctrl. Active", control || lampTest, VERDE], ["Power", lampTest || (abierto && !L.includes("X")), VERDE], ["Fire Alarm", on("A"), ROJO],
                               ["Pre-Alarm", on("P"), ROJO], ["Security", on("G"), AZUL], ["Supervisory", on("S"), AMBAR],
-                              ["Sys. Trouble", on("T"), AMBAR], ["Silenced", on("Q"), AMBAR], ["Pt. Disabled", on("D"), AMBAR],
+                              ["Sys. Trouble", on("T"), AMBAR], ["Silenced", on("Q"), AMBAR], ["Pt. Disabled", onD(), AMBAR],
                               ["Pre-Discharge", lampTest, AMBAR], ["Discharge", lampTest, ROJO],
                             ].map(([n, p, col]) => (
                               <div key={n} style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, fontWeight: 800, fontSize: 9.5, textTransform: "uppercase", letterSpacing: 0.2, color: "#2a2c2f" }}>
@@ -17560,7 +17569,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                           {ledAbajo("Supervisory", on("S"), AMBAR)}
                           {ledAbajo(<>System<br />Trouble</>, on("T"), AMBAR)}
                           {ledAbajo(<>Signals<br />Silenced</>, on("Q"), AMBAR)}
-                          {ledAbajo(<>Point<br />Disabled</>, on("D"), AMBAR)}
+                          {ledAbajo(<>Point<br />Disabled</>, onD(), AMBAR)}
                         </div>
                         )}
                         <div style={movil ? { display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 4, marginTop: 12 } : { display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 8, marginTop: 14 }}>

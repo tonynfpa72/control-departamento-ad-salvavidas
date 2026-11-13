@@ -15994,7 +15994,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
   };
 
   return (
-    <div style={{ background: IGNIS.bg, minHeight: "100vh", padding: 18, paddingTop: esMovilNotifier ? 58 : 18, paddingBottom: esMovilNotifier ? 100 : 30, display: "flex", flexDirection: "column", gap: 14, color: IGNIS.text, boxSizing: "border-box" }}>
+    <div className={modoCentral && centralAbierta && veCentral ? "ignis-raiz-central" : undefined} style={{ background: IGNIS.bg, minHeight: "100vh", padding: modoCentral && centralAbierta && veCentral ? 0 : 18, paddingTop: modoCentral && centralAbierta && veCentral ? 0 : esMovilNotifier ? 58 : 18, paddingBottom: esMovilNotifier ? 100 : 30, display: "flex", flexDirection: "column", gap: 14, color: IGNIS.text, boxSizing: "border-box" }}>
       {/* ---- Encabezado estilo IgnisMonitor ---- */}
       <AvisosCiberMonitoreo />
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, borderBottom: `1px solid ${IGNIS.border}`, paddingBottom: 12 }}>
@@ -16448,7 +16448,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         </div>
       ))}
 
-      {esMovilNotifier && sitioSeleccionado !== "Todos" && (
+      {esMovilNotifier && sitioSeleccionado !== "Todos" && !(modoCentral && centralAbierta && veCentral) && (
         <div style={{
           position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 20, display: "flex", paddingBottom: 20, // franja para la firma "by Anthony"
           background: IGNIS.panel2, borderTop: `1px solid ${IGNIS.border}`, boxShadow: "0 -4px 14px rgba(0,0,0,.35)",
@@ -16615,8 +16615,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             </button>);
         });
         return (
-          <div style={{ ...(modoCentral && !centralCompleta ? { position: "relative", height: "100vh" } : { position: "fixed", inset: 0 }), zIndex: 55, background: "#0b0f14", color: IGNIS.text, display: "flex", flexDirection: "column", fontFamily: "system-ui,-apple-system,sans-serif" }}>
-            <style>{"@keyframes ignisCentralNuevo{0%,100%{box-shadow:0 0 0 3px #1f6fd8,0 0 16px #1f6fd8aa}50%{box-shadow:0 0 0 3px #79b8ff,0 0 3px #1f6fd855}}"}</style>
+          <div className="ignis-central" style={{ ...(modoCentral && !centralCompleta ? { position: "relative", height: "100vh" } : { position: "fixed", inset: 0 }), zIndex: 55, background: "#0b0f14", color: IGNIS.text, display: "flex", flexDirection: "column", fontFamily: "system-ui,-apple-system,sans-serif" }}>
+            <style>{".ignis-raiz-central>:not(.ignis-central):not([style*='position: fixed']){display:none!important}.ignis-raiz-central{gap:0!important}@keyframes ignisCentralNuevo{0%,100%{box-shadow:0 0 0 3px #1f6fd8,0 0 16px #1f6fd8aa}50%{box-shadow:0 0 0 3px #79b8ff,0 0 3px #1f6fd855}}"}</style>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: movilC ? "10px 10px" : "10px 18px", borderBottom: `1px solid ${IGNIS.border}`, background: "#05080b" }}>
               <div style={{ fontSize: movilC ? 14 : 15, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase" }}>Centro de Monitoreo</div>
               <span style={{ fontSize: 12, color: IGNIS.dim }}>{sitiosC.length} sitios</span>

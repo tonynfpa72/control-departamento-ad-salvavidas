@@ -16656,7 +16656,6 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     if (L.includes("S")) resumenPantalla.push({ t: "Supervisión", st: ST.superv });
                     if (L.includes("D")) resumenPantalla.push({ t: "Anulados", st: ST.anulado });
                     if (L.includes("T")) resumenPantalla.push({ t: "Falla", st: ST.falla });
-                    if (!resumenPantalla.length && abierto) resumenPantalla.push({ t: "Normal", st: ST.verde });
                     // 10.9 / 11.1: ANUNCIADOR — 10 interruptores configurables por sitio (columna dispositivos_panel.anunciador)
                     const ANUN_DEF = [{ t: "Anular todas las Sirenas", a: "anular", d: "Z50" }, { t: "Habilitar todas las Sirenas", a: "habilitar", d: "Z50" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }, { t: "", a: "anular", d: "" }];
                     const anunFilas = (Array.isArray(f.anunciador) && f.anunciador.length ? [...f.anunciador, ...ANUN_DEF.slice(2)].slice(0, 10) : ANUN_DEF);

@@ -12986,7 +12986,7 @@ const ETIQUETA_CATEGORIA_PANEL = {
 const CATEGORIAS_PANEL_TILES = ["alarma", "prealarma", "problema", "supervision", "seguridad", "sinclasificar", "borrado"];
 // Tarjeta "General" del IgnisMonitor: suma Alarma + Problema + Supervisión
 // + Seguridad, y al tocarla filtra esas cuatro (igual que en el equipo).
-const CATEGORIAS_PANEL_GENERAL = ["alarma", "problema", "supervision", "seguridad"];
+const CATEGORIAS_PANEL_GENERAL = ["alarma", "problema", "supervision", "seguridad", "general"];   // 11.4: + manipulaciones del panel desde la App
 // Corrige eventos mal clasificados por firmwares viejos: "SYSTEM NORMAL" /
 // "SISTEMA NORMAL" (el panel volvió a normal) y líneas que empiezan con una
 // palabra como "FIRESTONE…" (nombre del sitio) no son alarmas.
@@ -15566,6 +15566,7 @@ function MonitoreoNotifier() {
     }
   }, [termFila, cfgForm]);
   const enviarAlPanel = async (bytes, etiqueta) => {
+    if (termRemoto) registrarManipulacion(termRemoto.sitio, "Tecla/texto enviado al panel" + (etiqueta && etiqueta.length <= 8 ? " (" + etiqueta + ")" : ""));
     if (!termRemoto) return;
     const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
     if (!hex) return;
@@ -15583,8 +15584,18 @@ function MonitoreoNotifier() {
   };
   // 7.3: control del panel Notifier por CRT (Reconocer, Silenciar, Reset, Historial, Detectores)
   const CRT_NOMBRES = { puntos: "Todos los puntos", simulacro: "Simulacro", ack: "Reconocer", silenciar: "Silenciar", reset: "Reset", historial: "Historial completo", histalarmas: "Historial de alarmas", detectores: "Reporte de detectores" };
+  // 11.4: queda registrado en eventos (categoría General) quién manipuló el panel desde la App
+  const NOMBRE_ORDEN = { ack: "Reconocer", silenciar: "Silenciar", reset: "Rearme", simulacro: "Simulacro (Drill)", historial: "Pedir historial completo",
+    histalarmas: "Pedir historial de alarmas", puntos: "Pedir todos los puntos", detectores: "Pedir reporte de detectores" };
+  const registrarManipulacion = (sitio, que) => {
+    try {
+      const quien = [currentUser?.name, currentUser?.email ? "(" + currentUser.email + ")" : ""].filter(Boolean).join(" ") || "usuario";
+      supabase.from("eventos_panel").insert({ sitio, categoria: "general", texto: `[APP] ${que} — ${quien}`, fecha_panel: new Date().toISOString() }).then(() => {}, () => {});
+    } catch (e) {}
+  };
   const ordenCrt = async (accion, extra) => {
     if (!termRemoto) return;
+    registrarManipulacion(termRemoto.sitio, NOMBRE_ORDEN[accion] || accion.replace(/^anular:/, "Anular ").replace(/^habilitar:/, "Habilitar "));
     // 10.8: "extra" va pegado a la orden (huella de la clave del panel); en pantalla solo se ve la acción
     const accionVis = accion;
     if (extra) accion = accion + ":" + extra;
@@ -15616,6 +15627,7 @@ function MonitoreoNotifier() {
     if (!partes.length) { setCfgMsg("No hay cambios."); return; }
     const reinicia = partes.some((p) => !/^(baud|fmt)=/.test(p));
     if (reinicia && !window.confirm("Estos cambios reinician el IgnisMonitor (unos 20 s sin monitoreo). ¿Aplicar?\n\n" + partes.join("\n"))) return;
+    registrarManipulacion(termRemoto.sitio, "Configuración del puerto: " + partes.join(", "));
     const { error } = await supabase.from("dispositivos_panel")
       .update({ comando: "config", comando_arg: partes.join(";"), comando_en: new Date().toISOString(), comando_resultado: "esperando que el equipo lea la configuracion" })
       .eq("sitio", termRemoto.sitio);
@@ -15925,9 +15937,9 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               <Wrench size={13} /> Diagnóstico
             </Btn>
           )}
-          {canGestionar && sitioSeleccionado !== "Todos" && (
+          {(canGestionar || esCliente) && sitioSeleccionado !== "Todos" && (
             <Btn small onClick={() => abrirMonitorRemoto(sitioSeleccionado)} title="Monitor serial del IgnisMonitor y configuración del puerto (Notifier/Simplex, RS232/Ethernet) desde la app">
-              <Settings size={13} /> Monitor serial
+              <Settings size={13} /> Control del panel
             </Btn>
           )}
           {canGestionar && sitioSeleccionado !== "Todos" && (() => {
@@ -16436,7 +16448,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         <div onClick={() => setMonPedir(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 61, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
           <div onClick={(x) => x.stopPropagation()}
             style={{ background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 12, width: "100%", maxWidth: 380, padding: "18px 20px", fontFamily: "system-ui,-apple-system,sans-serif" }}>
-            <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 4 }}>🔒 Monitor serial · {monPedir.sitio}</div>
+            <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 4 }}>🔒 Control del panel · {monPedir.sitio}</div>
             <div style={{ fontSize: 12.5, color: IGNIS.dim, marginBottom: 12, lineHeight: 1.5 }}>Ingrese la clave del Monitor de este equipo (la de «Clave del Monitor en la App» o, si no se definió, la clave de administración del equipo).</div>
             {monPedir.error && <div style={{ fontSize: 12.5, color: IGNIS.problema, marginBottom: 10 }}>{monPedir.error}</div>}
             <input type="password" autoFocus value={monClave} onChange={(e) => setMonClave(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && monClave) abrirMonitorRemoto(monPedir.sitio, monClave); }} placeholder="Clave del Monitor"
@@ -16487,7 +16499,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             <div onClick={(x) => x.stopPropagation()} onPointerDown={() => { monActividad.current = Date.now(); }} onKeyDown={() => { monActividad.current = Date.now(); }} style={{ background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 12, width: "100%", maxWidth: (typeof window !== "undefined" && window.innerWidth < 640) ? 880 : "min(1500px, 97vw)", maxHeight: (typeof window !== "undefined" && window.innerWidth < 640) ? "94vh" : "97vh", display: "flex", flexDirection: "column", padding: (typeof window !== "undefined" && window.innerWidth < 640) ? "10px 8px" : "16px 20px", fontFamily: "system-ui,-apple-system,sans-serif", overflow: "auto" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
                 <Settings size={18} color={IGNIS.general} />
-                <div style={{ flex: 1, fontWeight: 800, fontSize: 16 }}>Monitor serial · {termRemoto.sitio}</div>
+                <div style={{ flex: 1, fontWeight: 800, fontSize: 16 }}>Control del panel · {termRemoto.sitio}</div>
                 <button onClick={cerrarMonitorRemoto} style={{ background: "transparent", border: "none", color: IGNIS.dim, cursor: "pointer" }}><X size={18} /></button>
               </div>
               {termRemoto.error ? (
@@ -16585,6 +16597,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       if ((U.length <= 7 && !/\s/.test(U)) || /PULSE|^1=ANULAR|^ANULAR\/HAB|INTRODUZCA CLAVE|ENTRADA INVALIDA|^LEER PTO|ANULAR\/HAB PUNTO/.test(U)) return null;
                       // pedazo de línea (el principio quedó fuera del búfer): "126 Mie", "10:43P 1111"...
                       if (/^[\d\s:;.APM]*(DOM|LUN|MAR|MIE|JUE|VIE|SAB|SUN|MON|TUE|WED|THU|FRI|SAT)?$/i.test(t)) return null;
+                      if (/^\[APP\]/.test(t)) return { chip: "ORDEN", st: ST.azul, nombre: t.replace(/^\[APP\]\s*/, ""), sub: "desde la App", fondo: "#2f81f710" };
                       if (/^>>/.test(t)) return { chip: "ORDEN", st: ST.azul, nombre: t.replace(/^>>\s*\[?|\]$/g, ""), sub: "enviada desde la App", fondo: "#2f81f710" };
                       let hora = "";
                       const mh = t.match(/(\d{1,2})[:;](\d{2})([AP])\s*(\d{6})?(\s+(DOM|LUN|MAR|MIE|JUE|VIE|SAB|SUN|MON|TUE|WED|THU|FRI|SAT))?/i);
@@ -16757,7 +16770,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       <div style={{ width: movil ? "auto" : (anunEdit ? 400 : 270), flex: "none", background: "linear-gradient(#d4d5d1,#c4c5c0)", borderRadius: 12, padding: movil ? "10px 8px" : "12px 10px", color: "#2a2c2f", boxShadow: "inset 0 1px 0 #fff8, 0 2px 8px #0008", display: "flex", flexDirection: "column" }}>
                         <div style={{ position: "relative", textAlign: "center", fontWeight: 800, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8, minHeight: 24, lineHeight: "24px" }}>
                           {anunEdit ? "Configurar anunciador" : "Anunciador · Control"}
-                          {!anunEdit && <button type="button" title="Configurar" onClick={() => { setAnunMsg(""); setAnunEdit(anunFilas.map((r) => ({ ...r }))); }}
+                          {!anunEdit && !esCliente && <button type="button" title="Configurar" onClick={() => { setAnunMsg(""); setAnunEdit(anunFilas.map((r) => ({ ...r }))); }}
                             style={{ position: "absolute", right: 0, top: 0, fontSize: 14, background: "#e8e8e5", border: "1px solid #999", borderRadius: 6, padding: "0 7px", cursor: "pointer", lineHeight: "22px" }}>⚙</button>}
                         </div>
                         {anunEdit ? (
@@ -16821,13 +16834,13 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                           </div>)}
                           {pantallaCruda ? (
                           <div style={{ flex: 1, position: "relative", minWidth: movil ? 0 : 260, width: movil ? "100%" : undefined, display: "flex" }}>
-                          <button type="button" onClick={async () => {
+                          {!esCliente && <button type="button" onClick={async () => {
                             // 11.4: limpia SOLO la vista «Texto» (pide confirmar y borra el texto guardado en Supabase)
                             if (!window.confirm("¿Limpiar la vista «Texto»?\n\nSe borra el texto guardado del puerto en Supabase. Los eventos de la vista moderna no se tocan.")) return;
                             const t = String(f.terminal_txt || "");
                             setTextoLimpio((x) => ({ ...x, [termRemoto.sitio]: { en: Date.now(), corte: t.slice(-160) } }));
                             await supabase.from("dispositivos_panel").update({ terminal_txt: "", terminal_tx: "LIMPIAR" }).eq("sitio", termRemoto.sitio);
-                          }} style={{ position: "absolute", right: 118, top: 10, zIndex: 2, background: "#161e27", border: "1px solid #30363d", color: "#c9d1d9", borderRadius: 6, fontSize: 10.5, padding: "2px 8px", cursor: "pointer", fontFamily: "inherit" }}>Limpiar</button>
+                          }} style={{ position: "absolute", right: 118, top: 10, zIndex: 2, background: "#161e27", border: "1px solid #30363d", color: "#c9d1d9", borderRadius: 6, fontSize: 10.5, padding: "2px 8px", cursor: "pointer", fontFamily: "inherit" }}>Limpiar</button>}
                           <button type="button" onClick={() => setPantallaCruda(false)} style={{ position: "absolute", right: 14, top: 10, zIndex: 2, background: "#161e27", border: "1px solid #30363d", color: "#c9d1d9", borderRadius: 6, fontSize: 10.5, padding: "2px 8px", cursor: "pointer", fontFamily: "inherit" }}>Vista moderna</button>
                           <pre ref={termPreRef} style={{ flex: 1, width: movil ? "100%" : undefined, boxSizing: "border-box", minWidth: movil ? 0 : 260, height: movil ? 230 : 390, overflow: "auto", margin: 0, background: "#05080c", border: movil ? "4px solid #3a3d40" : "6px solid #3a3d40", borderRadius: 6, padding: movil ? "6px 7px" : "8px 10px", fontSize: movil ? 10.5 : 12, lineHeight: 1.4, color: "#7ee787", whiteSpace: "pre-wrap", wordBreak: "normal", overflowWrap: "anywhere", fontFamily: "ui-monospace,Consolas,monospace", boxShadow: "inset 0 0 12px #000" }}>
                             {[...lineas].reverse().map((ln, k) => <div key={k} style={{ color: ln.startsWith(">>") ? "#ffd866" : ln.startsWith("---") ? "#8b949e" : undefined, minHeight: "1.45em" }}>{ln}</div>)}
@@ -16838,7 +16851,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                               <div style={{ display: "flex", alignItems: "center", gap: 6, padding: movil ? "6px 8px" : "7px 12px", borderBottom: "1px solid #1f2933", fontSize: 11.5, color: "#8b949e", flexWrap: "wrap" }}>
                                 <b style={{ color: "#e6edf3", fontSize: movil ? 11.5 : 12.5 }}>{termRemoto.sitio}</b><span>· NFS2-640</span><span style={{ flex: 1 }} />
                                 
-                                <button type="button" onClick={async () => {
+                                {!esCliente && <button type="button" onClick={async () => {
                                   // 11.4: pide confirmar y BORRA de Supabase los eventos que se ven en esta pantalla
                                   const ids = filasPantalla.map((r) => r.idEv).filter((x) => x !== undefined && x !== null);
                                   if (!window.confirm("¿Limpiar la pantalla?\n\nSe borran de Supabase los " + ids.length + " evento(s) que se ven ahora en esta pantalla. No se pueden recuperar.\n(La vista «Texto» no se toca.)")) return;
@@ -16852,7 +16865,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                                       if (error) { window.alert("No se pudieron borrar de Supabase: " + error.message); break; }
                                     }
                                   }
-                                }} title="Quitar de la pantalla todo lo que se ve ahora (no borra nada del panel ni del historial)" style={{ background: "transparent", border: "1px solid #30363d", color: "#8b949e", borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>Limpiar</button>
+                                }} title="Quitar de la pantalla todo lo que se ve ahora (no borra nada del panel ni del historial)" style={{ background: "transparent", border: "1px solid #30363d", color: "#8b949e", borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>Limpiar</button>}
                                 <button type="button" onClick={() => setPantallaCruda(true)} title="Ver el texto tal como lo manda el panel" style={{ background: "transparent", border: "1px solid #30363d", color: "#8b949e", borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>Texto</button>
                               </div>
                               <div style={{ display: "flex", gap: movil ? 4 : 6, padding: movil ? "5px 6px" : "6px 12px", borderBottom: "1px solid #1f2933", background: "#0c1218" }}>
@@ -16952,6 +16965,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                           : /^CRT ack/.test(resCrt) ? " — el panel solo responde si hay eventos sin reconocer." : " — revise que el panel no esté imprimiendo un reporte o dentro de un menú.") : "")
                       : c.leds === undefined ? "Las luces necesitan el equipo en versión 7.6." : "Listo: toque un botón y el equipo lo manda al panel de inmediato."}
                   </div>
+                  {/* 11.4: el CLIENTE no manda texto al panel ni configura el puerto */}
+                  {!esCliente && (<>
                   <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
                     <input style={{ ...inp, flex: 1, minWidth: 180, width: "auto" }} placeholder="Texto para mandar al panel" value={termTexto} onChange={(e) => setTermTexto(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") enviarTextoTerminal(); }} />
                     <select style={{ ...inp, width: 110 }} value={termFin} onChange={(e) => setTermFin(e.target.value)}>
@@ -16991,6 +17006,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       </div>
                     ))}
                   </div>
+                  </>)}
                 </>
               )}
             </div>

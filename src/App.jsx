@@ -14867,8 +14867,9 @@ function MonitoreoNotifier() {
   const [pantallaCruda, setPantallaCruda] = useState(false);   // 10.9: ver el texto tal como lo manda el panel
   const vistoPantallaRef = useRef(new Map());
   const vivoRef = useRef({ lineas: [], leds: null });   // 11.2: lo que llega por el canal en vivo (no se pierde si la base viene atrasada)   // 11.1: id del evento -> cuándo lo vio llegar la App
+  const [limpiadoEn, setLimpiadoEn] = useState({});   // 11.3: sitio -> hora en que se limpió la pantalla
   const [, setTicPantalla] = useState(0);   // 11.1: refresca la pantalla para que los avisos de un momento se quiten solos
-  useEffect(() => { if (!termRemoto) return; const id = setInterval(() => setTicPantalla((x) => x + 1), 4000); return () => clearInterval(id); }, [termRemoto]);
+  useEffect(() => { if (!termRemoto) return; const id = setInterval(() => setTicPantalla((x) => x + 1), 1000); return () => clearInterval(id); }, [termRemoto]);
   const monActividad = useRef(Date.now());
   const monClaveRef = useRef("");
   const monAbiertoRef = useRef(false);   // 7.9: la clave queda solo en memoria mientras el Monitor está abierto
@@ -16617,7 +16618,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       const fe = new Date(e.fecha_panel || e.created_at || Date.now());
                       r.t = fe.getTime() || 0;
                       const kv = String(e.id || e.texto);
-                      if (!vistoPantallaRef.current.has(kv)) vistoPantallaRef.current.set(kv, Date.now());
+                      if (!vistoPantallaRef.current.has(kv)) {
+                        // si ya había llegado por el canal en vivo, cuenta desde ese momento
+                        const vv = vivoRef.current.lineas.find((x) => x.t.trim() === String(e.texto || "").trim());
+                        vistoPantallaRef.current.set(kv, vv ? Math.min(vv.at, Date.now()) : Date.now());
+                      }
                       r.visto = vistoPantallaRef.current.get(kv);
                       if (!isNaN(fe)) {
                         const h = fe.toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" });
@@ -16650,7 +16655,32 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     const ultHabil = Math.max(0, ...todas.filter((r) => r.chip === "HABILITADA").map((r) => r.t || 0));
                     // 11.2 (a pedido): por ahora NO se quita nada de la pantalla: se ven todos los eventos,
                     // el más nuevo arriba; los BR salen tachados.
-                    const filasPantalla = todas.slice(0, 80);
+                    // 11.3: reglas de la pantalla (a pedido)
+                    //  - Confirmar, Rearme, Silencio, órdenes y HABILITADA: 5 s y se quitan.
+                    //  - BORRADO (BR): se ve 5 s; después se quitan él y el evento que borró.
+                    //  - ANULADO / ANULADA: hasta que llegue la HABILITADA (ahí se quitan).
+                    //  - Alarmas / prealarmas / simulacro: hasta el rearme. Lo demás: hasta su borrado.
+                    //  - «Limpiar» quita todo lo que había hasta ese momento.
+                    const abiertoEn = (termRemoto && termRemoto.desde) || 0;
+                    const ahoraP = Date.now();
+                    const llegoNuevo = (r) => (r.visto || 0) - abiertoEn > 1500;          // llegó con el Monitor abierto
+                    const cinco = (r) => llegoNuevo(r) && ahoraP - (r.visto || 0) < 5000;   // todavía en sus 5 s
+                    const limpio = limpiadoEn[termRemoto.sitio] || 0;
+                    const brUlt = {};   // clave -> fila BR más nueva
+                    todas.forEach((r) => { if (r.chip === "BORRADO" || r.normal) { const k = claveFila(r, r.base || r.chip); if (!brUlt[k] || (r.t || 0) > (brUlt[k].t || 0)) brUlt[k] = r; } });
+                    const habils = todas.filter((r) => r.chip === "HABILITADA");
+                    const rearmes = todas.filter((r) => r.chip === "REARME");
+                    const filasPantalla = todas.filter((r) => {
+                      if (limpio && (r.visto || 0) <= limpio) return false;
+                      if (["CONFIRMADO", "REARME", "SILENCIADO", "ORDEN", "SIRENAS", "HABILITADA"].includes(r.chip)) return cinco(r);
+                      if (r.chip === "BORRADO" || r.normal) return cinco(r);
+                      if (r.chip === "ANULADA") return !habils.some((h) => h.dir === r.dir && (h.t || 0) >= (r.t || 0));
+                      if (r.chip === "ANULADO") return !habils.some((h) => (h.t || 0) >= (r.t || 0));
+                      if (["ALARMA", "PREALARMA", "SIMULACRO"].includes(r.chip) && rearmes.some((x) => (x.t || 0) - (r.t || 0) >= 2000)) return false;
+                      const br = brUlt[claveFila(r, r.chip)];
+                      if (br && (br.t || 0) >= (r.t || 0) && !cinco(br)) return false;   // su borrado ya cumplió los 5 s
+                      return true;
+                    }).slice(0, 80);
                     const resumenPantalla = [];
                     if (L.includes("A")) resumenPantalla.push({ t: "Alarma", st: ST.alarma });
                     if (L.includes("S")) resumenPantalla.push({ t: "Supervisión", st: ST.superv });
@@ -16761,16 +16791,17 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                           </pre>
                           </div>
                           ) : (
-                            <div style={{ flex: 1, width: movil ? "100%" : undefined, boxSizing: "border-box", minWidth: movil ? 0 : 260, height: movil ? 260 : 390, overflow: "hidden", display: "flex", flexDirection: "column", background: "linear-gradient(#0e141b,#0a0f14)", border: movil ? "4px solid #3a3d40" : "6px solid #3a3d40", borderRadius: 8, color: "#e6edf3", fontFamily: "Inter, system-ui, 'Segoe UI', Roboto, sans-serif" }}>
+                            <div style={{ flex: 1, width: movil ? "100%" : undefined, boxSizing: "border-box", minWidth: movil ? 0 : 260, height: "auto", overflow: "hidden", display: "flex", flexDirection: "column", background: "linear-gradient(#0e141b,#0a0f14)", border: movil ? "4px solid #3a3d40" : "6px solid #3a3d40", borderRadius: 8, color: "#e6edf3", fontFamily: "Inter, system-ui, 'Segoe UI', Roboto, sans-serif" }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, padding: movil ? "6px 8px" : "7px 12px", borderBottom: "1px solid #1f2933", fontSize: 11.5, color: "#8b949e", flexWrap: "wrap" }}>
                                 <b style={{ color: "#e6edf3", fontSize: movil ? 11.5 : 12.5 }}>{termRemoto.sitio}</b><span>· NFS2-640</span><span style={{ flex: 1 }} />
                                 {resumenPantalla.map((r) => <span key={r.t} style={{ padding: "2px 8px", borderRadius: 99, fontSize: 10.5, fontWeight: 700, ...r.st }}>{r.t}</span>)}
+                                <button type="button" onClick={() => setLimpiadoEn((x) => ({ ...x, [termRemoto.sitio]: Date.now() }))} title="Quitar de la pantalla todo lo que se ve ahora (no borra nada del panel ni del historial)" style={{ background: "transparent", border: "1px solid #30363d", color: "#8b949e", borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>Limpiar</button>
                                 <button type="button" onClick={() => setPantallaCruda(true)} title="Ver el texto tal como lo manda el panel" style={{ background: "transparent", border: "1px solid #30363d", color: "#8b949e", borderRadius: 6, fontSize: 10.5, padding: "2px 7px", cursor: "pointer", fontFamily: "inherit" }}>Texto</button>
                               </div>
-                              <div style={{ flex: 1, overflow: "auto" }}>
+                              <div style={{ height: (movil ? 38 : 56) * 6, flex: "none", overflowY: "auto", overflowX: "hidden", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", touchAction: "pan-y" }}>
                                 
                                 {filasPantalla.map((r, k) => (
-                                  <div key={k} style={{ display: "grid", gridTemplateColumns: movil ? "66px 1fr auto" : "92px 1fr auto 84px", gap: movil ? 7 : 12, alignItems: "center", padding: movil ? "6px 8px" : "8px 14px", borderBottom: "1px solid #161e27", background: k === 0 ? r.fondo : "transparent" }}>
+                                  <div key={k} style={{ display: "grid", gridTemplateColumns: movil ? "66px 1fr auto" : "92px 1fr auto 84px", gap: movil ? 7 : 12, alignItems: "center", padding: movil ? "0 8px" : "0 14px", height: movil ? 38 : 56, boxSizing: "border-box", overflow: "hidden", borderBottom: "1px solid #161e27", background: k === 0 ? r.fondo : "transparent" }}>
                                     <span style={{ fontSize: movil ? 9 : 11.5, fontWeight: 800, padding: movil ? "3px 0" : "4px 0", borderRadius: 6, textAlign: "center", letterSpacing: 0.3, ...r.st }}>{r.chip}</span>
                                     <span style={{ minWidth: 0 }}>
                                       <span style={{ display: "block", fontWeight: 600, fontSize: movil ? 11.5 : 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: r.tachado ? "#8b949e" : "#e6edf3", textDecoration: r.tachado ? "line-through" : "none" }}>{r.nombre}</span>

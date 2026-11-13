@@ -14828,6 +14828,68 @@ async function listarHistorialPaneles(opciones) {
   return { data: todos, error: null };
 }
 
+// 11.7: lector de líneas del panel para el Centro de Monitoreo (el mismo de la pantalla moderna del
+// Control del panel): así la cola de atención quita un evento igual que el panel, con su borrado.
+const lineaPanelCentral = (() => {
+  const ST = {
+    alarma: { background: "#e5484d22", color: "#ff8589", border: "1px solid #e5484d77" },
+    anulado: { background: "#ff8c3d22", color: "#ffad6b", border: "1px solid #ff8c3d66" },
+    falla: { background: "#f2b70522", color: "#ffd866", border: "1px solid #f2b70566" },
+    superv: { background: "#ff8c3d22", color: "#ffb36b", border: "1px solid #ff8c3d66" },
+    azul: { background: "#2f81f722", color: "#79b8ff", border: "1px solid #2f81f766" },
+    verde: { background: "#3fb95022", color: "#7ee787", border: "1px solid #3fb95066" },
+    gris: { background: "#30363d", color: "#8b949e", border: "1px solid #484f58" },
+  };
+  const ESTADOS = { "NO RES": "No responde", "ANULAD": "Anulado", "ABIERT": "Abierto", "CORTO": "Corto", "TIERRA": "Falla a tierra", "SUCIO": "Sucio", "INVREP": "Tipo incorrecto", "ACTIVO": "Activo", "NORMAL": "Normal" };
+  const titulo = (t) => String(t || "").toLowerCase().replace(/(^|[\s/(.-])([a-záéíóúñ])/g, (x, p, l) => p + l.toUpperCase()).replace(/\.(?=[A-Za-zÁÉÍÓÚÑáéíóúñ])/g, ". ").replace(/\bNum\b/g, "núm").replace(/\bCto\b/g, "Cto").replace(/\bSys\.initialization\b/i, "Sys. Initialization").replace(/\s(En|De|Del|La|El|Los|Las|Y|A)\b/g, (m) => m.toLowerCase()).replace(/^Prb\b/, "Problema").replace(/^Averia\b/, "Avería");
+  const parsear = (crudo) => {
+    let t = String(crudo || "").replace(/^[.\s]+/, "").replace(/\s+$/, "");
+    if (!t || /^---/.test(t) || /comunicacion\s*,?\s*conectada/i.test(t)) return null;
+    const U = t.toUpperCase();
+    if ((U.length <= 7 && !/\s/.test(U)) || /PULSE|^1=ANULAR|^ANULAR\/HAB|INTRODUZCA CLAVE|ENTRADA INVALIDA|^LEER PTO|ANULAR\/HAB PUNTO/.test(U)) return null;
+    // pedazo de línea (el principio quedó fuera del búfer): "126 Mie", "10:43P 1111"...
+    if (/^[\d\s:;.APM]*(DOM|LUN|MAR|MIE|JUE|VIE|SAB|SUN|MON|TUE|WED|THU|FRI|SAT)?$/i.test(t)) return null;
+    if (/^\[APP\]/.test(t)) return { chip: "ORDEN", st: ST.azul, nombre: t.replace(/^\[APP\]\s*/, ""), sub: "desde la App", fondo: "#2f81f710" };
+    if (/^>>/.test(t)) return { chip: "ORDEN", st: ST.azul, nombre: t.replace(/^>>\s*\[?|\]$/g, ""), sub: "enviada desde la App", fondo: "#2f81f710" };
+    let hora = "";
+    const mh = t.match(/(\d{1,2})[:;](\d{2})([AP])\s*(\d{6})?(\s+(DOM|LUN|MAR|MIE|JUE|VIE|SAB|SUN|MON|TUE|WED|THU|FRI|SAT))?/i);
+    if (mh) { hora = Number(mh[1]) + ":" + mh[2] + (mh[3].toUpperCase() === "P" ? " p.m." : " a.m."); t = (t.slice(0, mh.index) + " " + t.slice(mh.index + mh[0].length)).replace(/\s+$/, ""); }
+    const partes = t.split(/\s{2,}/).map((x) => x.trim()).filter(Boolean);
+    let dir = "";
+    const ult = partes.length > 1 ? partes[partes.length - 1] : "";
+    if (/^[A-Z0-9]{2,8}$/i.test(ult) && /\d/.test(ult)) { dir = ult.toUpperCase(); partes.pop(); }
+    let sub = "";
+    const pen = partes.length > 1 ? partes[partes.length - 1].toUpperCase() : "";
+    if (ESTADOS[pen]) { sub = ESTADOS[pen]; partes.pop(); }
+    const tipo = (partes[0] || "").toUpperCase();
+    const desc = partes.slice(1).join(" ");
+    const borr = /^(BR|CLR)\b/.test(tipo);
+    const T2 = borr ? tipo.replace(/^(BR|CLR)\s*/, "") : tipo;
+    let chip = "AVISO", st = ST.gris, fondo = "transparent", nombre = titulo(desc || T2);
+    if (/^CAMBIO ESTADO/.test(U) && /HABILITADA/.test(U)) {
+      const si = /\bSI\s+HABILITADA/.test(U);
+      chip = si ? "ANULADA" : "HABILITADA"; st = si ? ST.anulado : ST.verde; fondo = si ? "#ff8c3d10" : "#3fb95010";
+      nombre = (/^Z\d+$/.test(dir) ? "Zona " + dir.slice(1) : "Punto " + dir); sub = si ? "Anulación activa" : "Vuelve a estar activa";
+    } else if (/SIMULACION|DRILL/.test(T2)) { chip = "SIMULACRO"; st = ST.alarma; fondo = "#e5484d14"; nombre = "Simulacro activado"; }
+    else if (/PRE-?ALARM/.test(T2)) { chip = "PREALARMA"; st = ST.alarma; fondo = "#e5484d14"; }
+    else if (/^(ALARMA|ALARM|FIRE|FUEGO|INCENDIO)/.test(T2)) { chip = "ALARMA"; st = ST.alarma; fondo = "#e5484d14"; }
+    else if (/SUPERV/.test(T2)) { chip = "SUPERVISIÓN"; st = ST.superv; fondo = "#ff8c3d10"; }
+    else if (/SEGURIDAD|SECURITY/.test(T2)) { chip = "SEGURIDAD"; st = ST.azul; }
+    else if (/^ANULAR|ANULAD|DESHABIL|DISABL/.test(T2)) { chip = "ANULADO"; st = ST.anulado; fondo = "#ff8c3d10"; }
+    else if (/^(AVERIA|PRB|PROBLEMA|FALLA|TROUBL|FAULT)/.test(T2)) { chip = "FALLA"; st = ST.falla; fondo = "#f2b70510"; }
+    else if (/REARME|RESET/.test(T2)) { chip = "REARME"; st = ST.azul; nombre = "Rearme del sistema"; }
+    else if (/CONFIRMAR|ACKNOWLEDGE/.test(T2)) { chip = "CONFIRMADO"; st = ST.gris; nombre = "Eventos confirmados"; }
+    else if (/SENAL SILENCIADA|SIGNAL SILENCED/.test(T2)) { chip = "SILENCIADO"; st = ST.falla; nombre = "Señales silenciadas"; }
+    else if (/REACTIVAR/.test(T2)) { chip = "SIRENAS"; st = ST.alarma; nombre = "Sirenas reactivadas"; }
+    if (/EN SISTEMA$/.test(T2) && desc) { nombre = titulo(T2); sub = sub || titulo(desc); }
+    if (chip === "ALARMA" && !desc) nombre = titulo(T2.replace(/^(ALARMA|ALARM|FIRE|FUEGO|INCENDIO)\s*:?\s*/, "")) || "Alarma";
+    const base = chip;   // 11.1: lo que esta línea borra (FALLA, ALARMA…) cuando es un BR
+    if (borr) { chip = "BORRADO"; st = ST.gris; fondo = "transparent"; }
+    if (!desc && !/^CAMBIO ESTADO/.test(U) && nombre === titulo(T2)) nombre = titulo(T2);
+    return { chip, base, st, fondo, nombre: nombre || titulo(t), sub, dir, hora, tachado: borr, normal: /NORMAL|RESTAUR/.test(T2) };
+  };
+  return parsear;
+})();
 function MonitoreoNotifier({ modoCentral = false } = {}) {
   const currentUser = useContext(CurrentUserContext);
   const confirmar = useContext(ConfirmContext);
@@ -14896,6 +14958,7 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   const [centralCompleta, setCentralCompleta] = useState(false);   // pantalla completa del navegador
   const [centralVista, setCentralVista] = useEstadoRecordado("monitoreo-central-vista", "atencion");   // "atencion" (solo lo que necesita atención) | "matriz"
   const [centralOkAbierto, setCentralOkAbierto] = useState(false);
+  const [centralColaCliente, setCentralColaCliente] = useEstadoRecordado("monitoreo-central-cola-cliente", "");   // la cola de atención filtrada por cliente
   const esCorreoC = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v || "").trim());   // el navegador rellena el buscador con el correo del usuario
   const centralScrollRef = useRef(null);
   const [, setTicCentral] = useState(0);
@@ -16574,7 +16637,39 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const porSitio = centralPorSitio;
         const nombres = Array.from(new Set([...dispositivos.map((d) => d.sitio).filter(Boolean), ...Object.keys(porSitio)]));
         // evento que explica el estado del sitio (el más nuevo del tipo que tiene encendido)
-        const CAT_EST = { alarma: ["alarma", "prealarma"], superv: ["supervision"], falla: ["problema"], anulado: ["problema", "general", "sinclasificar"] };
+        // eventos que siguen ACTIVOS en el panel (igual que su pantalla): una falla/supervisión sale con SU
+        // borrado (BR), una alarma con el rearme, y lo anulado cuando se vuelve a habilitar.
+        const ACT = ["ALARMA", "PREALARMA", "SIMULACRO", "SUPERVISIÓN", "FALLA", "SEGURIDAD", "ANULADO", "ANULADA"];
+        const claveF = (r, chip) => chip + "|" + (r.dir || String(r.sub || r.nombre || "").toUpperCase());
+        const activosDe = (evs, sitio) => {
+          const limpio = limpiadoEn[sitio] || 0;
+          const filas = evs.map((e) => {
+            const r = lineaPanelCentral(e.texto);
+            if (!r) return null;
+            r.t = tEv(e); r.e = e;
+            if (e.borrado || e.categoria === "borrado") { if (r.chip !== "BORRADO") r.base = r.chip; r.chip = "BORRADO"; }
+            return r;
+          }).filter(Boolean);
+          const brUlt = {};
+          filas.forEach((r) => { if (r.chip === "BORRADO" || r.normal) { const k = claveF(r, r.base || r.chip); if (!(k in brUlt) || r.t > brUlt[k]) brUlt[k] = r.t; } });
+          const habils = filas.filter((r) => r.chip === "HABILITADA");
+          const rearmes = filas.filter((r) => r.chip === "REARME");
+          const ya = new Set();
+          return filas.filter((r) => {
+            if (!ACT.includes(r.chip) || r.normal) return false;
+            if (limpio && r.t <= limpio) return false;
+            if (r.chip === "ANULADA" && habils.some((h) => h.dir === r.dir && h.t >= r.t)) return false;
+            if (r.chip === "ANULADO" && habils.some((h) => h.t >= r.t)) return false;
+            if (["ALARMA", "PREALARMA", "SIMULACRO"].includes(r.chip) && rearmes.some((x) => x.t - r.t >= 2000)) return false;
+            const k = claveF(r, r.chip);
+            if (k in brUlt && brUlt[k] >= r.t) return false;
+            if (ya.has(k)) return false;   // el mismo punto una sola vez (el más nuevo)
+            ya.add(k);
+            return true;
+          });
+        };
+        const GR = { ALARMA: "alarma", PREALARMA: "alarma", SIMULACRO: "alarma", "SUPERVISIÓN": "superv", FALLA: "falla", SEGURIDAD: "falla", ANULADO: "anulado", ANULADA: "anulado" };
+        const PRI = ["alarma", "superv", "falla", "anulado", "normal"];
         const sitiosC = nombres.map((sitio) => {
           const d = dispositivos.find((x) => x.sitio === sitio) || null;
           const cc = d ? leerConfigPanel(d.config_panel) : {};
@@ -16583,13 +16678,17 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           const enLinea = !!(visto && (ahoraC - visto) / 1000 < 200);
           const evs = porSitio[sitio] || [];
           const simplex = cc.tipo === "1" || cc.tipo === "2";
-          const est = !d ? "sinequipo" : !enLinea ? "sinconex" : Lc.includes("A") ? "alarma" : Lc.includes("S") ? "superv" : Lc.includes("T") ? "falla" : Lc.includes("D") ? "anulado" : "normal";
+          const activos = activosDe(evs, sitio);
+          // estado: lo más grave entre las luces del panel y sus eventos activos
+          const estLed = Lc.includes("A") ? "alarma" : Lc.includes("S") ? "superv" : Lc.includes("T") ? "falla" : Lc.includes("D") ? "anulado" : "normal";
+          const estAct = activos.reduce((m, r) => (PRI.indexOf(GR[r.chip]) < PRI.indexOf(m) ? GR[r.chip] : m), "normal");
+          const est = !d ? "sinequipo" : !enLinea ? "sinconex" : PRI.indexOf(estAct) < PRI.indexOf(estLed) ? estAct : estLed;
           const ultEv = evs.length ? tEv(evs[0]) : 0;
-          const motivo = est === "sinconex" || est === "sinequipo" ? null
-            : (evs.find((e) => (CAT_EST[est] || []).includes(e.categoria) && !(e.borrado || e.categoria === "borrado") && (est !== "anulado" || /ANUL|HABILITADA|DISABL/i.test(String(e.texto || "")))) || evs[0] || null);
+          const ultAct = activos.length ? Math.max(...activos.map((r) => r.t)) : 0;
+          const motivo = activos[0] ? activos[0].e : null;
           // en la cola: el sitio del evento más nuevo va arriba (un equipo que se cae cuenta desde que dejó de reportar)
-          const orden = est === "sinconex" ? Math.max(ultEv, visto + 200000) : ultEv;
-          return { sitio, cliente: String((d && d.cliente) || "").trim(), d, Lc, enLinea, visto, evs, simplex, est, ult: ultEv, motivo, orden };
+          const orden = est === "sinconex" ? Math.max(ultEv, visto + 200000) : (ultAct || ultEv);
+          return { sitio, cliente: String((d && d.cliente) || "").trim(), d, Lc, enLinea, visto, evs, simplex, est, ult: ultEv, motivo, orden, activos };
         });
         const COLOR = { alarma: "#e5484d", superv: "#ff8c3d", falla: "#f2b705", anulado: "#b8641f", sinconex: "#6e7681", sinequipo: "#6e7681" };
         const CHIP = { alarma: ["ALARMA", "#e5484d33", "#ff8f92"], superv: ["SUPERV.", "#ff8c3d22", "#ffb27a"], falla: ["FALLA", "#f2b70522", "#f2d06b"], anulado: ["ANULADO", "#ff8c3d22", "#ffad6b"], sinconex: ["SIN CONEX.", "#30363d", "#aab3bd"], sinequipo: ["SIN EQUIPO", "#30363d", "#aab3bd"] };
@@ -16605,6 +16704,17 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const agrupar = centralTam === "cliente";
         const matriz = sitiosC.filter(pasa).sort((a, b) => (agrupar ? (a.cliente || "~").localeCompare(b.cliente || "~", "es") : 0) || a.sitio.localeCompare(b.sitio, "es"));
         const cola = sitiosC.filter((x) => x.est !== "normal" && pasa(x)).sort((a, b) => b.orden - a.orden);
+        // COLA DE ATENCIÓN (vista lista): un renglón por EVENTO activo, como en el panel; filtrable por cliente
+        const clientesCola = Array.from(new Set(sitiosC.map((x) => x.cliente || "Sin cliente"))).sort((a, b) => a.localeCompare(b, "es"));
+        const filtroCli = clientesCola.includes(centralColaCliente) ? centralColaCliente : "";
+        const colaEv = [];
+        sitiosC.forEach((x) => {
+          if (!pasa(x) || (filtroCli && (x.cliente || "Sin cliente") !== filtroCli)) return;
+          if (x.est === "sinconex" || x.est === "sinequipo") { colaEv.push({ x, off: true, t: x.orden, k: x.sitio + "|off" }); return; }
+          x.activos.forEach((r) => colaEv.push({ x, r, t: r.t, k: x.sitio + "|" + claveF(r, r.chip) }));
+        });
+        colaEv.sort((a, b) => b.t - a.t);
+        const colaF = cola.filter((x) => !filtroCli || (x.cliente || "Sin cliente") === filtroCli);
         const haceTxt = (t) => { const m = Math.round((ahoraC - t) / 60000); return m < 1 ? "ahora" : m < 60 ? "hace " + m + " min" : m < 1440 ? "hace " + Math.round(m / 60) + " h" : "hace " + Math.round(m / 1440) + " d"; };
         const KP = [
           ["alarma", "Alarma", cuentaC("alarma"), "#ff8f92", "#e5484d"], ["superv", "Superv.", cuentaC("superv"), "#ffb27a", "#ff8c3d"],
@@ -16626,24 +16736,27 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           const apag = x.est === "sinconex" || x.est === "sinequipo";
           const ESTX = { alarma: ["ALARMA", "#ff6b6f"], superv: ["SUPERVISIÓN", "#ffb27a"], falla: ["FALLA", "#f2d06b"], anulado: ["ANULADO", "#ffad6b"], sinconex: ["SIN CONEXIÓN", "#8b949e"], sinequipo: ["SIN EQUIPO", "#8b949e"], normal: ["OK", "#3fd17a"] }[x.est];
           const borde = { alarma: "#e5484d", superv: "#ff8c3d", falla: "#f2b705", anulado: "#b8641f" }[x.est];
-          const luzM = (on, col) => (<span style={{ width: 12, height: 6, borderRadius: 2, display: "inline-block", background: on ? col : "#a9aaa5", border: "1px solid #7d7e7a", boxShadow: on ? `0 0 5px ${col}` : "none" }} />);
+          const luzM = (on, col) => (<span style={{ width: 14, height: 7, borderRadius: 2, display: "inline-block", background: on ? col : "#a9aaa5", border: "1px solid #7d7e7a", boxShadow: on ? `0 0 5px ${col}` : "none" }} />);
           const lucesM = x.simplex
             ? [[!apag, "#3cff5a"], [x.Lc.includes("A"), "#ff3b3b"], [x.Lc.includes("G"), "#ff3b3b"], [x.Lc.includes("S"), "#ffb21f"], [x.Lc.includes("T"), "#ffb21f"]]
             : [[!apag, "#3cff5a"], [x.Lc.includes("A"), "#ff3b3b"], [x.Lc.includes("S"), "#ffb21f"], [x.Lc.includes("T"), "#ffb21f"], [x.Lc.includes("D"), "#ffb21f"]];
           celdas.push(
             <button key={x.sitio} type="button" onClick={() => abrirSitio(x.sitio)}
               title={(x.cliente ? x.cliente + " · " : "") + x.sitio + (x.simplex ? " · Simplex" : " · Notifier") + (x.motivo ? "\n" + String(x.motivo.texto || "").replace(/\s{2,}/g, " · ") : "") + "\nTocar: abrir el panel"}
-              style={{ height: movilC ? 108 : 116, borderRadius: 9, padding: "6px 7px 6px", textAlign: "left", cursor: "pointer", fontFamily: "inherit", position: "relative", display: "flex", flexDirection: "column", gap: 5, boxSizing: "border-box", minWidth: 0,
+              style={{ height: movilC ? 132 : 150, borderRadius: 10, padding: "7px 8px 7px", textAlign: "left", cursor: "pointer", fontFamily: "inherit", position: "relative", display: "flex", flexDirection: "column", gap: 5, boxSizing: "border-box", minWidth: 0,
                 background: x.simplex ? "linear-gradient(#d6dbe1,#b3bcc7)" : "linear-gradient(#d9dad6,#c2c3be)", color: "#1d2126", opacity: apag ? 0.55 : 1,
                 border: `2px solid ${borde || "#8f918c"}`,
                 boxShadow: x.est === "alarma" ? "0 0 0 1px #e5484d, 0 0 16px #e5484d" : "0 2px 0 #00000055", animation: nuevo ? "ignisCentralNuevo 1s ease-in-out infinite" : "none" }}>
               <span style={{ display: "flex", alignItems: "flex-start", gap: 4, minWidth: 0 }}>
-                <span style={{ fontSize: 10.5, fontWeight: 800, lineHeight: 1.15, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", minWidth: 0, flex: 1 }}>{x.sitio}</span>
+                <span style={{ minWidth: 0, flex: 1, lineHeight: 1.15 }}>
+                  <span style={{ fontSize: movilC ? 12.5 : 14, fontWeight: 800, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: x.cliente ? 1 : 2, WebkitBoxOrient: "vertical" }}>{x.cliente || x.sitio}</span>
+                  {x.cliente && <span style={{ display: "block", fontSize: movilC ? 10.5 : 11.5, fontWeight: 700, color: "#3d4248", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.sitio}</span>}
+                </span>
                 {sitiosMudos.includes(x.sitio) && <span style={{ fontSize: 10, flex: "none" }}>🔕</span>}
               </span>
               <span style={{ flex: 1, minHeight: 26, display: "flex", gap: 3 }}>
                 <span style={{ flex: 1, background: "#0a0f14", border: "3px solid #3a3d40", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px",
-                  color: x.est === "normal" ? "#3fd17abb" : ESTX[1], fontSize: x.est === "normal" ? 10 : 10.5, fontWeight: 800, letterSpacing: ".04em", textAlign: "center", lineHeight: 1.1 }}>
+                  color: x.est === "normal" ? "#3fd17abb" : ESTX[1], fontSize: x.est === "normal" ? 11.5 : 12.5, fontWeight: 800, letterSpacing: ".04em", textAlign: "center", lineHeight: 1.1 }}>
                   {x.est === "normal" ? "● OK" : ESTX[0]}
                 </span>
                 {/* máscara Simplex: los interruptores azules a la derecha de la pantalla */}
@@ -16735,18 +16848,23 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       style={{ background: "transparent", border: `1px solid ${IGNIS.border}`, color: IGNIS.dim, borderRadius: 6, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>{centralOkAbierto ? "menos ▴" : "más ▾"}</button>}
                     <input value={esCorreoC(centralBusca) ? "" : centralBusca} onChange={(e) => setCentralBusca(esCorreoC(e.target.value) && !centralBusca ? "" : e.target.value)} type="search" autoComplete="off" autoCorrect="off" spellCheck={false} data-lpignore="true" data-form-type="other" placeholder="Buscar…" name="central_busca_ignis2"
                       style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 7, padding: "5px 10px", width: movilC ? "100%" : 160, fontSize: 12.5, fontFamily: "inherit", boxSizing: "border-box" }} />
+                    <select value={filtroCli} onChange={(e) => setCentralColaCliente(e.target.value)} title="Ver solo un cliente"
+                      style={{ background: IGNIS.panel, color: filtroCli ? "#9cc3ff" : IGNIS.text, border: `1px solid ${filtroCli ? "#1f6fd8" : IGNIS.border}`, borderRadius: 7, padding: "5px 8px", fontSize: 12, fontFamily: "inherit", maxWidth: movilC ? "100%" : 180 }}>
+                      <option value="">Todos los clientes</option>
+                      {clientesCola.map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
                     <button type="button" onClick={() => setCentralVista("matriz")}
                       style={{ background: "transparent", border: "none", color: "#79b8ff", fontWeight: 800, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>Ver lista ▸</button>
                   </div>
                   <div ref={centralScrollRef} style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-                    {!cola.length && <div style={{ color: "#3fd17a", textAlign: "center", padding: "40px 10px", fontSize: 15, fontWeight: 800 }}>Ningún sitio necesita atención<div style={{ fontSize: 12, color: IGNIS.dim, fontWeight: 600, marginTop: 6 }}>Los sitios sin eventos están arriba; toque uno para abrir su panel.</div></div>}
+                    {!colaF.length && <div style={{ color: "#3fd17a", textAlign: "center", padding: "40px 10px", fontSize: 15, fontWeight: 800 }}>{filtroCli ? "Este cliente no tiene eventos activos" : "Ningún sitio necesita atención"}<div style={{ fontSize: 12, color: IGNIS.dim, fontWeight: 600, marginTop: 6 }}>Los sitios sin eventos están arriba; toque uno para abrir su panel.</div></div>}
                     <div style={{ display: "grid", gridTemplateColumns: movilC ? "1fr" : "repeat(auto-fill, minmax(300px, 1fr))", gap: 10 }}>
-                      {cola.map((x, k) => {
-                        const grande = k === 0 && !movilC && cola.length > 1;
+                      {colaF.map((x, k) => {
+                        const grande = k === 0 && !movilC && colaF.length > 1;
                         const apagado = x.est === "sinconex" || x.est === "sinequipo";
                         const nuevo = x.ult && ahoraC - x.ult < 10000;
                         const mudo = sitiosMudos.includes(x.sitio);
-                        const lineas = x.evs.slice(0, grande ? 6 : 5);
+                        const lineas = (x.activos.length ? x.activos.map((r) => r.e) : x.evs).slice(0, grande ? 6 : 5);   // primero lo que sigue activo en el panel
                         return (
                           <div key={x.sitio} role="button" tabIndex={0} onClick={() => abrirSitio(x.sitio)} onKeyDown={(e) => { if (e.key === "Enter") abrirSitio(x.sitio); }} title={"Abrir el panel de " + x.sitio}
                             style={{ gridColumn: grande ? "span 2" : undefined, height: movilC ? 190 : 200, boxSizing: "border-box", background: x.simplex ? "linear-gradient(#d6dbe1,#b8c0ca)" : "linear-gradient(#d9dad6,#c9cac5)", borderRadius: 10, padding: 7,
@@ -16808,7 +16926,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 </div>
                 <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
                   {!matriz.length && <div style={{ color: IGNIS.dim, textAlign: "center", padding: 30, fontSize: 13 }}>{sitiosC.length ? "Ningún sitio coincide." : "Todavía no hay equipos reportando."}</div>}
-                  <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${movilC ? 118 : 136}px, 1fr))`, gap: 8 }}>{celdas}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${movilC ? 150 : 190}px, 1fr))`, gap: 10 }}>{celdas}</div>
                 </div>
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11, color: IGNIS.dim, marginTop: 10 }}>
                   {[["Alarma", "#e5484d"], ["Supervisión", "#ff8c3d"], ["Falla", "#f2b705"], ["Anulado", "#b8641f"], ["Sin conexión", "#2a3038"], ["OK", "#132a1d"]].map(([t, c]) => (
@@ -16817,22 +16935,30 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 </div>
               </div>
               <div style={{ background: "#0e141b", border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: "12px 12px 4px", display: "flex", flexDirection: "column", minHeight: 0, maxHeight: movilC ? 420 : undefined, flex: movilC ? "none" : undefined, order: movilC ? -1 : undefined }}>
-                <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
                   <b style={{ fontSize: 12, letterSpacing: ".1em", color: IGNIS.dim }}>COLA DE ATENCIÓN</b>
-                  <span style={{ marginLeft: "auto", fontSize: 11.5, color: IGNIS.dim }}>{cola.length ? "último evento arriba" : ""}</span>
+                  <span style={{ fontSize: 11.5, color: IGNIS.dim }}>{colaEv.length} {colaEv.length === 1 ? "evento" : "eventos"}</span>
+                  <select value={filtroCli} onChange={(e) => setCentralColaCliente(e.target.value)} title="Filtrar la cola por cliente"
+                    style={{ marginLeft: "auto", background: IGNIS.panel, color: filtroCli ? "#9cc3ff" : IGNIS.text, border: `1px solid ${filtroCli ? "#1f6fd8" : IGNIS.border}`, borderRadius: 7, padding: "4px 8px", fontSize: 12, fontFamily: "inherit", maxWidth: 190 }}>
+                    <option value="">Todos los clientes</option>
+                    {clientesCola.map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>
                 </div>
                 <div ref={centralScrollRef} style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-                  {!cola.length && <div style={{ color: "#3fd17a", textAlign: "center", padding: "30px 10px", fontSize: 13, fontWeight: 700 }}>Ningún sitio necesita atención</div>}
-                  {cola.map((x) => {
-                    const [ct, bg, col] = CHIP[x.est];
-                    const txt = x.est === "sinconex" ? "Equipo sin conexión" : x.est === "sinequipo" ? "Sin equipo reportando" : x.motivo ? String(x.motivo.texto || "").replace(/^[.\s]+/, "").replace(/\s{2,}/g, " · ") : "";
-                    const cuando = x.est === "sinconex" ? (x.visto ? haceTxt(x.visto) : "") : x.ult ? haceTxt(x.ult) : "";
-                    const nuevo = x.ult && ahoraC - x.ult < 10000;
+                  {!colaEv.length && <div style={{ color: "#3fd17a", textAlign: "center", padding: "30px 10px", fontSize: 13, fontWeight: 700 }}>{filtroCli ? "Este cliente no tiene eventos activos" : "Ningún sitio necesita atención"}</div>}
+                  {colaEv.map((it) => {
+                    const x = it.x, r = it.r;
+                    const ct = it.off ? (x.est === "sinequipo" ? "SIN EQUIPO" : "SIN CONEX.") : r.chip === "SUPERVISIÓN" ? "SUPERV." : r.chip === "ANULADA" ? "ANULADO" : r.chip;
+                    const st = it.off ? { background: "#30363d", color: "#aab3bd", border: "1px solid #484f58" } : r.st;
+                    const barra = it.off ? "#6e7681" : COLOR[GR[r.chip]] || "#6e7681";
+                    const txt = it.off ? (x.est === "sinequipo" ? "Sin equipo reportando" : "Equipo sin conexión") : [r.nombre, r.sub, r.dir].filter(Boolean).join(" · ");
+                    const cuando = it.t ? haceTxt(it.off ? (x.visto || it.t) : it.t) : "";
+                    const nuevo = !it.off && ahoraC - it.t < 10000;
                     const mudo = sitiosMudos.includes(x.sitio);
                     return (
-                      <div key={x.sitio} role="button" tabIndex={0} onClick={() => abrirSitio(x.sitio)} onKeyDown={(e) => { if (e.key === "Enter") abrirSitio(x.sitio); }}
+                      <div key={it.k} role="button" tabIndex={0} onClick={() => abrirSitio(x.sitio)} onKeyDown={(e) => { if (e.key === "Enter") abrirSitio(x.sitio); }}
                         style={{ display: "grid", gridTemplateColumns: "5px minmax(0,1fr) auto", gap: 10, padding: "9px 4px", borderBottom: "1px solid #161e27", alignItems: "center", cursor: "pointer", borderRadius: 6, background: nuevo ? "#1f6fd822" : "transparent" }}>
-                        <span style={{ alignSelf: "stretch", borderRadius: 3, background: COLOR[x.est], boxShadow: x.est === "alarma" ? "0 0 8px #e5484d" : "none" }} />
+                        <span style={{ alignSelf: "stretch", borderRadius: 3, background: barra, boxShadow: !it.off && GR[r.chip] === "alarma" ? "0 0 8px #e5484d" : "none" }} />
                         <span style={{ minWidth: 0 }}>
                           <b style={{ display: "block", fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.cliente ? x.cliente + " · " : ""}{x.sitio}{x.simplex && <span style={{ marginLeft: 6, fontSize: 9, padding: "1px 5px", borderRadius: 4, background: "#c8102e", color: "#fff", verticalAlign: 1 }}>SIMPLEX</span>}</b>
                           <span style={{ display: "block", fontSize: 11.5, color: IGNIS.dim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{txt}</span>
@@ -16843,7 +16969,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                               style={{ border: `1px solid ${mudo ? "#c8102e" : IGNIS.border}`, background: mudo ? "#c8102e33" : "transparent", borderRadius: 5, padding: "0 5px", fontSize: 11, cursor: "pointer", lineHeight: "17px" }}>{mudo ? "🔕" : "🔔"}</button>
                             {canGestionar && <button type="button" onClick={(e) => { e.stopPropagation(); setCentralEditCli({ sitio: x.sitio, valor: x.cliente, msg: "" }); }} title="Nombre del cliente (de las OD de IPM o uno nuevo)"
                               style={{ border: `1px solid ${IGNIS.border}`, background: "transparent", color: IGNIS.dim, borderRadius: 5, padding: "0 5px", fontSize: 11, cursor: "pointer", lineHeight: "17px" }}>✎</button>}
-                            <span style={{ fontSize: 9.5, fontWeight: 800, padding: "2px 7px", borderRadius: 4, background: bg, color: col, border: `1px solid ${col}66`, minWidth: 64, textAlign: "center" }}>{ct}</span>
+                            <span style={{ fontSize: 9.5, fontWeight: 800, padding: "2px 7px", borderRadius: 4, ...st, minWidth: 64, textAlign: "center" }}>{ct}</span>
                           </span>
                           {cuando}
                         </span>

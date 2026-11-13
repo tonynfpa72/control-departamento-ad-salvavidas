@@ -15080,9 +15080,13 @@ function MonitoreoNotifier() {
     ganancia.gain.value = 0;
     ganancia.connect(ctx.destination);
     const osc = ctx.createOscillator();
-    osc.type = "sine";          // 11.3: onda suave (la cuadrada sonaba áspera / "ruido")
+    // 11.4: onda cuadrada (se oye bien en el parlante del teléfono) pero pasada por un filtro que le
+    // quita lo áspero: suena firme sin el "ruido" de antes. (La senoidal casi no se oía en el celular.)
+    osc.type = "square";
     osc.frequency.value = 520;  // 8.4: tono de 520 Hz (más grave, elegido por Anthony)
-    osc.connect(ganancia);
+    const filtro = ctx.createBiquadFilter();
+    filtro.type = "lowpass"; filtro.frequency.value = 1700; filtro.Q.value = 0.7;
+    osc.connect(filtro); filtro.connect(ganancia);
     osc.start();
     audioCtxRef.current = ctx;
     gananciaRef.current = ganancia;
@@ -15116,7 +15120,7 @@ function MonitoreoNotifier() {
       pulsoTimerRef.current = null;
       modoSonandoRef.current = modo;
       setModoSonando(modo);
-      const NIVEL = 0.22;   // 11.3: más bajo que antes (0.5)
+      const NIVEL = 0.4;    // 11.4: audible en el teléfono (antes 0.5 sin filtro, 0.22 senoidal casi no se oía)
       if (modo === 2) {
         volumen(NIVEL);
       } else {
@@ -15174,7 +15178,8 @@ function MonitoreoNotifier() {
     const nuevos = delSitio.filter((e) => idNum(e) > ultimoEventoVistoRef.current);
     ultimoEventoVistoRef.current = mayorId;
     // 11.3: el sonido sigue hasta que ALGÚN usuario confirme (el panel imprime CONFIRMAR, SEÑAL SILENCIADA o REARME)
-    if (nuevos.some((e) => /CONFIRMAR|SILENCIAD|REARME|ACKNOWLEDG|SIGNALS? SILENCED|SYSTEM RESET/i.test(String(e.texto || "")))) detenerSonido();
+    // 11.4: SOLO la confirmación (CONFIRMAR / ACKNOWLEDGE, desde el panel, la App o el APK) apaga el sonido
+    if (nuevos.some((e) => /CONFIRMAR|ACKNOWLEDG/i.test(String(e.texto || "")))) detenerSonido();
     if (monitorSitioRef.current && nuevos.every((e) => e.sitio === monitorSitioRef.current)) return;
     const cats = (e) => [e.categoria, e.subcat];   // la subcategoría también cuenta (ej. "general" + "problema")
     if (nuevos.some((e) => cats(e).some((c) => c === "alarma" || c === "prealarma"))) sonar(2);
@@ -15526,7 +15531,7 @@ function MonitoreoNotifier() {
     nuevo.split("\n").forEach((ln) => {
       if (/^\s*(>>|---)/.test(ln)) return;
       const u = ln.replace(/^[^A-Za-z0-9*#]+/, "").toUpperCase();
-      if (/^(CONFIRMAR|SENAL SILENCIADA|REARME DEL SISTEMA)/.test(u)) { detenerSonido(); return; }   // 11.3: alguien confirmó
+      if (/^(CONFIRMAR|ACKNOWLEDG)/.test(u)) { detenerSonido(); return; }   // 11.4: solo la confirmación apaga el sonido
       if (!u || /^(BR|CLR)\b/.test(u) || /HIST|LISTADO|NORMAL|RESTAUR|SILENCIAD|CONFIRMAR|REARME/.test(u)) return;
       const clave = u.replace(/\s+/g, " ").trim();
       const ya = lineasSonadasRef.current.get(clave);
@@ -15584,7 +15589,7 @@ function MonitoreoNotifier() {
     const accionVis = accion;
     if (extra) accion = accion + ":" + extra;
     // 8.4: Acknowledge o Signal Silence en el Monitor también callan el sonido de la App
-    if ((accion === "ack" || accion === "silenciar") && modoSonandoRef.current > 0) detenerSonido();
+    if (accion === "ack" && modoSonandoRef.current > 0) detenerSonido();   // 11.4: solo Confirmar apaga el sonido
     const quien = String(currentUser?.name || currentUser?.email || "app").replace(/[|"]/g, " ").slice(0, 40);
     setCrtPend({ accion: accionVis, desde: Date.now(), msg: "" });
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(12))).map((b) => b.toString(16).padStart(2, "0")).join("");

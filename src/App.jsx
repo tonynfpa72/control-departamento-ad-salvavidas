@@ -673,6 +673,7 @@ const AREAS = [
   { id: "equipos", label: "Equipos", icon: Package, color: T.amber },
   { id: "facturacion_publica", label: "Facturación", icon: LayoutDashboard, color: T.green },
   { id: "monitoreo_notifier", label: "Monitoreo", icon: Flame, color: T.red },
+  { id: "centro_monitoreo", label: "Centro de Monitoreo", icon: LayoutDashboard, color: T.red },   // 11.7: todos los clientes en vivo (solo personal interno)
   { id: "gastos_tarjeta", label: "Gastos de Tarjeta", icon: CreditCard, color: T.red },
   { id: "vehiculos", label: "Vehículos", icon: Truck, color: T.blue },
   { id: "planilla", label: "Planilla", icon: Wallet, color: T.amber },
@@ -14827,7 +14828,7 @@ async function listarHistorialPaneles(opciones) {
   return { data: todos, error: null };
 }
 
-function MonitoreoNotifier() {
+function MonitoreoNotifier({ modoCentral = false } = {}) {
   const currentUser = useContext(CurrentUserContext);
   const confirmar = useContext(ConfirmContext);
   // En este módulo, a diferencia del resto de la app, Técnico tiene el mismo
@@ -14840,7 +14841,8 @@ function MonitoreoNotifier() {
   // Los datos se piden a Supabase ya filtrados por ese sitio, así que los
   // otros equipos ni siquiera llegan a su navegador.
   const esCliente = currentUser?.categoria === "cliente";
-  const esAdminMonitoreo = currentUser?.categoria === "admin"; // el admin ve todas las conexiones, aun sin elegir sitio
+  const esAdminMonitoreo = currentUser?.categoria === "admin";
+  const veCentral = currentUser?.categoria === "admin" || currentUser?.categoria === "tecnico";   // 11.7: Centro de Monitoreo solo Admin y Técnicos // el admin ve todas las conexiones, aun sin elegir sitio
   const sitiosCliente = useMemo(() => (esCliente ? sitiosDeTexto(currentUser?.area) : []), [esCliente, currentUser?.area]);
   // Con un solo sitio se abre directo en ese sitio; con varios, elige entre los suyos.
   const sitioCliente = sitiosCliente.length === 1 ? sitiosCliente[0] : "";
@@ -14886,7 +14888,8 @@ function MonitoreoNotifier() {
   const [limpiadoEn, setLimpiadoEn] = useState({});
   // 11.7: Central de Monitoreo (todos los sitios, solo personal interno). Se recuerda en la pestaña:
   // si la pantalla de la pared se recarga, vuelve a abrir la Central con el mismo filtro y tamaño.
-  const [centralAbierta, setCentralAbierta] = useEstadoRecordado("monitoreo-central", false);
+  const [centralAbierta, setCentralAbierta] = useEstadoRecordado(modoCentral ? "centro-central" : "monitoreo-central", modoCentral);   // desde el menú «Centro de Monitoreo» abre directo
+  useEffect(() => { if (modoCentral) setCentralAbierta(true); }, []);   // al entrar por el menú siempre empieza en la vista de todos
   const [centralBusca, setCentralBusca] = useState("");
   const [centralFiltro, setCentralFiltro] = useEstadoRecordado("monitoreo-central-filtro", "todos");
   const [centralTam, setCentralTam] = useEstadoRecordado("monitoreo-central-tam", "normal");   // "grande" | "normal" | "compacto"
@@ -16035,7 +16038,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               <Wrench size={13} /> Diagnóstico
             </Btn>
           )}
-          {canGestionar && !esCliente && (
+          {veCentral && (
             <Btn small variant={desdeCentral ? undefined : "ghost"} onClick={() => { setDesdeCentral(false); setCentralAbierta(true); }} title="Central de Monitoreo: los monitores de todos los clientes en vivo">
               <LayoutDashboard size={13} /> {desdeCentral ? "← Volver a la central" : "Central de monitoreo"}
             </Btn>
@@ -16544,7 +16547,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           </div>
         );
       })()}
-      {centralAbierta && !esCliente && (() => {
+      {centralAbierta && veCentral && (() => {
         // 11.7: CENTRAL DE MONITOREO — un mini monitor por sitio con sus eventos en vivo (los que el equipo
         // ya sube a la base: no abre conexiones nuevas ni carga a los equipos). El sitio donde entra un
         // evento pasa al primer lugar y los demás bajan uno por uno. Al tocar un monitor se abre su
@@ -16598,7 +16601,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const haceTxt = (t) => { const m = Math.round((ahoraC - t) / 60000); return m < 1 ? "ahora" : m < 60 ? "hace " + m + " min" : m < 1440 ? "hace " + Math.round(m / 60) + " h" : "hace " + Math.round(m / 1440) + " d"; };
         const ledC = (on, col) => (<span style={{ width: 14, height: 7, borderRadius: 2, display: "inline-block", background: on ? col : "#b9bab5", border: "1px solid #888", boxShadow: on ? `0 0 5px ${col}` : "none" }} />);
         return (
-          <div style={{ position: "fixed", inset: 0, zIndex: 55, background: "#0b0f14", color: IGNIS.text, display: "flex", flexDirection: "column", fontFamily: "system-ui,-apple-system,sans-serif" }}>
+          <div style={{ ...(modoCentral && !centralCompleta ? { position: "relative", height: "100vh" } : { position: "fixed", inset: 0 }), zIndex: 55, background: "#0b0f14", color: IGNIS.text, display: "flex", flexDirection: "column", fontFamily: "system-ui,-apple-system,sans-serif" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: movilC ? "10px 10px" : "12px 20px", borderBottom: `1px solid ${IGNIS.border}`, background: "#0e141b" }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: movilC ? 14 : 16, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase" }}>Central de Monitoreo</div>
@@ -16625,10 +16628,10 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                   style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 8, padding: "7px 12px", fontWeight: 800, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>
                   {centralCompleta ? "⤡ Salir de pantalla completa" : "⤢ Pantalla completa"}
                 </button>)}
-              <button type="button" onClick={() => { try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) {} setCentralAbierta(false); }}
+              {!modoCentral && <button type="button" onClick={() => { try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) {} setCentralAbierta(false); }}
                 style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 8, padding: "7px 14px", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}>
                 <X size={15} /> Cerrar central
-              </button>
+              </button>}
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: movilC ? "8px 10px 0" : "10px 20px 0" }}>
               {KP.map(([k, t, n, col]) => (
@@ -29791,10 +29794,10 @@ function AppInner() {
     // El perfil "cliente" solo ve Monitoreo (y dentro, solo su sitio asignado).
     if (user.categoria === "cliente") return AREAS.filter((a) => a.id === "monitoreo_notifier");
     // En el APK el técnico ve Monitoreo (todos los sitios), Agenda y Entrenamiento.
-    if (MODO_CLIENTE && user.categoria === "tecnico") return AREAS.filter((a) => ["monitoreo_notifier", "agenda", "entrenamiento"].includes(a.id));
+    if (MODO_CLIENTE && user.categoria === "tecnico") return AREAS.filter((a) => ["monitoreo_notifier", "centro_monitoreo", "agenda", "entrenamiento"].includes(a.id));
     if (user.categoria === "admin") return esGerente ? [...AREAS, AREA_DOCUMENTACION] : AREAS;
     if (user.categoria === "tecnico") return AREAS.filter((a) => a.id !== "admin" && a.id !== "proyectos" && a.id !== "planilla");
-    return AREAS.filter((a) => a.id !== "admin");
+    return AREAS.filter((a) => a.id !== "admin" && a.id !== "centro_monitoreo");   // el Centro de Monitoreo solo lo ven Admin y Técnicos
   }, [user, esGerente]);
 
   useEffect(() => {
@@ -29882,8 +29885,8 @@ function AppInner() {
           <Menu size={18} />
         </button>
       )}
-      <div style={{ flex: 1, minWidth: 0, width: esPantallaAngosta ? "100%" : undefined, padding: tab === "monitoreo_notifier" ? 0 : esPantallaAngosta ? "14px 10px 16px" : "28px 32px", overflowY: "auto" }}>
-        {tab !== "monitoreo_notifier" && (
+      <div style={{ flex: 1, minWidth: 0, width: esPantallaAngosta ? "100%" : undefined, padding: tab === "monitoreo_notifier" || tab === "centro_monitoreo" ? 0 : esPantallaAngosta ? "14px 10px 16px" : "28px 32px", overflowY: "auto" }}>
+        {tab !== "monitoreo_notifier" && tab !== "centro_monitoreo" && (
           // En el celular el título va a la par del botón de menú (sin dejar una franja vacía arriba)
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: esPantallaAngosta ? 10 : 22, minHeight: esPantallaAngosta ? 38 : undefined, paddingRight: esPantallaAngosta ? 100 : 56 }}>
             {current && <current.icon size={esPantallaAngosta ? 18 : 20} color={current.color} />}
@@ -29892,7 +29895,7 @@ function AppInner() {
         )}
 
         {user.categoria !== "cliente" && <AvisoEvaluaciones />}
-        {user.categoria !== "cliente" && user.id && <CampanaMensajes user={user} abajo={tab === "monitoreo_notifier"} angosta={esPantallaAngosta} />}
+        {user.categoria !== "cliente" && user.id && <CampanaMensajes user={user} abajo={tab === "monitoreo_notifier" || tab === "centro_monitoreo"} angosta={esPantallaAngosta} />}
         {tab === "inspecciones" && <AreaOperativa area="inspecciones" color={T.steel} />}
         {tab === "proyectos" && <AreaOperativa area="proyectos" color={T.green} />}
         {tab === "cotizaciones" && <Cotizaciones />}
@@ -29900,6 +29903,7 @@ function AppInner() {
         {tab === "apertura" && <AperturaOD />}
         {tab === "facturacion_publica" && <FacturacionPublica />}
         {tab === "monitoreo_notifier" && <MonitoreoNotifier />}
+        {tab === "centro_monitoreo" && <MonitoreoNotifier modoCentral />}
         {tab === "agenda" && <AgendaVisitas />}
         {tab === "gastos_tarjeta" && <GastosTarjeta />}
         {tab === "vehiculos" && <Vehiculos />}

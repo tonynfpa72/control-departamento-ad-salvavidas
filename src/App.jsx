@@ -15146,6 +15146,16 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   const [sonidoOn, setSonidoOn] = useState(true);
   const [sonidoBloqueado, setSonidoBloqueado] = useState(true); // falta el primer toque del usuario
   const [modoSonando, setModoSonando] = useState(0); // 0 silencio, 1 pulsante, 2 continuo
+  const [sonandoSitio, setSonandoSitio] = useState(null);   // 11.7: qué cliente hizo sonar (se ve en el Centro de Monitoreo)
+  // 11.7: con la Central abierta, el título de la pestaña parpadea mientras suena (se nota aunque esté en otra pestaña)
+  useEffect(() => {
+    if (!centralAbierta || !modoSonando) return;
+    const original = document.title;
+    const txt = (modoSonando === 2 ? "🔥 ALARMA" : modoSonando === 3 ? "👁 SUPERVISIÓN" : "⚠ EVENTO") + (sonandoSitio ? " · " + sonandoSitio : "");
+    let on = false;
+    const id = setInterval(() => { on = !on; document.title = on ? txt : original; }, 1000);
+    return () => { clearInterval(id); document.title = original; };
+  }, [centralAbierta, modoSonando, sonandoSitio]);
   const audioCtxRef = React.useRef(null);
   const gananciaRef = React.useRef(null);
   const pulsoTimerRef = React.useRef(null);
@@ -15186,6 +15196,7 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   };
 
   const detenerSonido = () => {
+    setSonandoSitio(null);
     clearInterval(pulsoTimerRef.current);
     pulsoTimerRef.current = null;
     volumen(0);
@@ -15282,6 +15293,8 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
     const sonables = nuevos.filter((e) => !sitiosMudosRef.current.includes(e.sitio));   // 11.7: sin los sitios silenciados
     if (!sonables.length) return;
     const cats = (e) => [e.categoria, e.subcat];   // la subcategoría también cuenta (ej. "general" + "problema")
+    { const pri = sonables.find((e) => cats(e).some((c) => c === "alarma" || c === "prealarma")) || sonables.find((e) => cats(e).includes("supervision")) || sonables.find((e) => cats(e).some((c) => ["problema", "seguridad"].includes(c)));
+      if (pri) setSonandoSitio(pri.sitio); }
     if (sonables.some((e) => cats(e).some((c) => c === "alarma" || c === "prealarma"))) sonar(2);
     else if (sonables.some((e) => cats(e).some((c) => c === "supervision"))) sonar(3);
     else if (sonables.some((e) => cats(e).some((c) => ["problema", "seguridad"].includes(c)))) sonar(1);
@@ -16607,19 +16620,45 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             grupoAnt = x.cliente || "Sin cliente";
             celdas.push(<div key={"g-" + grupoAnt} style={{ gridColumn: "1 / -1", fontSize: 11.5, fontWeight: 800, color: IGNIS.dim, letterSpacing: ".06em", padding: "6px 2px 0", textTransform: "uppercase" }}>{grupoAnt}</div>);
           }
+          // 11.7: cada sitio se ve como un panel de control en miniatura (marco gris Notifier / gris azulado
+          // Simplex, pantallita con el estado y sus luces), del color de su estado
           const nuevo = x.est !== "normal" && x.ult && ahoraC - x.ult < 10000;
-          const fondo = { alarma: "#e5484d", superv: "#ff8c3d", falla: "#f2b705", anulado: "#b8641f", sinconex: "#2a3038", sinequipo: "#2a3038", normal: "#132a1d" }[x.est];
-          const letra = { alarma: "#fff", superv: "#1a0d02", falla: "#1d1600", anulado: "#fff", sinconex: "#aab3bd", sinequipo: "#7d8590", normal: "#6f9c80" }[x.est];
+          const apag = x.est === "sinconex" || x.est === "sinequipo";
+          const ESTX = { alarma: ["ALARMA", "#ff6b6f"], superv: ["SUPERVISIÓN", "#ffb27a"], falla: ["FALLA", "#f2d06b"], anulado: ["ANULADO", "#ffad6b"], sinconex: ["SIN CONEXIÓN", "#8b949e"], sinequipo: ["SIN EQUIPO", "#8b949e"], normal: ["OK", "#3fd17a"] }[x.est];
+          const borde = { alarma: "#e5484d", superv: "#ff8c3d", falla: "#f2b705", anulado: "#b8641f" }[x.est];
+          const luzM = (on, col) => (<span style={{ width: 12, height: 6, borderRadius: 2, display: "inline-block", background: on ? col : "#a9aaa5", border: "1px solid #7d7e7a", boxShadow: on ? `0 0 5px ${col}` : "none" }} />);
+          const lucesM = x.simplex
+            ? [[!apag, "#3cff5a"], [x.Lc.includes("A"), "#ff3b3b"], [x.Lc.includes("G"), "#ff3b3b"], [x.Lc.includes("S"), "#ffb21f"], [x.Lc.includes("T"), "#ffb21f"]]
+            : [[!apag, "#3cff5a"], [x.Lc.includes("A"), "#ff3b3b"], [x.Lc.includes("S"), "#ffb21f"], [x.Lc.includes("T"), "#ffb21f"], [x.Lc.includes("D"), "#ffb21f"]];
           celdas.push(
             <button key={x.sitio} type="button" onClick={() => abrirSitio(x.sitio)}
               title={(x.cliente ? x.cliente + " · " : "") + x.sitio + (x.simplex ? " · Simplex" : " · Notifier") + (x.motivo ? "\n" + String(x.motivo.texto || "").replace(/\s{2,}/g, " · ") : "") + "\nTocar: abrir el panel"}
-              style={{ height: movilC ? 44 : 46, borderRadius: 6, padding: "3px 5px", textAlign: "left", overflow: "hidden", cursor: "pointer", fontFamily: "inherit", lineHeight: 1.12, position: "relative",
-                background: fondo, color: letra, fontSize: 9.5, fontWeight: 700,
-                border: x.est === "sinconex" || x.est === "sinequipo" ? "1px dashed #6e7681" : x.est === "normal" ? "1px solid #1d3b29" : "1px solid #ffffff55",
-                boxShadow: x.est === "alarma" ? "0 0 14px #e5484d" : "none", animation: nuevo ? "ignisCentralNuevo 1s ease-in-out infinite" : "none" }}>
-              {x.sitio}
-              {x.simplex && <span style={{ position: "absolute", right: 3, bottom: 2, fontSize: 7, fontWeight: 800, opacity: 0.75 }}>SX</span>}
-              {sitiosMudos.includes(x.sitio) && <span style={{ position: "absolute", right: 3, top: 2, fontSize: 9 }}>🔕</span>}
+              style={{ height: movilC ? 108 : 116, borderRadius: 9, padding: "6px 7px 6px", textAlign: "left", cursor: "pointer", fontFamily: "inherit", position: "relative", display: "flex", flexDirection: "column", gap: 5, boxSizing: "border-box", minWidth: 0,
+                background: x.simplex ? "linear-gradient(#d6dbe1,#b3bcc7)" : "linear-gradient(#d9dad6,#c2c3be)", color: "#1d2126", opacity: apag ? 0.55 : 1,
+                border: `2px solid ${borde || "#8f918c"}`,
+                boxShadow: x.est === "alarma" ? "0 0 0 1px #e5484d, 0 0 16px #e5484d" : "0 2px 0 #00000055", animation: nuevo ? "ignisCentralNuevo 1s ease-in-out infinite" : "none" }}>
+              <span style={{ display: "flex", alignItems: "flex-start", gap: 4, minWidth: 0 }}>
+                <span style={{ fontSize: 10.5, fontWeight: 800, lineHeight: 1.15, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", minWidth: 0, flex: 1 }}>{x.sitio}</span>
+                {sitiosMudos.includes(x.sitio) && <span style={{ fontSize: 10, flex: "none" }}>🔕</span>}
+              </span>
+              <span style={{ flex: 1, minHeight: 26, display: "flex", gap: 3 }}>
+                <span style={{ flex: 1, background: "#0a0f14", border: "3px solid #3a3d40", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px",
+                  color: x.est === "normal" ? "#3fd17abb" : ESTX[1], fontSize: x.est === "normal" ? 10 : 10.5, fontWeight: 800, letterSpacing: ".04em", textAlign: "center", lineHeight: 1.1 }}>
+                  {x.est === "normal" ? "● OK" : ESTX[0]}
+                </span>
+                {/* máscara Simplex: los interruptores azules a la derecha de la pantalla */}
+                {x.simplex && <span style={{ width: 14, display: "flex", flexDirection: "column", gap: 2 }}>
+                  {[0, 1, 2, 3].map((k) => <span key={k} style={{ flex: 1, borderRadius: 2, background: k < 2 ? "linear-gradient(#2f7de0,#1b4fa6)" : "#8fa9d4" }} />)}
+                </span>}
+              </span>
+              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                {lucesM.map(([on, col], k) => <React.Fragment key={k}>{luzM(on, col)}</React.Fragment>)}
+                {/* máscara Notifier: los botones rojos; Simplex: los grises */}
+                <span style={{ display: "flex", gap: 2, marginLeft: 3 }}>
+                  {[0, 1, 2].map((k) => <span key={k} style={{ width: 9, height: 6, borderRadius: 2, background: x.simplex ? "#4f565e" : "#c22b2b" }} />)}
+                </span>
+                <span style={{ marginLeft: "auto", fontSize: 7.5, fontWeight: 800, padding: "1px 4px", borderRadius: 3, color: "#fff", background: x.simplex ? "#c8102e" : "#2a2c2f" }}>{x.simplex ? "SIMPLEX" : "NOTIFIER"}</span>
+              </span>
             </button>);
         });
         return (
@@ -16634,8 +16673,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               {esTecnicoSonido && modoSonando > 0 && (
                 <button type="button" onClick={detenerSonido} title="Apagar el sonido en este dispositivo"
                   style={{ background: modoSonando === 2 ? "#e5484d22" : "#f2b70522", border: `1px solid ${modoSonando === 2 ? IGNIS.alarma : IGNIS.problema}`, color: modoSonando === 2 ? "#ff8f92" : "#ffe08a", borderRadius: 8, padding: "5px 11px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
-                  🔊 {modoSonando === 2 ? "ALARMA" : modoSonando === 3 ? "SUPERVISIÓN" : "EVENTO NUEVO"} · Silenciar
+                  🔊 {modoSonando === 2 ? "ALARMA" : modoSonando === 3 ? "SUPERVISIÓN" : "EVENTO NUEVO"}{sonandoSitio ? " · " + ((dispositivos.find((z) => z.sitio === sonandoSitio) || {}).cliente || sonandoSitio) : ""} · Silenciar
                 </button>)}
+              {esTecnicoSonido && modoSonando > 0 && sonandoSitio && (
+                <button type="button" onClick={() => abrirMonitorRemoto(sonandoSitio)}
+                  style={{ background: "#1f6fd8", border: "none", color: "#fff", borderRadius: 8, padding: "5px 11px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Abrir panel ▸</button>)}
               <div style={{ marginLeft: movilC ? 0 : "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {KP.map(([k, t, n, col, bo]) => (
                   <button key={k} type="button" onClick={() => setCentralFiltro(centralFiltro === k ? "todos" : k)} title={centralFiltro === k ? "Ver todos" : "Ver solo " + t}
@@ -16766,12 +16808,12 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 </div>
                 <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
                   {!matriz.length && <div style={{ color: IGNIS.dim, textAlign: "center", padding: 30, fontSize: 13 }}>{sitiosC.length ? "Ningún sitio coincide." : "Todavía no hay equipos reportando."}</div>}
-                  <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${movilC ? 78 : 84}px, 1fr))`, gap: 5 }}>{celdas}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${movilC ? 118 : 136}px, 1fr))`, gap: 8 }}>{celdas}</div>
                 </div>
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11, color: IGNIS.dim, marginTop: 10 }}>
                   {[["Alarma", "#e5484d"], ["Supervisión", "#ff8c3d"], ["Falla", "#f2b705"], ["Anulado", "#b8641f"], ["Sin conexión", "#2a3038"], ["OK", "#132a1d"]].map(([t, c]) => (
                     <span key={t}><i style={{ display: "inline-block", width: 11, height: 11, borderRadius: 3, background: c, verticalAlign: -1, marginRight: 4, border: t === "Sin conexión" ? "1px dashed #6e7681" : t === "OK" ? "1px solid #1d3b29" : "none" }} />{t}</span>))}
-                  <span style={{ marginLeft: "auto" }}>SX = Simplex · tocar un sitio abre su panel</span>
+                  <span style={{ marginLeft: "auto" }}>Tocar un panel abre su control</span>
                 </div>
               </div>
               <div style={{ background: "#0e141b", border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: "12px 12px 4px", display: "flex", flexDirection: "column", minHeight: 0, maxHeight: movilC ? 420 : undefined, flex: movilC ? "none" : undefined, order: movilC ? -1 : undefined }}>

@@ -14893,7 +14893,8 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   const [centralBusca, setCentralBusca] = useState("");
   const [centralFiltro, setCentralFiltro] = useEstadoRecordado("monitoreo-central-filtro", "todos");
   const [centralTam, setCentralTam] = useEstadoRecordado("monitoreo-central-tam", "normal");   // "grande" | "normal" | "compacto"
-  const [centralCompleta, setCentralCompleta] = useState(false);   // pantalla completa del navegador
+  const [centralCompleta, setCentralCompleta] = useState(false);
+  const [centralVista, setCentralVista] = useEstadoRecordado("monitoreo-central-vista", "atencion");   // "atencion" (solo lo que necesita atención) | "matriz"   // pantalla completa del navegador
   const centralScrollRef = useRef(null);
   const [, setTicCentral] = useState(0);
   useEffect(() => { if (!centralAbierta) return; const id = setInterval(() => setTicCentral((x) => x + 1), 2000); return () => clearInterval(id); }, [centralAbierta]);
@@ -16591,7 +16592,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           ["falla", "Falla/Anul.", cuentaC("falla") + cuentaC("anulado"), "#f2d06b", "#f2b705"], ["sinconex", "Sin conexión", cuentaC("sinconex") + cuentaC("sinequipo"), "#aab3bd", "#6e7681"],
           ["normal", "OK", cuentaC("normal"), "#7ee2a6", "#3fd17a"],
         ];
-        const abrirSitio = (sitio) => abrirMonitorRemoto(sitio);   // directo al panel y control (pide la clave del monitor)
+        const abrirSitio = (sitio) => abrirMonitorRemoto(sitio);
+        const vistaF = centralVista !== "matriz";   // directo al panel y control (pide la clave del monitor)
         const celdas = [];
         let grupoAnt = null;
         matriz.forEach((x) => {
@@ -16641,9 +16643,101 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 8, padding: "5px 12px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 5 }}><X size={14} /> Cerrar</button>}
               <b style={{ fontSize: 14 }}>{new Date(ahoraC).toLocaleTimeString("es-CR", { hour: "2-digit", minute: "2-digit" })}</b>
             </div>
+            {vistaF && (() => {
+              // 11.7: VISTA «ATENCIÓN» — arriba una franja con los sitios sin eventos (un punto por sitio) y en grande
+              // solo los monitores de los sitios con algo activo; el del último evento toma el lugar grande.
+              const okL = sitiosC.filter((x) => x.est === "normal" && pasa(x)).sort((a, b) => a.sitio.localeCompare(b.sitio, "es"));
+              const ultimos = [];
+              Object.values(porSitio).forEach((l) => l.slice(0, 6).forEach((e) => ultimos.push(e)));
+              ultimos.sort((a, b) => tEv(b) - tEv(a));
+              const chipEv = (e) => {
+                const t = String(e.texto || "").toUpperCase().replace(/^[.\s]+/, "");
+                if (e.borrado || e.categoria === "borrado" || /^(BR|CLR)\b/.test(t)) return ["BORRADO", "#30363d", "#8b949e"];
+                if (/ANULAD|SI\s+HABILITADA|DESHABIL|DISABL/.test(t)) return ["ANULADO", "#ff8c3d22", "#ffad6b"];
+                if (e.categoria === "alarma" || e.categoria === "prealarma") return ["ALARMA", "#e5484d33", "#ff8f92"];
+                if (e.categoria === "supervision") return ["SUPERV.", "#ff8c3d22", "#ffb27a"];
+                if (e.categoria === "problema") return ["FALLA", "#f2b70522", "#f2d06b"];
+                if (e.categoria === "seguridad") return ["SEGUR.", "#2f81f722", "#79b8ff"];
+                if (/REARME|RESET/.test(t)) return ["REARME", "#2f81f722", "#79b8ff"];
+                if (/CONFIRMAR|ACKNOWLEDGE/.test(t)) return ["CONFIRM.", "#3fb95022", "#7ee787"];
+                return ["AVISO", "#30363d", "#8b949e"];
+              };
+              const limpio = (e) => String(e.texto || "").replace(/^[.\s]+/, "").replace(/\s{2,}/g, " · ");
+              const horaC = (t) => { const m = Math.round((ahoraC - t) / 60000); return m < 1 ? "ahora" : m < 60 ? m + " min" : m < 1440 ? Math.round(m / 60) + " h" : Math.round(m / 1440) + " d"; };
+              return (
+                <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 12, padding: movilC ? 10 : "12px 18px" }}>
+                  <div style={{ background: "#0e141b", border: "1px solid #1d3b29", borderRadius: 12, padding: "8px 14px", display: "flex", alignItems: "center", gap: 14, flexWrap: movilC ? "wrap" : "nowrap" }}>
+                    <b style={{ color: "#3fd17a", fontSize: 22 }}>{okL.length}</b>
+                    <span style={{ fontSize: 12, color: "#7ee2a6", fontWeight: 800, lineHeight: 1.2 }}>sitios<br />sin eventos</span>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 3, flex: 1, minWidth: 0, maxHeight: 44, overflow: "hidden" }}>
+                      {okL.map((x) => (
+                        <button key={x.sitio} type="button" onClick={() => abrirSitio(x.sitio)} title={(x.cliente ? x.cliente + " · " : "") + x.sitio + " · tocar: abrir el panel"}
+                          style={{ width: 10, height: 10, padding: 0, borderRadius: 2, border: "none", background: "#1f4a31", cursor: "pointer" }} />))}
+                    </div>
+                    <input value={centralBusca} onChange={(e) => setCentralBusca(e.target.value)} placeholder="Buscar…" autoComplete="off" name="central_busca_ignis2" data-lpignore="true"
+                      style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 7, padding: "5px 10px", width: movilC ? "100%" : 160, fontSize: 12.5, fontFamily: "inherit", boxSizing: "border-box" }} />
+                    <button type="button" onClick={() => setCentralVista("matriz")}
+                      style={{ background: "transparent", border: "none", color: "#79b8ff", fontWeight: 800, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>Ver lista ▸</button>
+                  </div>
+                  <div ref={centralScrollRef} style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+                    {!cola.length && <div style={{ color: "#3fd17a", textAlign: "center", padding: "60px 10px", fontSize: 16, fontWeight: 800 }}>Ningún sitio necesita atención</div>}
+                    <div style={{ display: "grid", gridTemplateColumns: movilC ? "1fr" : "repeat(auto-fill, minmax(300px, 1fr))", gap: 10 }}>
+                      {cola.map((x, k) => {
+                        const grande = k === 0 && !movilC && cola.length > 1;
+                        const apagado = x.est === "sinconex" || x.est === "sinequipo";
+                        const nuevo = x.ult && ahoraC - x.ult < 10000;
+                        const mudo = sitiosMudos.includes(x.sitio);
+                        const lineas = x.evs.slice(0, grande ? 6 : 5);
+                        return (
+                          <div key={x.sitio} role="button" tabIndex={0} onClick={() => abrirSitio(x.sitio)} onKeyDown={(e) => { if (e.key === "Enter") abrirSitio(x.sitio); }} title={"Abrir el panel de " + x.sitio}
+                            style={{ gridColumn: grande ? "span 2" : undefined, height: movilC ? 190 : 200, boxSizing: "border-box", background: x.simplex ? "linear-gradient(#d6dbe1,#b8c0ca)" : "linear-gradient(#d9dad6,#c9cac5)", borderRadius: 10, padding: 7,
+                              display: "flex", flexDirection: "column", gap: 6, cursor: "pointer", opacity: apagado ? 0.62 : 1, minWidth: 0,
+                              boxShadow: x.est === "alarma" ? "0 0 0 3px #e5484d, 0 0 24px #e5484d88" : x.est === "superv" ? "0 0 0 2px #ff8c3d" : "none",
+                              animation: nuevo && x.est !== "alarma" ? "ignisCentralNuevo 1s ease-in-out infinite" : "none" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#1d2126", fontWeight: 800, fontSize: 12.5, minWidth: 0 }}>
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{x.cliente ? x.cliente + " · " : ""}{x.sitio}</span>
+                              <span style={{ marginLeft: "auto", flex: "none", fontSize: 9, padding: "2px 6px", borderRadius: 4, color: "#fff", background: x.simplex ? "#c8102e" : "#2a2c2f" }}>{x.simplex ? "SIMPLEX" : "NOTIFIER"}</span>
+                              {canGestionar && <button type="button" onClick={(e) => { e.stopPropagation(); setCentralEditCli({ sitio: x.sitio, valor: x.cliente, msg: "" }); }} title="Nombre del cliente"
+                                style={{ flex: "none", border: "1px solid #8a8c88", background: "#ffffffaa", borderRadius: 5, padding: "0 5px", fontSize: 11, cursor: "pointer", lineHeight: "17px" }}>✎</button>}
+                              <button type="button" onClick={(e) => { e.stopPropagation(); alternarMudo(x.sitio); }} title={mudo ? "Sonido apagado para este cliente. Toque para activarlo." : "Apagar el sonido de este cliente en este dispositivo"}
+                                style={{ flex: "none", border: `1px solid ${mudo ? "#c8102e" : "#8a8c88"}`, background: mudo ? "#ffd5d5" : "#ffffffaa", borderRadius: 5, padding: "0 5px", fontSize: 11, cursor: "pointer", lineHeight: "17px" }}>{mudo ? "🔕" : "🔔"}</button>
+                            </div>
+                            <div style={{ flex: 1, minHeight: 0, background: "#0a0f14", border: "4px solid #3a3d40", borderRadius: 6, overflow: "hidden", color: "#e6edf3" }}>
+                              {apagado ? (
+                                <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#5b6673", fontSize: 12 }}>{x.est === "sinequipo" ? "Sin equipo reportando" : "Sin conexión" + (x.visto ? " hace " + horaC(x.visto) : "")}</div>
+                              ) : lineas.map((e, i) => {
+                                const [ct, bg, col] = chipEv(e);
+                                return (
+                                  <div key={e.id || i} style={{ display: "grid", gridTemplateColumns: grande ? "92px 1fr auto" : "66px 1fr auto", gap: 8, padding: grande ? "8px 12px" : "5px 8px", borderBottom: "1px solid #161e27", alignItems: "center" }}>
+                                    <span style={{ fontSize: grande ? 11 : 9, fontWeight: 800, textAlign: "center", padding: grande ? "3px 0" : "2px 0", borderRadius: 4, background: bg, color: col, border: `1px solid ${col}66` }}>{ct}</span>
+                                    <span style={{ fontSize: grande ? 15 : 11.5, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: ct === "BORRADO" ? "line-through" : "none", color: ct === "BORRADO" ? "#8b949e" : "#e6edf3" }}>{limpio(e)}</span>
+                                    <span style={{ fontSize: grande ? 11 : 10, color: "#8b949e" }}>{horaC(tEv(e))}</span>
+                                  </div>);
+                              })}
+                            </div>
+                          </div>);
+                      })}
+                    </div>
+                  </div>
+                  <div style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 10, padding: "8px 12px", fontSize: 12, display: "flex", gap: 18, whiteSpace: "nowrap", overflow: "hidden", alignItems: "center" }}>
+                    <b style={{ color: IGNIS.dim }}>EN VIVO</b>
+                    {ultimos.slice(0, 10).map((e, i) => {
+                      const [ct, bg, col] = chipEv(e);
+                      const d = dispositivos.find((z) => z.sitio === e.sitio);
+                      return (
+                        <span key={(e.id || "") + "-" + i} onClick={() => abrirSitio(e.sitio)} style={{ cursor: "pointer" }}>
+                          <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 4, background: bg, color: col, border: `1px solid ${col}66`, marginRight: 5 }}>{ct}</span>
+                          {(d && d.cliente) || e.sitio} · {new Date(tEv(e)).toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" })}
+                        </span>);
+                    })}
+                  </div>
+                </div>);
+            })()}
+            {!vistaF && (
             <div style={{ flex: 1, minHeight: 0, display: movilC ? "flex" : "grid", flexDirection: "column", gridTemplateColumns: "minmax(0,1fr) 420px", gap: 14, padding: movilC ? 10 : "14px 18px", overflow: movilC ? "auto" : "hidden" }}>
               <div style={{ background: "#0e141b", border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", minHeight: 0, flex: movilC ? "none" : undefined }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                  <button type="button" onClick={() => setCentralVista("atencion")} style={{ background: "transparent", border: `1px solid ${IGNIS.border}`, color: "#79b8ff", borderRadius: 7, padding: "3px 9px", fontWeight: 800, fontSize: 11.5, cursor: "pointer", fontFamily: "inherit" }}>◂ Vista atención</button>
                   <b style={{ fontSize: 12, letterSpacing: ".1em", color: IGNIS.dim }}>TODOS LOS SITIOS</b>
                   <input value={centralBusca} onChange={(e) => setCentralBusca(e.target.value)} placeholder="Buscar cliente o sitio…" autoComplete="off" name="central_busca_ignis" data-lpignore="true"
                     style={{ marginLeft: "auto", background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 7, padding: "5px 10px", width: movilC ? "100%" : 220, fontSize: 12.5, fontFamily: "inherit", boxSizing: "border-box" }} />
@@ -16699,6 +16793,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 </div>
               </div>
             </div>
+            )}
             {centralEditCli && (
               <div onClick={() => setCentralEditCli(null)} style={{ position: "fixed", inset: 0, zIndex: 57, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
                 <div onClick={(e) => e.stopPropagation()} style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: "16px 18px", width: "100%", maxWidth: 420 }}>

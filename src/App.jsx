@@ -14893,9 +14893,10 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   const [centralBusca, setCentralBusca] = useState("");
   const [centralFiltro, setCentralFiltro] = useEstadoRecordado("monitoreo-central-filtro", "todos");
   const [centralTam, setCentralTam] = useEstadoRecordado("monitoreo-central-tam", "normal");   // "grande" | "normal" | "compacto"
-  const [centralCompleta, setCentralCompleta] = useState(false);
-  const [centralVista, setCentralVista] = useEstadoRecordado("monitoreo-central-vista", "atencion");
-  const [centralOkAbierto, setCentralOkAbierto] = useState(false);   // "atencion" (solo lo que necesita atención) | "matriz"   // pantalla completa del navegador
+  const [centralCompleta, setCentralCompleta] = useState(false);   // pantalla completa del navegador
+  const [centralVista, setCentralVista] = useEstadoRecordado("monitoreo-central-vista", "atencion");   // "atencion" (solo lo que necesita atención) | "matriz"
+  const [centralOkAbierto, setCentralOkAbierto] = useState(false);
+  const esCorreoC = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v || "").trim());   // el navegador rellena el buscador con el correo del usuario
   const centralScrollRef = useRef(null);
   const [, setTicCentral] = useState(0);
   useEffect(() => { if (!centralAbierta) return; const id = setInterval(() => setTicCentral((x) => x + 1), 2000); return () => clearInterval(id); }, [centralAbierta]);
@@ -16580,7 +16581,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const COLOR = { alarma: "#e5484d", superv: "#ff8c3d", falla: "#f2b705", anulado: "#b8641f", sinconex: "#6e7681", sinequipo: "#6e7681" };
         const CHIP = { alarma: ["ALARMA", "#e5484d33", "#ff8f92"], superv: ["SUPERV.", "#ff8c3d22", "#ffb27a"], falla: ["FALLA", "#f2b70522", "#f2d06b"], anulado: ["ANULADO", "#ff8c3d22", "#ffad6b"], sinconex: ["SIN CONEX.", "#30363d", "#aab3bd"], sinequipo: ["SIN EQUIPO", "#30363d", "#aab3bd"] };
         const cuentaC = (k) => sitiosC.filter((x) => x.est === k).length;
-        const qC = centralBusca.trim().toLowerCase();
+        const qC = esCorreoC(centralBusca) ? "" : centralBusca.trim().toLowerCase();   // el navegador a veces mete el correo del usuario: se ignora
         const pasa = (x) => (!qC || x.sitio.toLowerCase().includes(qC) || x.cliente.toLowerCase().includes(qC))
           && (centralFiltro === "todos" ? true : centralFiltro === "notifier" ? !x.simplex : centralFiltro === "simplex" ? x.simplex
             : centralFiltro === "sinconex" ? (x.est === "sinconex" || x.est === "sinequipo") : centralFiltro === "falla" ? (x.est === "falla" || x.est === "anulado") : x.est === centralFiltro);
@@ -16680,7 +16681,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     </div>
                     {okL.length > 12 && <button type="button" onClick={() => setCentralOkAbierto(!centralOkAbierto)}
                       style={{ background: "transparent", border: `1px solid ${IGNIS.border}`, color: IGNIS.dim, borderRadius: 6, padding: "3px 8px", fontSize: 11, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>{centralOkAbierto ? "menos ▴" : "más ▾"}</button>}
-                    <input value={centralBusca} onChange={(e) => setCentralBusca(e.target.value)} placeholder="Buscar…" autoComplete="off" name="central_busca_ignis2" data-lpignore="true"
+                    <input value={esCorreoC(centralBusca) ? "" : centralBusca} onChange={(e) => setCentralBusca(esCorreoC(e.target.value) && !centralBusca ? "" : e.target.value)} type="search" autoComplete="off" autoCorrect="off" spellCheck={false} data-lpignore="true" data-form-type="other" placeholder="Buscar…" name="central_busca_ignis2"
                       style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 7, padding: "5px 10px", width: movilC ? "100%" : 160, fontSize: 12.5, fontFamily: "inherit", boxSizing: "border-box" }} />
                     <button type="button" onClick={() => setCentralVista("matriz")}
                       style={{ background: "transparent", border: "none", color: "#79b8ff", fontWeight: 800, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>Ver lista ▸</button>
@@ -16745,7 +16746,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
                   <button type="button" onClick={() => setCentralVista("atencion")} style={{ background: "transparent", border: `1px solid ${IGNIS.border}`, color: "#79b8ff", borderRadius: 7, padding: "3px 9px", fontWeight: 800, fontSize: 11.5, cursor: "pointer", fontFamily: "inherit" }}>◂ Vista atención</button>
                   <b style={{ fontSize: 12, letterSpacing: ".1em", color: IGNIS.dim }}>TODOS LOS SITIOS</b>
-                  <input value={centralBusca} onChange={(e) => setCentralBusca(e.target.value)} placeholder="Buscar cliente o sitio…" autoComplete="off" name="central_busca_ignis" data-lpignore="true"
+                  <input value={esCorreoC(centralBusca) ? "" : centralBusca} onChange={(e) => setCentralBusca(esCorreoC(e.target.value) && !centralBusca ? "" : e.target.value)} type="search" autoComplete="off" autoCorrect="off" spellCheck={false} data-lpignore="true" data-form-type="other" placeholder="Buscar cliente o sitio…" name="central_busca_ignis"
                     style={{ marginLeft: "auto", background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 7, padding: "5px 10px", width: movilC ? "100%" : 220, fontSize: 12.5, fontFamily: "inherit", boxSizing: "border-box" }} />
                   {[["todos", "Todos"], ["notifier", "Notifier"], ["simplex", "Simplex"]].map(([k, t]) => (
                     <button key={k} type="button" onClick={() => setCentralFiltro(k)}

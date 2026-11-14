@@ -18107,8 +18107,9 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       if (br && (br.t || 0) >= (r.t || 0) && !cinco(br)) return false;   // su borrado ya cumplió los 5 s
                       return true;
                     };
-                    // contador: lo que está PRESENTE (no le afecta «Limpiar»)
-                    const presentes = todas.filter((r) => GRUPO[r.chip] && reglaActiva(r));
+                    // 11.7: los contadores (FIRE / PRI2 / SUPV / TRBL y Alarmas / Fallas…) cuentan EXACTAMENTE las filas
+                    // que muestra la pantalla (también les afecta «Limpiar»), igual que la cola del Centro
+                    const presentes = todas.filter((r) => GRUPO[r.chip] && !(limpio && (r.visto || 0) <= limpio) && reglaActiva(r));
                     const cuenta = (g) => presentes.filter((r) => GRUPO[r.chip] === g).length;
                     // 11.7: en la máscara Simplex TRBL junta fallas y anulados; un filtro que no es de esta máscara se ignora
                     const filtroV = (crtSimplex ? ["alarma", "segur", "superv", "trbl"] : ["alarma", "superv", "falla", "anulado", "segur"]).includes(filtroPantalla) ? filtroPantalla : null;

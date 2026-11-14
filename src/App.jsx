@@ -14879,7 +14879,7 @@ const lineaPanelCentral = (() => {
     let t = String(crudo || "").replace(/^[.\s]+/, "").replace(/\s+$/, "");
     if (!t || /^---/.test(t) || /comunicacion\s*,?\s*conectada/i.test(t)) return null;
     const U = t.toUpperCase();
-    if ((U.length <= 7 && !/\s/.test(U)) || /PULSE|^\d\s*=|^ANULAR\/HAB|INTRODUZCA CLAVE|ENTRADA INVALIDA|^LEER PTO|ANULAR\/HAB PUNTO/.test(U)) return null;   // 11.7: «4=borrar Histor.» y demás opciones del menú del panel no son eventos
+    if ((U.length <= 7 && !/\s/.test(U)) || /PULSE|^\d\s*=|\b\d=(ANULAR|ALARMA|BORRAR|ALERT)|ALERT\/ACCION|BORRAR HIST|BORRAR CONT|^ANULAR\/HAB|INTRODUZCA CLAVE|ENTRADA INVALIDA|^LEER PTO|ANULAR\/HAB PUNTO/.test(U)) return null;   // 11.7: «4=borrar Histor.» y demás opciones del menú del panel no son eventos
     // pedazo de línea (el principio quedó fuera del búfer): "126 Mie", "10:43P 1111"...
     if (/^[\d\s:;.APM]*(DOM|LUN|MAR|MIE|JUE|VIE|SAB|SUN|MON|TUE|WED|THU|FRI|SAT)?$/i.test(t)) return null;
     if (/^\[APP\]/.test(t)) return { chip: "ORDEN", st: ST.azul, nombre: t.replace(/^\[APP\]\s*/, ""), sub: "desde la App", fondo: "#2f81f710" };
@@ -17986,7 +17986,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       let t = String(crudo || "").replace(/^[.\s]+/, "").replace(/\s+$/, "");
                       if (!t || /^---/.test(t) || /comunicacion\s*,?\s*conectada/i.test(t)) return null;
                       const U = t.toUpperCase();
-                      if ((U.length <= 7 && !/\s/.test(U)) || /PULSE|^\d\s*=|^ANULAR\/HAB|INTRODUZCA CLAVE|ENTRADA INVALIDA|^LEER PTO|ANULAR\/HAB PUNTO/.test(U)) return null;   // 11.7: «4=borrar Histor.» y demás opciones del menú del panel no son eventos
+                      if ((U.length <= 7 && !/\s/.test(U)) || /PULSE|^\d\s*=|\b\d=(ANULAR|ALARMA|BORRAR|ALERT)|ALERT\/ACCION|BORRAR HIST|BORRAR CONT|^ANULAR\/HAB|INTRODUZCA CLAVE|ENTRADA INVALIDA|^LEER PTO|ANULAR\/HAB PUNTO/.test(U)) return null;   // 11.7: «4=borrar Histor.» y demás opciones del menú del panel no son eventos
                       // pedazo de línea (el principio quedó fuera del búfer): "126 Mie", "10:43P 1111"...
                       if (/^[\d\s:;.APM]*(DOM|LUN|MAR|MIE|JUE|VIE|SAB|SUN|MON|TUE|WED|THU|FRI|SAT)?$/i.test(t)) return null;
                       if (/^\[APP\]/.test(t)) return { chip: "ORDEN", st: ST.azul, nombre: t.replace(/^\[APP\]\s*/, ""), sub: "desde la App", fondo: "#2f81f710" };
@@ -18144,6 +18144,28 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       if (inp) inp.value = "";
                       ordenCrt(fila.a + ":" + String(fila.d).toUpperCase(), h);
                     };
+                    // 11.7: anular / habilitar CUALQUIER detector, módulo o zona escribiendo su dirección
+                    // (la misma orden de los interruptores del anunciador: el equipo la teclea con las pausas correctas)
+                    const anularPunto = (accion) => {
+                      const inp = document.getElementById("punto_manual_anun");
+                      const d = String((inp && inp.value) || "").trim().toUpperCase().replace(/\s+/g, "");
+                      if (!(crtSimplex ? /^[A-Z0-9][A-Z0-9-]{1,11}$/ : /^[A-Z0-9]{2,7}$/).test(d)) { window.alert("Escriba el punto, por ejemplo " + (crtSimplex ? "M1-14 o Z2" : "1D013 (detector), 1M005 (módulo) o Z05 (zona)") + "."); if (inp) inp.focus(); return; }
+                      if (accion === "anular" && !window.confirm("¿Anular (deshabilitar) " + d + "?\nMientras esté anulado NO reporta alarmas ni fallas.")) return;
+                      tocarAnun({ t: d, a: accion, d });
+                    };
+                    const puntoManual = !esCliente && (
+                      <div style={{ marginTop: 8 }}>
+                        <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: ".05em", color: "#555", marginBottom: 4 }}>ANULAR / HABILITAR UN PUNTO</div>
+                        <div style={{ display: "flex", gap: 5 }}>
+                          <input id="punto_manual_anun" type="text" autoComplete="off" autoCorrect="off" autoCapitalize="characters" spellCheck={false} data-lpignore="true" data-1p-ignore="true" data-form-type="other" name="punto_manual_ignis"
+                            placeholder={crtSimplex ? "Ej. M1-14" : "Ej. 1D013 / 1M005"} maxLength={12}
+                            style={{ flex: 1, minWidth: 0, padding: "8px 9px", borderRadius: 7, border: "1px solid #999", fontSize: 13, background: "#fff", color: "#222", fontFamily: "inherit", textTransform: "uppercase" }} />
+                          <button type="button" onClick={() => anularPunto("anular")} title="Deshabilitar el punto en el panel"
+                            style={{ padding: "0 10px", borderRadius: 7, border: "1px solid #b8641f", background: "#ff8c3d", color: "#fff", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Anular</button>
+                          <button type="button" onClick={() => anularPunto("habilitar")} title="Volver a habilitar el punto en el panel"
+                            style={{ padding: "0 10px", borderRadius: 7, border: "1px solid #1d7a43", background: "#2ea043", color: "#fff", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Habilitar</button>
+                        </div>
+                      </div>);
                     const guardarAnun = async () => {
                       const filas = anunEdit.map((r) => ({ t: String(r.t || "").trim().slice(0, 40), a: r.a === "habilitar" ? "habilitar" : "anular", d: String(r.d || "").trim().toUpperCase().slice(0, 12) }));
                       for (const r of filas) if (r.t && !(crtSimplex ? /^[A-Z0-9][A-Z0-9-]{1,11}$/ : /^[A-Z0-9]{2,7}$/).test(r.d)) { setAnunMsg("Revise la zona/punto de «" + r.t + "» (ej. " + (crtSimplex ? "Z2, M1-14" : "Z50, B01, 1D045") + ")."); return; }
@@ -18211,6 +18233,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                             </div>
                             <input id="clave_panel_anun" type="text" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} data-lpignore="true" data-1p-ignore="true" data-form-type="other" inputMode="numeric" name="clave_panel_anun_ignis" placeholder="Clave del panel"
                               style={{ WebkitTextSecurity: "disc", marginTop: 8, padding: "8px 10px", borderRadius: 7, border: "1px solid #999", fontSize: 13, background: "#fff", color: "#222", fontFamily: "inherit" }} />
+                            {puntoManual}
                           </>
                         )}
                       </div>);
@@ -18248,6 +18271,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                         </div>
                         <input id="clave_panel_anun" type="text" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} data-lpignore="true" data-1p-ignore="true" data-form-type="other" inputMode="numeric" name="clave_panel_anun_ignis" placeholder="Clave del panel"
                           style={{ WebkitTextSecurity: "disc", marginTop: movil ? 0 : "auto", padding: "9px 10px", borderRadius: 7, border: "1px solid #999", fontSize: 13, background: "#fff", color: "#222", fontFamily: "inherit" }} />
+                        {puntoManual}
                       </div>);
                     return (
                       <div style={{ display: "flex", flexDirection: movil ? "column" : "row", gap: 10, alignItems: "stretch", marginBottom: 10 }}>

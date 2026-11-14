@@ -17508,8 +17508,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 if (blk && blk < 25000) av.push(["Memoria baja", "#ff8f92"]);
                 if (x.enLinea && !isNaN(ord) && ord > 180) av.push(["No lee órdenes", "#ff8f92"]);
                 if (vMax && d.version && numV(d.version) < numV(vMax)) av.push(["Firmware viejo", "#f2d06b"]);
-                // 11.7: «lat» viene en MILISEGUNDOS (de que el equipo leyó la línea a que Supabase la aceptó); 447 = 0.4 s, normal
-                if (lat > 15000) av.push(["Demora " + Math.round(lat / 1000) + " s", "#f2d06b"]);
+                if (lat > 15) av.push(["Demora " + lat + " s", "#f2d06b"]);
                 return { x, d, cc, rssi, blk, heap, ord, lat, av };
               }).sort((p2, q) => q.av.length - p2.av.length || p2.x.sitio.localeCompare(q.x.sitio, "es"));
               const colS = (r) => r === null ? IGNIS.dim : r >= -65 ? "#3fd17a" : r >= -70 ? "#a3d977" : r >= -78 ? "#f2d06b" : "#ff8f92";

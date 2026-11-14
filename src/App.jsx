@@ -14906,7 +14906,8 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   // otros equipos ni siquiera llegan a su navegador.
   const esCliente = currentUser?.categoria === "cliente";
   const esAdminMonitoreo = currentUser?.categoria === "admin";
-  const veCentral = currentUser?.categoria === "admin" || currentUser?.categoria === "tecnico";   // 11.7: Centro de Monitoreo solo Admin y Técnicos // el admin ve todas las conexiones, aun sin elegir sitio
+  const veCentral = !!currentUser;   // 11.7: el Centro lo ven todos (el cliente, solo sus sitios)
+  const esOperadorCentral = currentUser?.categoria === "admin" || currentUser?.categoria === "tecnico" || currentUser?.categoria === "asistente";   // atender, ficha, mantenimiento, escalamiento, bitácora   // 11.7: Centro de Monitoreo solo Admin y Técnicos // el admin ve todas las conexiones, aun sin elegir sitio
   const sitiosCliente = useMemo(() => (esCliente ? sitiosDeTexto(currentUser?.area) : []), [esCliente, currentUser?.area]);
   // Con un solo sitio se abre directo en ese sitio; con varios, elige entre los suyos.
   const sitioCliente = sitiosCliente.length === 1 ? sitiosCliente[0] : "";
@@ -14974,7 +14975,7 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   centralPrevRef.current = !!(centralAbierta && veCentral);
   const enGraciaCentral = () => Date.now() - centralAbiertaEnRef.current < 20000;
   useEffect(() => {
-    if (!centralAbierta || !veCentral) return;
+    if (!centralAbierta || !veCentral || esCliente) return;   // el cliente usa sus propios eventos (ya filtrados a sus sitios)
     let vivo = true, enCurso = false;
     const cargarCentro = async () => {
       if (enCurso) return; enCurso = true;
@@ -15067,7 +15068,10 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   // ubicación: acepta un enlace de Google Maps o «9.93, -84.08»
   const leerCoordenadas = (txt) => {
     const t = String(txt || "");
-    const m = t.match(/@(-?\d{1,2}\.\d+),(-?\d{1,3}\.\d+)/) || t.match(/!3d(-?\d{1,2}\.\d+)!4d(-?\d{1,3}\.\d+)/) || t.match(/[?&](?:q|query|ll)=(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/) || t.match(/^\s*(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)\s*$/);
+    // 11.7: primero el PIN del lugar (!3d…!4d…); el «@lat,lng» de Google es el CENTRO de la vista, no el punto,
+    // por eso queda de último (era la causa de que el mapa saliera corrido)
+    const m = t.match(/!3d(-?\d{1,2}\.\d+)!4d(-?\d{1,3}\.\d+)/) || t.match(/[?&](?:q|query|ll|destination)=(-?\d{1,2}\.\d+)(?:,|%2C)\s*(-?\d{1,3}\.\d+)/i)
+      || t.match(/^\s*\(?\s*(-?\d{1,2}\.\d+)\s*[,;\s]\s*(-?\d{1,3}\.\d+)\s*\)?\s*$/) || t.match(/@(-?\d{1,2}\.\d+),(-?\d{1,3}\.\d+)/);
     if (!m) return null;
     const lat = Number(m[1]), lng = Number(m[2]);
     return Math.abs(lat) <= 90 && Math.abs(lng) <= 180 ? { lat, lng } : null;
@@ -15094,7 +15098,7 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   const [atencionesListas, setAtencionesListas] = useState(false);   // hasta que carguen, nada cuenta como «sin atender»
   const [notaAtencion, setNotaAtencion] = useState(null);   // { id, sitio, texto, nota }
   useEffect(() => {
-    if (!centralAbierta || !veCentral) return;
+    if (!centralAbierta || !veCentral || !esOperadorCentral) { if (centralAbierta && !esOperadorCentral) setAtencionesListas(true); return; }
     let vivo = true, canal = null;
     const cargarAt = async () => {
       const desde = new Date(Date.now() - 2 * 86400000).toISOString();
@@ -15201,6 +15205,19 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   // sitios sin coordenadas pero con dirección: se ubican por la dirección (OpenStreetMap), guardado en este navegador
   const [geoCache, setGeoCache] = useState(() => { try { const v = JSON.parse(localStorage.getItem("ignisGeoDir") || "{}"); return v && typeof v === "object" ? v : {}; } catch (e) { return {}; } });
   const geoPendRef = useRef([]);
+  const esOperadorRef = useRef(false);
+  esOperadorRef.current = esOperadorCentral;
+  const dispRef = useRef([]);
+  dispRef.current = dispositivos;
+  const guardarCoordenadas = async (sitio, lat, lng) => {
+    const d = dispRef.current.find((x) => x.sitio === sitio) || {};
+    const f0 = (d.ficha && typeof d.ficha === "object") ? d.ficha : {};
+    const ficha = { ...f0, lat: Number(lat.toFixed(6)), lng: Number(lng.toFixed(6)), ubicacion: lat.toFixed(6) + ", " + lng.toFixed(6) };
+    const { error } = await supabase.from("dispositivos_panel").update({ ficha }).eq("sitio", sitio);
+    if (error) { window.alert(/ficha/i.test(error.message || "") ? "Falta correr en Supabase el SQL_centro_operacion.sql." : error.message); mapaFirmaPintadaRef.current = ""; return; }
+    setDispositivos((prev) => prev.map((x) => (x.sitio === sitio ? { ...x, ficha } : x)));
+    registrarManipulacion(sitio, "Ubicación en el mapa ajustada");
+  };
   const mapaVerTodos = () => {
     const m = mapaObjRef.current, pts = mapaDatosRef.current.puntos || [];
     if (!m || !pts.length) return;
@@ -15266,7 +15283,15 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
     capa.clearLayers();
     const COL = { alarma: "#e5484d", superv: "#ff8c3d", falla: "#f2b705", anulado: "#b8641f", sinconex: "#6e7681", sinequipo: "#6e7681", normal: "#2fbf5f" };
     puntos.forEach((p2) => {
-      const mk = L.circleMarker([p2.lat, p2.lng], { radius: p2.est === "alarma" ? 13 : p2.est === "normal" ? 9 : 11, color: p2.aprox ? "#79b8ff" : "#fff", weight: p2.aprox ? 3 : 2, dashArray: p2.aprox ? "3 3" : null, fillColor: COL[p2.est] || "#2fbf5f", fillOpacity: 0.95 });
+      // punto arrastrable (solo personal): se suelta en el lugar exacto y se guarda en la ficha
+      const tam = p2.est === "alarma" ? 26 : p2.est === "normal" ? 18 : 22;
+      const html = '<div style="width:' + tam + 'px;height:' + tam + 'px;border-radius:50%;background:' + (COL[p2.est] || "#2fbf5f") + ';border:' + (p2.aprox ? "3px dashed #79b8ff" : "3px solid #fff") + ';box-shadow:0 1px 6px rgba(0,0,0,.6);box-sizing:border-box' + (p2.est === "alarma" ? ";animation:ignisPulsoMapa 1s infinite" : "") + '"></div>';
+      const mk = L.marker([p2.lat, p2.lng], { icon: L.divIcon({ className: "", html, iconSize: [tam, tam], iconAnchor: [tam / 2, tam / 2] }), draggable: !!esOperadorRef.current, autoPan: true });
+      mk.on("dragend", () => {
+        const ll = mk.getLatLng();
+        if (window.confirm("¿Guardar la ubicación de «" + p2.sitio + "» en este punto?\n" + ll.lat.toFixed(6) + ", " + ll.lng.toFixed(6))) guardarCoordenadas(p2.sitio, ll.lat, ll.lng);
+        else mk.setLatLng([p2.lat, p2.lng]);
+      });
       mk.bindTooltip((p2.cliente ? p2.cliente + " · " : "") + p2.sitio + (p2.est !== "normal" ? " — " + p2.estTxt : "") + (p2.aprox ? " (ubicación aproximada por la dirección)" : ""), { direction: "top", permanent: puntos.length <= 25, className: "ignis-mapa-etq" });
       mk.on("click", () => abrirMonitorRemoto(p2.sitio));
       mk.addTo(capa);
@@ -16991,7 +17016,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           // en la cola: el sitio del evento más nuevo va arriba (un equipo que se cae cuenta desde que dejó de reportar)
           const orden = est === "sinconex" ? Math.max(ultEv, visto + SEG_CAIDO * 1000) : (ultAct || ultEv);
           const fch = (d && d.ficha && typeof d.ficha === "object") ? d.ficha : {};
-          return { sitio, region: String(fch.region || "").trim(), lat: fch.lat != null ? Number(fch.lat) : null, lng: fch.lng != null ? Number(fch.lng) : null, logo: fch.logo || "", mant: enMantenimiento(d), cliente: String((d && d.cliente) || "").trim(), d, Lc: LcR, enLinea, visto, evs, simplex, est, ult: ultEv, motivo, orden, activos };
+          const cU = leerCoordenadas(fch.ubicacion);   // se vuelve a leer del texto guardado (corrige las que se guardaron con el centro de la vista)
+          return { sitio, region: String(fch.region || "").trim(), lat: cU ? cU.lat : fch.lat != null ? Number(fch.lat) : null, lng: cU ? cU.lng : fch.lng != null ? Number(fch.lng) : null, logo: fch.logo || "", mant: enMantenimiento(d), cliente: String((d && d.cliente) || "").trim(), d, Lc: LcR, enLinea, visto, evs, simplex, est, ult: ultEv, motivo, orden, activos };
         });
         const COLOR = { alarma: "#e5484d", superv: "#ff8c3d", falla: "#f2b705", anulado: "#b8641f", sinconex: "#6e7681", sinequipo: "#6e7681" };
         const CHIP = { alarma: ["ALARMA", "#e5484d33", "#ff8f92"], superv: ["SUPERV.", "#ff8c3d22", "#ffb27a"], falla: ["FALLA", "#f2b70522", "#f2d06b"], anulado: ["ANULADO", "#ff8c3d22", "#ffad6b"], sinconex: ["SIN CONEX.", "#30363d", "#aab3bd"], sinequipo: ["SIN EQUIPO", "#30363d", "#aab3bd"] };
@@ -17019,7 +17045,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         });
         colaEv.sort((a, b) => b.t - a.t);
         const colaF = cola.filter((x) => !filtroCli || (x.cliente || "Sin cliente") === filtroCli);
-        const centralTieneOperacion = !centroSinOperacion;
+        const centralTieneOperacion = !centroSinOperacion && esOperadorCentral;
         // ESCALAMIENTO: un evento que nadie atiende pasa a «Supervisor» y luego a «Gerencia» según los minutos
         const nivelEsc = (it) => {
           if (it.x.mant || !centralTieneOperacion) return 0;
@@ -17037,7 +17063,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           const claves = escalados.map((it) => it.k + ":" + it.esc);
           // 11.7: la foto inicial se toma cuando YA cargaron equipos, eventos por sitio y atenciones; antes de eso
           // todo parecía «nuevo» y sonaba cada vez que se entraba al menú
-          const datosListos = !cargando && dispositivos.length > 0 && (eventosCentro !== null || centroSinSql) && atencionesListas;
+          const datosListos = !cargando && dispositivos.length > 0 && (eventosCentro !== null || centroSinSql || esCliente) && atencionesListas;
           if (!datosListos) escPrimeraRef.current = false;
           else if (escPrimeraRef.current && esTecnicoSonido && sonidoOn && !enGraciaCentral()) {
             const sube = escalados.filter((it) => !escVistosRef.current.has(it.k + ":" + it.esc) && (it.esc === 2 || !sitiosMudos.includes(it.x.sitio))).sort((p2, q) => q.esc - p2.esc)[0];
@@ -17052,7 +17078,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           ["normal", "OK", cuentaC("normal"), "#7ee2a6", "#3fd17a"],
         ];
         const abrirSitio = (sitio) => abrirMonitorRemoto(sitio);
-        const vistaF = !["matriz", "bitacora", "indicadores", "equipos", "mapa"].includes(centralVista);   // directo al panel y control (pide la clave del monitor)
+        const vistaOk = esOperadorCentral || !["bitacora", "indicadores"].includes(centralVista);
+        const vistaF = !vistaOk || !["matriz", "bitacora", "indicadores", "equipos", "mapa"].includes(centralVista);   // directo al panel y control (pide la clave del monitor)
         const celdas = [];
         let grupoAnt = null;
         matriz.forEach((x) => {
@@ -17142,24 +17169,24 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                   ⏱ {escalados.length} ESCALADO{escalados.length === 1 ? "" : "S"}
                 </span>)}
               <div style={{ display: "flex", gap: 3, background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: 3 }}>
-                {[["atencion", "Atención"], ["matriz", "Lista"], ["bitacora", "Bitácora"], ["indicadores", "Indicadores"], ["equipos", "Equipos"], ["mapa", "Mapa"]].map(([k, t]) => (
+                {[["atencion", "Atención"], ["matriz", "Lista"], ["bitacora", "Bitácora"], ["indicadores", "Indicadores"], ["equipos", "Equipos"], ["mapa", "Mapa"]].filter(([k]) => esOperadorCentral || !["bitacora", "indicadores"].includes(k)).map(([k, t]) => (
                   <button key={k} type="button" onClick={() => { setCentralVista(k); if (k === "indicadores") cargarIndicadores(indDias); }}
                     style={{ border: "none", borderRadius: 6, padding: "4px 9px", fontSize: 11.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", background: (centralVista === k || (k === "atencion" && !["matriz", "bitacora", "indicadores", "equipos", "mapa"].includes(centralVista))) ? "#1f6fd8" : "transparent", color: (centralVista === k || (k === "atencion" && !["matriz", "bitacora", "indicadores", "equipos", "mapa"].includes(centralVista))) ? "#fff" : IGNIS.dim }}>{t}</button>))}
               </div>
-              {canGestionar && <button type="button" onClick={() => setEscEdit({ a1: escCfg.alarma[0], a2: escCfg.alarma[1], s1: escCfg.superv[0], s2: escCfg.superv[1], f1: escCfg.falla[0], f2: escCfg.falla[1], supervisor: escCfg.supervisor, gerencia: escCfg.gerencia })} title="Tiempos y contactos del escalamiento"
+              {esOperadorCentral && canGestionar && <button type="button" onClick={() => setEscEdit({ a1: escCfg.alarma[0], a2: escCfg.alarma[1], s1: escCfg.superv[0], s2: escCfg.superv[1], f1: escCfg.falla[0], f2: escCfg.falla[1], supervisor: escCfg.supervisor, gerencia: escCfg.gerencia })} title="Tiempos y contactos del escalamiento"
                 style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.dim, borderRadius: 8, padding: "5px 9px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>⏱ ⚙</button>}
               <b style={{ fontSize: 14 }}>{new Date(ahoraC).toLocaleTimeString("es-CR", { hour: "2-digit", minute: "2-digit" })}</b>
             </div>
-            {(sitiosMudos.length > 0 || sitiosC.some((x) => x.mant) || centroSinOperacion) && (
+            {(sitiosMudos.length > 0 || sitiosC.some((x) => x.mant) || (centroSinOperacion && esOperadorCentral)) && (
               <div style={{ margin: movilC ? "8px 10px 0" : "10px 18px 0", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", fontSize: 12 }}>
-                {centroSinOperacion && <span style={{ color: "#ffe08a", border: "1px solid #f2b70566", borderRadius: 6, padding: "3px 8px" }}>⚠ Para Atender, contactos y mantenimiento falta correr el SQL_centro_operacion.sql</span>}
+                {centroSinOperacion && esOperadorCentral && <span style={{ color: "#ffe08a", border: "1px solid #f2b70566", borderRadius: 6, padding: "3px 8px" }}>⚠ Para Atender, contactos y mantenimiento falta correr el SQL_centro_operacion.sql</span>}
                 {sitiosMudos.map((m) => (
                   <button key={"m-" + m} type="button" onClick={() => alternarMudo(m)} title="Toque para volver a activar el sonido"
                     style={{ background: "#c8102e22", border: "1px solid #c8102e88", color: "#ffb3b8", borderRadius: 999, padding: "3px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
                     🔕 {((dispositivos.find((z) => z.sitio === m) || {}).cliente || m)}{mudosEn[m] ? " · desde " + new Date(mudosEn[m]).toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" }) + " (vence sola en " + Math.max(1, Math.round((mudosEn[m] + MUDO_HORAS * 3600000 - ahoraC) / 3600000)) + " h)" : ""} ✕
                   </button>))}
                 {sitiosC.filter((x) => x.mant).map((x) => (
-                  <button key={"t-" + x.sitio} type="button" onClick={() => ponerMantenimiento(x.sitio, 0)} title="Toque para terminar el mantenimiento"
+                  <button key={"t-" + x.sitio} type="button" onClick={() => { if (esOperadorCentral) ponerMantenimiento(x.sitio, 0); }} title={esOperadorCentral ? "Toque para terminar el mantenimiento" : "En mantenimiento por Salvavidas"}
                     style={{ background: "#7048e822", border: "1px solid #7048e888", color: "#c9b8ff", borderRadius: 999, padding: "3px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
                     🛠 {x.cliente || x.sitio} · hasta {new Date(x.d.mantenimiento_hasta).toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" })} ✕
                   </button>))}
@@ -17280,7 +17307,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                   </div>
                 </div>);
             })()}
-            {centralVista === "bitacora" && (
+            {centralVista === "bitacora" && esOperadorCentral && (
               <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: movilC ? 10 : "14px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                   <b style={{ fontSize: 12, letterSpacing: ".1em", color: IGNIS.dim }}>BITÁCORA DE TURNO</b>
@@ -17323,7 +17350,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 </div>
               </div>
             )}
-            {centralVista === "indicadores" && (() => {
+            {centralVista === "indicadores" && esOperadorCentral && (() => {
               const d = indDatos;
               const ats = (d && d.atenciones) || [];
               const resp = ats.filter((a) => a.evento_t && a.tomado_en).map((a) => (Date.parse(a.tomado_en) - Date.parse(a.evento_t)) / 60000).filter((m) => m >= 0 && m < 24 * 60);
@@ -17456,11 +17483,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     {!mapaListo && !mapaError && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: IGNIS.dim, fontSize: 13 }}>Cargando mapa…</div>}
                     {mapaListo && conC.length > 0 && <button type="button" onClick={mapaVerTodos}
                       style={{ position: "absolute", top: 10, right: 10, zIndex: 500, background: "#1f6fd8", color: "#fff", border: "none", borderRadius: 8, padding: "6px 12px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 6px #0006" }}>Ver todos ({conC.length})</button>}
-                    <style>{".ignis-mapa-etq{font-weight:700;font-size:11px;padding:2px 6px}"}</style>
+                    <style>{".ignis-mapa-etq{font-weight:700;font-size:11px;padding:2px 6px}@keyframes ignisPulsoMapa{0%,100%{transform:scale(1)}50%{transform:scale(1.35)}}"}</style>
                   </div>
                   <div style={{ background: "#0e141b", border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: 12, overflow: "auto", minHeight: 0 }}>
                     <b style={{ fontSize: 12, letterSpacing: ".08em", color: IGNIS.dim }}>EN EL MAPA ({conC.length})</b>
-                    <div style={{ fontSize: 11.5, color: IGNIS.dim, margin: "4px 0 10px" }}>Toque un punto para abrir su panel. El color es su estado.</div>
+                    <div style={{ fontSize: 11.5, color: IGNIS.dim, margin: "4px 0 10px" }}>Toque un punto para abrir su panel. El color es su estado.{esOperadorCentral ? " Si un punto quedó corrido, arrástrelo al lugar exacto y se guarda." : ""}</div>
                     {conC.filter((x) => x.est !== "normal").map((x) => (
                       <div key={x.sitio} onClick={() => { try { mapaObjRef.current.setView([x.lat, x.lng], 15); } catch (e) {} }} style={{ cursor: "pointer", fontSize: 12.5, padding: "5px 0", borderBottom: "1px solid #161e27" }}>
                         <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", marginRight: 6, background: COLOR[x.est] || "#2fbf5f" }} />{x.cliente ? x.cliente + " · " : ""}{x.sitio} <span style={{ color: IGNIS.dim }}>· {ET[x.est]}</span>
@@ -17723,7 +17750,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 {centralAbierta && <Btn small onClick={cerrarMonitorRemoto} title="Cerrar este panel y volver al Centro de Monitoreo">← Centro de Monitoreo</Btn>}
                 <Settings size={18} color={IGNIS.general} />
                 <div style={{ flex: 1, fontWeight: 800, fontSize: 16 }}>Control del panel · {termRemoto.sitio}</div>
-                {centralAbierta && <Btn small variant="ghost" onClick={() => abrirFicha(termRemoto.sitio)} title="Contactos, procedimiento y mantenimiento">📇 Ficha</Btn>}
+                {centralAbierta && esOperadorCentral && <Btn small variant="ghost" onClick={() => abrirFicha(termRemoto.sitio)} title="Contactos, procedimiento y mantenimiento">📇 Ficha</Btn>}
                 {centralAbierta && <Btn small variant="ghost" onClick={() => { const s2 = termRemoto.sitio; cerrarMonitorRemoto(); abrirDesdeCentral(s2); }} title="Ver las tarjetas, eventos e historial de este cliente">Ver tarjetas del cliente</Btn>}
                 <button onClick={cerrarMonitorRemoto} style={{ background: "transparent", border: "none", color: IGNIS.dim, cursor: "pointer" }}><X size={18} /></button>
               </div>
@@ -17733,7 +17760,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 const fF = (dF.ficha && typeof dF.ficha === "object") ? dF.ficha : {};
                 const cts = Array.isArray(fF.contactos) ? fF.contactos : [];
                 if (!dF.cliente && !fF.direccion && !cts.length && !fF.procedimiento && !enMantenimiento(dF)) return (
-                  <div style={{ fontSize: 12, color: IGNIS.dim, marginBottom: 8 }}>Este sitio no tiene ficha (contactos y procedimiento). <button type="button" onClick={() => abrirFicha(termRemoto.sitio)} style={{ background: "transparent", border: "none", color: "#79b8ff", fontWeight: 800, cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>Llenar ficha</button></div>);
+                  !esOperadorCentral ? null : <div style={{ fontSize: 12, color: IGNIS.dim, marginBottom: 8 }}>Este sitio no tiene ficha (contactos y procedimiento). <button type="button" onClick={() => abrirFicha(termRemoto.sitio)} style={{ background: "transparent", border: "none", color: "#79b8ff", fontWeight: 800, cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>Llenar ficha</button></div>);
                 return (
                   <div style={{ display: "flex", gap: 14, flexWrap: "wrap", background: "#1f6fd812", border: "1px solid #1f6fd855", borderRadius: 9, padding: "8px 12px", marginBottom: 8, fontSize: 12.5 }}>
                     <div style={{ minWidth: 180 }}>
@@ -30767,12 +30794,14 @@ function AppInner() {
     // En el APK el perfil Entrenamiento ve Entrenamiento y la Agenda; en la web solo Entrenamiento.
     if (user.categoria === "entrenamiento") return [...AREAS.filter((a) => a.id === "entrenamiento"), ...AREAS.filter((a) => MODO_CLIENTE && a.id === "agenda")];
     // El perfil "cliente" solo ve Monitoreo (y dentro, solo su sitio asignado).
-    if (user.categoria === "cliente") return AREAS.filter((a) => a.id === "monitoreo_notifier");
+    // 11.7: todo el monitoreo entra por el «Centro de Monitoreo» (el cliente ve solo sus sitios asociados)
+    if (user.categoria === "cliente") return AREAS.filter((a) => a.id === "centro_monitoreo");
     // En el APK el técnico ve Monitoreo (todos los sitios), Agenda y Entrenamiento.
-    if (MODO_CLIENTE && user.categoria === "tecnico") return AREAS.filter((a) => ["monitoreo_notifier", "centro_monitoreo", "agenda", "entrenamiento"].includes(a.id));
-    if (user.categoria === "admin") return esGerente ? [...AREAS, AREA_DOCUMENTACION] : AREAS;
-    if (user.categoria === "tecnico") return AREAS.filter((a) => a.id !== "admin" && a.id !== "proyectos" && a.id !== "planilla");
-    return AREAS.filter((a) => a.id !== "admin" && a.id !== "centro_monitoreo");   // el Centro de Monitoreo solo lo ven Admin y Técnicos
+    const sinMon = AREAS.filter((a) => a.id !== "monitoreo_notifier");   // «Monitoreo» ya no sale en el menú: se llega desde el Centro
+    if (MODO_CLIENTE && user.categoria === "tecnico") return sinMon.filter((a) => ["centro_monitoreo", "agenda", "entrenamiento"].includes(a.id));
+    if (user.categoria === "admin") return esGerente ? [...sinMon, AREA_DOCUMENTACION] : sinMon;
+    if (user.categoria === "tecnico") return sinMon.filter((a) => a.id !== "admin" && a.id !== "proyectos" && a.id !== "planilla");
+    return sinMon.filter((a) => a.id !== "admin");
   }, [user, esGerente]);
 
   useEffect(() => {
@@ -30781,6 +30810,8 @@ function AppInner() {
   // Si por cualquier camino se intenta abrir un área que este usuario no
   // tiene permitida (ej. un cliente), se le regresa a su primera área válida.
   useEffect(() => {
+    // 11.7: quien tenía guardada la pestaña «Monitoreo» entra al Centro de Monitoreo
+    if (user && tab === "monitoreo_notifier" && visibleAreas.some((a) => a.id === "centro_monitoreo")) { setTab("centro_monitoreo"); return; }
     if (user && tab && !visibleAreas.some((a) => a.id === tab)) setTab(visibleAreas[0]?.id);
   }, [user, tab, visibleAreas]);
 

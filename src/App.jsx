@@ -15602,8 +15602,12 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
         setTimeout(() => { if (modoSonandoRef.current === modo) detenerSonido(); }, duracionMs);
       }
     };
-    if (ctx.state !== "running") ctx.resume().then(reproducir).catch(() => setSonidoBloqueado(true));
-    else reproducir();
+    if (ctx.state !== "running") {
+      // 11.7: sin un toque previo, el navegador deja el permiso «esperando» sin avisar: a los 1.5 s se muestra
+      // el botón «Toque para activar el sonido» (antes quedaba en silencio sin decir nada)
+      const espera = setTimeout(() => { if (audioCtxRef.current && audioCtxRef.current.state !== "running") setSonidoBloqueado(true); }, 1500);
+      ctx.resume().then(() => { clearTimeout(espera); reproducir(); }).catch(() => { clearTimeout(espera); setSonidoBloqueado(true); });
+    } else reproducir();
   };
 
   // Desbloquea el audio con el primer toque/clic del técnico en la página
@@ -15681,7 +15685,10 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
     if (monitorSitioRef.current && nuevos.every((e) => e.sitio === monitorSitioRef.current)) return;
     const sonables = nuevos.filter((e) => !sitiosMudosRef.current.includes(e.sitio) && !mantRef.current.includes(e.sitio));   // 11.7: sin los sitios silenciados ni en mantenimiento
     if (!sonables.length) return;
-    const cats = (e) => [e.categoria, e.subcat];   // la subcategoría también cuenta (ej. "general" + "problema")
+    // la subcategoría también cuenta (ej. "general" + "problema"); 11.7: y lo que la LÍNEA dice, igual que la cola
+    // de atención (ej. «NO RESPONDE» sale como FALLA aunque el equipo la haya guardado con otra categoría)
+    const CHIP_CAT = { ALARMA: "alarma", PREALARMA: "prealarma", SIMULACRO: "alarma", "SUPERVISIÓN": "supervision", FALLA: "problema", SEGURIDAD: "seguridad", ANULADO: "problema", ANULADA: "problema" };
+    const cats = (e) => { let ch = null; try { const r = lineaPanelCentral(e.texto); ch = r && !r.tachado && !/^\s*\[APP\]/.test(String(e.texto || "")) ? CHIP_CAT[r.chip] : null; } catch (er) {} return [e.categoria, e.subcat, ch]; };
     { const pri = sonables.find((e) => cats(e).some((c) => c === "alarma" || c === "prealarma")) || sonables.find((e) => cats(e).includes("supervision")) || sonables.find((e) => cats(e).some((c) => ["problema", "seguridad"].includes(c)));
       if (pri) setSonandoSitio(pri.sitio); }
     if (sonables.some((e) => cats(e).some((c) => c === "alarma" || c === "prealarma"))) sonar(2);

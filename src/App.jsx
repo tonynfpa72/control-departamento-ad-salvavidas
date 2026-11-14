@@ -17134,7 +17134,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               style={{ height: movilC ? 132 : 150, borderRadius: 10, padding: "7px 8px 7px", textAlign: "left", cursor: "pointer", fontFamily: "inherit", position: "relative", display: "flex", flexDirection: "column", gap: 5, boxSizing: "border-box", minWidth: 0,
                 background: x.simplex ? "linear-gradient(#d6dbe1,#b3bcc7)" : "linear-gradient(#d9dad6,#c2c3be)", color: "#1d2126", opacity: apag ? 0.55 : 1,
                 border: `2px solid ${borde || "#8f918c"}`,
-                boxShadow: x.est === "alarma" ? "0 0 0 1px #e5484d, 0 0 16px #e5484d" : "0 2px 0 #00000055", animation: nuevo ? "ignisCentralNuevo 1s ease-in-out infinite" : "none" }}>
+                boxShadow: "0 2px 0 #00000055",
+                // 11.7: brilla fuerte según su estado para verlo de lejos: rojo alarma, naranja supervisión, amarillo falla/anulado
+                animation: nuevo && x.est !== "alarma" ? "ignisCentralNuevo 1s ease-in-out infinite"
+                  : x.est === "alarma" ? "ignisBrillaRojo 0.9s ease-in-out infinite" : x.est === "superv" ? "ignisBrillaNaranja 1.3s ease-in-out infinite"
+                  : (x.est === "falla" || x.est === "anulado") ? "ignisBrillaAmarillo 1.6s ease-in-out infinite" : "none" }}>
               <span style={{ display: "flex", alignItems: "flex-start", gap: 4, minWidth: 0 }}>
                 {x.logo && <img src={x.logo} alt="" style={{ height: 28, maxWidth: 46, objectFit: "contain", background: "#fff", borderRadius: 4, padding: 1, flex: "none" }} onError={(e) => { e.currentTarget.style.display = "none"; }} />}
                 <span style={{ minWidth: 0, flex: 1, lineHeight: 1.15 }}>
@@ -17145,7 +17149,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 {x.mant && <span title="En mantenimiento" style={{ fontSize: 10, flex: "none" }}>🛠</span>}
               </span>
               <span style={{ flex: 1, minHeight: 26, display: "flex", gap: 3 }}>
-                <span style={{ flex: 1, background: "#0a0f14", border: "3px solid #3a3d40", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px",
+                <span style={{ flex: 1, background: x.est === "alarma" ? "#3a0d10" : x.est === "superv" ? "#3a1f0a" : (x.est === "falla" || x.est === "anulado") ? "#332700" : "#0a0f14", border: "3px solid #3a3d40", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px",
                   color: x.est === "normal" ? "#3fd17abb" : ESTX[1], fontSize: x.est === "normal" ? 11.5 : 12.5, fontWeight: 800, letterSpacing: ".04em", textAlign: "center", lineHeight: 1.1 }}>
                   {x.est === "normal" ? "● OK" : ESTX[0]}
                 </span>
@@ -17166,15 +17170,26 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         });
         return (
           <div className="ignis-central" style={{ ...(modoCentral && !centralCompleta ? { position: "relative", height: "100vh" } : { position: "fixed", inset: 0 }), zIndex: 55, background: "#0b0f14", color: IGNIS.text, display: "flex", flexDirection: "column", fontFamily: "system-ui,-apple-system,sans-serif" }}>
-            <style>{"@keyframes ignisEscalado{0%,100%{background:#e5484d33}50%{background:#e5484d0d}}"}</style>
+            <style>{"@keyframes ignisEscalado{0%,100%{background:#e5484d33}50%{background:#e5484d0d}}"
+              + "@keyframes ignisBrillaRojo{0%,100%{box-shadow:0 0 0 3px #ff3b3b,0 0 26px 6px #ff3b3bcc}50%{box-shadow:0 0 0 3px #ff8f92,0 0 8px 1px #ff3b3b66}}"
+              + "@keyframes ignisBrillaAmarillo{0%,100%{box-shadow:0 0 0 3px #ffd000,0 0 24px 5px #ffd000bb}50%{box-shadow:0 0 0 3px #fff1a8,0 0 6px 1px #ffd00055}}"
+              + "@keyframes ignisBrillaNaranja{0%,100%{box-shadow:0 0 0 3px #ff8c3d,0 0 24px 5px #ff8c3dbb}50%{box-shadow:0 0 0 3px #ffc49a,0 0 6px 1px #ff8c3d55}}"}</style>
             <style>{".ignis-raiz-central>:not(.ignis-central):not([style*='position: fixed']){display:none!important}.ignis-raiz-central{gap:0!important}@keyframes ignisCentralNuevo{0%,100%{box-shadow:0 0 0 3px #1f6fd8,0 0 16px #1f6fd8aa}50%{box-shadow:0 0 0 3px #79b8ff,0 0 3px #1f6fd855}}"}</style>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: movilC ? "10px 10px" : "10px 18px", borderBottom: `1px solid ${IGNIS.border}`, background: "#05080b" }}>
               <div style={{ fontSize: movilC ? 14 : 15, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase" }}>Centro de Monitoreo</div>
               <span style={{ fontSize: 12, color: IGNIS.dim }}>{sitiosC.length} {sitiosC.length === 1 ? "sitio" : "sitios"}</span>
               {centroSinSql && <span title="Corra en Supabase el SQL_centro_eventos.sql: el Centro baja los eventos de cada sitio por separado" style={{ fontSize: 11, color: "#ffe08a", border: "1px solid #f2b70566", borderRadius: 6, padding: "2px 7px" }}>⚠ Falta SQL del Centro (usando los últimos 500)</span>}
-              {esTecnicoSonido && sonidoOn && sonidoBloqueado && (
-                <button type="button" onClick={() => { const ctx = prepararAudio(); if (ctx && ctx.state !== "running") ctx.resume().then(() => setSonidoBloqueado(false)).catch(() => {}); else setSonidoBloqueado(false); }}
-                  style={{ background: "#1a2a3a", border: `1px solid ${IGNIS.seguridad}`, color: "#9dc6ff", borderRadius: 8, padding: "5px 11px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>🔈 Toque para activar el sonido</button>)}
+              {/* 11.7: el sonido se controla aquí mismo: estado, activar/apagar y probar */}
+              {esTecnicoSonido && (
+                <span style={{ display: "inline-flex", gap: 4 }}>
+                  <button type="button" onClick={() => { if (!sonidoOn) toggleSonido(); const ctx = prepararAudio(); if (ctx && ctx.state !== "running") ctx.resume().then(() => setSonidoBloqueado(false)).catch(() => {}); else setSonidoBloqueado(false); if (sonidoOn && !sonidoBloqueado) toggleSonido(); }}
+                    title={!sonidoOn ? "El sonido está APAGADO en esta pantalla: toque para activarlo" : sonidoBloqueado ? "El navegador necesita un toque para poder sonar" : "Sonido activo: toque para apagarlo en esta pantalla"}
+                    style={{ background: !sonidoOn ? "#c8102e" : sonidoBloqueado ? "#1a2a3a" : "#1f3a2a", border: `1px solid ${!sonidoOn ? "#ff6b6f" : sonidoBloqueado ? IGNIS.seguridad : "#2fbf5f"}`, color: "#fff", borderRadius: 8, padding: "5px 11px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit", animation: !sonidoOn || sonidoBloqueado ? "ignisEscalado 1.2s ease-in-out infinite" : "none" }}>
+                    {!sonidoOn ? "🔇 Sonido APAGADO — activar" : sonidoBloqueado ? "🔈 Toque para activar el sonido" : "🔊 Sonido activo"}
+                  </button>
+                  {sonidoOn && <button type="button" onClick={() => { const ctx = prepararAudio(); const ir = () => { setSonidoBloqueado(false); detenerSonido(); sonar(1, 1500); }; if (ctx && ctx.state !== "running") ctx.resume().then(ir).catch(() => {}); else ir(); }} title="Suena 1.5 s para comprobar el parlante"
+                    style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 8, padding: "5px 9px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Probar</button>}
+                </span>)}
               {esTecnicoSonido && modoSonando > 0 && (
                 <button type="button" onClick={detenerSonido} title="Apagar el sonido en este dispositivo"
                   style={{ background: modoSonando === 2 ? "#e5484d22" : "#f2b70522", border: `1px solid ${modoSonando === 2 ? IGNIS.alarma : IGNIS.problema}`, color: modoSonando === 2 ? "#ff8f92" : "#ffe08a", borderRadius: 8, padding: "5px 11px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
@@ -17287,8 +17302,10 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                           <div key={x.sitio} role="button" tabIndex={0} onClick={() => abrirSitio(x.sitio)} onKeyDown={(e) => { if (e.key === "Enter") abrirSitio(x.sitio); }} title={"Abrir el panel de " + x.sitio}
                             style={{ gridColumn: grande ? "span 2" : undefined, height: movilC ? 190 : 200, boxSizing: "border-box", background: x.simplex ? "linear-gradient(#d6dbe1,#b8c0ca)" : "linear-gradient(#d9dad6,#c9cac5)", borderRadius: 10, padding: 7,
                               display: "flex", flexDirection: "column", gap: 6, cursor: "pointer", opacity: apagado ? 0.62 : 1, minWidth: 0,
-                              boxShadow: x.est === "alarma" ? "0 0 0 3px #e5484d, 0 0 24px #e5484d88" : x.est === "superv" ? "0 0 0 2px #ff8c3d" : "none",
-                              animation: nuevo && x.est !== "alarma" ? "ignisCentralNuevo 1s ease-in-out infinite" : "none" }}>
+                              boxShadow: "none",
+                              animation: nuevo && x.est !== "alarma" ? "ignisCentralNuevo 1s ease-in-out infinite"
+                                : x.est === "alarma" ? "ignisBrillaRojo 0.9s ease-in-out infinite" : x.est === "superv" ? "ignisBrillaNaranja 1.3s ease-in-out infinite"
+                                : (x.est === "falla" || x.est === "anulado") ? "ignisBrillaAmarillo 1.6s ease-in-out infinite" : "none" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#1d2126", fontWeight: 800, fontSize: 12.5, minWidth: 0 }}>
                               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{x.cliente ? x.cliente + " · " : ""}{x.sitio}</span>
                               {x.mant && <span title={"En mantenimiento" + (x.d.mantenimiento_por ? " · " + x.d.mantenimiento_por : "")} style={{ flex: "none", fontSize: 9, padding: "2px 6px", borderRadius: 4, color: "#fff", background: "#7048e8" }}>🛠 MANT.</span>}

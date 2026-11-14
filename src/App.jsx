@@ -14828,6 +14828,8 @@ async function listarHistorialPaneles(opciones) {
   return { data: todos, error: null };
 }
 
+// 11.7: un equipo sin latido por 150 s (2 latidos perdidos; avisa cada 1 min y reintenta a los 15 s) se marca caído
+const SEG_CAIDO = 150;
 // 11.7: lector de líneas del panel para el Centro de Monitoreo (el mismo de la pantalla moderna del
 // Control del panel): así la cola de atención quita un evento igual que el panel, con su borrado.
 const lineaPanelCentral = (() => {
@@ -15083,6 +15085,7 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   // ATENDER EVENTO: el operador toma el evento (queda «atendiendo»), anota qué hizo y lo cierra
   const [atenciones, setAtenciones] = useState([]);
   const [centroSinOperacion, setCentroSinOperacion] = useState(false);
+  const [atencionesListas, setAtencionesListas] = useState(false);   // hasta que carguen, nada cuenta como «sin atender»
   const [notaAtencion, setNotaAtencion] = useState(null);   // { id, sitio, texto, nota }
   useEffect(() => {
     if (!centralAbierta || !veCentral) return;
@@ -15091,8 +15094,8 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
       const desde = new Date(Date.now() - 2 * 86400000).toISOString();
       const { data, error } = await supabase.from("centro_atenciones").select("*").or("estado.eq.atendiendo,tomado_en.gt." + desde).order("tomado_en", { ascending: false }).limit(1000);
       if (!vivo) return;
-      if (error) { setCentroSinOperacion(true); return; }
-      setCentroSinOperacion(false); setAtenciones(data || []);
+      if (error) { setCentroSinOperacion(true); setAtencionesListas(true); return; }
+      setCentroSinOperacion(false); setAtenciones(data || []); setAtencionesListas(true);
     };
     cargarAt();
     try {
@@ -15444,16 +15447,16 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   mantRef.current = dispositivos.filter((d) => d.mantenimiento_hasta && Date.parse(d.mantenimiento_hasta) > Date.now()).map((d) => d.sitio);
   // 11.7: con el Centro abierto, un equipo que SE CAE suena como una falla (deja de vigilar ese panel)
   const caidosRef = useRef(null);
-  const caidosAhora = (centralAbierta && veCentral) ? dispositivos.filter((d) => d.actualizado_en && (Date.now() - new Date(d.actualizado_en).getTime()) / 1000 >= 200).map((d) => d.sitio).sort().join("|") : "";
+  const caidosAhora = (centralAbierta && veCentral) ? dispositivos.filter((d) => d.actualizado_en && (Date.now() - new Date(d.actualizado_en).getTime()) / 1000 >= SEG_CAIDO).map((d) => d.sitio).sort().join("|") : "";
   useEffect(() => {
-    if (!(centralAbierta && veCentral)) { caidosRef.current = null; return; }
+    if (!(centralAbierta && veCentral) || cargando || !dispositivos.length) { caidosRef.current = null; return; }   // 11.7: sin datos todavía no se toma la foto inicial
     const ahora = caidosAhora ? caidosAhora.split("|") : [];
     const antes = caidosRef.current;
     caidosRef.current = ahora;
     if (antes === null || !esTecnicoSonido || !sonidoOn) return;   // la primera vez solo toma nota
     const nuevos = ahora.filter((x) => !antes.includes(x) && !sitiosMudosRef.current.includes(x) && !mantRef.current.includes(x));
     if (nuevos.length && modoSonandoRef.current < 1) { setSonandoSitio(nuevos[0]); sonar(1); }
-  }, [caidosAhora, centralAbierta, veCentral]);
+  }, [caidosAhora, centralAbierta, veCentral, cargando, dispositivos.length]);
   // 11.7: con la Central abierta, el título de la pestaña parpadea mientras suena (se nota aunque esté en otra pestaña)
   useEffect(() => {
     if (!centralAbierta || !modoSonando) return;
@@ -16113,7 +16116,7 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
     if (!(await confirmar(`¿ELIMINAR el sitio "${sitio}"?\n\nSe borran sus eventos, historial, mantenimiento, Todos los puntos y la ficha del equipo. El IgnisMonitor borra su memoria y deja de reportar (para volver a usarlo hay que ponerle nombre de sitio en su página de configuración).\n\nNo se puede deshacer.`, { confirmLabel: "Eliminar definitivamente", variant: "danger" }))) return;
     setBorrando(true);
     const ficha = dispositivos.find((d) => d.sitio === sitio);
-    const enLinea = ficha?.actualizado_en && Date.now() - new Date(ficha.actualizado_en).getTime() < 3 * 60000;
+    const enLinea = ficha?.actualizado_en && Date.now() - new Date(ficha.actualizado_en).getTime() < SEG_CAIDO * 1000;
     await supabase.from("dispositivos_panel").update({ comando: "baja", comando_en: new Date().toISOString() }).eq("sitio", sitio);
     const { todos } = await archivosDelSitio(sitio);
     const [{ error: e1 }, resArch] = await Promise.all([
@@ -16502,7 +16505,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               {sitiosElegibles.map((sitio) => {
                 const d = dispositivos.find((x) => x.sitio === sitio);
                 const segundos = d?.actualizado_en ? (Date.now() - new Date(d.actualizado_en).getTime()) / 1000 : Infinity;
-                const enLinea = segundos < 200;
+                const enLinea = segundos < SEG_CAIDO;
                 return (
                   <button
                     key={sitio}
@@ -16600,7 +16603,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               <tbody>
                 {dispositivosFiltrados.map((d) => {
                   const segundos = (Date.now() - new Date(d.actualizado_en).getTime()) / 1000;
-                  const enLinea = segundos < 200; // sin aviso en más de ~3 min (el equipo avisa cada 1 min y reintenta a los 15 s) = se asume caído
+                  const enLinea = segundos < SEG_CAIDO; // sin aviso en más de 2.5 min (el equipo avisa cada 1 min y reintenta a los 15 s) = se asume caído
                   return (
                     <tr key={d.sitio} style={{ borderTop: `1px solid ${IGNIS.border}` }}>
                       <td style={{ padding: "8px", fontWeight: 600 }}>{d.sitio}</td>
@@ -16940,7 +16943,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           const cc = d ? leerConfigPanel(d.config_panel) : {};
           const Lc = String(cc.leds || "").toUpperCase();
           const visto = d && d.actualizado_en ? new Date(d.actualizado_en).getTime() : 0;
-          const enLinea = !!(visto && (ahoraC - visto) / 1000 < 200);
+          const enLinea = !!(visto && (ahoraC - visto) / 1000 < SEG_CAIDO);
           const evs = porSitio[sitio] || [];
           const simplex = cc.tipo === "1" || cc.tipo === "2";
           const activos = activosDe(evs, sitio);
@@ -16953,7 +16956,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           const ultAct = activos.length ? Math.max(...activos.map((r) => r.t)) : 0;
           const motivo = activos[0] ? activos[0].e : null;
           // en la cola: el sitio del evento más nuevo va arriba (un equipo que se cae cuenta desde que dejó de reportar)
-          const orden = est === "sinconex" ? Math.max(ultEv, visto + 200000) : (ultAct || ultEv);
+          const orden = est === "sinconex" ? Math.max(ultEv, visto + SEG_CAIDO * 1000) : (ultAct || ultEv);
           const fch = (d && d.ficha && typeof d.ficha === "object") ? d.ficha : {};
           return { sitio, region: String(fch.region || "").trim(), lat: fch.lat != null ? Number(fch.lat) : null, lng: fch.lng != null ? Number(fch.lng) : null, logo: fch.logo || "", mant: enMantenimiento(d), cliente: String((d && d.cliente) || "").trim(), d, Lc: LcR, enLinea, visto, evs, simplex, est, ult: ultEv, motivo, orden, activos };
         });
@@ -16991,7 +16994,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           if (atencionDe(it.x.sitio, clave, it.off ? 0 : it.t)) return 0;
           const g = it.off ? "falla" : GR[it.r.chip] === "alarma" ? "alarma" : GR[it.r.chip] === "superv" ? "superv" : "falla";
           const [m1, m2] = escCfg[g] || ESC_DEF[g];
-          const min = (ahoraC - (it.off ? (it.x.visto + 200000) : it.t)) / 60000;
+          const min = (ahoraC - (it.off ? (it.x.visto + SEG_CAIDO * 1000) : it.t)) / 60000;
           return min >= m2 ? 2 : min >= m1 ? 1 : 0;
         };
         colaEv.forEach((it) => { it.esc = nivelEsc(it); });
@@ -16999,11 +17002,15 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         // suena cuando un evento SUBE de nivel (la primera vez solo toma nota). Gerencia suena aunque el sitio esté silenciado.
         {
           const claves = escalados.map((it) => it.k + ":" + it.esc);
-          if (escPrimeraRef.current && esTecnicoSonido && sonidoOn) {
+          // 11.7: la foto inicial se toma cuando YA cargaron equipos, eventos por sitio y atenciones; antes de eso
+          // todo parecía «nuevo» y sonaba cada vez que se entraba al menú
+          const datosListos = !cargando && dispositivos.length > 0 && (eventosCentro !== null || centroSinSql) && atencionesListas;
+          if (!datosListos) escPrimeraRef.current = false;
+          else if (escPrimeraRef.current && esTecnicoSonido && sonidoOn) {
             const sube = escalados.filter((it) => !escVistosRef.current.has(it.k + ":" + it.esc) && (it.esc === 2 || !sitiosMudos.includes(it.x.sitio))).sort((p2, q) => q.esc - p2.esc)[0];
             if (sube) setTimeout(() => { setSonandoSitio(sube.x.sitio); sonar(2); }, 0);
           }
-          escVistosRef.current = new Set(claves); escPrimeraRef.current = true;
+          escVistosRef.current = new Set(claves); if (datosListos) escPrimeraRef.current = true;
         }
         const haceTxt = (t) => { const m = Math.round((ahoraC - t) / 60000); return m < 1 ? "ahora" : m < 60 ? "hace " + m + " min" : m < 1440 ? "hace " + Math.round(m / 60) + " h" : "hace " + Math.round(m / 1440) + " d"; };
         const KP = [
@@ -17481,7 +17488,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                           <b style={{ display: "block", fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.cliente ? x.cliente + " · " : ""}{x.sitio}{x.simplex && <span style={{ marginLeft: 6, fontSize: 9, padding: "1px 5px", borderRadius: 4, background: "#c8102e", color: "#fff", verticalAlign: 1 }}>SIMPLEX</span>}</b>
                           <span style={{ display: "block", fontSize: 11.5, color: IGNIS.dim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{txt}</span>
                           {it.esc > 0 && <span style={{ display: "block", fontSize: 11, fontWeight: 800, color: it.esc === 2 ? "#ff6b6f" : "#ffb27a" }}>
-                            ⏱ {(() => { const m = Math.round((ahoraC - (it.off ? x.visto + 200000 : it.t)) / 60000); return m < 90 ? m + " min" : m < 2880 ? Math.floor(m / 60) + " h " + (m % 60) + " min" : Math.floor(m / 1440) + " días"; })()} sin atender · ESCALADO a {it.esc === 2 ? "Gerencia" : "Supervisor"}{(it.esc === 2 ? escCfg.gerencia : escCfg.supervisor) ? " (" + (it.esc === 2 ? escCfg.gerencia : escCfg.supervisor) + ")" : ""}
+                            ⏱ {(() => { const m = Math.round((ahoraC - (it.off ? x.visto + SEG_CAIDO * 1000 : it.t)) / 60000); return m < 90 ? m + " min" : m < 2880 ? Math.floor(m / 60) + " h " + (m % 60) + " min" : Math.floor(m / 1440) + " días"; })()} sin atender · ESCALADO a {it.esc === 2 ? "Gerencia" : "Supervisor"}{(it.esc === 2 ? escCfg.gerencia : escCfg.supervisor) ? " (" + (it.esc === 2 ? escCfg.gerencia : escCfg.supervisor) + ")" : ""}
                           </span>}
                           {x.mant && <span style={{ display: "block", fontSize: 11, color: "#b197fc", fontWeight: 700 }}>🛠 En mantenimiento hasta {new Date(x.d.mantenimiento_hasta).toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" })}{x.d.mantenimiento_por ? " · " + x.d.mantenimiento_por : ""}</span>}
                           {at && at.estado === "atendiendo" && <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#79b8ff", fontWeight: 700, marginTop: 2 }}>

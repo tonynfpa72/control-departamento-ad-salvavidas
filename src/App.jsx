@@ -17723,8 +17723,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 4 }}>🔒 Control del panel · {monPedir.sitio}</div>
             <div style={{ fontSize: 12.5, color: IGNIS.dim, marginBottom: 12, lineHeight: 1.5 }}>Ingrese la clave del Monitor de este equipo (la de «Clave del Monitor en la App» o, si no se definió, la clave de administración del equipo).</div>
             {monPedir.error && <div style={{ fontSize: 12.5, color: IGNIS.problema, marginBottom: 10 }}>{monPedir.error}</div>}
-            <input type="password" autoFocus value={monClave} onChange={(e) => setMonClave(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && monClave) abrirMonitorRemoto(monPedir.sitio, monClave); }} placeholder="Clave del Monitor"
-              style={{ width: "100%", boxSizing: "border-box", background: IGNIS.bg, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: "10px 12px", fontSize: 14, fontFamily: "inherit" }} />
+            <input type="text" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} data-lpignore="true" data-1p-ignore="true" data-form-type="other" autoFocus value={monClave} onChange={(e) => setMonClave(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && monClave) abrirMonitorRemoto(monPedir.sitio, monClave); }} placeholder="Clave del Monitor"
+              style={{ WebkitTextSecurity: "disc", width: "100%", boxSizing: "border-box", background: IGNIS.bg, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: "10px 12px", fontSize: 14, fontFamily: "inherit" }} />
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
               <Btn small variant="ghost" onClick={() => setMonPedir(null)}>Cancelar</Btn>
               <Btn small onClick={() => { if (monClave) abrirMonitorRemoto(monPedir.sitio, monClave); }}>Entrar</Btn>
@@ -18128,8 +18128,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                                   </div>);
                               })}
                             </div>
-                            <input id="clave_panel_anun" type="password" inputMode="numeric" autoComplete="new-password" name="clave_panel_anun_ignis" data-lpignore="true" placeholder="Clave del panel"
-                              style={{ marginTop: 8, padding: "8px 10px", borderRadius: 7, border: "1px solid #999", fontSize: 13, background: "#fff", color: "#222", fontFamily: "inherit" }} />
+                            <input id="clave_panel_anun" type="text" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} data-lpignore="true" data-1p-ignore="true" data-form-type="other" inputMode="numeric" name="clave_panel_anun_ignis" placeholder="Clave del panel"
+                              style={{ WebkitTextSecurity: "disc", marginTop: 8, padding: "8px 10px", borderRadius: 7, border: "1px solid #999", fontSize: 13, background: "#fff", color: "#222", fontFamily: "inherit" }} />
                           </>
                         )}
                       </div>);
@@ -18165,8 +18165,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                               </button>);
                           })}
                         </div>
-                        <input id="clave_panel_anun" type="password" inputMode="numeric" autoComplete="new-password" name="clave_panel_anun_ignis" data-lpignore="true" placeholder="Clave del panel"
-                          style={{ marginTop: movil ? 0 : "auto", padding: "9px 10px", borderRadius: 7, border: "1px solid #999", fontSize: 13, background: "#fff", color: "#222", fontFamily: "inherit" }} />
+                        <input id="clave_panel_anun" type="text" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} data-lpignore="true" data-1p-ignore="true" data-form-type="other" inputMode="numeric" name="clave_panel_anun_ignis" placeholder="Clave del panel"
+                          style={{ WebkitTextSecurity: "disc", marginTop: movil ? 0 : "auto", padding: "9px 10px", borderRadius: 7, border: "1px solid #999", fontSize: 13, background: "#fff", color: "#222", fontFamily: "inherit" }} />
                       </div>);
                     return (
                       <div style={{ display: "flex", flexDirection: movil ? "column" : "row", gap: 10, alignItems: "stretch", marginBottom: 10 }}>

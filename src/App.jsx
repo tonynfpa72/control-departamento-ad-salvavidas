@@ -14830,6 +14830,31 @@ async function listarHistorialPaneles(opciones) {
 
 // 11.7: un equipo sin latido por 150 s (2 latidos perdidos; avisa cada 1 min y reintenta a los 15 s) se marca caído
 const SEG_CAIDO = 150;
+// 11.7: la PANTALLA del panel y la COLA del Centro usan exactamente la misma ventana de eventos de cada sitio
+// (los 120 más nuevos, más las anulaciones/habilitaciones más viejas): lo que sale de la pantalla sale de la cola.
+const VENTANA_PANTALLA = 120;
+const tEvVentana = (e) => Date.parse(e.fecha_panel || e.created_at || 0) || 0;
+function ventanaPantalla(listas, soloSitio) {
+  const por = {};
+  listas.forEach((l) => (l || []).forEach((e) => {
+    if (!e || !e.sitio || (soloSitio && e.sitio !== soloSitio)) return;
+    const m = por[e.sitio] || (por[e.sitio] = new Map());
+    const k = e.id != null ? "i" + e.id : "t" + tEvVentana(e) + "|" + e.texto;
+    if (!m.has(k)) m.set(k, e);   // la primera lista manda (la más fresca)
+  }));
+  const res = {};
+  Object.keys(por).forEach((s) => {
+    const todos = [...por[s].values()].sort((a, b) => {
+      const d = tEvVentana(b) - tEvVentana(a);
+      if (d) return d;
+      const ia = Number(a.id), ib = Number(b.id);
+      if (!isNaN(ia) && !isNaN(ib)) return ib - ia;
+      return String(b.id || "").localeCompare(String(a.id || ""));
+    });
+    res[s] = [...todos.slice(0, VENTANA_PANTALLA), ...todos.slice(VENTANA_PANTALLA).filter((e) => /ANUL|HABILITAD|DISABL/i.test(String(e.texto || "")))];
+  });
+  return res;
+}
 // 11.7: lector de líneas del panel para el Centro de Monitoreo (el mismo de la pantalla moderna del
 // Control del panel): así la cola de atención quita un evento igual que el panel, con su borrado.
 const lineaPanelCentral = (() => {
@@ -15022,12 +15047,13 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   // eventos ya ordenados por sitio (se calcula solo cuando cambian los eventos, no en cada refresco)
   const centralPorSitio = useMemo(() => {
     if (!centralAbierta) return {};
-    const tE = (e) => Date.parse(e.fecha_panel || e.created_at || 0) || 0;
     const m = {};
-    (eventosCentro || eventos).forEach((e) => { if (!e || !e.sitio || /^\s*\[APP\]/.test(String(e.texto || ""))) return; (m[e.sitio] = m[e.sitio] || []).push(e); });
-    Object.values(m).forEach((l) => l.sort((a, b) => tE(b) - tE(a) || (Number(b.id) || 0) - (Number(a.id) || 0)));
+    // 11.7: la misma ventana que la pantalla del panel (así la cola y la pantalla siempre coinciden)
+    const v = ventanaPantalla([eventos, eventosCentro]);
+    Object.keys(v).forEach((s) => { m[s] = v[s].filter((e) => !/^\s*\[APP\]/.test(String(e.texto || ""))); });
     return m;
   }, [eventos, eventosCentro, centralAbierta]);
+  const ventanaTerm = useMemo(() => (termRemoto ? (ventanaPantalla([eventos, eventosCentro], termRemoto.sitio)[termRemoto.sitio] || []) : []), [eventos, eventosCentro, termRemoto && termRemoto.sitio]);
   // cuando entra un evento nuevo, la lista vuelve arriba para ver el sitio que pasó al primer lugar
   const centralUlt = useMemo(() => Math.max(0, ...Object.values(centralPorSitio).map((l) => Date.parse((l[0] && (l[0].fecha_panel || l[0].created_at)) || 0) || 0)), [centralPorSitio]);
   useEffect(() => { if (centralAbierta && centralScrollRef.current) try { centralScrollRef.current.scrollTo({ top: 0, behavior: "smooth" }); } catch (e) {} }, [centralUlt]);
@@ -15481,8 +15507,8 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
           setEventos((prev) => (prev.some((e) => e.id === n.id) ? prev : [corregirCategoriaEvento(n), ...prev].slice(0, 500)));
           setEventosCentro((prev) => (!prev || prev.some((e) => e.id === n.id) ? prev : [corregirCategoriaEvento(n), ...prev]));
         })
-        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "eventos_panel" }, () => { cargar(); if (centralAbiertaRef.current) window.dispatchEvent(new Event("ignis-centro-recargar")); })
-        .on("postgres_changes", { event: "DELETE", schema: "public", table: "eventos_panel" }, () => { cargar(); if (centralAbiertaRef.current) window.dispatchEvent(new Event("ignis-centro-recargar")); })
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "eventos_panel" }, (p) => { const n = p && p.new; if (n && n.id != null) setEventosCentro((prev) => (prev ? prev.map((e) => (e.id === n.id ? corregirCategoriaEvento({ ...e, ...n }) : e)) : prev)); cargar(); if (centralAbiertaRef.current) window.dispatchEvent(new Event("ignis-centro-recargar")); })
+        .on("postgres_changes", { event: "DELETE", schema: "public", table: "eventos_panel" }, (p) => { const o = p && p.old; if (o && o.id != null) setEventosCentro((prev) => (prev ? prev.filter((e) => e.id !== o.id) : prev)); cargar(); if (centralAbiertaRef.current) window.dispatchEvent(new Event("ignis-centro-recargar")); })
         .on("postgres_changes", { event: "UPDATE", schema: "public", table: "dispositivos_panel" }, (p) => {
           const n = p && p.new;
           if (!n || !permitido(n.sitio)) return;
@@ -16168,7 +16194,7 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
     ]);
     ultimoBorradoRef.current = Date.now();
     setBorrando(false);
-    if (!error) setEventos((prev) => prev.filter((e) => e.sitio !== sitio));
+    if (!error) { setEventos((prev) => prev.filter((e) => e.sitio !== sitio)); setEventosCentro((prev) => (prev ? prev.filter((e) => e.sitio !== sitio) : prev)); }
     setHistorialHtml(""); setHistArchivos([]); setMantArchivos([]); setMantLineas([]);
     setPuntosInfo({ lineas: 0, fecha: null });
     if (vista === "tendencias" || vista === "puntos") setVista("eventos");
@@ -16213,7 +16239,7 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
     const { error: e2 } = await supabase.from("dispositivos_panel").delete().eq("sitio", sitio);
     ultimoBorradoRef.current = Date.now();
     setBorrando(false);
-    setEventos((prev) => prev.filter((e) => e.sitio !== sitio));
+    setEventos((prev) => prev.filter((e) => e.sitio !== sitio)); setEventosCentro((prev) => (prev ? prev.filter((e) => e.sitio !== sitio) : prev));
     setDispositivos((prev) => prev.filter((d) => d.sitio !== sitio));
     setHistorialHtml(""); setHistArchivos([]); setMantArchivos([]); setMantLineas([]);
     setPuntosInfo({ lineas: 0, fecha: null });
@@ -16248,7 +16274,7 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
       await confirmar("Supabase no borró ningún evento (falta el permiso de borrar en la tabla eventos_panel). Avise al administrador.", { confirmLabel: "Entendido", soloAviso: true });
       return;
     }
-    setEventos((prev) => prev.filter((e) => e.sitio !== sitioSeleccionado));
+    setEventos((prev) => prev.filter((e) => e.sitio !== sitioSeleccionado)); setEventosCentro((prev) => (prev ? prev.filter((e) => e.sitio !== sitioSeleccionado) : prev));
     if (categoriaSeleccionada !== "historial" && categoriaSeleccionada !== "mantenimiento") setCategoriaSeleccionada(null);
     await confirmar(n === 1 ? "Se borró 1 evento." : `Se borraron ${n} eventos.`, { confirmLabel: "Listo", soloAviso: true, variant: "info" });
   };
@@ -17227,12 +17253,12 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               {esTecnicoSonido && modoSonando > 0 && sonandoSitio && (
                 <button type="button" onClick={() => abrirMonitorRemoto(sonandoSitio)}
                   style={{ background: "#1f6fd8", border: "none", color: "#fff", borderRadius: 8, padding: "5px 11px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Abrir panel ▸</button>)}
-              <div style={{ marginLeft: movilC ? 0 : "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {esOperadorCentral && <div style={{ marginLeft: movilC ? 0 : "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {KP.map(([k, t, n, col, bo]) => (
                   <button key={k} type="button" onClick={() => setCentralFiltro(centralFiltro === k ? "todos" : k)} title={centralFiltro === k ? "Ver todos" : "Ver solo " + t}
                     style={{ borderRadius: 999, padding: "4px 11px", fontSize: 11.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", color: col,
                       background: centralFiltro === k ? bo + "33" : "transparent", border: `1px solid ${centralFiltro === k || (k === "alarma" && n) ? bo : IGNIS.border}` }}>{n} {t.toUpperCase()}</button>))}
-              </div>
+              </div>}
               {!movilC && typeof document !== "undefined" && document.documentElement && document.documentElement.requestFullscreen && (
                 <button type="button" onClick={alternarCompleta} title="Pantalla completa (para una pantalla en la pared)"
                   style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 8, padding: "5px 10px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>{centralCompleta ? "⤡" : "⤢"}</button>)}
@@ -17508,7 +17534,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 if (blk && blk < 25000) av.push(["Memoria baja", "#ff8f92"]);
                 if (x.enLinea && !isNaN(ord) && ord > 180) av.push(["No lee órdenes", "#ff8f92"]);
                 if (vMax && d.version && numV(d.version) < numV(vMax)) av.push(["Firmware viejo", "#f2d06b"]);
-                if (lat > 15) av.push(["Demora " + lat + " s", "#f2d06b"]);
+                // 11.7: «lat» viene en MILISEGUNDOS (de que el equipo leyó la línea a que Supabase la aceptó); 447 = 0.4 s, normal
+                if (lat > 15000) av.push(["Demora " + Math.round(lat / 1000) + " s", "#f2d06b"]);
                 return { x, d, cc, rssi, blk, heap, ord, lat, av };
               }).sort((p2, q) => q.av.length - p2.av.length || p2.x.sitio.localeCompare(q.x.sitio, "es"));
               const colS = (r) => r === null ? IGNIS.dim : r >= -65 ? "#3fd17a" : r >= -70 ? "#a3d977" : r >= -78 ? "#f2d06b" : "#ff8f92";
@@ -17998,15 +18025,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     // 10.9: la vista moderna usa los EVENTOS guardados del sitio (no se pierden como en el
                     // texto del puerto, que solo guarda los últimos ~2 KB); si todavía no hay, usa el texto.
                     const hoyTxt = new Date().toDateString();
-                    const evSitio = eventos.filter((e) => e.sitio === termRemoto.sitio)
-                      // el más nuevo arriba: por hora del panel y, dentro del mismo minuto, por orden de llegada (id)
-                      .sort((a, b) => {
-                        const ta = Date.parse(a.fecha_panel || a.created_at || 0) || 0, tb = Date.parse(b.fecha_panel || b.created_at || 0) || 0;
-                        if (tb !== ta) return tb - ta;
-                        const ia = Number(a.id), ib = Number(b.id);
-                        if (!isNaN(ia) && !isNaN(ib)) return ib - ia;
-                        return String(b.id || "").localeCompare(String(a.id || ""));
-                      }).slice(0, 120);
+                    const evSitio = ventanaTerm;   // 11.7: la misma ventana que usa la cola del Centro
                     const filasEv = evSitio.map((e) => {
                       const r = parsear(e.texto);
                       if (!r) return null;
@@ -18261,7 +18280,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                                   setLimpiadoEn((x) => ({ ...x, [termRemoto.sitio]: ahoraL }));
                                   if (ids.length) {
                                     ultimoBorradoRef.current = ahoraL;
-                                    setEventos((prev) => prev.filter((e) => !ids.includes(e.id)));
+                                    setEventos((prev) => prev.filter((e) => !ids.includes(e.id))); setEventosCentro((prev) => (prev ? prev.filter((e) => !ids.includes(e.id)) : prev));
                                     for (let i = 0; i < ids.length; i += 100) {
                                       const { error } = await supabase.from("eventos_panel").delete().in("id", ids.slice(i, i + 100));
                                       if (error) { window.alert("No se pudieron borrar de Supabase: " + error.message); break; }

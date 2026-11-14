@@ -14967,6 +14967,12 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   const [centroSinSql, setCentroSinSql] = useState(false);
   const centralAbiertaRef = useRef(false);
   centralAbiertaRef.current = !!(centralAbierta && veCentral);
+  // 11.7: al ENTRAR a la Central hay 20 s de gracia: lo que ya estaba caído o escalado no suena (solo lo nuevo)
+  const centralAbiertaEnRef = useRef(0);
+  const centralPrevRef = useRef(false);
+  if (centralAbierta && veCentral && !centralPrevRef.current) centralAbiertaEnRef.current = Date.now();   // se marca en el mismo render en que se abre
+  centralPrevRef.current = !!(centralAbierta && veCentral);
+  const enGraciaCentral = () => Date.now() - centralAbiertaEnRef.current < 20000;
   useEffect(() => {
     if (!centralAbierta || !veCentral) return;
     let vivo = true, enCurso = false;
@@ -15192,6 +15198,31 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   const mapaDatosRef = useRef({ firma: "", puntos: [] });
   const mapaFirmaPintadaRef = useRef("");
   const [mapaListo, setMapaListo] = useState(false);
+  // sitios sin coordenadas pero con dirección: se ubican por la dirección (OpenStreetMap), guardado en este navegador
+  const [geoCache, setGeoCache] = useState(() => { try { const v = JSON.parse(localStorage.getItem("ignisGeoDir") || "{}"); return v && typeof v === "object" ? v : {}; } catch (e) { return {}; } });
+  const geoPendRef = useRef([]);
+  const mapaVerTodos = () => {
+    const m = mapaObjRef.current, pts = mapaDatosRef.current.puntos || [];
+    if (!m || !pts.length) return;
+    try { if (pts.length === 1) m.setView([pts[0].lat, pts[0].lng], 14); else m.fitBounds(pts.map((p2) => [p2.lat, p2.lng]), { padding: [40, 40], maxZoom: 14 }); } catch (e) {}
+  };
+  useEffect(() => {
+    if (!(centralAbierta && veCentral && centralVista === "mapa")) return;
+    let vivo = true;
+    const id = setInterval(async () => {
+      const dir = geoPendRef.current.find((d) => !(d in geoCache));
+      if (!dir || !vivo) return;
+      let val = null;
+      try {
+        const r = await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&accept-language=es&q=" + encodeURIComponent(dir), { headers: { Accept: "application/json" } });
+        const j = await r.json();
+        if (Array.isArray(j) && j[0]) val = [Number(j[0].lat), Number(j[0].lon)];
+      } catch (e) { return; }   // sin internet: se intenta después
+      if (!vivo) return;
+      setGeoCache((prev) => { const nv = { ...prev, [dir]: val }; try { localStorage.setItem("ignisGeoDir", JSON.stringify(nv)); } catch (e) {} return nv; });
+    }, 1300);   // OpenStreetMap pide como máximo 1 consulta por segundo
+    return () => { vivo = false; clearInterval(id); };
+  }, [centralAbierta, veCentral, centralVista, geoCache]);
   const [mapaError, setMapaError] = useState("");
   useEffect(() => {
     if (!(centralAbierta && veCentral && centralVista === "mapa")) return;
@@ -15228,17 +15259,19 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
     if (!mapaListo || !L || !capa || !m) return;
     const { firma, puntos } = mapaDatosRef.current;
     if (firma === mapaFirmaPintadaRef.current) return;
-    const primera = !mapaFirmaPintadaRef.current;
+    const conjunto = puntos.map((p2) => p2.sitio).sort().join("|");
+    const primera = !mapaFirmaPintadaRef.current || conjunto !== mapaFirmaPintadaRef.conjunto;
+    mapaFirmaPintadaRef.conjunto = conjunto;
     mapaFirmaPintadaRef.current = firma;
     capa.clearLayers();
     const COL = { alarma: "#e5484d", superv: "#ff8c3d", falla: "#f2b705", anulado: "#b8641f", sinconex: "#6e7681", sinequipo: "#6e7681", normal: "#2fbf5f" };
     puntos.forEach((p2) => {
-      const mk = L.circleMarker([p2.lat, p2.lng], { radius: p2.est === "alarma" ? 13 : p2.est === "normal" ? 7 : 10, color: "#fff", weight: 2, fillColor: COL[p2.est] || "#2fbf5f", fillOpacity: 0.95 });
-      mk.bindTooltip((p2.cliente ? p2.cliente + " · " : "") + p2.sitio + (p2.est !== "normal" ? " — " + p2.estTxt : ""), { direction: "top" });
+      const mk = L.circleMarker([p2.lat, p2.lng], { radius: p2.est === "alarma" ? 13 : p2.est === "normal" ? 9 : 11, color: p2.aprox ? "#79b8ff" : "#fff", weight: p2.aprox ? 3 : 2, dashArray: p2.aprox ? "3 3" : null, fillColor: COL[p2.est] || "#2fbf5f", fillOpacity: 0.95 });
+      mk.bindTooltip((p2.cliente ? p2.cliente + " · " : "") + p2.sitio + (p2.est !== "normal" ? " — " + p2.estTxt : "") + (p2.aprox ? " (ubicación aproximada por la dirección)" : ""), { direction: "top", permanent: puntos.length <= 25, className: "ignis-mapa-etq" });
       mk.on("click", () => abrirMonitorRemoto(p2.sitio));
       mk.addTo(capa);
     });
-    if (primera && puntos.length) { try { m.fitBounds(puntos.map((p2) => [p2.lat, p2.lng]), { padding: [40, 40], maxZoom: 13 }); } catch (e) {} }
+    if (primera && puntos.length) mapaVerTodos();
   });
   // se entró a un sitio desde la Central: botón para volver
   const abrirDesdeCentral = (sitio) => { setSitioSeleccionado(sitio); setDesdeCentral(true); setCentralAbierta(false); try { window.scrollTo(0, 0); } catch (e) {} };
@@ -15453,7 +15486,7 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
     const ahora = caidosAhora ? caidosAhora.split("|") : [];
     const antes = caidosRef.current;
     caidosRef.current = ahora;
-    if (antes === null || !esTecnicoSonido || !sonidoOn) return;   // la primera vez solo toma nota
+    if (antes === null || !esTecnicoSonido || !sonidoOn || enGraciaCentral()) return;   // la primera vez (y los primeros 20 s) solo toma nota
     const nuevos = ahora.filter((x) => !antes.includes(x) && !sitiosMudosRef.current.includes(x) && !mantRef.current.includes(x));
     if (nuevos.length && modoSonandoRef.current < 1) { setSonandoSitio(nuevos[0]); sonar(1); }
   }, [caidosAhora, centralAbierta, veCentral, cargando, dispositivos.length]);
@@ -17006,7 +17039,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           // todo parecía «nuevo» y sonaba cada vez que se entraba al menú
           const datosListos = !cargando && dispositivos.length > 0 && (eventosCentro !== null || centroSinSql) && atencionesListas;
           if (!datosListos) escPrimeraRef.current = false;
-          else if (escPrimeraRef.current && esTecnicoSonido && sonidoOn) {
+          else if (escPrimeraRef.current && esTecnicoSonido && sonidoOn && !enGraciaCentral()) {
             const sube = escalados.filter((it) => !escVistosRef.current.has(it.k + ":" + it.esc) && (it.esc === 2 || !sitiosMudos.includes(it.x.sitio))).sort((p2, q) => q.esc - p2.esc)[0];
             if (sube) setTimeout(() => { setSonandoSitio(sube.x.sitio); sonar(2); }, 0);
           }
@@ -17404,16 +17437,26 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 </div>);
             })()}
             {centralVista === "mapa" && (() => {
-              const conC = sitiosC.filter((x) => x.lat != null && x.lng != null && !isNaN(x.lat) && pasaBusca(x));
-              const sinC = sitiosC.filter((x) => (x.lat == null || isNaN(x.lat)) && pasaBusca(x));
+              const dirDe = (x) => { const f = (x.d && x.d.ficha && typeof x.d.ficha === "object") ? x.d.ficha : {}; return String(f.direccion || "").trim(); };
+              const coordDe = (x) => {
+                if (x.lat != null && x.lng != null && !isNaN(x.lat) && !isNaN(x.lng)) return { lat: x.lat, lng: x.lng, aprox: false };
+                const g = dirDe(x) && geoCache[dirDe(x)];
+                return g ? { lat: g[0], lng: g[1], aprox: true } : null;
+              };
+              geoPendRef.current = sitiosC.filter((x) => x.lat == null && dirDe(x)).map(dirDe);
+              const conC = sitiosC.filter((x) => coordDe(x) && pasaBusca(x)).map((x) => ({ ...x, ...coordDe(x) }));
+              const sinC = sitiosC.filter((x) => !coordDe(x) && pasaBusca(x));
               const ET = { alarma: "Alarma", superv: "Supervisión", falla: "Falla", anulado: "Anulado", sinconex: "Sin conexión", sinequipo: "Sin equipo", normal: "OK" };
-              mapaDatosRef.current = { firma: conC.map((x) => x.sitio + ":" + x.est + ":" + x.lat + ":" + x.lng + ":" + x.cliente).join("|"), puntos: conC.map((x) => ({ sitio: x.sitio, cliente: x.cliente, lat: x.lat, lng: x.lng, est: x.est, estTxt: ET[x.est] })) };
+              mapaDatosRef.current = { firma: conC.map((x) => x.sitio + ":" + x.est + ":" + x.lat + ":" + x.lng + ":" + x.cliente + ":" + x.aprox).join("|") + "#" + conC.length, puntos: conC.map((x) => ({ sitio: x.sitio, cliente: x.cliente, lat: x.lat, lng: x.lng, est: x.est, estTxt: ET[x.est], aprox: x.aprox })) };
               return (
                 <div style={{ flex: 1, minHeight: 0, display: movilC ? "flex" : "grid", flexDirection: "column", gridTemplateColumns: "minmax(0,1fr) 300px", gap: 12, padding: movilC ? 10 : "14px 18px" }}>
                   <div style={{ position: "relative", minHeight: movilC ? 360 : 0, borderRadius: 12, overflow: "hidden", border: `1px solid ${IGNIS.border}`, background: "#0e141b" }}>
                     <div ref={mapaDivRef} style={{ position: "absolute", inset: 0 }} />
                     {mapaError && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#ffb27a", fontSize: 13 }}>{mapaError}</div>}
                     {!mapaListo && !mapaError && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: IGNIS.dim, fontSize: 13 }}>Cargando mapa…</div>}
+                    {mapaListo && conC.length > 0 && <button type="button" onClick={mapaVerTodos}
+                      style={{ position: "absolute", top: 10, right: 10, zIndex: 500, background: "#1f6fd8", color: "#fff", border: "none", borderRadius: 8, padding: "6px 12px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 2px 6px #0006" }}>Ver todos ({conC.length})</button>}
+                    <style>{".ignis-mapa-etq{font-weight:700;font-size:11px;padding:2px 6px}"}</style>
                   </div>
                   <div style={{ background: "#0e141b", border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: 12, overflow: "auto", minHeight: 0 }}>
                     <b style={{ fontSize: 12, letterSpacing: ".08em", color: IGNIS.dim }}>EN EL MAPA ({conC.length})</b>
@@ -17423,7 +17466,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                         <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", marginRight: 6, background: COLOR[x.est] || "#2fbf5f" }} />{x.cliente ? x.cliente + " · " : ""}{x.sitio} <span style={{ color: IGNIS.dim }}>· {ET[x.est]}</span>
                       </div>))}
                     <b style={{ display: "block", marginTop: 14, fontSize: 12, letterSpacing: ".08em", color: IGNIS.dim }}>SIN UBICACIÓN ({sinC.length})</b>
-                    <div style={{ fontSize: 11.5, color: IGNIS.dim, margin: "4px 0 6px" }}>Póngala en la ficha (✎) con el enlace de Google Maps.</div>
+                    <div style={{ fontSize: 11.5, color: IGNIS.dim, margin: "4px 0 6px" }}>Póngale en la ficha (✎) la dirección o las coordenadas. Los enlaces cortos de Google (maps.app.goo.gl) no traen coordenadas: en Google Maps haga clic derecho en el punto y copie los números (ej. 9.93, -84.08). Con dirección, el punto sale aproximado (borde azul punteado).</div>
                     {sinC.map((x) => (
                       <div key={x.sitio} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, padding: "4px 0" }}>
                         <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.cliente ? x.cliente + " · " : ""}{x.sitio}</span>

@@ -16400,10 +16400,10 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
   };
 
   return (
-    <div className={modoCentral && centralAbierta && veCentral ? "ignis-raiz-central" : undefined} style={{ ...(termRemoto && desdeCentral && !centralAbierta ? { display: "flex", flexDirection: "column" } : {}), background: IGNIS.bg, minHeight: "100vh", padding: modoCentral && centralAbierta && veCentral ? 0 : 18, paddingTop: modoCentral && centralAbierta && veCentral ? 0 : esMovilNotifier ? 58 : 18, paddingBottom: esMovilNotifier ? 100 : 30, display: "flex", flexDirection: "column", gap: 14, color: IGNIS.text, boxSizing: "border-box" }}>
+    <div className={modoCentral && centralAbierta && veCentral ? "ignis-raiz-central" : undefined} style={{ ...(!centralAbierta && (termRemoto || sitioSeleccionado !== "Todos") ? { display: "flex", flexDirection: "column" } : {}), background: IGNIS.bg, minHeight: "100vh", padding: modoCentral && centralAbierta && veCentral ? 0 : 18, paddingTop: modoCentral && centralAbierta && veCentral ? 0 : esMovilNotifier ? 58 : 18, paddingBottom: esMovilNotifier ? 100 : 30, display: "flex", flexDirection: "column", gap: 14, color: IGNIS.text, boxSizing: "border-box" }}>
       {/* ---- Encabezado estilo IgnisMonitor ---- */}
       <AvisosCiberMonitoreo />
-      <div style={{ order: termRemoto && desdeCentral && !centralAbierta ? -2 : undefined, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, borderBottom: `1px solid ${IGNIS.border}`, paddingBottom: 12 }}>
+      <div style={{ order: !centralAbierta && (termRemoto || sitioSeleccionado !== "Todos") ? 0 : undefined, background: !centralAbierta && (termRemoto || sitioSeleccionado !== "Todos") ? "#0e141b" : undefined, borderRadius: !centralAbierta && (termRemoto || sitioSeleccionado !== "Todos") ? 10 : undefined, padding: !centralAbierta && (termRemoto || sitioSeleccionado !== "Todos") ? "8px 10px" : undefined, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, borderBottom: `1px solid ${IGNIS.border}`, paddingBottom: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ width: 30, height: 30, borderRadius: 8, background: IGNIS.panel2, border: `1px solid ${IGNIS.border}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <Flame size={16} color={IGNIS.alarma} />
@@ -16953,6 +16953,26 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           </div>
         );
       })()}
+      {!centralAbierta && !termRemoto && sitioSeleccionado !== "Todos" && (
+        // 11.7: la pantalla del sitio es UNA sola: el panel arriba y las tarjetas debajo. Sin la clave del monitor
+        // el panel queda bloqueado en su mismo lugar; lo que se puede hacer depende del usuario.
+        <div style={{ order: -1, marginBottom: 14, background: "linear-gradient(#d9dad6,#c9cac5)", borderRadius: 12, padding: "14px 16px", color: "#2a2c2f" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            {veCentral && <Btn small onClick={volverAlCentro} title="Volver al Centro de Monitoreo">← Centro de Monitoreo</Btn>}
+            <b style={{ fontSize: 15 }}>{((dispositivos.find((z) => z.sitio === sitioSeleccionado) || {}).cliente ? (dispositivos.find((z) => z.sitio === sitioSeleccionado) || {}).cliente + " · " : "") + sitioSeleccionado}</b>
+          </div>
+          <div style={{ marginTop: 12, background: "#0a0f14", border: "6px solid #3a3d40", borderRadius: 8, minHeight: 150, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, color: "#8b949e", padding: 16, textAlign: "center" }}>
+            <div style={{ fontSize: 26 }}>🔒</div>
+            {(canGestionar || esCliente)
+              ? <>
+                  <div style={{ fontSize: 13 }}>El panel se abre con la clave del monitor.</div>
+                  <button type="button" onClick={() => abrirMonitorRemoto(sitioSeleccionado)}
+                    style={{ background: "#1f6fd8", color: "#fff", border: "none", borderRadius: 8, padding: "9px 18px", fontWeight: 800, fontSize: 13.5, cursor: "pointer", fontFamily: "inherit" }}>Abrir panel</button>
+                </>
+              : <div style={{ fontSize: 13 }}>Su usuario puede ver los eventos y las tarjetas de este sitio, pero no controlar el panel.</div>}
+          </div>
+        </div>
+      )}
       {centralAbierta && veCentral && (() => {
         // 11.7: CENTRO DE MONITOREO (propuesta D) — matriz con TODOS los sitios (pensada para 100+ clientes)
         // y a la derecha la COLA DE ATENCIÓN: los sitios con algo activo, el del último evento arriba.
@@ -17747,7 +17767,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const campo = (k, titulo, extra) => (<div><span style={lab}>{titulo}</span><input style={inp} value={cfgForm ? cfgForm[k] : ""} onChange={set(k)} {...(extra || {})} /></div>);
         const tecla = (txt, bytes) => (<Btn small onClick={() => enviarAlPanel(bytes, txt)}>{txt}</Btn>);
         const red = cfgForm && cfgForm.tipo === "2";
-        const unido = !!(desdeCentral && !centralAbierta);   // 11.7: panel dentro de la pantalla del sitio (con sus tarjetas debajo)
+        const unido = !centralAbierta;   // 11.7: el panel SIEMPRE vive dentro de la pantalla del sitio, con sus tarjetas debajo (un solo modo)
         return (
           <div onClick={unido ? undefined : cerrarMonitorRemoto} style={unido ? { order: -1, marginBottom: 14 } : { position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: centralAbierta ? 0 : (typeof window !== "undefined" && window.innerWidth < 640) ? 4 : 12 }}>
             <div onClick={(x) => x.stopPropagation()} onPointerDown={() => { monActividad.current = Date.now(); }} onKeyDown={() => { monActividad.current = Date.now(); }} style={{ background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: centralAbierta ? 0 : 12, width: "100%", maxWidth: unido ? "100%" : centralAbierta ? "100vw" : (typeof window !== "undefined" && window.innerWidth < 640) ? 880 : "min(1500px, 97vw)", maxHeight: unido ? "none" : centralAbierta ? "100vh" : (typeof window !== "undefined" && window.innerWidth < 640) ? "94vh" : "97vh", height: centralAbierta && !unido ? "100vh" : undefined, boxSizing: "border-box", display: "flex", flexDirection: "column", padding: (typeof window !== "undefined" && window.innerWidth < 640) ? "10px 8px" : "16px 20px", fontFamily: "system-ui,-apple-system,sans-serif", overflow: "auto" }}>

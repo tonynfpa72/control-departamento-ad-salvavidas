@@ -14958,7 +14958,34 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   const [centralCompleta, setCentralCompleta] = useState(false);   // pantalla completa del navegador
   const [centralVista, setCentralVista] = useEstadoRecordado("monitoreo-central-vista", "atencion");   // "atencion" (solo lo que necesita atención) | "matriz"
   const [centralOkAbierto, setCentralOkAbierto] = useState(false);
-  const [centralColaCliente, setCentralColaCliente] = useEstadoRecordado("monitoreo-central-cola-cliente", "");   // la cola de atención filtrada por cliente
+  const [centralColaCliente, setCentralColaCliente] = useEstadoRecordado("monitoreo-central-cola-cliente", "");
+  // 11.7 (punto 1): el Centro baja de Supabase los últimos eventos DE CADA SITIO (no 500 de todos juntos),
+  // más las anulaciones/habilitaciones recientes, así un sitio con mucho movimiento no saca a los otros.
+  const [eventosCentro, setEventosCentro] = useState(null);   // null = todavía no cargó o falta el SQL
+  const [centroSinSql, setCentroSinSql] = useState(false);
+  const centralAbiertaRef = useRef(false);
+  centralAbiertaRef.current = !!(centralAbierta && veCentral);
+  useEffect(() => {
+    if (!centralAbierta || !veCentral) return;
+    let vivo = true, enCurso = false;
+    const cargarCentro = async () => {
+      if (enCurso) return; enCurso = true;
+      try {
+        const { data, error } = await supabase.rpc("centro_eventos", { p_por_sitio: 150, p_dias: 60 });
+        if (!vivo) return;
+        if (error) { setCentroSinSql(true); setEventosCentro(null); return; }
+        const vistos = new Set();
+        const lista = (data || []).filter((e) => e && !vistos.has(e.id) && vistos.add(e.id)).map(corregirCategoriaEvento);
+        setCentroSinSql(false);
+        setEventosCentro(lista);
+      } finally { enCurso = false; }
+    };
+    cargarCentro();
+    const id = setInterval(cargarCentro, 60000);   // respaldo: los eventos nuevos llegan en tiempo real
+    const recargar = () => cargarCentro();
+    window.addEventListener("ignis-centro-recargar", recargar);
+    return () => { vivo = false; clearInterval(id); window.removeEventListener("ignis-centro-recargar", recargar); };
+  }, [centralAbierta, veCentral]);   // la cola de atención filtrada por cliente
   const esCorreoC = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v || "").trim());   // el navegador rellena el buscador con el correo del usuario
   const centralScrollRef = useRef(null);
   const [, setTicCentral] = useState(0);
@@ -14985,10 +15012,10 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
     if (!centralAbierta) return {};
     const tE = (e) => Date.parse(e.fecha_panel || e.created_at || 0) || 0;
     const m = {};
-    eventos.forEach((e) => { if (!e || !e.sitio || /^\s*\[APP\]/.test(String(e.texto || ""))) return; (m[e.sitio] = m[e.sitio] || []).push(e); });
+    (eventosCentro || eventos).forEach((e) => { if (!e || !e.sitio || /^\s*\[APP\]/.test(String(e.texto || ""))) return; (m[e.sitio] = m[e.sitio] || []).push(e); });
     Object.values(m).forEach((l) => l.sort((a, b) => tE(b) - tE(a) || (Number(b.id) || 0) - (Number(a.id) || 0)));
     return m;
-  }, [eventos, centralAbierta]);
+  }, [eventos, eventosCentro, centralAbierta]);
   // cuando entra un evento nuevo, la lista vuelve arriba para ver el sitio que pasó al primer lugar
   const centralUlt = useMemo(() => Math.max(0, ...Object.values(centralPorSitio).map((l) => Date.parse((l[0] && (l[0].fecha_panel || l[0].created_at)) || 0) || 0)), [centralPorSitio]);
   useEffect(() => { if (centralAbierta && centralScrollRef.current) try { centralScrollRef.current.scrollTo({ top: 0, behavior: "smooth" }); } catch (e) {} }, [centralUlt]);
@@ -15008,15 +15035,209 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
   }, [centralAbierta, termRemoto, monPedir, centralEditCli]);
+  // 11.7 (punto 2): FICHA DEL SITIO — cliente, dirección, contactos en orden de llamada y procedimiento
   const guardarClienteSitio = async () => {
     const ed = centralEditCli; if (!ed) return;
     const v = String(ed.valor || "").trim().slice(0, 80);
+    const contactos = String(ed.contactos || "").split("\n").map((l) => l.trim()).filter(Boolean).slice(0, 12).map((l) => l.slice(0, 120));
+    const coord = leerCoordenadas(ed.ubicacion);
+    const ficha = { direccion: String(ed.direccion || "").trim().slice(0, 200), contactos, procedimiento: String(ed.procedimiento || "").trim().slice(0, 1500),
+      region: String(ed.region || "").trim().slice(0, 60), ubicacion: String(ed.ubicacion || "").trim().slice(0, 400), lat: coord ? coord.lat : null, lng: coord ? coord.lng : null,
+      logo: /^https:\/\//i.test(String(ed.logo || "").trim()) ? String(ed.logo).trim().slice(0, 500) : "" };
     setCentralEditCli({ ...ed, guardando: true, msg: "" });
-    const { error } = await supabase.from("dispositivos_panel").update({ cliente: v || null }).eq("sitio", ed.sitio);
+    let { error } = await supabase.from("dispositivos_panel").update({ cliente: v || null, ficha }).eq("sitio", ed.sitio);
+    if (error && /ficha/i.test(error.message || "")) {
+      // sin el SQL de operación todavía: al menos se guarda el cliente
+      const r2 = await supabase.from("dispositivos_panel").update({ cliente: v || null }).eq("sitio", ed.sitio);
+      if (!r2.error) { setDispositivos((prev) => prev.map((d) => (d.sitio === ed.sitio ? { ...d, cliente: v || null } : d))); setCentralEditCli({ ...ed, guardando: false, msg: "Se guardó el cliente. Para guardar contactos y procedimiento falta correr el SQL_centro_operacion.sql." }); return; }
+      error = r2.error;
+    }
     if (error) { setCentralEditCli({ ...ed, guardando: false, msg: /cliente/i.test(error.message || "") ? "Falta correr en Supabase el SQL_cliente_sitio.sql." : error.message }); return; }
-    setDispositivos((prev) => prev.map((d) => (d.sitio === ed.sitio ? { ...d, cliente: v || null } : d)));
+    setDispositivos((prev) => prev.map((d) => (d.sitio === ed.sitio ? { ...d, cliente: v || null, ficha } : d)));
     setCentralEditCli(null);
-  };   // se entró a un sitio desde la Central: botón para volver
+  };
+  // ubicación: acepta un enlace de Google Maps o «9.93, -84.08»
+  const leerCoordenadas = (txt) => {
+    const t = String(txt || "");
+    const m = t.match(/@(-?\d{1,2}\.\d+),(-?\d{1,3}\.\d+)/) || t.match(/!3d(-?\d{1,2}\.\d+)!4d(-?\d{1,3}\.\d+)/) || t.match(/[?&](?:q|query|ll)=(-?\d{1,2}\.\d+),\s*(-?\d{1,3}\.\d+)/) || t.match(/^\s*(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)\s*$/);
+    if (!m) return null;
+    const lat = Number(m[1]), lng = Number(m[2]);
+    return Math.abs(lat) <= 90 && Math.abs(lng) <= 180 ? { lat, lng } : null;
+  };
+  const abrirFicha = (sitio) => {
+    const d = dispositivos.find((x) => x.sitio === sitio) || {};
+    const f = (d.ficha && typeof d.ficha === "object") ? d.ficha : {};
+    setCentralEditCli({ sitio, valor: d.cliente || "", direccion: f.direccion || "", contactos: (f.contactos || []).join("\n"), procedimiento: f.procedimiento || "", region: f.region || "", ubicacion: f.ubicacion || (f.lat != null ? f.lat + ", " + f.lng : ""), logo: f.logo || "", msg: "" });
+  };
+  // MANTENIMIENTO por sitio: sigue registrando todo, pero no suena ni escala hasta la hora indicada
+  const enMantenimiento = (d) => !!(d && d.mantenimiento_hasta && Date.parse(d.mantenimiento_hasta) > Date.now());
+  const ponerMantenimiento = async (sitio, horas) => {
+    const hasta = horas ? new Date(Date.now() + horas * 3600000).toISOString() : null;
+    const quien = currentUser?.name || currentUser?.email || "usuario";
+    const { error } = await supabase.from("dispositivos_panel").update({ mantenimiento_hasta: hasta, mantenimiento_por: hasta ? quien : null }).eq("sitio", sitio);
+    if (error) { window.alert(/manten/i.test(error.message || "") ? "Falta correr en Supabase el SQL_centro_operacion.sql." : error.message); return; }
+    setDispositivos((prev) => prev.map((d) => (d.sitio === sitio ? { ...d, mantenimiento_hasta: hasta, mantenimiento_por: hasta ? quien : null } : d)));
+    registrarManipulacion(sitio, hasta ? "Modo mantenimiento por " + horas + " h" : "Fin del modo mantenimiento");
+    if (hasta && modoSonandoRef.current > 0 && sonandoSitioRef.current === sitio) detenerSonido();
+  };
+  // ATENDER EVENTO: el operador toma el evento (queda «atendiendo»), anota qué hizo y lo cierra
+  const [atenciones, setAtenciones] = useState([]);
+  const [centroSinOperacion, setCentroSinOperacion] = useState(false);
+  const [notaAtencion, setNotaAtencion] = useState(null);   // { id, sitio, texto, nota }
+  useEffect(() => {
+    if (!centralAbierta || !veCentral) return;
+    let vivo = true, canal = null;
+    const cargarAt = async () => {
+      const desde = new Date(Date.now() - 2 * 86400000).toISOString();
+      const { data, error } = await supabase.from("centro_atenciones").select("*").or("estado.eq.atendiendo,tomado_en.gt." + desde).order("tomado_en", { ascending: false }).limit(1000);
+      if (!vivo) return;
+      if (error) { setCentroSinOperacion(true); return; }
+      setCentroSinOperacion(false); setAtenciones(data || []);
+    };
+    cargarAt();
+    try {
+      canal = supabase.channel("centro-atenciones-" + Math.random().toString(36).slice(2))
+        .on("postgres_changes", { event: "*", schema: "public", table: "centro_atenciones" }, () => cargarAt())
+        .subscribe();
+    } catch (e) { canal = null; }
+    const id = setInterval(cargarAt, 30000);
+    return () => { vivo = false; clearInterval(id); try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
+  }, [centralAbierta, veCentral]);
+  const atencionDe = (sitio, clave, t) => atenciones.find((a) => a.sitio === sitio && a.clave === clave && (a.estado === "atendiendo" || !t || Date.parse(a.tomado_en) >= t - 1000));
+  const atenderEvento = async (sitio, clave, texto, t) => {
+    const quien = currentUser?.name || currentUser?.email || "usuario";
+    const fila = { sitio, clave, evento_texto: String(texto || "").slice(0, 300), evento_t: t ? new Date(t).toISOString() : null, estado: "atendiendo", operador: quien, operador_email: currentUser?.email || null };
+    const { data, error } = await supabase.from("centro_atenciones").insert(fila).select().single();
+    if (error) { window.alert(/centro_atenciones/i.test(error.message || "") ? "Falta correr en Supabase el SQL_centro_operacion.sql." : error.message); return; }
+    setAtenciones((prev) => [data, ...prev]);
+    registrarManipulacion(sitio, "Atiende: " + String(texto || "").slice(0, 120));
+    if (modoSonandoRef.current > 0 && sonandoSitioRef.current === sitio) detenerSonido();
+  };
+  const cerrarAtencion = async () => {
+    const na = notaAtencion; if (!na) return;
+    const quien = currentUser?.name || currentUser?.email || "usuario";
+    const cambios = { estado: "cerrado", nota: String(na.nota || "").trim().slice(0, 1000), cerrado_en: new Date().toISOString(), cerrado_por: quien };
+    const { error } = await supabase.from("centro_atenciones").update(cambios).eq("id", na.id);
+    if (error) { setNotaAtencion({ ...na, msg: error.message }); return; }
+    setAtenciones((prev) => prev.map((a) => (a.id === na.id ? { ...a, ...cambios } : a)));
+    registrarManipulacion(na.sitio, "Cerró atención: " + String(na.texto || "").slice(0, 80) + (cambios.nota ? " — " + cambios.nota.slice(0, 120) : ""));
+    setNotaAtencion(null);
+  };
+  // 11.7 (punto 3): SUPERVISIÓN — escalamiento, bitácora de turno e indicadores
+  const ESC_DEF = { alarma: [2, 5], superv: [5, 15], falla: [30, 120], supervisor: "", gerencia: "" };
+  const [escCfg, setEscCfg] = useState(ESC_DEF);
+  const [escEdit, setEscEdit] = useState(null);
+  const [bitacora, setBitacora] = useState([]);
+  const [bitDia, setBitDia] = useState(() => new Date().toISOString().slice(0, 10));
+  const [bitNota, setBitNota] = useState("");
+  const [turnoEdit, setTurnoEdit] = useState(null);   // texto de la entrega de turno
+  const [indDias, setIndDias] = useState(30);
+  const [indDatos, setIndDatos] = useState(null);   // { sitios: [...], atenciones: [...] }
+  const escVistosRef = useRef(new Set());
+  const escPrimeraRef = useRef(false);
+  useEffect(() => {
+    if (!centralAbierta || !veCentral) return;
+    supabase.from("centro_config").select("valor").eq("clave", "escalamiento").maybeSingle().then(({ data }) => {
+      if (data && data.valor && typeof data.valor === "object") setEscCfg({ ...ESC_DEF, ...data.valor });
+    }, () => {});
+  }, [centralAbierta, veCentral]);
+  const guardarEscCfg = async () => {
+    const v = escEdit; if (!v) return;
+    const num = (x, d) => { const n = Math.round(Number(x)); return n > 0 && n < 10000 ? n : d; };
+    const val = { alarma: [num(v.a1, 2), num(v.a2, 5)], superv: [num(v.s1, 5), num(v.s2, 15)], falla: [num(v.f1, 30), num(v.f2, 120)], supervisor: String(v.supervisor || "").slice(0, 160), gerencia: String(v.gerencia || "").slice(0, 160) };
+    const { error } = await supabase.from("centro_config").upsert({ clave: "escalamiento", valor: val, actualizado_en: new Date().toISOString(), actualizado_por: currentUser?.name || currentUser?.email || "" });
+    if (error) { setEscEdit({ ...v, msg: /centro_config/i.test(error.message || "") ? "Falta correr en Supabase el SQL_centro_supervision.sql." : error.message }); return; }
+    setEscCfg(val); setEscEdit(null);
+  };
+  const cargarBitacora = async () => {
+    const ini = new Date(bitDia + "T00:00:00"), fin = new Date(ini.getTime() + 86400000);
+    const [b, a] = await Promise.all([
+      supabase.from("centro_bitacora").select("*").gte("creado_en", ini.toISOString()).lt("creado_en", fin.toISOString()).order("creado_en", { ascending: false }).limit(500),
+      supabase.from("centro_atenciones").select("*").gte("tomado_en", ini.toISOString()).lt("tomado_en", fin.toISOString()).order("tomado_en", { ascending: false }).limit(1000),
+    ]);
+    const l = [];
+    (b.data || []).forEach((x) => l.push({ k: "b" + x.id, t: Date.parse(x.creado_en), tipo: x.tipo, quien: x.operador, texto: x.texto }));
+    (a.data || []).forEach((x) => {
+      l.push({ k: "a" + x.id, t: Date.parse(x.tomado_en), tipo: "atiende", quien: x.operador, texto: x.evento_texto, sitio: x.sitio });
+      if (x.cerrado_en) l.push({ k: "c" + x.id, t: Date.parse(x.cerrado_en), tipo: "cierra", quien: x.cerrado_por || x.operador, texto: (x.evento_texto || "") + (x.nota ? " — " + x.nota : ""), sitio: x.sitio, resp: x.evento_t ? Math.round((Date.parse(x.tomado_en) - Date.parse(x.evento_t)) / 60000) : null });
+    });
+    l.sort((p2, q) => q.t - p2.t);
+    setBitacora({ lista: l, sinSql: !!(b.error && /centro_bitacora/i.test(b.error.message || "")) });
+  };
+  const agregarBitacora = async (tipo, texto) => {
+    const t = String(texto || "").trim(); if (!t) return false;
+    const { error } = await supabase.from("centro_bitacora").insert({ tipo, texto: t.slice(0, 4000), operador: currentUser?.name || currentUser?.email || "usuario", operador_email: currentUser?.email || null });
+    if (error) { window.alert(/centro_bitacora/i.test(error.message || "") ? "Falta correr en Supabase el SQL_centro_supervision.sql." : error.message); return false; }
+    cargarBitacora();
+    return true;
+  };
+  const cargarIndicadores = async (dias) => {
+    setIndDatos(null);
+    const desde = new Date(Date.now() - dias * 86400000).toISOString();
+    const [r1, r2] = await Promise.all([
+      supabase.rpc("centro_indicadores", { p_dias: dias }),
+      supabase.from("centro_atenciones").select("sitio,operador,evento_t,tomado_en,cerrado_en,estado").gte("tomado_en", desde).limit(10000),
+    ]);
+    setIndDatos({ sitios: r1.data || [], atenciones: r2.data || [], sinSql: !!r1.error, error: r1.error ? r1.error.message : "" });
+  };
+  useEffect(() => { if (centralAbierta && veCentral && centralVista === "bitacora") cargarBitacora(); }, [bitDia, centralVista, centralAbierta]);
+  useEffect(() => { if (centralAbierta && veCentral && centralVista === "indicadores" && !indDatos) cargarIndicadores(indDias); }, [centralVista, centralAbierta]);
+  // 11.7 (punto 5): MAPA — Leaflet + OpenStreetMap, se carga solo cuando se abre la vista «Mapa»
+  const mapaDivRef = useRef(null);
+  const mapaObjRef = useRef(null);
+  const mapaCapaRef = useRef(null);
+  const mapaDatosRef = useRef({ firma: "", puntos: [] });
+  const mapaFirmaPintadaRef = useRef("");
+  const [mapaListo, setMapaListo] = useState(false);
+  const [mapaError, setMapaError] = useState("");
+  useEffect(() => {
+    if (!(centralAbierta && veCentral && centralVista === "mapa")) return;
+    let vivo = true;
+    const cargarLeaflet = () => new Promise((ok, mal) => {
+      if (window.L && window.L.map) return ok(window.L);
+      if (!document.getElementById("ignis-leaflet-css")) {
+        const l = document.createElement("link"); l.id = "ignis-leaflet-css"; l.rel = "stylesheet"; l.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"; document.head.appendChild(l);
+      }
+      const ya = document.getElementById("ignis-leaflet-js");
+      if (ya) { ya.addEventListener("load", () => ok(window.L)); ya.addEventListener("error", mal); return; }
+      const sc = document.createElement("script"); sc.id = "ignis-leaflet-js"; sc.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+      sc.onload = () => ok(window.L); sc.onerror = () => mal(new Error("no cargó")); document.head.appendChild(sc);
+    });
+    cargarLeaflet().then((L) => {
+      if (!vivo || !mapaDivRef.current) return;
+      if (!mapaObjRef.current) {
+        const m = L.map(mapaDivRef.current, { zoomControl: true }).setView([9.93, -84.08], 8);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(m);
+        mapaObjRef.current = m; mapaCapaRef.current = L.layerGroup().addTo(m); mapaFirmaPintadaRef.current = "";
+      }
+      setMapaError(""); setMapaListo(true);
+      setTimeout(() => { try { mapaObjRef.current.invalidateSize(); } catch (e) {} }, 200);
+    }, () => { if (vivo) setMapaError("No se pudo cargar el mapa (revise la conexión a internet)."); });
+    return () => {
+      vivo = false;
+      try { if (mapaObjRef.current) mapaObjRef.current.remove(); } catch (e) {}
+      mapaObjRef.current = null; mapaCapaRef.current = null; setMapaListo(false);
+    };
+  }, [centralAbierta, veCentral, centralVista]);
+  useEffect(() => {
+    // vuelve a pintar los puntos solo si cambió algún estado (se revisa en cada refresco)
+    const L = window.L, capa = mapaCapaRef.current, m = mapaObjRef.current;
+    if (!mapaListo || !L || !capa || !m) return;
+    const { firma, puntos } = mapaDatosRef.current;
+    if (firma === mapaFirmaPintadaRef.current) return;
+    const primera = !mapaFirmaPintadaRef.current;
+    mapaFirmaPintadaRef.current = firma;
+    capa.clearLayers();
+    const COL = { alarma: "#e5484d", superv: "#ff8c3d", falla: "#f2b705", anulado: "#b8641f", sinconex: "#6e7681", sinequipo: "#6e7681", normal: "#2fbf5f" };
+    puntos.forEach((p2) => {
+      const mk = L.circleMarker([p2.lat, p2.lng], { radius: p2.est === "alarma" ? 13 : p2.est === "normal" ? 7 : 10, color: "#fff", weight: 2, fillColor: COL[p2.est] || "#2fbf5f", fillOpacity: 0.95 });
+      mk.bindTooltip((p2.cliente ? p2.cliente + " · " : "") + p2.sitio + (p2.est !== "normal" ? " — " + p2.estTxt : ""), { direction: "top" });
+      mk.on("click", () => abrirMonitorRemoto(p2.sitio));
+      mk.addTo(capa);
+    });
+    if (primera && puntos.length) { try { m.fitBounds(puntos.map((p2) => [p2.lat, p2.lng]), { padding: [40, 40], maxZoom: 13 }); } catch (e) {} }
+  });
+  // se entró a un sitio desde la Central: botón para volver
   const abrirDesdeCentral = (sitio) => { setSitioSeleccionado(sitio); setDesdeCentral(true); setCentralAbierta(false); try { window.scrollTo(0, 0); } catch (e) {} };
   const [filtroPantalla, setFiltroPantalla] = useState(null);   // 11.4: tocar un contador filtra la pantalla
   const [textoLimpio, setTextoLimpio] = useState({});   // 11.4: sitio -> { en, corte } al limpiar la vista «Texto»   // 11.3: sitio -> hora en que se limpió la pantalla
@@ -15149,7 +15370,12 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
 
   useEffect(() => {
     let enCurso = false, otraVez = false;
-    const cargar = async () => {
+    let ultCarga = 0;
+    const cargar = async (desdeIntervalo) => {
+      // 11.7: con el Centro de Monitoreo abierto no hace falta bajar los 500 cada 2.5 s (el Centro tiene
+      // su propia consulta por sitio y el tiempo real); se baja cada 10 s y así no se carga la plataforma
+      if (desdeIntervalo === true && centralAbiertaRef.current && Date.now() - ultCarga < 10000) return;
+      ultCarga = Date.now();
       // Si ya hay una consulta en camino, se repite al terminar (no se pierde ningún aviso)
       if (enCurso) { otraVez = true; return; }
       enCurso = true;
@@ -15184,9 +15410,10 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
           if (!n || !permitido(n.sitio)) return;
           if (n.id && ultimoBorradoRef.current && Date.now() - ultimoBorradoRef.current < 3000) return;
           setEventos((prev) => (prev.some((e) => e.id === n.id) ? prev : [corregirCategoriaEvento(n), ...prev].slice(0, 500)));
+          setEventosCentro((prev) => (!prev || prev.some((e) => e.id === n.id) ? prev : [corregirCategoriaEvento(n), ...prev]));
         })
-        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "eventos_panel" }, () => cargar())
-        .on("postgres_changes", { event: "DELETE", schema: "public", table: "eventos_panel" }, () => cargar())
+        .on("postgres_changes", { event: "UPDATE", schema: "public", table: "eventos_panel" }, () => { cargar(); if (centralAbiertaRef.current) window.dispatchEvent(new Event("ignis-centro-recargar")); })
+        .on("postgres_changes", { event: "DELETE", schema: "public", table: "eventos_panel" }, () => { cargar(); if (centralAbiertaRef.current) window.dispatchEvent(new Event("ignis-centro-recargar")); })
         .on("postgres_changes", { event: "UPDATE", schema: "public", table: "dispositivos_panel" }, (p) => {
           const n = p && p.new;
           if (!n || !permitido(n.sitio)) return;
@@ -15196,7 +15423,7 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
         .on("postgres_changes", { event: "DELETE", schema: "public", table: "dispositivos_panel" }, () => cargar())
         .subscribe();
     } catch (e) { canal = null; }
-    const intervalo = setInterval(cargar, 2500);   // respaldo por si el aviso en tiempo real no llega
+    const intervalo = setInterval(() => cargar(true), 2500);   // respaldo por si el aviso en tiempo real no llega
     return () => { clearInterval(intervalo); try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
   }, []);
 
@@ -15210,6 +15437,23 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   const [sonidoBloqueado, setSonidoBloqueado] = useState(true); // falta el primer toque del usuario
   const [modoSonando, setModoSonando] = useState(0); // 0 silencio, 1 pulsante, 2 continuo
   const [sonandoSitio, setSonandoSitio] = useState(null);   // 11.7: qué cliente hizo sonar (se ve en el Centro de Monitoreo)
+  const sonandoSitioRef = useRef(null);
+  sonandoSitioRef.current = sonandoSitio;
+  // sitios en modo mantenimiento (no suenan)
+  const mantRef = useRef([]);
+  mantRef.current = dispositivos.filter((d) => d.mantenimiento_hasta && Date.parse(d.mantenimiento_hasta) > Date.now()).map((d) => d.sitio);
+  // 11.7: con el Centro abierto, un equipo que SE CAE suena como una falla (deja de vigilar ese panel)
+  const caidosRef = useRef(null);
+  const caidosAhora = (centralAbierta && veCentral) ? dispositivos.filter((d) => d.actualizado_en && (Date.now() - new Date(d.actualizado_en).getTime()) / 1000 >= 200).map((d) => d.sitio).sort().join("|") : "";
+  useEffect(() => {
+    if (!(centralAbierta && veCentral)) { caidosRef.current = null; return; }
+    const ahora = caidosAhora ? caidosAhora.split("|") : [];
+    const antes = caidosRef.current;
+    caidosRef.current = ahora;
+    if (antes === null || !esTecnicoSonido || !sonidoOn) return;   // la primera vez solo toma nota
+    const nuevos = ahora.filter((x) => !antes.includes(x) && !sitiosMudosRef.current.includes(x) && !mantRef.current.includes(x));
+    if (nuevos.length && modoSonandoRef.current < 1) { setSonandoSitio(nuevos[0]); sonar(1); }
+  }, [caidosAhora, centralAbierta, veCentral]);
   // 11.7: con la Central abierta, el título de la pestaña parpadea mientras suena (se nota aunque esté en otra pestaña)
   useEffect(() => {
     if (!centralAbierta || !modoSonando) return;
@@ -15318,13 +15562,31 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   const [sitiosMudos, setSitiosMudos] = useState(() => { try { const v = JSON.parse(localStorage.getItem("ignisSitiosMudos") || "[]"); return Array.isArray(v) ? v : []; } catch (e) { return []; } });
   const sitiosMudosRef = React.useRef(sitiosMudos);
   sitiosMudosRef.current = sitiosMudos;
+  // cuándo se silenció cada sitio: el silencio vence solo a las 8 h para que no quede olvidado
+  const [mudosEn, setMudosEn] = useState(() => { try { const v = JSON.parse(localStorage.getItem("ignisSitiosMudosEn") || "{}"); return v && typeof v === "object" ? v : {}; } catch (e) { return {}; } });
+  const MUDO_HORAS = 8;
   const alternarMudo = (sitio) => {
     const ya = sitiosMudos.includes(sitio);
     const nv = ya ? sitiosMudos.filter((x) => x !== sitio) : [...sitiosMudos, sitio];
-    setSitiosMudos(nv); sitiosMudosRef.current = nv;
-    try { localStorage.setItem("ignisSitiosMudos", JSON.stringify(nv)); } catch (e) {}
+    const en = { ...mudosEn }; if (ya) delete en[sitio]; else en[sitio] = Date.now();
+    setSitiosMudos(nv); sitiosMudosRef.current = nv; setMudosEn(en);
+    try { localStorage.setItem("ignisSitiosMudos", JSON.stringify(nv)); localStorage.setItem("ignisSitiosMudosEn", JSON.stringify(en)); } catch (e) {}
     if (!ya && modoSonandoRef.current > 0) detenerSonido();
   };
+  useEffect(() => {
+    const revisar = () => {
+      const lim = Date.now() - MUDO_HORAS * 3600000;
+      const vencidos = sitiosMudosRef.current.filter((x) => (mudosEn[x] || 0) < lim);
+      if (!vencidos.length) return;
+      const nv = sitiosMudosRef.current.filter((x) => !vencidos.includes(x));
+      const en = { ...mudosEn }; vencidos.forEach((x) => delete en[x]);
+      setSitiosMudos(nv); sitiosMudosRef.current = nv; setMudosEn(en);
+      try { localStorage.setItem("ignisSitiosMudos", JSON.stringify(nv)); localStorage.setItem("ignisSitiosMudosEn", JSON.stringify(en)); } catch (e) {}
+    };
+    revisar();
+    const id = setInterval(revisar, 60000);
+    return () => clearInterval(id);
+  }, [mudosEn]);
   // 8.6: con el Monitor serial abierto en este sitio, el sonido lo da el Monitor (más rápido);
   // así un evento no vuelve a sonar tarde después de haberlo confirmado.
   const monitorSitioRef = React.useRef(null);
@@ -15353,7 +15615,7 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
     // 11.4: SOLO la confirmación (CONFIRMAR / ACKNOWLEDGE, desde el panel, la App o el APK) apaga el sonido
     if (nuevos.some((e) => /CONFIRMAR|ACKNOWLEDG/i.test(String(e.texto || "")))) detenerSonido();
     if (monitorSitioRef.current && nuevos.every((e) => e.sitio === monitorSitioRef.current)) return;
-    const sonables = nuevos.filter((e) => !sitiosMudosRef.current.includes(e.sitio));   // 11.7: sin los sitios silenciados
+    const sonables = nuevos.filter((e) => !sitiosMudosRef.current.includes(e.sitio) && !mantRef.current.includes(e.sitio));   // 11.7: sin los sitios silenciados ni en mantenimiento
     if (!sonables.length) return;
     const cats = (e) => [e.categoria, e.subcat];   // la subcategoría también cuenta (ej. "general" + "problema")
     { const pri = sonables.find((e) => cats(e).some((c) => c === "alarma" || c === "prealarma")) || sonables.find((e) => cats(e).includes("supervision")) || sonables.find((e) => cats(e).some((c) => ["problema", "seguridad"].includes(c)));
@@ -16692,7 +16954,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           const motivo = activos[0] ? activos[0].e : null;
           // en la cola: el sitio del evento más nuevo va arriba (un equipo que se cae cuenta desde que dejó de reportar)
           const orden = est === "sinconex" ? Math.max(ultEv, visto + 200000) : (ultAct || ultEv);
-          return { sitio, cliente: String((d && d.cliente) || "").trim(), d, Lc: LcR, enLinea, visto, evs, simplex, est, ult: ultEv, motivo, orden, activos };
+          const fch = (d && d.ficha && typeof d.ficha === "object") ? d.ficha : {};
+          return { sitio, region: String(fch.region || "").trim(), lat: fch.lat != null ? Number(fch.lat) : null, lng: fch.lng != null ? Number(fch.lng) : null, logo: fch.logo || "", mant: enMantenimiento(d), cliente: String((d && d.cliente) || "").trim(), d, Lc: LcR, enLinea, visto, evs, simplex, est, ult: ultEv, motivo, orden, activos };
         });
         const COLOR = { alarma: "#e5484d", superv: "#ff8c3d", falla: "#f2b705", anulado: "#b8641f", sinconex: "#6e7681", sinequipo: "#6e7681" };
         const CHIP = { alarma: ["ALARMA", "#e5484d33", "#ff8f92"], superv: ["SUPERV.", "#ff8c3d22", "#ffb27a"], falla: ["FALLA", "#f2b70522", "#f2d06b"], anulado: ["ANULADO", "#ff8c3d22", "#ffad6b"], sinconex: ["SIN CONEX.", "#30363d", "#aab3bd"], sinequipo: ["SIN EQUIPO", "#30363d", "#aab3bd"] };
@@ -16705,8 +16968,9 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const pasa = (x) => pasaBusca(x)
           && (centralFiltro === "todos" ? true : centralFiltro === "notifier" ? !x.simplex : centralFiltro === "simplex" ? x.simplex
             : centralFiltro === "sinconex" ? (x.est === "sinconex" || x.est === "sinequipo") : centralFiltro === "falla" ? (x.est === "falla" || x.est === "anulado") : x.est === centralFiltro);
-        const agrupar = centralTam === "cliente";
-        const matriz = sitiosC.filter(pasa).sort((a, b) => (agrupar ? (a.cliente || "~").localeCompare(b.cliente || "~", "es") : 0) || a.sitio.localeCompare(b.sitio, "es"));
+        const agrupar = centralTam === "cliente" || centralTam === "region";
+        const grupoDe = (x) => centralTam === "region" ? (x.region || "Sin región") : (x.cliente || "Sin cliente");
+        const matriz = sitiosC.filter(pasa).sort((a, b) => (agrupar ? grupoDe(a).replace(/^Sin /, "~").localeCompare(grupoDe(b).replace(/^Sin /, "~"), "es") : 0) || a.sitio.localeCompare(b.sitio, "es"));
         const cola = sitiosC.filter((x) => x.est !== "normal" && pasa(x)).sort((a, b) => b.orden - a.orden);
         // COLA DE ATENCIÓN (vista lista): un renglón por EVENTO activo, como en el panel; filtrable por cliente
         const clientesCola = Array.from(new Set(sitiosC.map((x) => x.cliente || "Sin cliente"))).sort((a, b) => a.localeCompare(b, "es"));
@@ -16719,6 +16983,28 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         });
         colaEv.sort((a, b) => b.t - a.t);
         const colaF = cola.filter((x) => !filtroCli || (x.cliente || "Sin cliente") === filtroCli);
+        const centralTieneOperacion = !centroSinOperacion;
+        // ESCALAMIENTO: un evento que nadie atiende pasa a «Supervisor» y luego a «Gerencia» según los minutos
+        const nivelEsc = (it) => {
+          if (it.x.mant || !centralTieneOperacion) return 0;
+          const clave = it.off ? "off" : claveF(it.r, it.r.chip);
+          if (atencionDe(it.x.sitio, clave, it.off ? 0 : it.t)) return 0;
+          const g = it.off ? "falla" : GR[it.r.chip] === "alarma" ? "alarma" : GR[it.r.chip] === "superv" ? "superv" : "falla";
+          const [m1, m2] = escCfg[g] || ESC_DEF[g];
+          const min = (ahoraC - (it.off ? (it.x.visto + 200000) : it.t)) / 60000;
+          return min >= m2 ? 2 : min >= m1 ? 1 : 0;
+        };
+        colaEv.forEach((it) => { it.esc = nivelEsc(it); });
+        const escalados = colaEv.filter((it) => it.esc > 0);
+        // suena cuando un evento SUBE de nivel (la primera vez solo toma nota). Gerencia suena aunque el sitio esté silenciado.
+        {
+          const claves = escalados.map((it) => it.k + ":" + it.esc);
+          if (escPrimeraRef.current && esTecnicoSonido && sonidoOn) {
+            const sube = escalados.filter((it) => !escVistosRef.current.has(it.k + ":" + it.esc) && (it.esc === 2 || !sitiosMudos.includes(it.x.sitio))).sort((p2, q) => q.esc - p2.esc)[0];
+            if (sube) setTimeout(() => { setSonandoSitio(sube.x.sitio); sonar(2); }, 0);
+          }
+          escVistosRef.current = new Set(claves); escPrimeraRef.current = true;
+        }
         const haceTxt = (t) => { const m = Math.round((ahoraC - t) / 60000); return m < 1 ? "ahora" : m < 60 ? "hace " + m + " min" : m < 1440 ? "hace " + Math.round(m / 60) + " h" : "hace " + Math.round(m / 1440) + " d"; };
         const KP = [
           ["alarma", "Alarma", cuentaC("alarma"), "#ff8f92", "#e5484d"], ["superv", "Superv.", cuentaC("superv"), "#ffb27a", "#ff8c3d"],
@@ -16726,12 +17012,12 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           ["normal", "OK", cuentaC("normal"), "#7ee2a6", "#3fd17a"],
         ];
         const abrirSitio = (sitio) => abrirMonitorRemoto(sitio);
-        const vistaF = centralVista !== "matriz";   // directo al panel y control (pide la clave del monitor)
+        const vistaF = !["matriz", "bitacora", "indicadores", "equipos", "mapa"].includes(centralVista);   // directo al panel y control (pide la clave del monitor)
         const celdas = [];
         let grupoAnt = null;
         matriz.forEach((x) => {
-          if (agrupar && (x.cliente || "Sin cliente") !== grupoAnt) {
-            grupoAnt = x.cliente || "Sin cliente";
+          if (agrupar && grupoDe(x) !== grupoAnt) {
+            grupoAnt = grupoDe(x);
             celdas.push(<div key={"g-" + grupoAnt} style={{ gridColumn: "1 / -1", fontSize: 11.5, fontWeight: 800, color: IGNIS.dim, letterSpacing: ".06em", padding: "6px 2px 0", textTransform: "uppercase" }}>{grupoAnt}</div>);
           }
           // 11.7: cada sitio se ve como un panel de control en miniatura (marco gris Notifier / gris azulado
@@ -16752,11 +17038,13 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 border: `2px solid ${borde || "#8f918c"}`,
                 boxShadow: x.est === "alarma" ? "0 0 0 1px #e5484d, 0 0 16px #e5484d" : "0 2px 0 #00000055", animation: nuevo ? "ignisCentralNuevo 1s ease-in-out infinite" : "none" }}>
               <span style={{ display: "flex", alignItems: "flex-start", gap: 4, minWidth: 0 }}>
+                {x.logo && <img src={x.logo} alt="" style={{ height: 28, maxWidth: 46, objectFit: "contain", background: "#fff", borderRadius: 4, padding: 1, flex: "none" }} onError={(e) => { e.currentTarget.style.display = "none"; }} />}
                 <span style={{ minWidth: 0, flex: 1, lineHeight: 1.15 }}>
                   <span style={{ fontSize: movilC ? 12.5 : 14, fontWeight: 800, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: x.cliente ? 1 : 2, WebkitBoxOrient: "vertical" }}>{x.cliente || x.sitio}</span>
                   {x.cliente && <span style={{ display: "block", fontSize: movilC ? 10.5 : 11.5, fontWeight: 700, color: "#3d4248", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.sitio}</span>}
                 </span>
                 {sitiosMudos.includes(x.sitio) && <span style={{ fontSize: 10, flex: "none" }}>🔕</span>}
+                {x.mant && <span title="En mantenimiento" style={{ fontSize: 10, flex: "none" }}>🛠</span>}
               </span>
               <span style={{ flex: 1, minHeight: 26, display: "flex", gap: 3 }}>
                 <span style={{ flex: 1, background: "#0a0f14", border: "3px solid #3a3d40", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px",
@@ -16780,10 +17068,12 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         });
         return (
           <div className="ignis-central" style={{ ...(modoCentral && !centralCompleta ? { position: "relative", height: "100vh" } : { position: "fixed", inset: 0 }), zIndex: 55, background: "#0b0f14", color: IGNIS.text, display: "flex", flexDirection: "column", fontFamily: "system-ui,-apple-system,sans-serif" }}>
+            <style>{"@keyframes ignisEscalado{0%,100%{background:#e5484d33}50%{background:#e5484d0d}}"}</style>
             <style>{".ignis-raiz-central>:not(.ignis-central):not([style*='position: fixed']){display:none!important}.ignis-raiz-central{gap:0!important}@keyframes ignisCentralNuevo{0%,100%{box-shadow:0 0 0 3px #1f6fd8,0 0 16px #1f6fd8aa}50%{box-shadow:0 0 0 3px #79b8ff,0 0 3px #1f6fd855}}"}</style>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: movilC ? "10px 10px" : "10px 18px", borderBottom: `1px solid ${IGNIS.border}`, background: "#05080b" }}>
               <div style={{ fontSize: movilC ? 14 : 15, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase" }}>Centro de Monitoreo</div>
               <span style={{ fontSize: 12, color: IGNIS.dim }}>{sitiosC.length} {sitiosC.length === 1 ? "sitio" : "sitios"}</span>
+              {centroSinSql && <span title="Corra en Supabase el SQL_centro_eventos.sql: el Centro baja los eventos de cada sitio por separado" style={{ fontSize: 11, color: "#ffe08a", border: "1px solid #f2b70566", borderRadius: 6, padding: "2px 7px" }}>⚠ Falta SQL del Centro (usando los últimos 500)</span>}
               {esTecnicoSonido && sonidoOn && sonidoBloqueado && (
                 <button type="button" onClick={() => { const ctx = prepararAudio(); if (ctx && ctx.state !== "running") ctx.resume().then(() => setSonidoBloqueado(false)).catch(() => {}); else setSonidoBloqueado(false); }}
                   style={{ background: "#1a2a3a", border: `1px solid ${IGNIS.seguridad}`, color: "#9dc6ff", borderRadius: 8, padding: "5px 11px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>🔈 Toque para activar el sonido</button>)}
@@ -16806,8 +17096,34 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                   style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 8, padding: "5px 10px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>{centralCompleta ? "⤡" : "⤢"}</button>)}
               {!modoCentral && <button type="button" onClick={() => { try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) {} setCentralAbierta(false); }}
                 style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 8, padding: "5px 12px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 5 }}><X size={14} /> Cerrar</button>}
+              {escalados.length > 0 && (
+                <span title={"Sin atender a tiempo: " + escalados.map((it) => it.x.sitio).join(", ")}
+                  style={{ borderRadius: 999, padding: "4px 11px", fontSize: 11.5, fontWeight: 800, color: "#fff", background: escalados.some((it) => it.esc === 2) ? "#c8102e" : "#d9480f", animation: "ignisEscalado 1.2s ease-in-out infinite" }}>
+                  ⏱ {escalados.length} ESCALADO{escalados.length === 1 ? "" : "S"}
+                </span>)}
+              <div style={{ display: "flex", gap: 3, background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: 3 }}>
+                {[["atencion", "Atención"], ["matriz", "Lista"], ["bitacora", "Bitácora"], ["indicadores", "Indicadores"], ["equipos", "Equipos"], ["mapa", "Mapa"]].map(([k, t]) => (
+                  <button key={k} type="button" onClick={() => { setCentralVista(k); if (k === "indicadores") cargarIndicadores(indDias); }}
+                    style={{ border: "none", borderRadius: 6, padding: "4px 9px", fontSize: 11.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", background: (centralVista === k || (k === "atencion" && !["matriz", "bitacora", "indicadores", "equipos", "mapa"].includes(centralVista))) ? "#1f6fd8" : "transparent", color: (centralVista === k || (k === "atencion" && !["matriz", "bitacora", "indicadores", "equipos", "mapa"].includes(centralVista))) ? "#fff" : IGNIS.dim }}>{t}</button>))}
+              </div>
+              {canGestionar && <button type="button" onClick={() => setEscEdit({ a1: escCfg.alarma[0], a2: escCfg.alarma[1], s1: escCfg.superv[0], s2: escCfg.superv[1], f1: escCfg.falla[0], f2: escCfg.falla[1], supervisor: escCfg.supervisor, gerencia: escCfg.gerencia })} title="Tiempos y contactos del escalamiento"
+                style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.dim, borderRadius: 8, padding: "5px 9px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>⏱ ⚙</button>}
               <b style={{ fontSize: 14 }}>{new Date(ahoraC).toLocaleTimeString("es-CR", { hour: "2-digit", minute: "2-digit" })}</b>
             </div>
+            {(sitiosMudos.length > 0 || sitiosC.some((x) => x.mant) || centroSinOperacion) && (
+              <div style={{ margin: movilC ? "8px 10px 0" : "10px 18px 0", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", fontSize: 12 }}>
+                {centroSinOperacion && <span style={{ color: "#ffe08a", border: "1px solid #f2b70566", borderRadius: 6, padding: "3px 8px" }}>⚠ Para Atender, contactos y mantenimiento falta correr el SQL_centro_operacion.sql</span>}
+                {sitiosMudos.map((m) => (
+                  <button key={"m-" + m} type="button" onClick={() => alternarMudo(m)} title="Toque para volver a activar el sonido"
+                    style={{ background: "#c8102e22", border: "1px solid #c8102e88", color: "#ffb3b8", borderRadius: 999, padding: "3px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                    🔕 {((dispositivos.find((z) => z.sitio === m) || {}).cliente || m)}{mudosEn[m] ? " · desde " + new Date(mudosEn[m]).toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" }) + " (vence sola en " + Math.max(1, Math.round((mudosEn[m] + MUDO_HORAS * 3600000 - ahoraC) / 3600000)) + " h)" : ""} ✕
+                  </button>))}
+                {sitiosC.filter((x) => x.mant).map((x) => (
+                  <button key={"t-" + x.sitio} type="button" onClick={() => ponerMantenimiento(x.sitio, 0)} title="Toque para terminar el mantenimiento"
+                    style={{ background: "#7048e822", border: "1px solid #7048e888", color: "#c9b8ff", borderRadius: 999, padding: "3px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                    🛠 {x.cliente || x.sitio} · hasta {new Date(x.d.mantenimiento_hasta).toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" })} ✕
+                  </button>))}
+              </div>)}
             {(filtroEstado || qC || centralFiltro === "notifier" || centralFiltro === "simplex") && (
               <div style={{ margin: movilC ? "8px 10px 0" : "10px 18px 0", padding: "6px 12px", borderRadius: 8, background: "#1f6fd81a", border: "1px solid #1f6fd866", color: "#9cc3ff", fontSize: 12.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                 Mostrando solo: {[filtroEstado && { alarma: "Alarma", superv: "Supervisión", falla: "Falla / anulado", sinconex: "Sin conexión", normal: "OK" }[filtroEstado], centralFiltro === "notifier" && "Notifier", centralFiltro === "simplex" && "Simplex", qC && "«" + centralBusca.trim() + "»"].filter(Boolean).join(" · ")}
@@ -16877,8 +17193,18 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                               animation: nuevo && x.est !== "alarma" ? "ignisCentralNuevo 1s ease-in-out infinite" : "none" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#1d2126", fontWeight: 800, fontSize: 12.5, minWidth: 0 }}>
                               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{x.cliente ? x.cliente + " · " : ""}{x.sitio}</span>
+                              {x.mant && <span title={"En mantenimiento" + (x.d.mantenimiento_por ? " · " + x.d.mantenimiento_por : "")} style={{ flex: "none", fontSize: 9, padding: "2px 6px", borderRadius: 4, color: "#fff", background: "#7048e8" }}>🛠 MANT.</span>}
                               <span style={{ marginLeft: "auto", flex: "none", fontSize: 9, padding: "2px 6px", borderRadius: 4, color: "#fff", background: x.simplex ? "#c8102e" : "#2a2c2f" }}>{x.simplex ? "SIMPLEX" : "NOTIFIER"}</span>
-                              {canGestionar && <button type="button" onClick={(e) => { e.stopPropagation(); setCentralEditCli({ sitio: x.sitio, valor: x.cliente, msg: "" }); }} title="Nombre del cliente"
+                              {centralTieneOperacion && (() => {
+                                const pend = apagado ? (atencionDe(x.sitio, "off", 0) ? [] : [{ k: "off", txt: "Equipo sin conexión", t: 0 }])
+                                  : x.activos.filter((r) => !atencionDe(x.sitio, claveF(r, r.chip), r.t)).map((r) => ({ k: claveF(r, r.chip), txt: [r.nombre, r.sub, r.dir].filter(Boolean).join(" · "), t: r.t }));
+                                const enAt = atenciones.find((a) => a.sitio === x.sitio && a.estado === "atendiendo");
+                                if (!pend.length && enAt) return <span style={{ flex: "none", fontSize: 9.5, fontWeight: 800, color: "#1b4fa6" }}>👤 {String(enAt.operador || "").split(" ")[0]}</span>;
+                                if (!pend.length) return null;
+                                return <button type="button" onClick={(e) => { e.stopPropagation(); pend.forEach((q) => atenderEvento(x.sitio, q.k, x.sitio + " · " + q.txt, q.t)); }} title="Tomar los eventos de este sitio"
+                                  style={{ flex: "none", border: "1px solid #1b4fa6", background: "#1f6fd8", color: "#fff", borderRadius: 5, padding: "0 7px", fontSize: 10.5, fontWeight: 800, cursor: "pointer", lineHeight: "17px", fontFamily: "inherit" }}>Atender</button>;
+                              })()}
+                              {canGestionar && <button type="button" onClick={(e) => { e.stopPropagation(); abrirFicha(x.sitio); }} title="Ficha del sitio: cliente, contactos, procedimiento y mantenimiento"
                                 style={{ flex: "none", border: "1px solid #8a8c88", background: "#ffffffaa", borderRadius: 5, padding: "0 5px", fontSize: 11, cursor: "pointer", lineHeight: "17px" }}>✎</button>}
                               <button type="button" onClick={(e) => { e.stopPropagation(); alternarMudo(x.sitio); }} title={mudo ? "Sonido apagado para este cliente. Toque para activarlo." : "Apagar el sonido de este cliente en este dispositivo"}
                                 style={{ flex: "none", border: `1px solid ${mudo ? "#c8102e" : "#8a8c88"}`, background: mudo ? "#ffd5d5" : "#ffffffaa", borderRadius: 5, padding: "0 5px", fontSize: 11, cursor: "pointer", lineHeight: "17px" }}>{mudo ? "🔕" : "🔔"}</button>
@@ -16914,7 +17240,192 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                   </div>
                 </div>);
             })()}
-            {!vistaF && (
+            {centralVista === "bitacora" && (
+              <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: movilC ? 10 : "14px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  <b style={{ fontSize: 12, letterSpacing: ".1em", color: IGNIS.dim }}>BITÁCORA DE TURNO</b>
+                  <input type="date" value={bitDia} onChange={(e) => setBitDia(e.target.value)}
+                    style={{ background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 7, padding: "4px 8px", fontFamily: "inherit", fontSize: 12.5 }} />
+                  <Btn small variant="ghost" onClick={cargarBitacora}>Actualizar</Btn>
+                  <Btn small onClick={() => {
+                    const ult = (bitacora.lista || []).find((x) => x.tipo === "turno");
+                    const desde = ult ? ult.t : Date.now() - 12 * 3600000;
+                    const at = (bitacora.lista || []).filter((x) => x.t > desde && x.tipo === "cierra");
+                    const pend = colaEv.filter((it) => !atencionDe(it.x.sitio, it.off ? "off" : claveF(it.r, it.r.chip), it.off ? 0 : it.t));
+                    const lin = ["ENTREGA DE TURNO — " + new Date().toLocaleString("es-CR"), "",
+                      "Atenciones cerradas en el turno: " + at.length, ...at.slice(0, 15).map((x) => "  • " + (x.sitio || "") + ": " + x.texto),
+                      "", "Eventos activos sin atender: " + pend.length, ...pend.slice(0, 15).map((it) => "  • " + (it.x.cliente ? it.x.cliente + " · " : "") + it.x.sitio + ": " + (it.off ? "sin conexión" : [it.r.chip, it.r.nombre, it.r.dir].filter(Boolean).join(" "))),
+                      "", "En mantenimiento: " + (sitiosC.filter((x) => x.mant).map((x) => x.sitio).join(", ") || "ninguno"),
+                      "Silenciados en esta pantalla: " + (sitiosMudos.join(", ") || "ninguno"), "", "Observaciones: "];
+                    setTurnoEdit(lin.join("\n"));
+                  }}>Entregar turno</Btn>
+                </div>
+                {bitacora.sinSql && <div style={{ color: "#ffe08a", fontSize: 12 }}>⚠ Falta correr el SQL_centro_supervision.sql para guardar notas y entregas de turno.</div>}
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input value={bitNota} onChange={(e) => setBitNota(e.target.value)} onKeyDown={async (e) => { if (e.key === "Enter" && await agregarBitacora("nota", bitNota)) setBitNota(""); }}
+                    placeholder="Agregar una nota a la bitácora…" autoComplete="off" name="central_bitnota" data-lpignore="true"
+                    style={{ flex: 1, background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: "8px 10px", fontFamily: "inherit", fontSize: 13 }} />
+                  <Btn small onClick={async () => { if (await agregarBitacora("nota", bitNota)) setBitNota(""); }}>Agregar</Btn>
+                </div>
+                <div style={{ background: "#0e141b", border: `1px solid ${IGNIS.border}`, borderRadius: 12 }}>
+                  {!(bitacora.lista || []).length && <div style={{ color: IGNIS.dim, padding: 24, textAlign: "center", fontSize: 13 }}>Sin registros este día.</div>}
+                  {(bitacora.lista || []).map((x) => {
+                    const ic = { atiende: ["👤", "#79b8ff", "Atendió"], cierra: ["✔", "#7ee2a6", "Cerró"], turno: ["🔁", "#c9b8ff", "Entrega de turno"], nota: ["📝", "#e6edf3", "Nota"] }[x.tipo] || ["•", "#e6edf3", x.tipo];
+                    return (
+                      <div key={x.k} style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: 10, padding: "9px 12px", borderBottom: "1px solid #161e27", fontSize: 12.5 }}>
+                        <span style={{ color: IGNIS.dim }}>{new Date(x.t).toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" })}</span>
+                        <span style={{ minWidth: 0 }}>
+                          <b style={{ color: ic[1] }}>{ic[0]} {ic[2]}</b> <span style={{ color: IGNIS.dim }}>· {x.quien || ""}{x.resp !== null && x.resp !== undefined ? " · respuesta " + x.resp + " min" : ""}</span>
+                          <div style={{ whiteSpace: "pre-wrap", marginTop: 2 }}>{x.texto}</div>
+                        </span>
+                      </div>);
+                  })}
+                </div>
+              </div>
+            )}
+            {centralVista === "indicadores" && (() => {
+              const d = indDatos;
+              const ats = (d && d.atenciones) || [];
+              const resp = ats.filter((a) => a.evento_t && a.tomado_en).map((a) => (Date.parse(a.tomado_en) - Date.parse(a.evento_t)) / 60000).filter((m) => m >= 0 && m < 24 * 60);
+              const prom = resp.length ? resp.reduce((p2, q) => p2 + q, 0) / resp.length : null;
+              const en2 = resp.length ? Math.round(100 * resp.filter((m) => m <= 2).length / resp.length) : null;
+              const porOp = {};
+              ats.forEach((a) => { const o = a.operador || "—"; porOp[o] = porOp[o] || { n: 0, r: [] }; porOp[o].n++; if (a.evento_t) porOp[o].r.push((Date.parse(a.tomado_en) - Date.parse(a.evento_t)) / 60000); });
+              const viejas = colaEv.filter((it) => !it.off && ahoraC - it.t > 86400000);
+              const tarjeta = (t, v, sub, col) => (
+                <div style={{ background: "#0e141b", border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: "12px 14px", minWidth: 170, flex: 1 }}>
+                  <div style={{ fontSize: 11.5, color: IGNIS.dim, fontWeight: 800, letterSpacing: ".05em" }}>{t}</div>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: col || IGNIS.text }}>{v}</div>
+                  {sub && <div style={{ fontSize: 11.5, color: IGNIS.dim }}>{sub}</div>}
+                </div>);
+              const filasS = ((d && d.sitios) || []).slice().sort((p2, q) => Number(q.total) - Number(p2.total)).slice(0, 30);
+              const cliDe = (st) => (dispositivos.find((z) => z.sitio === st) || {}).cliente || "";
+              return (
+                <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: movilC ? 10 : "14px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <b style={{ fontSize: 12, letterSpacing: ".1em", color: IGNIS.dim }}>INDICADORES</b>
+                    {[7, 30, 90].map((n) => <Btn key={n} small variant={indDias === n ? undefined : "ghost"} onClick={() => { setIndDias(n); cargarIndicadores(n); }}>{n} días</Btn>)}
+                  </div>
+                  {!d && <div style={{ color: IGNIS.dim, fontSize: 13 }}>Calculando…</div>}
+                  {d && d.sinSql && <div style={{ color: "#ffe08a", fontSize: 12 }}>⚠ Para los eventos por cliente falta correr el SQL_centro_supervision.sql.</div>}
+                  {d && <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    {tarjeta("RESPUESTA PROMEDIO", prom === null ? "—" : prom < 1 ? Math.round(prom * 60) + " s" : prom.toFixed(1) + " min", resp.length + " eventos atendidos", prom !== null && prom <= 2 ? "#3fd17a" : "#ffb27a")}
+                    {tarjeta("ATENDIDOS EN ≤ 2 MIN", en2 === null ? "—" : en2 + " %", "meta sugerida: 90 %", en2 !== null && en2 >= 90 ? "#3fd17a" : "#ffb27a")}
+                    {tarjeta("ATENCIONES", ats.length, ats.filter((a) => a.estado === "atendiendo").length + " abiertas")}
+                    {tarjeta("FALLAS DE MÁS DE 1 DÍA", viejas.length, "activas en los paneles ahora", viejas.length ? "#f2d06b" : "#3fd17a")}
+                  </div>}
+                  {d && Object.keys(porOp).length > 0 && (
+                    <div style={{ background: "#0e141b", border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: 12 }}>
+                      <b style={{ fontSize: 12, color: IGNIS.dim, letterSpacing: ".05em" }}>POR OPERADOR</b>
+                      {Object.entries(porOp).sort((p2, q) => q[1].n - p2[1].n).map(([o, v]) => (
+                        <div key={o} style={{ display: "flex", gap: 10, padding: "6px 0", borderBottom: "1px solid #161e27", fontSize: 13 }}>
+                          <span style={{ flex: 1 }}>{o}</span><span>{v.n} atenciones</span>
+                          <span style={{ color: IGNIS.dim, minWidth: 130, textAlign: "right" }}>{v.r.length ? "prom. " + (v.r.reduce((p2, q) => p2 + q, 0) / v.r.length).toFixed(1) + " min" : ""}</span>
+                        </div>))}
+                    </div>)}
+                  {d && viejas.length > 0 && (
+                    <div style={{ background: "#0e141b", border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: 12 }}>
+                      <b style={{ fontSize: 12, color: IGNIS.dim, letterSpacing: ".05em" }}>FALLAS / ANULADOS DE MÁS DE 1 DÍA</b>
+                      {viejas.slice(0, 40).map((it) => (
+                        <div key={it.k} onClick={() => abrirSitio(it.x.sitio)} style={{ display: "flex", gap: 10, padding: "6px 0", borderBottom: "1px solid #161e27", fontSize: 12.5, cursor: "pointer" }}>
+                          <span style={{ flex: 1 }}>{it.x.cliente ? it.x.cliente + " · " : ""}{it.x.sitio}: {[it.r.chip, it.r.nombre, it.r.dir].filter(Boolean).join(" · ")}</span>
+                          <span style={{ color: "#f2d06b" }}>{Math.floor((ahoraC - it.t) / 86400000)} d</span>
+                        </div>))}
+                    </div>)}
+                  {d && filasS.length > 0 && (
+                    <div style={{ background: "#0e141b", border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: 12, overflowX: "auto" }}>
+                      <b style={{ fontSize: 12, color: IGNIS.dim, letterSpacing: ".05em" }}>EVENTOS POR SITIO ({indDias} días)</b>
+                      <div style={{ display: "grid", gridTemplateColumns: "minmax(160px,1fr) 70px 70px 70px 70px 70px", gap: 6, fontSize: 12.5, marginTop: 8, minWidth: 560 }}>
+                        {["Sitio", "Total", "Alarmas", "Superv.", "Fallas", "Anulados"].map((h) => <b key={h} style={{ color: IGNIS.dim, fontSize: 11.5 }}>{h}</b>)}
+                        {filasS.map((r) => (
+                          <React.Fragment key={r.sitio}>
+                            <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{cliDe(r.sitio) ? cliDe(r.sitio) + " · " : ""}{r.sitio}</span>
+                            <span>{r.total}</span><span style={{ color: Number(r.alarmas) ? "#ff8f92" : IGNIS.dim }}>{r.alarmas}</span>
+                            <span style={{ color: Number(r.supervisiones) ? "#ffb27a" : IGNIS.dim }}>{r.supervisiones}</span>
+                            <span style={{ color: Number(r.fallas) ? "#f2d06b" : IGNIS.dim }}>{r.fallas}</span>
+                            <span style={{ color: Number(r.anulados) ? "#ffad6b" : IGNIS.dim }}>{r.anulados}</span>
+                          </React.Fragment>))}
+                      </div>
+                    </div>)}
+                </div>);
+            })()}
+            {centralVista === "equipos" && (() => {
+              // 11.7 (punto 4): SALUD DE LOS EQUIPOS — para ver un IgnisMonitor que está por fallar antes de que se caiga
+              const vers = dispositivos.map((d) => String(d.version || "")).filter(Boolean);
+              const numV = (v) => { const m = String(v).match(/(\d+)\.(\d+)/); return m ? Number(m[1]) * 1000 + Number(m[2]) : 0; };
+              const vMax = vers.reduce((m, v) => (numV(v) > numV(m) ? v : m), "");
+              const filas = sitiosC.filter((x) => x.d && pasaBusca(x)).map((x) => {
+                const d = x.d, cc = leerConfigPanel(d.config_panel);
+                const rssi = d.rssi != null ? Number(d.rssi) : null;
+                const blk = Number(cc.blk) || 0, heap = Number(cc.heap) || 0, ord = Number(cc.ord), lat = Number(cc.lat) || 0;
+                const av = [];
+                if (!x.enLinea) av.push(["Sin conexión", "#8b949e"]);
+                if (rssi !== null && rssi < -78) av.push(["Señal débil", "#ff8f92"]); else if (rssi !== null && rssi < -70) av.push(["Señal regular", "#f2d06b"]);
+                if (blk && blk < 25000) av.push(["Memoria baja", "#ff8f92"]);
+                if (x.enLinea && !isNaN(ord) && ord > 180) av.push(["No lee órdenes", "#ff8f92"]);
+                if (vMax && d.version && numV(d.version) < numV(vMax)) av.push(["Firmware viejo", "#f2d06b"]);
+                if (lat > 15) av.push(["Demora " + lat + " s", "#f2d06b"]);
+                return { x, d, cc, rssi, blk, heap, ord, lat, av };
+              }).sort((p2, q) => q.av.length - p2.av.length || p2.x.sitio.localeCompare(q.x.sitio, "es"));
+              const colS = (r) => r === null ? IGNIS.dim : r >= -65 ? "#3fd17a" : r >= -70 ? "#a3d977" : r >= -78 ? "#f2d06b" : "#ff8f92";
+              return (
+                <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: movilC ? 10 : "14px 18px" }}>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+                    <b style={{ fontSize: 12, letterSpacing: ".1em", color: IGNIS.dim }}>SALUD DE LOS EQUIPOS</b>
+                    <span style={{ fontSize: 12, color: IGNIS.dim }}>{filas.length} equipos · {filas.filter((f) => f.av.length).length} con avisos{vMax ? " · versión más nueva V" + vMax : ""}</span>
+                  </div>
+                  <div style={{ background: "#0e141b", border: `1px solid ${IGNIS.border}`, borderRadius: 12, overflowX: "auto" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "minmax(170px,1.4fr) 90px 80px 110px 80px 120px minmax(160px,1.4fr) 90px", gap: 8, padding: "8px 12px", fontSize: 11.5, fontWeight: 800, color: IGNIS.dim, borderBottom: `1px solid ${IGNIS.border}`, minWidth: 980 }}>
+                      <span>Sitio</span><span>Estado</span><span>Versión</span><span>Señal</span><span>Memoria</span><span>Último latido</span><span>Avisos</span><span></span>
+                    </div>
+                    {filas.map((f) => (
+                      <div key={f.x.sitio} style={{ display: "grid", gridTemplateColumns: "minmax(170px,1.4fr) 90px 80px 110px 80px 120px minmax(160px,1.4fr) 90px", gap: 8, padding: "8px 12px", fontSize: 12.5, borderBottom: "1px solid #161e27", alignItems: "center", minWidth: 980 }}>
+                        <span style={{ minWidth: 0 }}>
+                          <b style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.x.cliente ? f.x.cliente + " · " : ""}{f.x.sitio}</b>
+                          <span style={{ fontSize: 11, color: IGNIS.dim }}>{f.d.ssid || ""}{f.d.ip ? " · " + f.d.ip : ""}</span>
+                        </span>
+                        <span style={{ color: f.x.enLinea ? "#3fd17a" : "#8b949e", fontWeight: 700 }}>{f.x.enLinea ? "● En línea" : "○ Caído"}</span>
+                        <span>{f.d.version ? "V" + f.d.version : "—"}</span>
+                        <span style={{ color: colS(f.rssi), fontWeight: 700 }}>{f.rssi !== null ? f.rssi + " dBm" : "—"}</span>
+                        <span title={f.heap ? "Libre " + Math.round(f.heap / 1024) + " KB · bloque mayor " + Math.round(f.blk / 1024) + " KB" : ""} style={{ color: f.blk && f.blk < 25000 ? "#ff8f92" : IGNIS.text }}>{f.blk ? Math.round(f.blk / 1024) + " KB" : "—"}</span>
+                        <span style={{ color: IGNIS.dim }}>{f.d.actualizado_en ? haceTxt(new Date(f.d.actualizado_en).getTime()) : "—"}</span>
+                        <span style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>{f.av.length ? f.av.map(([t, c2]) => <span key={t} style={{ fontSize: 10.5, fontWeight: 800, padding: "1px 7px", borderRadius: 999, border: `1px solid ${c2}88`, color: c2 }}>{t}</span>) : <span style={{ color: "#3fd17a", fontSize: 11.5 }}>Sin avisos</span>}</span>
+                        <span>{canGestionar && <Btn small variant="ghost" onClick={() => pedirDiagnostico(f.x.sitio)} title="Pide al equipo su diagnóstico: red, señal, memoria, reinicios y caídas de WiFi">Diagnóstico</Btn>}</span>
+                      </div>))}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: IGNIS.dim, marginTop: 8 }}>Señal: buena ≥ −65 dBm, regular hasta −78, débil por debajo. «Memoria» es el bloque libre más grande (por debajo de 25 KB pueden fallar las descargas). Los reinicios y las caídas de WiFi salen en el Diagnóstico.</div>
+                </div>);
+            })()}
+            {centralVista === "mapa" && (() => {
+              const conC = sitiosC.filter((x) => x.lat != null && x.lng != null && !isNaN(x.lat) && pasaBusca(x));
+              const sinC = sitiosC.filter((x) => (x.lat == null || isNaN(x.lat)) && pasaBusca(x));
+              const ET = { alarma: "Alarma", superv: "Supervisión", falla: "Falla", anulado: "Anulado", sinconex: "Sin conexión", sinequipo: "Sin equipo", normal: "OK" };
+              mapaDatosRef.current = { firma: conC.map((x) => x.sitio + ":" + x.est + ":" + x.lat + ":" + x.lng + ":" + x.cliente).join("|"), puntos: conC.map((x) => ({ sitio: x.sitio, cliente: x.cliente, lat: x.lat, lng: x.lng, est: x.est, estTxt: ET[x.est] })) };
+              return (
+                <div style={{ flex: 1, minHeight: 0, display: movilC ? "flex" : "grid", flexDirection: "column", gridTemplateColumns: "minmax(0,1fr) 300px", gap: 12, padding: movilC ? 10 : "14px 18px" }}>
+                  <div style={{ position: "relative", minHeight: movilC ? 360 : 0, borderRadius: 12, overflow: "hidden", border: `1px solid ${IGNIS.border}`, background: "#0e141b" }}>
+                    <div ref={mapaDivRef} style={{ position: "absolute", inset: 0 }} />
+                    {mapaError && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#ffb27a", fontSize: 13 }}>{mapaError}</div>}
+                    {!mapaListo && !mapaError && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: IGNIS.dim, fontSize: 13 }}>Cargando mapa…</div>}
+                  </div>
+                  <div style={{ background: "#0e141b", border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: 12, overflow: "auto", minHeight: 0 }}>
+                    <b style={{ fontSize: 12, letterSpacing: ".08em", color: IGNIS.dim }}>EN EL MAPA ({conC.length})</b>
+                    <div style={{ fontSize: 11.5, color: IGNIS.dim, margin: "4px 0 10px" }}>Toque un punto para abrir su panel. El color es su estado.</div>
+                    {conC.filter((x) => x.est !== "normal").map((x) => (
+                      <div key={x.sitio} onClick={() => { try { mapaObjRef.current.setView([x.lat, x.lng], 15); } catch (e) {} }} style={{ cursor: "pointer", fontSize: 12.5, padding: "5px 0", borderBottom: "1px solid #161e27" }}>
+                        <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", marginRight: 6, background: COLOR[x.est] || "#2fbf5f" }} />{x.cliente ? x.cliente + " · " : ""}{x.sitio} <span style={{ color: IGNIS.dim }}>· {ET[x.est]}</span>
+                      </div>))}
+                    <b style={{ display: "block", marginTop: 14, fontSize: 12, letterSpacing: ".08em", color: IGNIS.dim }}>SIN UBICACIÓN ({sinC.length})</b>
+                    <div style={{ fontSize: 11.5, color: IGNIS.dim, margin: "4px 0 6px" }}>Póngala en la ficha (✎) con el enlace de Google Maps.</div>
+                    {sinC.map((x) => (
+                      <div key={x.sitio} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, padding: "4px 0" }}>
+                        <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.cliente ? x.cliente + " · " : ""}{x.sitio}</span>
+                        {canGestionar && <button type="button" onClick={() => abrirFicha(x.sitio)} style={{ border: `1px solid ${IGNIS.border}`, background: "transparent", color: IGNIS.dim, borderRadius: 5, padding: "0 6px", fontSize: 11, cursor: "pointer" }}>✎</button>}
+                      </div>))}
+                  </div>
+                </div>);
+            })()}
+            {centralVista === "matriz" && (
             <div style={{ flex: 1, minHeight: 0, display: movilC ? "flex" : "grid", flexDirection: "column", gridTemplateColumns: "minmax(0,1fr) 420px", gap: 14, padding: movilC ? 10 : "14px 18px", overflow: movilC ? "auto" : "hidden" }}>
               <div style={{ background: "#0e141b", border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", minHeight: 0, flex: movilC ? "none" : undefined }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
@@ -16925,8 +17436,8 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                   {[["todos", "Todos"], ["notifier", "Notifier"], ["simplex", "Simplex"]].map(([k, t]) => (
                     <button key={k} type="button" onClick={() => setCentralFiltro(k)}
                       style={{ border: `1px solid ${centralFiltro === k ? "#1f6fd8" : IGNIS.border}`, background: centralFiltro === k ? "#1f6fd822" : "transparent", color: centralFiltro === k ? "#9cc3ff" : IGNIS.dim, borderRadius: 999, padding: "4px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>{t}</button>))}
-                  <button type="button" onClick={() => setCentralTam(agrupar ? "normal" : "cliente")}
-                    style={{ border: `1px solid ${agrupar ? "#1f6fd8" : IGNIS.border}`, background: agrupar ? "#1f6fd822" : "transparent", color: agrupar ? "#9cc3ff" : IGNIS.dim, borderRadius: 999, padding: "4px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Agrupar por cliente</button>
+                  <button type="button" onClick={() => setCentralTam(centralTam === "cliente" ? "region" : centralTam === "region" ? "normal" : "cliente")} title="Toque para cambiar: por cliente → por región → sin agrupar"
+                    style={{ border: `1px solid ${agrupar ? "#1f6fd8" : IGNIS.border}`, background: agrupar ? "#1f6fd822" : "transparent", color: agrupar ? "#9cc3ff" : IGNIS.dim, borderRadius: 999, padding: "4px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>{centralTam === "cliente" ? "Agrupado por cliente" : centralTam === "region" ? "Agrupado por región" : "Agrupar"}</button>
                 </div>
                 <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
                   {!matriz.length && <div style={{ color: IGNIS.dim, textAlign: "center", padding: 30, fontSize: 13 }}>{sitiosC.length ? "Ningún sitio coincide." : "Todavía no hay equipos reportando."}</div>}
@@ -16959,19 +17470,34 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     const cuando = it.t ? haceTxt(it.off ? (x.visto || it.t) : it.t) : "";
                     const nuevo = !it.off && ahoraC - it.t < 10000;
                     const mudo = sitiosMudos.includes(x.sitio);
+                    const claveAt = it.off ? "off" : claveF(r, r.chip);
+                    const at = atencionDe(x.sitio, claveAt, it.off ? 0 : it.t);
+                    const minAt = at ? Math.max(0, Math.round(((at.cerrado_en ? Date.parse(at.cerrado_en) : ahoraC) - Date.parse(at.tomado_en)) / 60000)) : 0;
                     return (
                       <div key={it.k} role="button" tabIndex={0} onClick={() => abrirSitio(x.sitio)} onKeyDown={(e) => { if (e.key === "Enter") abrirSitio(x.sitio); }}
-                        style={{ display: "grid", gridTemplateColumns: "5px minmax(0,1fr) auto", gap: 10, padding: "9px 4px", borderBottom: "1px solid #161e27", alignItems: "center", cursor: "pointer", borderRadius: 6, background: nuevo ? "#1f6fd822" : "transparent" }}>
+                        style={{ display: "grid", gridTemplateColumns: "5px minmax(0,1fr) auto", gap: 10, padding: "9px 4px", borderBottom: "1px solid #161e27", alignItems: "center", cursor: "pointer", borderRadius: 6, background: nuevo ? "#1f6fd822" : it.esc === 2 ? "#e5484d1f" : it.esc === 1 ? "#ff8c3d14" : "transparent", animation: it.esc === 2 ? "ignisEscalado 1.2s ease-in-out infinite" : "none" }}>
                         <span style={{ alignSelf: "stretch", borderRadius: 3, background: barra, boxShadow: !it.off && GR[r.chip] === "alarma" ? "0 0 8px #e5484d" : "none" }} />
                         <span style={{ minWidth: 0 }}>
                           <b style={{ display: "block", fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.cliente ? x.cliente + " · " : ""}{x.sitio}{x.simplex && <span style={{ marginLeft: 6, fontSize: 9, padding: "1px 5px", borderRadius: 4, background: "#c8102e", color: "#fff", verticalAlign: 1 }}>SIMPLEX</span>}</b>
                           <span style={{ display: "block", fontSize: 11.5, color: IGNIS.dim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{txt}</span>
+                          {it.esc > 0 && <span style={{ display: "block", fontSize: 11, fontWeight: 800, color: it.esc === 2 ? "#ff6b6f" : "#ffb27a" }}>
+                            ⏱ {(() => { const m = Math.round((ahoraC - (it.off ? x.visto + 200000 : it.t)) / 60000); return m < 90 ? m + " min" : m < 2880 ? Math.floor(m / 60) + " h " + (m % 60) + " min" : Math.floor(m / 1440) + " días"; })()} sin atender · ESCALADO a {it.esc === 2 ? "Gerencia" : "Supervisor"}{(it.esc === 2 ? escCfg.gerencia : escCfg.supervisor) ? " (" + (it.esc === 2 ? escCfg.gerencia : escCfg.supervisor) + ")" : ""}
+                          </span>}
+                          {x.mant && <span style={{ display: "block", fontSize: 11, color: "#b197fc", fontWeight: 700 }}>🛠 En mantenimiento hasta {new Date(x.d.mantenimiento_hasta).toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" })}{x.d.mantenimiento_por ? " · " + x.d.mantenimiento_por : ""}</span>}
+                          {at && at.estado === "atendiendo" && <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#79b8ff", fontWeight: 700, marginTop: 2 }}>
+                            👤 {at.operador} atendiendo · {minAt} min
+                            <button type="button" onClick={(e) => { e.stopPropagation(); setNotaAtencion({ id: at.id, sitio: x.sitio, texto: at.evento_texto, nota: at.nota || "" }); }}
+                              style={{ background: "#1f6fd8", border: "none", color: "#fff", borderRadius: 5, padding: "1px 8px", fontSize: 11, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>Cerrar con nota</button>
+                          </span>}
+                          {at && at.estado === "cerrado" && <span title={at.nota || ""} style={{ display: "block", fontSize: 11, color: "#7ee2a6", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 2 }}>✔ Atendido por {at.cerrado_por || at.operador}{at.nota ? ": " + at.nota : ""}</span>}
+                          {!at && centralTieneOperacion && <button type="button" onClick={(e) => { e.stopPropagation(); atenderEvento(x.sitio, claveAt, x.sitio + " · " + txt, it.off ? 0 : it.t); }}
+                            style={{ marginTop: 3, background: "transparent", border: "1px solid #1f6fd8", color: "#79b8ff", borderRadius: 5, padding: "1px 9px", fontSize: 11, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>Atender</button>}
                         </span>
                         <span style={{ textAlign: "right", fontSize: 11, color: IGNIS.dim, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
                           <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
                             <button type="button" onClick={(e) => { e.stopPropagation(); alternarMudo(x.sitio); }} title={mudo ? "Sonido apagado para este cliente (en este dispositivo). Toque para activarlo." : "Apagar el sonido de este cliente en este dispositivo"}
                               style={{ border: `1px solid ${mudo ? "#c8102e" : IGNIS.border}`, background: mudo ? "#c8102e33" : "transparent", borderRadius: 5, padding: "0 5px", fontSize: 11, cursor: "pointer", lineHeight: "17px" }}>{mudo ? "🔕" : "🔔"}</button>
-                            {canGestionar && <button type="button" onClick={(e) => { e.stopPropagation(); setCentralEditCli({ sitio: x.sitio, valor: x.cliente, msg: "" }); }} title="Nombre del cliente (de las OD de IPM o uno nuevo)"
+                            {canGestionar && <button type="button" onClick={(e) => { e.stopPropagation(); abrirFicha(x.sitio); }} title="Ficha del sitio: cliente, contactos, procedimiento y mantenimiento"
                               style={{ border: `1px solid ${IGNIS.border}`, background: "transparent", color: IGNIS.dim, borderRadius: 5, padding: "0 5px", fontSize: 11, cursor: "pointer", lineHeight: "17px" }}>✎</button>}
                             <span style={{ fontSize: 9.5, fontWeight: 800, padding: "2px 7px", borderRadius: 4, ...st, minWidth: 64, textAlign: "center" }}>{ct}</span>
                           </span>
@@ -16983,21 +17509,107 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               </div>
             </div>
             )}
-            {centralEditCli && (
-              <div onClick={() => setCentralEditCli(null)} style={{ position: "fixed", inset: 0, zIndex: 57, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
-                <div onClick={(e) => e.stopPropagation()} style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: "16px 18px", width: "100%", maxWidth: 420 }}>
-                  <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>Cliente del sitio</div>
-                  <div style={{ fontSize: 12, color: IGNIS.dim, marginBottom: 10 }}>{centralEditCli.sitio} · elija un cliente de las OD de IPM o escriba uno nuevo.</div>
+            {centralEditCli && (() => {
+              const dF = dispositivos.find((z) => z.sitio === centralEditCli.sitio) || {};
+              const campo = { width: "100%", boxSizing: "border-box", background: IGNIS.bg, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 13, fontFamily: "inherit" };
+              const etq = { fontSize: 11.5, fontWeight: 800, color: IGNIS.dim, margin: "10px 0 4px", letterSpacing: ".04em" };
+              return (
+              <div onClick={() => setCentralEditCli(null)} style={{ position: "fixed", inset: 0, zIndex: 62, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
+                <div onClick={(e) => e.stopPropagation()} style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: "16px 18px", width: "100%", maxWidth: 520, maxHeight: "92vh", overflow: "auto" }}>
+                  <div style={{ fontWeight: 800, fontSize: 15 }}>Ficha del sitio</div>
+                  <div style={{ fontSize: 12, color: IGNIS.dim }}>{centralEditCli.sitio}</div>
+                  <div style={etq}>CLIENTE (de las OD de IPM o uno nuevo)</div>
                   <input autoFocus list="central_clientes_ipm" value={centralEditCli.valor || ""} onChange={(e) => setCentralEditCli({ ...centralEditCli, valor: e.target.value })}
-                    onKeyDown={(e) => { if (e.key === "Enter") guardarClienteSitio(); }} placeholder="Nombre del cliente" autoComplete="off" name="central_cliente_ignis" data-lpignore="true"
-                    style={{ width: "100%", boxSizing: "border-box", background: IGNIS.bg, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: "9px 10px", fontSize: 13.5, fontFamily: "inherit" }} />
+                    placeholder="Nombre del cliente" autoComplete="off" name="central_cliente_ignis" data-lpignore="true" style={campo} />
                   <datalist id="central_clientes_ipm">{centralClientes.map((n) => <option key={n} value={n} />)}</datalist>
                   {centralEditCli.valor && !centralClientes.some((n) => n.toLowerCase() === String(centralEditCli.valor).trim().toLowerCase()) && (
-                    <div style={{ fontSize: 11.5, color: "#9cc3ff", marginTop: 6 }}>Cliente nuevo (no está en las OD de IPM).</div>)}
-                  {centralEditCli.msg && <div style={{ fontSize: 12, color: IGNIS.alarma, marginTop: 6 }}>{centralEditCli.msg}</div>}
-                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+                    <div style={{ fontSize: 11.5, color: "#9cc3ff", marginTop: 4 }}>Cliente nuevo (no está en las OD de IPM).</div>)}
+                  <div style={etq}>DIRECCIÓN</div>
+                  <input value={centralEditCli.direccion || ""} onChange={(e) => setCentralEditCli({ ...centralEditCli, direccion: e.target.value })} placeholder="Ej. Zona Franca Coyol, nave 7, portón 2" autoComplete="off" name="central_dir_ignis" data-lpignore="true" style={campo} />
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <div style={{ flex: "1 1 140px" }}>
+                      <div style={etq}>REGIÓN</div>
+                      <input list="central_regiones" value={centralEditCli.region || ""} onChange={(e) => setCentralEditCli({ ...centralEditCli, region: e.target.value })} placeholder="Ej. GAM Oeste, Guanacaste, El Salvador" autoComplete="off" name="central_region_ignis" data-lpignore="true" style={campo} />
+                      <datalist id="central_regiones">{Array.from(new Set(dispositivos.map((z) => z.ficha && z.ficha.region).filter(Boolean))).map((r) => <option key={r} value={r} />)}</datalist>
+                    </div>
+                    <div style={{ flex: "2 1 220px" }}>
+                      <div style={etq}>UBICACIÓN (enlace de Google Maps o «9.93, -84.08»)</div>
+                      <input value={centralEditCli.ubicacion || ""} onChange={(e) => setCentralEditCli({ ...centralEditCli, ubicacion: e.target.value })} placeholder="https://maps.google.com/…" autoComplete="off" name="central_ubic_ignis" data-lpignore="true" style={campo} />
+                      {centralEditCli.ubicacion && <div style={{ fontSize: 11, marginTop: 3, color: leerCoordenadas(centralEditCli.ubicacion) ? "#7ee2a6" : "#ffb27a" }}>{leerCoordenadas(centralEditCli.ubicacion) ? "✔ Ubicación reconocida" : "No encuentro las coordenadas en ese texto (en Google Maps: clic derecho en el punto → copiar las coordenadas)."}</div>}
+                    </div>
+                  </div>
+                  <div style={etq}>LOGO DEL CLIENTE (enlace https de la imagen, opcional)</div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input value={centralEditCli.logo || ""} onChange={(e) => setCentralEditCli({ ...centralEditCli, logo: e.target.value })} placeholder="https://…/logo.png" autoComplete="off" name="central_logo_ignis" data-lpignore="true" style={campo} />
+                    {/^https:\/\//i.test(String(centralEditCli.logo || "")) && <img src={centralEditCli.logo} alt="" style={{ height: 30, maxWidth: 80, objectFit: "contain", background: "#fff", borderRadius: 4, padding: 2 }} />}
+                  </div>
+                  <div style={etq}>CONTACTOS EN ORDEN DE LLAMADA (uno por línea: nombre · cargo · teléfono)</div>
+                  <textarea rows={4} value={centralEditCli.contactos || ""} onChange={(e) => setCentralEditCli({ ...centralEditCli, contactos: e.target.value })} placeholder={"Juan Pérez · Seguridad · 8888-8888\nAna Mora · Mantenimiento · 7777-7777"} style={{ ...campo, resize: "vertical" }} />
+                  <div style={etq}>PROCEDIMIENTO (qué hacer cuando se activa)</div>
+                  <textarea rows={4} value={centralEditCli.procedimiento || ""} onChange={(e) => setCentralEditCli({ ...centralEditCli, procedimiento: e.target.value })} placeholder="Ej. Alarma: llamar primero a Seguridad; si no contesta en 2 min, a Bomberos 9-1-1..." style={{ ...campo, resize: "vertical" }} />
+                  <div style={etq}>MODO MANTENIMIENTO (sigue registrando, pero no suena ni escala)</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                    {enMantenimiento(dF) && <span style={{ fontSize: 12, color: "#c9b8ff", fontWeight: 700 }}>🛠 Hasta {new Date(dF.mantenimiento_hasta).toLocaleString("es-CR", { hour: "numeric", minute: "2-digit", day: "2-digit", month: "2-digit" })}{dF.mantenimiento_por ? " · " + dF.mantenimiento_por : ""}</span>}
+                    {[1, 2, 4, 8].map((h) => <Btn key={h} small variant="ghost" onClick={() => ponerMantenimiento(centralEditCli.sitio, h)}>{h} h</Btn>)}
+                    {enMantenimiento(dF) && <Btn small variant="ghost" onClick={() => ponerMantenimiento(centralEditCli.sitio, 0)}>Terminar</Btn>}
+                  </div>
+                  {centralEditCli.msg && <div style={{ fontSize: 12, color: IGNIS.alarma, marginTop: 8 }}>{centralEditCli.msg}</div>}
+                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
                     <Btn small variant="ghost" onClick={() => setCentralEditCli(null)}>Cancelar</Btn>
                     <Btn small disabled={!!centralEditCli.guardando} onClick={guardarClienteSitio}>{centralEditCli.guardando ? "Guardando…" : "Guardar"}</Btn>
+                  </div>
+                </div>
+              </div>);
+            })()}
+            {escEdit && (
+              <div onClick={() => setEscEdit(null)} style={{ position: "fixed", inset: 0, zIndex: 62, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
+                <div onClick={(e) => e.stopPropagation()} style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: "16px 18px", width: "100%", maxWidth: 460 }}>
+                  <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 2 }}>Escalamiento</div>
+                  <div style={{ fontSize: 12, color: IGNIS.dim, marginBottom: 10 }}>Minutos sin atender para escalar a Supervisor y luego a Gerencia. Es igual para todos los operadores.</div>
+                  {[["Alarma", "a1", "a2"], ["Supervisión", "s1", "s2"], ["Falla / anulado / sin conexión", "f1", "f2"]].map(([t, k1, k2]) => (
+                    <div key={t} style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0", fontSize: 13 }}>
+                      <span style={{ flex: 1 }}>{t}</span>
+                      <input type="number" min="1" value={escEdit[k1]} onChange={(e) => setEscEdit({ ...escEdit, [k1]: e.target.value })} style={{ width: 64, background: IGNIS.bg, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 6, padding: "4px 6px" }} />
+                      <span style={{ color: IGNIS.dim, fontSize: 11.5 }}>Superv.</span>
+                      <input type="number" min="1" value={escEdit[k2]} onChange={(e) => setEscEdit({ ...escEdit, [k2]: e.target.value })} style={{ width: 64, background: IGNIS.bg, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 6, padding: "4px 6px" }} />
+                      <span style={{ color: IGNIS.dim, fontSize: 11.5 }}>Ger.</span>
+                    </div>))}
+                  {[["Supervisor (nombre y teléfono)", "supervisor"], ["Gerencia (nombre y teléfono)", "gerencia"]].map(([t, k]) => (
+                    <div key={k} style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 11.5, fontWeight: 800, color: IGNIS.dim, marginBottom: 3 }}>{t}</div>
+                      <input value={escEdit[k] || ""} onChange={(e) => setEscEdit({ ...escEdit, [k]: e.target.value })} autoComplete="off" name={"central_esc_" + k} data-lpignore="true"
+                        style={{ width: "100%", boxSizing: "border-box", background: IGNIS.bg, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: "7px 9px", fontSize: 13, fontFamily: "inherit" }} />
+                    </div>))}
+                  {escEdit.msg && <div style={{ fontSize: 12, color: IGNIS.alarma, marginTop: 6 }}>{escEdit.msg}</div>}
+                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+                    <Btn small variant="ghost" onClick={() => setEscEdit(null)}>Cancelar</Btn>
+                    <Btn small onClick={guardarEscCfg}>Guardar</Btn>
+                  </div>
+                </div>
+              </div>)}
+            {turnoEdit !== null && (
+              <div onClick={() => setTurnoEdit(null)} style={{ position: "fixed", inset: 0, zIndex: 62, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
+                <div onClick={(e) => e.stopPropagation()} style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: "16px 18px", width: "100%", maxWidth: 620 }}>
+                  <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 8 }}>Entrega de turno</div>
+                  <textarea rows={16} value={turnoEdit} onChange={(e) => setTurnoEdit(e.target.value)}
+                    style={{ width: "100%", boxSizing: "border-box", background: IGNIS.bg, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: "9px 10px", fontSize: 12.5, fontFamily: "ui-monospace,monospace", resize: "vertical" }} />
+                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+                    <Btn small variant="ghost" onClick={() => setTurnoEdit(null)}>Cancelar</Btn>
+                    <Btn small onClick={async () => { if (await agregarBitacora("turno", turnoEdit)) setTurnoEdit(null); }}>Guardar entrega</Btn>
+                  </div>
+                </div>
+              </div>)}
+            {notaAtencion && (
+              <div onClick={() => setNotaAtencion(null)} style={{ position: "fixed", inset: 0, zIndex: 62, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
+                <div onClick={(e) => e.stopPropagation()} style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 12, padding: "16px 18px", width: "100%", maxWidth: 460 }}>
+                  <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>Cerrar atención</div>
+                  <div style={{ fontSize: 12, color: IGNIS.dim, marginBottom: 10 }}>{notaAtencion.texto}</div>
+                  <textarea autoFocus rows={4} value={notaAtencion.nota || ""} onChange={(e) => setNotaAtencion({ ...notaAtencion, nota: e.target.value })}
+                    placeholder="¿Qué se hizo? Ej. Llamé a Juan (Seguridad), revisaron: falsa alarma por polvo." style={{ width: "100%", boxSizing: "border-box", background: IGNIS.bg, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: "9px 10px", fontSize: 13, fontFamily: "inherit", resize: "vertical" }} />
+                  {notaAtencion.msg && <div style={{ fontSize: 12, color: IGNIS.alarma, marginTop: 6 }}>{notaAtencion.msg}</div>}
+                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+                    <Btn small variant="ghost" onClick={() => setNotaAtencion(null)}>Cancelar</Btn>
+                    <Btn small onClick={cerrarAtencion}>Cerrar atención</Btn>
                   </div>
                 </div>
               </div>)}
@@ -17061,9 +17673,37 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 {centralAbierta && <Btn small onClick={cerrarMonitorRemoto} title="Cerrar este panel y volver al Centro de Monitoreo">← Centro de Monitoreo</Btn>}
                 <Settings size={18} color={IGNIS.general} />
                 <div style={{ flex: 1, fontWeight: 800, fontSize: 16 }}>Control del panel · {termRemoto.sitio}</div>
+                {centralAbierta && <Btn small variant="ghost" onClick={() => abrirFicha(termRemoto.sitio)} title="Contactos, procedimiento y mantenimiento">📇 Ficha</Btn>}
                 {centralAbierta && <Btn small variant="ghost" onClick={() => { const s2 = termRemoto.sitio; cerrarMonitorRemoto(); abrirDesdeCentral(s2); }} title="Ver las tarjetas, eventos e historial de este cliente">Ver tarjetas del cliente</Btn>}
                 <button onClick={cerrarMonitorRemoto} style={{ background: "transparent", border: "none", color: IGNIS.dim, cursor: "pointer" }}><X size={18} /></button>
               </div>
+              {centralAbierta && (() => {
+                // 11.7: desde el Centro, la ficha del cliente a la vista: contactos en orden de llamada y procedimiento
+                const dF = dispositivos.find((z) => z.sitio === termRemoto.sitio) || {};
+                const fF = (dF.ficha && typeof dF.ficha === "object") ? dF.ficha : {};
+                const cts = Array.isArray(fF.contactos) ? fF.contactos : [];
+                if (!dF.cliente && !fF.direccion && !cts.length && !fF.procedimiento && !enMantenimiento(dF)) return (
+                  <div style={{ fontSize: 12, color: IGNIS.dim, marginBottom: 8 }}>Este sitio no tiene ficha (contactos y procedimiento). <button type="button" onClick={() => abrirFicha(termRemoto.sitio)} style={{ background: "transparent", border: "none", color: "#79b8ff", fontWeight: 800, cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>Llenar ficha</button></div>);
+                return (
+                  <div style={{ display: "flex", gap: 14, flexWrap: "wrap", background: "#1f6fd812", border: "1px solid #1f6fd855", borderRadius: 9, padding: "8px 12px", marginBottom: 8, fontSize: 12.5 }}>
+                    <div style={{ minWidth: 180 }}>
+                      <b style={{ fontSize: 13.5 }}>{dF.cliente || termRemoto.sitio}</b>
+                      {fF.direccion && <div style={{ color: IGNIS.dim }}>📍 {fF.direccion}</div>}
+                      {enMantenimiento(dF) && <div style={{ color: "#c9b8ff", fontWeight: 700 }}>🛠 En mantenimiento hasta {new Date(dF.mantenimiento_hasta).toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" })}</div>}
+                    </div>
+                    {cts.length > 0 && <div style={{ minWidth: 200 }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: IGNIS.dim, letterSpacing: ".05em" }}>LLAMAR EN ESTE ORDEN</div>
+                      {cts.map((c2, k) => {
+                        const tel = (String(c2).match(/[+\d][\d\s-]{6,}/) || [""])[0].replace(/[\s-]/g, "");
+                        return <div key={k}>{k + 1}. {tel ? <a href={"tel:" + tel} style={{ color: "#9cc3ff" }}>{c2}</a> : c2}</div>;
+                      })}
+                    </div>}
+                    {fF.procedimiento && <div style={{ flex: 1, minWidth: 220 }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: IGNIS.dim, letterSpacing: ".05em" }}>PROCEDIMIENTO</div>
+                      <div style={{ whiteSpace: "pre-wrap" }}>{fF.procedimiento}</div>
+                    </div>}
+                  </div>);
+              })()}
               {termRemoto.error ? (
                 <div style={{ color: IGNIS.alarma, fontSize: 13 }}>No se pudo abrir: {termRemoto.error}</div>
               ) : (

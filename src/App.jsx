@@ -14906,6 +14906,9 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   // otros equipos ni siquiera llegan a su navegador.
   const esCliente = currentUser?.categoria === "cliente";
   const esAdminMonitoreo = currentUser?.categoria === "admin";
+  // 11.7: la información técnica del equipo (cómo está conectado y configurado: puerto, baudios, red, IP, MAC,
+  // señal, versión, demoras) solo la ven Admin y Técnicos; los demás ven solo si está en línea
+  const verInfoTecnica = currentUser?.categoria === "admin" || currentUser?.categoria === "tecnico";
   const veCentral = !!currentUser;   // 11.7: el Centro lo ven todos (el cliente, solo sus sitios)
   const esOperadorCentral = currentUser?.categoria === "admin" || currentUser?.categoria === "tecnico" || currentUser?.categoria === "asistente";   // atender, ficha, mantenimiento, escalamiento, bitácora   // 11.7: Centro de Monitoreo solo Admin y Técnicos // el admin ve todas las conexiones, aun sin elegir sitio
   const sitiosCliente = useMemo(() => (esCliente ? sitiosDeTexto(currentUser?.area) : []), [esCliente, currentUser?.area]);
@@ -15147,6 +15150,8 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   const [indDias, setIndDias] = useState(30);
   const [indDatos, setIndDatos] = useState(null);   // { sitios: [...], atenciones: [...] }
   const escVistosRef = useRef(new Set());
+  const colaVistosRef = useRef(new Set());
+  const colaPrimeraRef = useRef(false);
   const escPrimeraRef = useRef(false);
   useEffect(() => {
     if (!centralAbierta || !veCentral) return;
@@ -15682,8 +15687,12 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
     // 11.3: el sonido sigue hasta que ALGÚN usuario confirme (el panel imprime CONFIRMAR, SEÑAL SILENCIADA o REARME)
     // 11.4: SOLO la confirmación (CONFIRMAR / ACKNOWLEDGE, desde el panel, la App o el APK) apaga el sonido
     if (nuevos.some((e) => /CONFIRMAR|ACKNOWLEDG/i.test(String(e.texto || "")))) detenerSonido();
-    if (monitorSitioRef.current && nuevos.every((e) => e.sitio === monitorSitioRef.current)) return;
-    const sonables = nuevos.filter((e) => !sitiosMudosRef.current.includes(e.sitio) && !mantRef.current.includes(e.sitio));   // 11.7: sin los sitios silenciados ni en mantenimiento
+    // 11.7: antes, con el panel abierto se dejaba el sonido solo al monitor en vivo y, si esa línea no llegaba por
+    // el monitor, no sonaba nada. Ahora suena igual, y una línea que ya sonó por el monitor (20 s) no se repite.
+    const claveLinea = (e) => String(e.texto || "").replace(/^[^A-Za-z0-9*#]+/, "").toUpperCase().replace(/\s+/g, " ").trim();
+    const sonables = nuevos.filter((e) => !sitiosMudosRef.current.includes(e.sitio) && !mantRef.current.includes(e.sitio)
+      && !(lineasSonadasRef.current.get(claveLinea(e)) && Date.now() - lineasSonadasRef.current.get(claveLinea(e)) < 20000));
+    sonables.forEach((e) => lineasSonadasRef.current.set(claveLinea(e), Date.now()));   // 11.7: sin los sitios silenciados ni en mantenimiento
     if (!sonables.length) return;
     // la subcategoría también cuenta (ej. "general" + "problema"); 11.7: y lo que la LÍNEA dice, igual que la cola
     // de atención (ej. «NO RESPONDE» sale como FALLA aunque el equipo la haya guardado con otra categoría)
@@ -16666,7 +16675,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ textAlign: "left", color: IGNIS.dim, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
-                  <th style={{ padding: "6px 8px" }}>Sitio</th><th>Estado</th><th>Red (SSID)</th><th>MAC</th><th>IP</th><th>Señal</th><th>Versión</th><th>Última actualización</th>
+                  <th style={{ padding: "6px 8px" }}>Sitio</th><th>Estado</th>{verInfoTecnica && <><th>Red (SSID)</th><th>MAC</th><th>IP</th><th>Señal</th><th>Versión</th></>}<th>Última actualización</th>
                 </tr>
               </thead>
               <tbody>
@@ -16681,11 +16690,13 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                           <Dot color={enLinea ? IGNIS.ok : IGNIS.alarma} />{enLinea ? "En línea" : "Sin conexión"}
                         </span>
                       </td>
+                      {verInfoTecnica && <>
                       <td>{d.ssid || "—"}</td>
                       <td style={{ fontFamily: "monospace", fontSize: 12 }}>{d.mac || "—"}</td>
                       <td style={{ fontFamily: "monospace", fontSize: 12 }}>{d.ip || "—"}</td>
                       <td>{d.rssi != null ? `${d.rssi} dBm` : "—"}</td>
                       <td style={{ fontSize: 12 }} title={d.comando_resultado || ""}>{d.version ? `V${d.version}` : "—"}{d.comando === "actualizar" ? <span style={{ color: IGNIS.problema, marginLeft: 6 }}>⟳ actualizando</span> : ""}</td>
+                      </>}
                       <td style={{ fontSize: 12, color: IGNIS.dim }}>{new Date(d.actualizado_en).toLocaleString("es-CR", { dateStyle: "short", timeStyle: "medium" })}</td>
                     </tr>
                   );
@@ -17089,6 +17100,23 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         };
         colaEv.forEach((it) => { it.esc = nivelEsc(it); });
         const escalados = colaEv.filter((it) => it.esc > 0);
+        {
+          // 11.7: un evento NUEVO en la cola de atención suena según lo que es (igual a lo que se ve). La primera foto
+          // se toma cuando ya cargó todo y con 20 s de gracia al entrar; después, cada evento que aparece suena.
+          const listosCola = !cargando && dispositivos.length > 0 && (eventosCentro !== null || centroSinSql || esCliente);
+          const clavesCola = colaEv.filter((it) => !it.off).map((it) => it.k + "@" + it.t);
+          if (!listosCola) colaPrimeraRef.current = false;
+          else if (colaPrimeraRef.current && esTecnicoSonido && sonidoOn && !enGraciaCentral()) {
+            const nuevosCola = colaEv.filter((it) => !it.off && !colaVistosRef.current.has(it.k + "@" + it.t) && !it.x.mant && !sitiosMudos.includes(it.x.sitio) && ahoraC - it.t < 15 * 60000);
+            if (nuevosCola.length) {
+              const g = (it) => GR[it.r.chip];
+              const top = nuevosCola.find((it) => g(it) === "alarma") || nuevosCola.find((it) => g(it) === "superv") || nuevosCola[0];
+              const modo = g(top) === "alarma" ? 2 : g(top) === "superv" ? 3 : 1;
+              setTimeout(() => { setSonandoSitio(top.x.sitio); sonar(modo); }, 0);
+            }
+          }
+          colaVistosRef.current = new Set(clavesCola); if (listosCola) colaPrimeraRef.current = true;
+        }
         // suena cuando un evento SUBE de nivel (la primera vez solo toma nota). Gerencia suena aunque el sitio esté silenciado.
         {
           const claves = escalados.map((it) => it.k + ":" + it.esc);
@@ -17109,7 +17137,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           ["normal", "OK", cuentaC("normal"), "#7ee2a6", "#3fd17a"],
         ];
         const abrirSitio = (sitio) => abrirSitioUnido(sitio);   // panel + tarjetas en una sola pantalla
-        const vistaOk = esOperadorCentral || !["bitacora", "indicadores"].includes(centralVista);
+        const vistaOk = (esOperadorCentral || !["bitacora", "indicadores"].includes(centralVista)) && (verInfoTecnica || centralVista !== "equipos");
         const vistaF = !vistaOk || !["matriz", "bitacora", "indicadores", "equipos", "mapa"].includes(centralVista);   // directo al panel y control (pide la clave del monitor)
         const celdas = [];
         let grupoAnt = null;
@@ -17142,7 +17170,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
               <span style={{ display: "flex", alignItems: "flex-start", gap: 4, minWidth: 0 }}>
                 {x.logo && <img src={x.logo} alt="" style={{ height: 28, maxWidth: 46, objectFit: "contain", background: "#fff", borderRadius: 4, padding: 1, flex: "none" }} onError={(e) => { e.currentTarget.style.display = "none"; }} />}
                 <span style={{ minWidth: 0, flex: 1, lineHeight: 1.15 }}>
-                  <span style={{ fontSize: movilC ? 12.5 : 14, fontWeight: 800, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: x.cliente ? 1 : 2, WebkitBoxOrient: "vertical" }}>{x.cliente || x.sitio}</span>
+                  <span style={{ fontSize: movilC ? 12.5 : 14, fontWeight: 800, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: x.cliente ? 1 : 2, WebkitBoxOrient: "vertical", textShadow: x.est !== "normal" && x.est !== "sinconex" && x.est !== "sinequipo" ? "0 0 3px #fff, 0 0 6px #fff" : "none" }}>{x.cliente || x.sitio}</span>
                   {x.cliente && <span style={{ display: "block", fontSize: movilC ? 10.5 : 11.5, fontWeight: 700, color: "#3d4248", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.sitio}</span>}
                 </span>
                 {sitiosMudos.includes(x.sitio) && <span style={{ fontSize: 10, flex: "none" }}>🔕</span>}
@@ -17171,9 +17199,10 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         return (
           <div className="ignis-central" style={{ ...(modoCentral && !centralCompleta ? { position: "relative", height: "100vh" } : { position: "fixed", inset: 0 }), zIndex: 55, background: "#0b0f14", color: IGNIS.text, display: "flex", flexDirection: "column", fontFamily: "system-ui,-apple-system,sans-serif" }}>
             <style>{"@keyframes ignisEscalado{0%,100%{background:#e5484d33}50%{background:#e5484d0d}}"
-              + "@keyframes ignisBrillaRojo{0%,100%{box-shadow:0 0 0 3px #ff3b3b,0 0 26px 6px #ff3b3bcc}50%{box-shadow:0 0 0 3px #ff8f92,0 0 8px 1px #ff3b3b66}}"
-              + "@keyframes ignisBrillaAmarillo{0%,100%{box-shadow:0 0 0 3px #ffd000,0 0 24px 5px #ffd000bb}50%{box-shadow:0 0 0 3px #fff1a8,0 0 6px 1px #ffd00055}}"
-              + "@keyframes ignisBrillaNaranja{0%,100%{box-shadow:0 0 0 3px #ff8c3d,0 0 24px 5px #ff8c3dbb}50%{box-shadow:0 0 0 3px #ffc49a,0 0 6px 1px #ff8c3d55}}"}</style>
+              // 11.7: el panel entero cambia de color y destella (no solo el borde) para que llame la atención
+              + "@keyframes ignisBrillaRojo{0%,100%{background:#ff3b3b;box-shadow:0 0 0 4px #ff3b3b,0 0 34px 10px #ff3b3bdd;transform:scale(1.03)}50%{background:#7a0b10;box-shadow:0 0 0 4px #ff8f92,0 0 6px 1px #ff3b3b55;transform:scale(1)}}"
+              + "@keyframes ignisBrillaAmarillo{0%,100%{background:#ffd400;box-shadow:0 0 0 4px #ffd400,0 0 30px 8px #ffd400cc}50%{background:#7a6200;box-shadow:0 0 0 4px #fff1a8,0 0 6px 1px #ffd40044}}"
+              + "@keyframes ignisBrillaNaranja{0%,100%{background:#ff8c3d;box-shadow:0 0 0 4px #ff8c3d,0 0 30px 8px #ff8c3dcc}50%{background:#7a3a0b;box-shadow:0 0 0 4px #ffc49a,0 0 6px 1px #ff8c3d44}}"}</style>
             <style>{".ignis-raiz-central>:not(.ignis-central):not([style*='position: fixed']){display:none!important}.ignis-raiz-central{gap:0!important}@keyframes ignisCentralNuevo{0%,100%{box-shadow:0 0 0 3px #1f6fd8,0 0 16px #1f6fd8aa}50%{box-shadow:0 0 0 3px #79b8ff,0 0 3px #1f6fd855}}"}</style>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: movilC ? "10px 10px" : "10px 18px", borderBottom: `1px solid ${IGNIS.border}`, background: "#05080b" }}>
               <div style={{ fontSize: movilC ? 14 : 15, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase" }}>Centro de Monitoreo</div>
@@ -17187,7 +17216,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     style={{ background: !sonidoOn ? "#c8102e" : sonidoBloqueado ? "#1a2a3a" : "#1f3a2a", border: `1px solid ${!sonidoOn ? "#ff6b6f" : sonidoBloqueado ? IGNIS.seguridad : "#2fbf5f"}`, color: "#fff", borderRadius: 8, padding: "5px 11px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit", animation: !sonidoOn || sonidoBloqueado ? "ignisEscalado 1.2s ease-in-out infinite" : "none" }}>
                     {!sonidoOn ? "🔇 Sonido APAGADO — activar" : sonidoBloqueado ? "🔈 Toque para activar el sonido" : "🔊 Sonido activo"}
                   </button>
-                  {sonidoOn && <button type="button" onClick={() => { const ctx = prepararAudio(); const ir = () => { setSonidoBloqueado(false); detenerSonido(); sonar(1, 1500); }; if (ctx && ctx.state !== "running") ctx.resume().then(ir).catch(() => {}); else ir(); }} title="Suena 1.5 s para comprobar el parlante"
+                  {sonidoOn && verInfoTecnica && <button type="button" onClick={() => { const ctx = prepararAudio(); const ir = () => { setSonidoBloqueado(false); detenerSonido(); sonar(1, 1500); }; if (ctx && ctx.state !== "running") ctx.resume().then(ir).catch(() => {}); else ir(); }} title="Suena 1.5 s para comprobar el parlante"
                     style={{ background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, color: IGNIS.text, borderRadius: 8, padding: "5px 9px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Probar</button>}
                 </span>)}
               {esTecnicoSonido && modoSonando > 0 && (
@@ -17215,7 +17244,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                   ⏱ {escalados.length} ESCALADO{escalados.length === 1 ? "" : "S"}
                 </span>)}
               <div style={{ display: "flex", gap: 3, background: IGNIS.panel, border: `1px solid ${IGNIS.border}`, borderRadius: 8, padding: 3 }}>
-                {[["atencion", "Atención"], ["matriz", "Lista"], ["bitacora", "Bitácora"], ["indicadores", "Indicadores"], ["equipos", "Equipos"], ["mapa", "Mapa"]].filter(([k]) => esOperadorCentral || !["bitacora", "indicadores"].includes(k)).map(([k, t]) => (
+                {[["atencion", "Atención"], ["matriz", "Lista"], ["bitacora", "Bitácora"], ["indicadores", "Indicadores"], ["equipos", "Equipos"], ["mapa", "Mapa"]].filter(([k]) => (esOperadorCentral || !["bitacora", "indicadores"].includes(k)) && (verInfoTecnica || k !== "equipos")).map(([k, t]) => (
                   <button key={k} type="button" onClick={() => { setCentralVista(k); if (k === "indicadores") cargarIndicadores(indDias); }}
                     style={{ border: "none", borderRadius: 6, padding: "4px 9px", fontSize: 11.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", background: (centralVista === k || (k === "atencion" && !["matriz", "bitacora", "indicadores", "equipos", "mapa"].includes(centralVista))) ? "#1f6fd8" : "transparent", color: (centralVista === k || (k === "atencion" && !["matriz", "bitacora", "indicadores", "equipos", "mapa"].includes(centralVista))) ? "#fff" : IGNIS.dim }}>{t}</button>))}
               </div>
@@ -17291,7 +17320,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                   </div>
                   <div ref={centralScrollRef} style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
                     {!colaF.length && <div style={{ color: "#3fd17a", textAlign: "center", padding: "40px 10px", fontSize: 15, fontWeight: 800 }}>{filtroCli ? "Este cliente no tiene eventos activos" : "Ningún sitio necesita atención"}<div style={{ fontSize: 12, color: IGNIS.dim, fontWeight: 600, marginTop: 6 }}>Los sitios sin eventos están arriba; toque uno para abrir su panel.</div></div>}
-                    <div style={{ display: "grid", gridTemplateColumns: movilC ? "1fr" : "repeat(auto-fill, minmax(300px, 1fr))", gap: 10 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: movilC ? "1fr" : "repeat(auto-fill, minmax(300px, 1fr))", gap: 16, padding: 12 }}>
                       {colaF.map((x, k) => {
                         const grande = k === 0 && !movilC && colaF.length > 1;
                         const apagado = x.est === "sinconex" || x.est === "sinequipo";
@@ -17464,7 +17493,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     </div>)}
                 </div>);
             })()}
-            {centralVista === "equipos" && (() => {
+            {centralVista === "equipos" && verInfoTecnica && (() => {
               // 11.7 (punto 4): SALUD DE LOS EQUIPOS — para ver un IgnisMonitor que está por fallar antes de que se caiga
               const vers = dispositivos.map((d) => String(d.version || "")).filter(Boolean);
               const numV = (v) => { const m = String(v).match(/(\d+)\.(\d+)/); return m ? Number(m[1]) * 1000 + Number(m[2]) : 0; };
@@ -17540,6 +17569,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       <div key={x.sitio} onClick={() => { try { mapaObjRef.current.setView([x.lat, x.lng], 15); } catch (e) {} }} style={{ cursor: "pointer", fontSize: 12.5, padding: "5px 0", borderBottom: "1px solid #161e27" }}>
                         <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", marginRight: 6, background: COLOR[x.est] || "#2fbf5f" }} />{x.cliente ? x.cliente + " · " : ""}{x.sitio} <span style={{ color: IGNIS.dim }}>· {ET[x.est]}</span>
                       </div>))}
+                    {esOperadorCentral && <>   {/* 11.7: lo de «sin ubicación» y cómo ponerla es solo para el personal */}
                     <b style={{ display: "block", marginTop: 14, fontSize: 12, letterSpacing: ".08em", color: IGNIS.dim }}>SIN UBICACIÓN ({sinC.length})</b>
                     <div style={{ fontSize: 11.5, color: IGNIS.dim, margin: "4px 0 6px" }}>Póngale en la ficha (✎) la dirección o las coordenadas. Los enlaces cortos de Google (maps.app.goo.gl) no traen coordenadas: en Google Maps haga clic derecho en el punto y copie los números (ej. 9.93, -84.08). Con dirección, el punto sale aproximado (borde azul punteado).</div>
                     {sinC.map((x) => (
@@ -17547,6 +17577,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                         <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.cliente ? x.cliente + " · " : ""}{x.sitio}</span>
                         {canGestionar && <button type="button" onClick={() => abrirFicha(x.sitio)} style={{ border: `1px solid ${IGNIS.border}`, background: "transparent", color: IGNIS.dim, borderRadius: 5, padding: "0 6px", fontSize: 11, cursor: "pointer" }}>✎</button>}
                       </div>))}
+                    </>}
                   </div>
                 </div>);
             })()}
@@ -17566,7 +17597,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 </div>
                 <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
                   {!matriz.length && <div style={{ color: IGNIS.dim, textAlign: "center", padding: 30, fontSize: 13 }}>{sitiosC.length ? "Ningún sitio coincide." : "Todavía no hay equipos reportando."}</div>}
-                  <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${movilC ? 150 : 190}px, 1fr))`, gap: 10 }}>{celdas}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${movilC ? 150 : 190}px, 1fr))`, gap: 16, padding: 12 }}>{celdas}</div>
                 </div>
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11, color: IGNIS.dim, marginTop: 10 }}>
                   {[["Alarma", "#e5484d"], ["Supervisión", "#ff8c3d"], ["Falla", "#f2b705"], ["Anulado", "#b8641f"], ["Sin conexión", "#2a3038"], ["OK", "#132a1d"]].map(([t, c]) => (
@@ -17836,11 +17867,11 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                 <>
                   <div style={{ fontSize: 12, color: IGNIS.dim, marginBottom: 8, lineHeight: 1.5 }}>
                     {abierto ? <span style={{ color: IGNIS.ok || "#3fb950" }}>● Conectado</span> : <span>○ Conectando con el equipo (unos segundos)…</span>}
-                    {" · "}{f.comando_resultado || ""}
-                    {c.tipo !== undefined && <> · Panel: <b style={{ color: IGNIS.text }}>{c.tipo === "3" ? "Notifier CRT" : c.tipo === "2" ? "Simplex Ethernet" : c.tipo === "1" ? "Simplex RS232" : "Notifier RS232"}</b> {c.tipo === "2" ? `(${c.ipactual || c.ethip} → ${c.panelip}:${c.port}, ${c.estado})` : `(${c.baud} ${c.fmt})`}</>}
-                    {Number(c.ruido) > 0 && <> · <span title="Bytes con el 8.º bit encendido: ruido eléctrico en la línea, descartado por el equipo">ruido filtrado: {c.ruido} bytes</span></>}
-                    {c.lat !== undefined && Number(c.lat) > 0 && <> · <span title="Demora del último evento desde que el panel lo imprimió hasta que la nube lo recibió (peor caso entre paréntesis), y lo que tardó la conexión">panel→nube {(Number(c.lat) / 1000).toFixed(1)} s (máx {(Number(c.latmax) / 1000).toFixed(1)} s) · red {c.red} ms</span></>}
-                    {viejo && <div style={{ color: IGNIS.problema, marginTop: 4 }}>Este equipo tiene la versión {f.version}: el monitor remoto necesita la 7.2. Actualícelo desde «Actualizar firmware».</div>}
+                    {verInfoTecnica && <>{" · "}{f.comando_resultado || ""}</>}
+                    {verInfoTecnica && c.tipo !== undefined && <> · Panel: <b style={{ color: IGNIS.text }}>{c.tipo === "3" ? "Notifier CRT" : c.tipo === "2" ? "Simplex Ethernet" : c.tipo === "1" ? "Simplex RS232" : "Notifier RS232"}</b> {c.tipo === "2" ? `(${c.ipactual || c.ethip} → ${c.panelip}:${c.port}, ${c.estado})` : `(${c.baud} ${c.fmt})`}</>}
+                    {verInfoTecnica && Number(c.ruido) > 0 && <> · <span title="Bytes con el 8.º bit encendido: ruido eléctrico en la línea, descartado por el equipo">ruido filtrado: {c.ruido} bytes</span></>}
+                    {verInfoTecnica && c.lat !== undefined && Number(c.lat) > 0 && <> · <span title="Demora del último evento desde que el panel lo imprimió hasta que la nube lo recibió (peor caso entre paréntesis), y lo que tardó la conexión">panel→nube {(Number(c.lat) / 1000).toFixed(1)} s (máx {(Number(c.latmax) / 1000).toFixed(1)} s) · red {c.red} ms</span></>}
+                    {verInfoTecnica && viejo && <div style={{ color: IGNIS.problema, marginTop: 4 }}>Este equipo tiene la versión {f.version}: el monitor remoto necesita la 7.2. Actualícelo desde «Actualizar firmware».</div>}
                   </div>
                   {esTecnicoSonido && modoSonando > 0 && (
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, borderRadius: 9, padding: "8px 12px", marginBottom: 8,

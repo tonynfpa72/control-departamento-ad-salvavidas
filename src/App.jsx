@@ -15293,12 +15293,15 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
         else mk.setLatLng([p2.lat, p2.lng]);
       });
       mk.bindTooltip((p2.cliente ? p2.cliente + " · " : "") + p2.sitio + (p2.est !== "normal" ? " — " + p2.estTxt : "") + (p2.aprox ? " (ubicación aproximada por la dirección)" : ""), { direction: "top", permanent: puntos.length <= 25, className: "ignis-mapa-etq" });
-      mk.on("click", () => abrirMonitorRemoto(p2.sitio));
+      mk.on("click", () => abrirSitioUnido(p2.sitio));
       mk.addTo(capa);
     });
     if (primera && puntos.length) mapaVerTodos();
   });
   // se entró a un sitio desde la Central: botón para volver
+  // 11.7: desde el Centro, el panel y las tarjetas del sitio quedan en UNA sola pantalla (panel arriba, tarjetas debajo)
+  const abrirSitioUnido = (sitio) => { abrirDesdeCentral(sitio); abrirMonitorRemoto(sitio); };
+  const volverAlCentro = () => { if (termRemoto) cerrarMonitorRemoto(); setDesdeCentral(false); setCentralAbierta(true); };
   const abrirDesdeCentral = (sitio) => { setSitioSeleccionado(sitio); setDesdeCentral(true); setCentralAbierta(false); try { window.scrollTo(0, 0); } catch (e) {} };
   const [filtroPantalla, setFiltroPantalla] = useState(null);   // 11.4: tocar un contador filtra la pantalla
   const [textoLimpio, setTextoLimpio] = useState({});   // 11.4: sitio -> { en, corte } al limpiar la vista «Texto»   // 11.3: sitio -> hora en que se limpió la pantalla
@@ -15832,7 +15835,8 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
     const c = {};
     CATEGORIAS_PANEL_TILES.forEach((cat) => { c[cat] = 0; });
     eventosDelSitio.filter(evEnRango).forEach((e) => { if (c[e.categoria] !== undefined) c[e.categoria]++; else c.otro = (c.otro || 0) + 1; });
-    c.general = CATEGORIAS_PANEL_GENERAL.reduce((t, k) => t + (c[k] || 0), 0);
+    // 11.7: «general» (órdenes desde la App) no es tarjeta propia; la tarjeta General cuenta lo mismo que muestra al tocarla
+    c.general = eventosDelSitio.filter(evEnRango).filter((e) => CATEGORIAS_PANEL_GENERAL.includes(e.categoria)).length;
     c.historial = hayRango ? lineasHistorial.filter((e) => enRango(e.fechaLinea)).length : lineasHistorial.length;
     c.mantenimiento = lineasMantenimiento.length;
     return c;
@@ -16302,7 +16306,7 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
       const tarjetasHtml = (evs) => {
         const c = {}; CATEGORIAS_PANEL_TILES.forEach((k) => { c[k] = 0; });
         evs.forEach((e) => { if (c[e.categoria] !== undefined) c[e.categoria]++; else c.otro = (c.otro || 0) + 1; });
-        c.general = CATEGORIAS_PANEL_GENERAL.reduce((t, k) => t + (c[k] || 0), 0);
+        c.general = evs.filter((e) => CATEGORIAS_PANEL_GENERAL.includes(e.categoria)).length;   // 11.7: igual que la tarjeta
         const total = evs.length;
         return `<div class="tiles">` + ["general", ...CATEGORIAS_PANEL_TILES, ...(c.otro ? ["otro"] : [])].map((k) => {
           const n = c[k] || 0, pct = total ? Math.round((n / total) * 100) : 0;
@@ -16396,10 +16400,10 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
   };
 
   return (
-    <div className={modoCentral && centralAbierta && veCentral ? "ignis-raiz-central" : undefined} style={{ background: IGNIS.bg, minHeight: "100vh", padding: modoCentral && centralAbierta && veCentral ? 0 : 18, paddingTop: modoCentral && centralAbierta && veCentral ? 0 : esMovilNotifier ? 58 : 18, paddingBottom: esMovilNotifier ? 100 : 30, display: "flex", flexDirection: "column", gap: 14, color: IGNIS.text, boxSizing: "border-box" }}>
+    <div className={modoCentral && centralAbierta && veCentral ? "ignis-raiz-central" : undefined} style={{ ...(termRemoto && desdeCentral && !centralAbierta ? { display: "flex", flexDirection: "column" } : {}), background: IGNIS.bg, minHeight: "100vh", padding: modoCentral && centralAbierta && veCentral ? 0 : 18, paddingTop: modoCentral && centralAbierta && veCentral ? 0 : esMovilNotifier ? 58 : 18, paddingBottom: esMovilNotifier ? 100 : 30, display: "flex", flexDirection: "column", gap: 14, color: IGNIS.text, boxSizing: "border-box" }}>
       {/* ---- Encabezado estilo IgnisMonitor ---- */}
       <AvisosCiberMonitoreo />
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, borderBottom: `1px solid ${IGNIS.border}`, paddingBottom: 12 }}>
+      <div style={{ order: termRemoto && desdeCentral && !centralAbierta ? -2 : undefined, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, borderBottom: `1px solid ${IGNIS.border}`, paddingBottom: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ width: 30, height: 30, borderRadius: 8, background: IGNIS.panel2, border: `1px solid ${IGNIS.border}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <Flame size={16} color={IGNIS.alarma} />
@@ -16441,7 +16445,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
             </Btn>
           )}
           {veCentral && (
-            <Btn small variant={desdeCentral ? undefined : "ghost"} onClick={() => { setDesdeCentral(false); setCentralAbierta(true); }} title="Central de Monitoreo: los monitores de todos los clientes en vivo">
+            <Btn small variant={desdeCentral ? undefined : "ghost"} onClick={volverAlCentro} title="Central de Monitoreo: los monitores de todos los clientes en vivo">
               <LayoutDashboard size={13} /> {desdeCentral ? "← Volver a la central" : "Central de monitoreo"}
             </Btn>
           )}
@@ -17077,7 +17081,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
           ["falla", "Falla/Anul.", cuentaC("falla") + cuentaC("anulado"), "#f2d06b", "#f2b705"], ["sinconex", "Sin conexión", cuentaC("sinconex") + cuentaC("sinequipo"), "#aab3bd", "#6e7681"],
           ["normal", "OK", cuentaC("normal"), "#7ee2a6", "#3fd17a"],
         ];
-        const abrirSitio = (sitio) => abrirMonitorRemoto(sitio);
+        const abrirSitio = (sitio) => abrirSitioUnido(sitio);   // panel + tarjetas en una sola pantalla
         const vistaOk = esOperadorCentral || !["bitacora", "indicadores"].includes(centralVista);
         const vistaF = !vistaOk || !["matriz", "bitacora", "indicadores", "equipos", "mapa"].includes(centralVista);   // directo al panel y control (pide la clave del monitor)
         const celdas = [];
@@ -17743,18 +17747,19 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
         const campo = (k, titulo, extra) => (<div><span style={lab}>{titulo}</span><input style={inp} value={cfgForm ? cfgForm[k] : ""} onChange={set(k)} {...(extra || {})} /></div>);
         const tecla = (txt, bytes) => (<Btn small onClick={() => enviarAlPanel(bytes, txt)}>{txt}</Btn>);
         const red = cfgForm && cfgForm.tipo === "2";
+        const unido = !!(desdeCentral && !centralAbierta);   // 11.7: panel dentro de la pantalla del sitio (con sus tarjetas debajo)
         return (
-          <div onClick={cerrarMonitorRemoto} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: centralAbierta ? 0 : (typeof window !== "undefined" && window.innerWidth < 640) ? 4 : 12 }}>
-            <div onClick={(x) => x.stopPropagation()} onPointerDown={() => { monActividad.current = Date.now(); }} onKeyDown={() => { monActividad.current = Date.now(); }} style={{ background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: centralAbierta ? 0 : 12, width: "100%", maxWidth: centralAbierta ? "100vw" : (typeof window !== "undefined" && window.innerWidth < 640) ? 880 : "min(1500px, 97vw)", maxHeight: centralAbierta ? "100vh" : (typeof window !== "undefined" && window.innerWidth < 640) ? "94vh" : "97vh", height: centralAbierta ? "100vh" : undefined, boxSizing: "border-box", display: "flex", flexDirection: "column", padding: (typeof window !== "undefined" && window.innerWidth < 640) ? "10px 8px" : "16px 20px", fontFamily: "system-ui,-apple-system,sans-serif", overflow: "auto" }}>
+          <div onClick={unido ? undefined : cerrarMonitorRemoto} style={unido ? { order: -1, marginBottom: 14 } : { position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: centralAbierta ? 0 : (typeof window !== "undefined" && window.innerWidth < 640) ? 4 : 12 }}>
+            <div onClick={(x) => x.stopPropagation()} onPointerDown={() => { monActividad.current = Date.now(); }} onKeyDown={() => { monActividad.current = Date.now(); }} style={{ background: IGNIS.panel, color: IGNIS.text, border: `1px solid ${IGNIS.border}`, borderRadius: centralAbierta ? 0 : 12, width: "100%", maxWidth: unido ? "100%" : centralAbierta ? "100vw" : (typeof window !== "undefined" && window.innerWidth < 640) ? 880 : "min(1500px, 97vw)", maxHeight: unido ? "none" : centralAbierta ? "100vh" : (typeof window !== "undefined" && window.innerWidth < 640) ? "94vh" : "97vh", height: centralAbierta && !unido ? "100vh" : undefined, boxSizing: "border-box", display: "flex", flexDirection: "column", padding: (typeof window !== "undefined" && window.innerWidth < 640) ? "10px 8px" : "16px 20px", fontFamily: "system-ui,-apple-system,sans-serif", overflow: "auto" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                {centralAbierta && <Btn small onClick={cerrarMonitorRemoto} title="Cerrar este panel y volver al Centro de Monitoreo">← Centro de Monitoreo</Btn>}
+                {(centralAbierta || unido) && <Btn small onClick={unido ? volverAlCentro : cerrarMonitorRemoto} title="Volver al Centro de Monitoreo">← Centro de Monitoreo</Btn>}
                 <Settings size={18} color={IGNIS.general} />
                 <div style={{ flex: 1, fontWeight: 800, fontSize: 16 }}>Control del panel · {termRemoto.sitio}</div>
-                {centralAbierta && esOperadorCentral && <Btn small variant="ghost" onClick={() => abrirFicha(termRemoto.sitio)} title="Contactos, procedimiento y mantenimiento">📇 Ficha</Btn>}
-                {centralAbierta && <Btn small variant="ghost" onClick={() => { const s2 = termRemoto.sitio; cerrarMonitorRemoto(); abrirDesdeCentral(s2); }} title="Ver las tarjetas, eventos e historial de este cliente">Ver tarjetas del cliente</Btn>}
+                {(centralAbierta || unido) && esOperadorCentral && <Btn small variant="ghost" onClick={() => abrirFicha(termRemoto.sitio)} title="Contactos, procedimiento y mantenimiento">📇 Ficha</Btn>}
+                {centralAbierta && !unido && <Btn small variant="ghost" onClick={() => { const s2 = termRemoto.sitio; cerrarMonitorRemoto(); abrirDesdeCentral(s2); }} title="Ver las tarjetas, eventos e historial de este cliente">Ver tarjetas del cliente</Btn>}
                 <button onClick={cerrarMonitorRemoto} style={{ background: "transparent", border: "none", color: IGNIS.dim, cursor: "pointer" }}><X size={18} /></button>
               </div>
-              {centralAbierta && (() => {
+              {(centralAbierta || unido) && (() => {
                 // 11.7: desde el Centro, la ficha del cliente a la vista: contactos en orden de llamada y procedimiento
                 const dF = dispositivos.find((z) => z.sitio === termRemoto.sitio) || {};
                 const fF = (dF.ficha && typeof dF.ficha === "object") ? dF.ficha : {};

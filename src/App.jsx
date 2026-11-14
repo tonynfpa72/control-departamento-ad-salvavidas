@@ -14836,8 +14836,14 @@ const VENTANA_PANTALLA = 120;
 const tEvVentana = (e) => Date.parse(e.fecha_panel || e.created_at || 0) || 0;
 function ventanaPantalla(listas, soloSitio) {
   const por = {};
-  listas.forEach((l) => (l || []).forEach((e) => {
+  // la primera lista (los últimos 500 eventos, que se recargan cada 2.5 s) es la verdad desde su evento más viejo:
+  // si un evento de otra lista cae en ese rango y ya no está en ella, es que lo borraron -> no se muestra en ningún lado
+  const l0 = listas[0] || [];
+  const ids0 = new Set(l0.map((e) => e && e.id).filter((x) => x != null));
+  const desde0 = l0.length ? (l0.length >= 500 ? Math.min(...l0.map(tEvVentana)) : -Infinity) : Infinity;
+  listas.forEach((l, li) => (l || []).forEach((e) => {
     if (!e || !e.sitio || (soloSitio && e.sitio !== soloSitio)) return;
+    if (li > 0 && e.id != null && !ids0.has(e.id) && tEvVentana(e) > desde0) return;
     const m = por[e.sitio] || (por[e.sitio] = new Map());
     const k = e.id != null ? "i" + e.id : "t" + tEvVentana(e) + "|" + e.texto;
     if (!m.has(k)) m.set(k, e);   // la primera lista manda (la más fresca)
@@ -14873,7 +14879,7 @@ const lineaPanelCentral = (() => {
     let t = String(crudo || "").replace(/^[.\s]+/, "").replace(/\s+$/, "");
     if (!t || /^---/.test(t) || /comunicacion\s*,?\s*conectada/i.test(t)) return null;
     const U = t.toUpperCase();
-    if ((U.length <= 7 && !/\s/.test(U)) || /PULSE|^1=ANULAR|^ANULAR\/HAB|INTRODUZCA CLAVE|ENTRADA INVALIDA|^LEER PTO|ANULAR\/HAB PUNTO/.test(U)) return null;
+    if ((U.length <= 7 && !/\s/.test(U)) || /PULSE|^\d\s*=|^ANULAR\/HAB|INTRODUZCA CLAVE|ENTRADA INVALIDA|^LEER PTO|ANULAR\/HAB PUNTO/.test(U)) return null;   // 11.7: «4=borrar Histor.» y demás opciones del menú del panel no son eventos
     // pedazo de línea (el principio quedó fuera del búfer): "126 Mie", "10:43P 1111"...
     if (/^[\d\s:;.APM]*(DOM|LUN|MAR|MIE|JUE|VIE|SAB|SUN|MON|TUE|WED|THU|FRI|SAT)?$/i.test(t)) return null;
     if (/^\[APP\]/.test(t)) return { chip: "ORDEN", st: ST.azul, nombre: t.replace(/^\[APP\]\s*/, ""), sub: "desde la App", fondo: "#2f81f710" };
@@ -17980,7 +17986,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                       let t = String(crudo || "").replace(/^[.\s]+/, "").replace(/\s+$/, "");
                       if (!t || /^---/.test(t) || /comunicacion\s*,?\s*conectada/i.test(t)) return null;
                       const U = t.toUpperCase();
-                      if ((U.length <= 7 && !/\s/.test(U)) || /PULSE|^1=ANULAR|^ANULAR\/HAB|INTRODUZCA CLAVE|ENTRADA INVALIDA|^LEER PTO|ANULAR\/HAB PUNTO/.test(U)) return null;
+                      if ((U.length <= 7 && !/\s/.test(U)) || /PULSE|^\d\s*=|^ANULAR\/HAB|INTRODUZCA CLAVE|ENTRADA INVALIDA|^LEER PTO|ANULAR\/HAB PUNTO/.test(U)) return null;   // 11.7: «4=borrar Histor.» y demás opciones del menú del panel no son eventos
                       // pedazo de línea (el principio quedó fuera del búfer): "126 Mie", "10:43P 1111"...
                       if (/^[\d\s:;.APM]*(DOM|LUN|MAR|MIE|JUE|VIE|SAB|SUN|MON|TUE|WED|THU|FRI|SAT)?$/i.test(t)) return null;
                       if (/^\[APP\]/.test(t)) return { chip: "ORDEN", st: ST.azul, nombre: t.replace(/^\[APP\]\s*/, ""), sub: "desde la App", fondo: "#2f81f710" };
@@ -18092,7 +18098,7 @@ ${secciones.join("") || '<p class="vacio">No hay sitios con datos.</p>'}
                     const rearmes = todas.filter((r) => r.chip === "REARME");
                     const GRUPO = { ALARMA: "alarma", PREALARMA: "alarma", SIMULACRO: "alarma", "SUPERVISIÓN": "superv", FALLA: "falla", ANULADO: "anulado", ANULADA: "anulado", SEGURIDAD: "segur" };
                     const reglaActiva = (r) => {
-                      if (["CONFIRMADO", "REARME", "SILENCIADO", "ORDEN", "SIRENAS", "HABILITADA"].includes(r.chip)) return cinco(r);
+                      if (["CONFIRMADO", "REARME", "SILENCIADO", "ORDEN", "SIRENAS", "HABILITADA", "AVISO"].includes(r.chip)) return cinco(r);   // 11.7: AVISO 5 s, como en la cola (no queda pegado)
                       if (r.chip === "BORRADO" || r.normal) return cinco(r);
                       if (r.chip === "ANULADA") return !habils.some((h) => h.dir === r.dir && (h.t || 0) >= (r.t || 0));
                       if (r.chip === "ANULADO") return !habils.some((h) => (h.t || 0) >= (r.t || 0));

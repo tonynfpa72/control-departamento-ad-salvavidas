@@ -492,16 +492,21 @@ function avisoPdfApk(fase, nombre) {
 // Cada reporte que se abre para imprimir / guardar en PDF queda guardado en Supabase (tabla reportes_archivo),
 // ordenado por año y mes, para volver a descargarlo en PDF desde el menú «Reportes».
 let usuarioReportes = null;   // lo pone el App al iniciar sesión
-async function archivarReporte(titulo, html, { horizontal = false, membrete = true } = {}) {
+const CLIENTE_INTERNO = "Salvavidas (interno)";
+async function archivarReporte(titulo, html, { horizontal = false, membrete = true, sitio: sitioOp = "", cliente: clienteOp = "" } = {}) {
   try {
     const u = usuarioReportes;
-    if (!u || u.categoria === "cliente") return;
+    if (!u) return;
+    // 11.7: cada reporte queda en la carpeta de SU cliente (automático); lo que no es de un cliente, en «Salvavidas (interno)»
+    const sitio = String(sitioOp || "").trim() || null;
+    const cliente = String(clienteOp || "").trim() || sitio || CLIENTE_INTERNO;
+    if (u.categoria === "cliente" && !sitio) return;   // el cliente solo guarda reportes de sus propios sitios
     const limpio = quitarAutoImpresion(String(html || "")).replace(/<script[\s\S]*?<\/script>/gi, "");
     if (limpio.length < 50 || limpio.length > 8000000) return;   // vacío o demasiado grande (más de ~8 MB)
     const ahora = new Date();
     await supabase.from("reportes_archivo").insert({
       titulo: String(titulo || "Reporte Salvavidas").slice(0, 200), anio: ahora.getFullYear(), mes: ahora.getMonth() + 1,
-      horizontal: !!horizontal, membrete: membrete !== false, html: limpio, tamano: limpio.length,
+      horizontal: !!horizontal, membrete: membrete !== false, html: limpio, tamano: limpio.length, cliente: cliente.slice(0, 120), sitio,
       creado_por: u.name || null, creado_por_email: u.email || null,
     });
     try { window.dispatchEvent(new Event("ignis-reportes-nuevo")); } catch {}
@@ -509,7 +514,7 @@ async function archivarReporte(titulo, html, { horizontal = false, membrete = tr
 }
 function abrirImpresion(titulo, opciones = {}) {
   const r = abrirImpresionBase(titulo, opciones);
-  if (!r || opciones.archivar === false) return r;
+  if (!r || opciones.archivar !== true) return r;   // 11.7: solo se archivan los reportes que lo piden (Tendencias)
   const escribir = r.escribir;
   let archivado = false;
   r.escribir = (html, ...resto) => {
@@ -599,7 +604,6 @@ function abrirImpresionBase(titulo, { horizontal = false, membrete = true } = {}
 }
 // Imprime la pantalla actual (cotizaciones, pretareas, reporte ejecutivo).
 function imprimirPantalla(titulo) {
-  archivarReporte(titulo || "Reporte Salvavidas", "<!doctype html>" + document.documentElement.outerHTML, { membrete: false });
   if (puenteArchivos()) {
     // APK v4: PDF de lo que se ve en pantalla
     const nombre = titulo || "Reporte Salvavidas";
@@ -704,8 +708,8 @@ const AREAS = [
   { id: "equipos", label: "Equipos", icon: Package, color: T.amber },
   { id: "facturacion_publica", label: "Facturación", icon: LayoutDashboard, color: T.green },
   { id: "monitoreo_notifier", label: "Monitoreo", icon: Flame, color: T.red },
-  { id: "centro_monitoreo", label: "Centro de Monitoreo", icon: LayoutDashboard, color: T.red },
-  { id: "reportes", label: "Reportes", icon: FolderOpen, color: T.steel },   // 11.7: todo reporte descargado, por año y mes   // 11.7: todos los clientes en vivo (solo personal interno)
+  { id: "centro_monitoreo", label: "Centro de Monitoreo", icon: LayoutDashboard, color: T.red },   // 11.7: todos los clientes en vivo
+  { id: "reportes", label: "Reportes", icon: FolderOpen, color: T.steel },   // 11.7: reportes de Tendencias por cliente, año y mes
   { id: "gastos_tarjeta", label: "Gastos de Tarjeta", icon: CreditCard, color: T.red },
   { id: "vehiculos", label: "Vehículos", icon: Truck, color: T.blue },
   { id: "planilla", label: "Planilla", icon: Wallet, color: T.amber },
@@ -14867,21 +14871,21 @@ function ReportesArchivo() {
   const currentUser = useContext(CurrentUserContext);
   const confirmar = useContext(ConfirmContext);
   const esAdmin = currentUser?.categoria === "admin";
+  const esCliente = currentUser?.categoria === "cliente";
   const hoy = new Date();
   const [lista, setLista] = useState(null);
   const [error, setError] = useState("");
-  const [sel, setSel] = useState({ anio: hoy.getFullYear(), mes: hoy.getMonth() + 1 });
-  const [abiertos, setAbiertos] = useState(() => ({ [hoy.getFullYear()]: true }));
+  const [sel, setSel] = useState({ cliente: null, anio: null, mes: null });   // cliente null = todos (personal)
   const [busca, setBusca] = useState("");
-  const [trabajando, setTrabajando] = useState(null);   // id del reporte que se está preparando
+  const [trabajando, setTrabajando] = useState(null);
   const [angosta, setAngosta] = useState(() => typeof window !== "undefined" && window.innerWidth < 760);
   useEffect(() => { const f = () => setAngosta(window.innerWidth < 760); window.addEventListener("resize", f); return () => window.removeEventListener("resize", f); }, []);
 
   const cargar = useCallback(async () => {
     const { data, error: e } = await supabase.from("reportes_archivo")
-      .select("id, titulo, anio, mes, horizontal, membrete, tamano, creado_por, creado_en")
+      .select("id, titulo, anio, mes, horizontal, membrete, tamano, cliente, sitio, creado_por, creado_en")
       .order("creado_en", { ascending: false }).limit(5000);
-    if (e) { setError(/reportes_archivo/i.test(e.message || "") ? "Falta correr en Supabase el archivo SQL_reportes_archivo.sql." : e.message); setLista([]); return; }
+    if (e) { setError(/reportes_archivo|cliente/i.test(e.message || "") ? "Falta correr en Supabase el archivo SQL_reportes_archivo.sql." : e.message); setLista([]); return; }
     setError(""); setLista(data || []);
   }, []);
   useEffect(() => {
@@ -14891,16 +14895,26 @@ function ReportesArchivo() {
     return () => window.removeEventListener("ignis-reportes-nuevo", f);
   }, [cargar]);
 
-  // árbol año -> mes -> cantidad
+  const cliDe = (r) => r.cliente || r.sitio || CLIENTE_INTERNO;
+  // árbol: cliente -> año -> mes -> cantidad
   const arbol = useMemo(() => {
     const a = {};
-    (lista || []).forEach((r) => { const y = a[r.anio] || (a[r.anio] = {}); y[r.mes] = (y[r.mes] || 0) + 1; });
+    (lista || []).forEach((r) => {
+      const c = a[cliDe(r)] || (a[cliDe(r)] = { n: 0, anios: {} });
+      c.n++;
+      const y = c.anios[r.anio] || (c.anios[r.anio] = {});
+      y[r.mes] = (y[r.mes] || 0) + 1;
+    });
     return a;
   }, [lista]);
-  const anios = Object.keys(arbol).map(Number).sort((x, y) => y - x);
-  if (!anios.includes(hoy.getFullYear())) anios.unshift(hoy.getFullYear());
+  const clientes = Object.keys(arbol).sort((x, y) => (x === CLIENTE_INTERNO) - (y === CLIENTE_INTERNO) || x.localeCompare(y, "es"));
+  // el cliente con un solo cliente entra directo a su carpeta
+  useEffect(() => { if (esCliente && clientes.length === 1 && sel.cliente !== clientes[0]) setSel({ cliente: clientes[0], anio: null, mes: null }); }, [esCliente, clientes.join("|")]);
+
   const q = busca.trim().toLowerCase();
-  const visibles = (lista || []).filter((r) => (q ? (r.titulo + " " + (r.creado_por || "")).toLowerCase().includes(q) : r.anio === sel.anio && r.mes === sel.mes));
+  const visibles = (lista || []).filter((r) => (q
+    ? (r.titulo + " " + cliDe(r) + " " + (r.creado_por || "")).toLowerCase().includes(q)
+    : (!sel.cliente || cliDe(r) === sel.cliente) && (!sel.anio || r.anio === sel.anio) && (!sel.mes || r.mes === sel.mes)));
 
   const traerHtml = async (r) => {
     const { data, error: e } = await supabase.from("reportes_archivo").select("html").eq("id", r.id).single();
@@ -14928,55 +14942,64 @@ function ReportesArchivo() {
     finally { setTrabajando(null); }
   };
   const abrir = async (r) => {
-    const v = abrirImpresion(r.titulo, { horizontal: r.horizontal, membrete: r.membrete !== false, archivar: false });
+    const v = abrirImpresion(r.titulo, { horizontal: r.horizontal, membrete: r.membrete !== false });
     if (!v) return;
     try { v.escribir(await traerHtml(r)); } catch (e) { v.error("No se pudo abrir el reporte: " + (e?.message || e)); }
   };
   const borrar = async (r) => {
-    const ok = confirmar ? await confirmar("¿Borrar el reporte «" + r.titulo + "»? No se puede deshacer.") : window.confirm("¿Borrar el reporte «" + r.titulo + "»?");
-    if (!ok) return;
+    if (!(await confirmar("¿Borrar el reporte «" + r.titulo + "»? No se puede deshacer."))) return;
     const { error: e } = await supabase.from("reportes_archivo").delete().eq("id", r.id);
     if (e) { alert(e.message); return; }
     setLista((l) => (l || []).filter((x) => x.id !== r.id));
   };
   const kb = (n) => (!n ? "" : n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
-  const fechaHora = (t) => { const f = new Date(t); return isNaN(f) ? "" : f.toLocaleDateString("es-CR", { day: "2-digit", month: "short" }) + " · " + f.toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" }); };
+  const fechaHora = (t) => { const f = new Date(t); return isNaN(f) ? "" : f.toLocaleDateString("es-CR", { day: "2-digit", month: "short", year: "numeric" }) + " · " + f.toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" }); };
   const btn = (fondo, color, borde) => ({ padding: "7px 11px", borderRadius: 8, border: `1px solid ${borde}`, background: fondo, color, fontWeight: 700, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" });
+  const fila = (activo, nivel) => ({ width: "100%", display: "flex", alignItems: "center", gap: 7, padding: `6px 8px 6px ${8 + nivel * 18}px`, border: "none", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", textAlign: "left",
+    fontSize: nivel ? 13.5 : 14, background: activo ? T.blueSoft : "transparent", color: activo ? T.blue : T.ink, fontWeight: activo ? 800 : nivel ? 500 : 700 });
+  const cuenta = (n, activo) => <span style={{ marginLeft: "auto", fontSize: 11.5, color: activo ? T.blue : T.inkSoft, fontWeight: 600 }}>{n}</span>;
+  const titulo = q ? "Resultados de la búsqueda" : [sel.cliente || "Todos los clientes", sel.mes ? MESES_REP[sel.mes - 1] + " " + sel.anio : sel.anio || ""].filter(Boolean).join(" · ");
 
   return (
     <div style={{ display: "flex", flexDirection: angosta ? "column" : "row", gap: 16, alignItems: "flex-start" }}>
-      <div style={{ width: angosta ? "100%" : 250, flexShrink: 0, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 14, padding: 12, boxSizing: "border-box" }}>
-        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".06em", color: T.inkSoft, padding: "2px 6px 8px" }}>CARPETAS</div>
-        {anios.map((y) => (
-          <div key={y}>
-            <button type="button" onClick={() => setAbiertos((a) => ({ ...a, [y]: !a[y] }))}
-              style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, padding: "7px 6px", border: "none", background: "transparent", cursor: "pointer", fontFamily: "inherit", fontWeight: 800, fontSize: 14, color: T.ink }}>
-              {abiertos[y] ? <ChevronDown size={15} /> : <ChevronRight size={15} />}<FolderOpen size={16} color={T.amber} />{y}
-              <span style={{ marginLeft: "auto", fontSize: 11.5, color: T.inkSoft, fontWeight: 600 }}>{Object.values(arbol[y] || {}).reduce((a, b) => a + b, 0)}</span>
-            </button>
-            {abiertos[y] && MESES_REP.map((m, i) => {
-              const n = (arbol[y] || {})[i + 1] || 0;
-              const activo = !q && sel.anio === y && sel.mes === i + 1;
-              if (!n && !(y === hoy.getFullYear() && i === hoy.getMonth())) return null;
-              return (
-                <button key={i} type="button" onClick={() => { setBusca(""); setSel({ anio: y, mes: i + 1 }); }}
-                  style={{ width: "100%", display: "flex", alignItems: "center", gap: 7, padding: "6px 8px 6px 30px", border: "none", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 13.5,
-                    background: activo ? T.blueSoft : "transparent", color: activo ? T.blue : T.ink, fontWeight: activo ? 800 : 500 }}>
-                  <FolderOpen size={14} color={activo ? T.blue : T.inkSoft} />{String(i + 1).padStart(2, "0")} · {m}
-                  <span style={{ marginLeft: "auto", fontSize: 11.5, color: activo ? T.blue : T.inkSoft }}>{n}</span>
-                </button>);
-            })}
-          </div>
-        ))}
+      <div style={{ width: angosta ? "100%" : 270, flexShrink: 0, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 14, padding: 12, boxSizing: "border-box" }}>
+        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".06em", color: T.inkSoft, padding: "2px 6px 8px" }}>{esCliente ? "MIS REPORTES" : "CLIENTES"}</div>
+        {!esCliente && (
+          <button type="button" onClick={() => { setBusca(""); setSel({ cliente: null, anio: null, mes: null }); }} style={fila(!q && !sel.cliente, 0)}>
+            <FolderOpen size={16} color={T.steel} />Todos los clientes{cuenta((lista || []).length, !q && !sel.cliente)}
+          </button>)}
+        {clientes.map((c) => {
+          const abierto = sel.cliente === c;
+          const anios = Object.keys(arbol[c].anios).map(Number).sort((x, y) => y - x);
+          return (
+            <div key={c}>
+              <button type="button" onClick={() => { setBusca(""); setSel(abierto && !sel.anio ? { cliente: esCliente && clientes.length === 1 ? c : null, anio: null, mes: null } : { cliente: c, anio: null, mes: null }); }}
+                style={fila(!q && abierto && !sel.anio, 0)}>
+                {abierto ? <ChevronDown size={15} /> : <ChevronRight size={15} />}<FolderOpen size={16} color={c === CLIENTE_INTERNO ? T.inkSoft : T.amber} />
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c}</span>{cuenta(arbol[c].n, !q && abierto && !sel.anio)}
+              </button>
+              {abierto && !q && anios.map((y) => (
+                <div key={y}>
+                  <button type="button" onClick={() => setSel({ cliente: c, anio: y, mes: null })} style={fila(sel.anio === y && !sel.mes, 1)}>
+                    <FolderOpen size={14} color={T.amber} />{y}{cuenta(Object.values(arbol[c].anios[y]).reduce((a, b) => a + b, 0), sel.anio === y && !sel.mes)}
+                  </button>
+                  {Object.keys(arbol[c].anios[y]).map(Number).sort((x, z) => z - x).map((m) => (
+                    <button key={m} type="button" onClick={() => setSel({ cliente: c, anio: y, mes: m })} style={fila(sel.anio === y && sel.mes === m, 2)}>
+                      <FolderOpen size={13} color={sel.anio === y && sel.mes === m ? T.blue : T.inkSoft} />{String(m).padStart(2, "0")} · {MESES_REP[m - 1]}{cuenta(arbol[c].anios[y][m], sel.anio === y && sel.mes === m)}
+                    </button>))}
+                </div>))}
+            </div>);
+        })}
+        {lista && !clientes.length && <div style={{ fontSize: 12.5, color: T.inkSoft, padding: "6px 8px" }}>Todavía no hay reportes.</div>}
       </div>
 
       <div style={{ flex: 1, minWidth: 0, width: angosta ? "100%" : undefined, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 14, padding: angosta ? 12 : 18, boxSizing: "border-box" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: T.ink }}>{q ? "Resultados de la búsqueda" : MESES_REP[sel.mes - 1] + " " + sel.anio}</h3>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: T.ink }}>{titulo}</h3>
           <span style={{ fontSize: 12.5, color: T.inkSoft }}>{visibles.length} reporte{visibles.length === 1 ? "" : "s"}</span>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, border: `1px solid ${T.line}`, borderRadius: 9, padding: "6px 9px", width: angosta ? "100%" : 260, boxSizing: "border-box" }}>
             <Search size={14} color={T.inkSoft} />
-            <input type="search" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar en todos los reportes…" autoComplete="off" name="buscar_reportes_ignis"
+            <input type="search" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar reporte…" autoComplete="off" name="buscar_reportes_ignis"
               style={{ border: "none", outline: "none", flex: 1, minWidth: 0, fontSize: 13, fontFamily: "inherit", background: "transparent", color: T.ink }} />
           </div>
         </div>
@@ -14984,7 +15007,7 @@ function ReportesArchivo() {
         {lista === null ? <div style={{ color: T.inkSoft, fontSize: 13, padding: 20 }}>Cargando…</div>
           : !visibles.length ? (
             <div style={{ color: T.inkSoft, fontSize: 13.5, padding: "30px 10px", textAlign: "center" }}>
-              {q ? "Ningún reporte coincide con la búsqueda." : "No hay reportes en esta carpeta. Cada reporte que se abra para imprimir o guardar en PDF, en cualquier parte de la App, se guarda aquí automáticamente."}
+              {q ? "Ningún reporte coincide con la búsqueda." : "No hay reportes aquí. Cada reporte de Tendencias que se genera queda guardado solo, en la carpeta de su cliente, por año y mes."}
             </div>)
           : visibles.map((r) => (
             <div key={r.id} style={{ display: "flex", alignItems: angosta ? "flex-start" : "center", flexDirection: angosta ? "column" : "row", gap: angosta ? 8 : 12, padding: "11px 4px", borderTop: `1px solid ${T.line}` }}>
@@ -14992,7 +15015,10 @@ function ReportesArchivo() {
                 <div style={{ width: 34, height: 40, borderRadius: 5, background: T.redSoft, color: T.red, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9.5, fontWeight: 900, flexShrink: 0 }}>PDF</div>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 14, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: angosta ? "normal" : "nowrap" }}>{r.titulo}</div>
-                  <div style={{ fontSize: 12, color: T.inkSoft, marginTop: 2 }}>{fechaHora(r.creado_en)}{r.creado_por ? " · " + r.creado_por : ""}{r.tamano ? " · " + kb(r.tamano) : ""}{q ? " · " + MESES_REP[r.mes - 1] + " " + r.anio : ""}</div>
+                  <div style={{ fontSize: 12, color: T.inkSoft, marginTop: 2 }}>
+                    {(!sel.cliente || q) && <b style={{ color: T.steel, fontWeight: 700 }}>{cliDe(r)} · </b>}
+                    {fechaHora(r.creado_en)}{r.creado_por && !esCliente ? " · " + r.creado_por : ""}{r.tamano ? " · " + kb(r.tamano) : ""}
+                  </div>
                 </div>
               </div>
               <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
@@ -16482,7 +16508,7 @@ function MonitoreoNotifier({ modoCentral = false } = {}) {
   // en una pestaña nueva, limpia, lista para imprimir o "Guardar como PDF"
   // desde el propio diálogo de impresión del navegador.
   const imprimirTendencias = (firmas) => {
-    const imp = abrirImpresion(`Tendencias - ${sitioSeleccionado}`);
+    const imp = abrirImpresion(`Tendencias - ${sitioSeleccionado}`, { archivar: true, sitio: sitioSeleccionado, cliente: (dispositivos.find((d) => d.sitio === sitioSeleccionado) || {}).cliente || sitioSeleccionado });
     if (!imp) return;
     // Arma el informe con lo elegido en "Armar informe": cada período es un bloque
     const texto = (histArchivos.find((h) => h.sitio === sitioSeleccionado) || histArchivos[0] || {}).texto || "";
@@ -31105,7 +31131,7 @@ function AppInner() {
     if (user.categoria === "entrenamiento") return [...AREAS.filter((a) => a.id === "entrenamiento"), ...AREAS.filter((a) => MODO_CLIENTE && a.id === "agenda")];
     // El perfil "cliente" solo ve Monitoreo (y dentro, solo su sitio asignado).
     // 11.7: todo el monitoreo entra por el «Centro de Monitoreo» (el cliente ve solo sus sitios asociados)
-    if (user.categoria === "cliente") return AREAS.filter((a) => a.id === "centro_monitoreo");
+    if (user.categoria === "cliente") return AREAS.filter((a) => a.id === "centro_monitoreo" || a.id === "reportes");   // 11.7: y sus reportes
     // En el APK el técnico ve Monitoreo (todos los sitios), Agenda y Entrenamiento.
     const sinMon = AREAS.filter((a) => a.id !== "monitoreo_notifier");   // «Monitoreo» ya no sale en el menú: se llega desde el Centro
     if (MODO_CLIENTE && user.categoria === "tecnico") return sinMon.filter((a) => ["centro_monitoreo", "agenda", "entrenamiento"].includes(a.id));

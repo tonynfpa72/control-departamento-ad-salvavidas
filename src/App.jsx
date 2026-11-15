@@ -10,7 +10,7 @@ import {
   ChevronLeft, ChevronRight, ChevronUp, ChevronDown, AlertCircle, Upload, Flame, Wallet, CreditCard, Truck, Package, GraduationCap, Award,
   Star, Trophy, Zap, Target, Medal, Rocket, Crown, Sparkles, ShieldCheck, Gem, Repeat, Lock, Search,
   AlertTriangle, Settings, Shield, HelpCircle, Trash2, Wrench, Wifi, TrendingUp, Volume2, VolumeX, Menu,
-  Calculator, Pencil, FolderLock, UploadCloud, Bell, BellRing, Send, Inbox, CheckCheck, EyeOff, RotateCcw,
+  Calculator, Pencil, FolderLock, FolderOpen, UploadCloud, Bell, BellRing, Send, Inbox, CheckCheck, EyeOff, RotateCcw,
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import { supabase, setTokenSesion, getTokenSesion, onTokenSesion } from "./supabaseClient";
@@ -488,7 +488,37 @@ function avisoPdfApk(fase, nombre) {
 
 // Devuelve un objeto para escribir el reporte, o null si no se pudo abrir
 // (ventana emergente bloqueada o APK sin el puente; ya se avisó).
-function abrirImpresion(titulo, { horizontal = false, membrete = true } = {}) {
+// ---- 11.7: ARCHIVO DE REPORTES ----
+// Cada reporte que se abre para imprimir / guardar en PDF queda guardado en Supabase (tabla reportes_archivo),
+// ordenado por año y mes, para volver a descargarlo en PDF desde el menú «Reportes».
+let usuarioReportes = null;   // lo pone el App al iniciar sesión
+async function archivarReporte(titulo, html, { horizontal = false, membrete = true } = {}) {
+  try {
+    const u = usuarioReportes;
+    if (!u || u.categoria === "cliente") return;
+    const limpio = quitarAutoImpresion(String(html || "")).replace(/<script[\s\S]*?<\/script>/gi, "");
+    if (limpio.length < 50 || limpio.length > 8000000) return;   // vacío o demasiado grande (más de ~8 MB)
+    const ahora = new Date();
+    await supabase.from("reportes_archivo").insert({
+      titulo: String(titulo || "Reporte Salvavidas").slice(0, 200), anio: ahora.getFullYear(), mes: ahora.getMonth() + 1,
+      horizontal: !!horizontal, membrete: membrete !== false, html: limpio, tamano: limpio.length,
+      creado_por: u.name || null, creado_por_email: u.email || null,
+    });
+    try { window.dispatchEvent(new Event("ignis-reportes-nuevo")); } catch {}
+  } catch { /* si falta la tabla, el reporte sale igual */ }
+}
+function abrirImpresion(titulo, opciones = {}) {
+  const r = abrirImpresionBase(titulo, opciones);
+  if (!r || opciones.archivar === false) return r;
+  const escribir = r.escribir;
+  let archivado = false;
+  r.escribir = (html, ...resto) => {
+    if (!archivado) { archivado = true; archivarReporte(titulo, html, opciones); }
+    return escribir(html, ...resto);
+  };
+  return r;
+}
+function abrirImpresionBase(titulo, { horizontal = false, membrete = true } = {}) {
   const puente = puenteAndroid();
   const nombre = titulo || "Reporte Salvavidas";
   const preparar = (html) => (membrete ? aplicarMembrete(html, { horizontal }) : html);
@@ -569,6 +599,7 @@ function abrirImpresion(titulo, { horizontal = false, membrete = true } = {}) {
 }
 // Imprime la pantalla actual (cotizaciones, pretareas, reporte ejecutivo).
 function imprimirPantalla(titulo) {
+  archivarReporte(titulo || "Reporte Salvavidas", "<!doctype html>" + document.documentElement.outerHTML, { membrete: false });
   if (puenteArchivos()) {
     // APK v4: PDF de lo que se ve en pantalla
     const nombre = titulo || "Reporte Salvavidas";
@@ -673,7 +704,8 @@ const AREAS = [
   { id: "equipos", label: "Equipos", icon: Package, color: T.amber },
   { id: "facturacion_publica", label: "Facturación", icon: LayoutDashboard, color: T.green },
   { id: "monitoreo_notifier", label: "Monitoreo", icon: Flame, color: T.red },
-  { id: "centro_monitoreo", label: "Centro de Monitoreo", icon: LayoutDashboard, color: T.red },   // 11.7: todos los clientes en vivo (solo personal interno)
+  { id: "centro_monitoreo", label: "Centro de Monitoreo", icon: LayoutDashboard, color: T.red },
+  { id: "reportes", label: "Reportes", icon: FolderOpen, color: T.steel },   // 11.7: todo reporte descargado, por año y mes   // 11.7: todos los clientes en vivo (solo personal interno)
   { id: "gastos_tarjeta", label: "Gastos de Tarjeta", icon: CreditCard, color: T.red },
   { id: "vehiculos", label: "Vehículos", icon: Truck, color: T.blue },
   { id: "planilla", label: "Planilla", icon: Wallet, color: T.amber },
@@ -14829,6 +14861,153 @@ async function listarHistorialPaneles(opciones) {
 }
 
 // 11.7: un equipo sin latido por 150 s (2 latidos perdidos; avisa cada 1 min y reintenta a los 15 s) se marca caído
+// ---- 11.7: menú «Reportes» — todos los reportes descargados, en carpetas por año y mes ----
+const MESES_REP = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+function ReportesArchivo() {
+  const currentUser = useContext(CurrentUserContext);
+  const confirmar = useContext(ConfirmContext);
+  const esAdmin = currentUser?.categoria === "admin";
+  const hoy = new Date();
+  const [lista, setLista] = useState(null);
+  const [error, setError] = useState("");
+  const [sel, setSel] = useState({ anio: hoy.getFullYear(), mes: hoy.getMonth() + 1 });
+  const [abiertos, setAbiertos] = useState(() => ({ [hoy.getFullYear()]: true }));
+  const [busca, setBusca] = useState("");
+  const [trabajando, setTrabajando] = useState(null);   // id del reporte que se está preparando
+  const [angosta, setAngosta] = useState(() => typeof window !== "undefined" && window.innerWidth < 760);
+  useEffect(() => { const f = () => setAngosta(window.innerWidth < 760); window.addEventListener("resize", f); return () => window.removeEventListener("resize", f); }, []);
+
+  const cargar = useCallback(async () => {
+    const { data, error: e } = await supabase.from("reportes_archivo")
+      .select("id, titulo, anio, mes, horizontal, membrete, tamano, creado_por, creado_en")
+      .order("creado_en", { ascending: false }).limit(5000);
+    if (e) { setError(/reportes_archivo/i.test(e.message || "") ? "Falta correr en Supabase el archivo SQL_reportes_archivo.sql." : e.message); setLista([]); return; }
+    setError(""); setLista(data || []);
+  }, []);
+  useEffect(() => {
+    cargar();
+    const f = () => setTimeout(cargar, 800);
+    window.addEventListener("ignis-reportes-nuevo", f);
+    return () => window.removeEventListener("ignis-reportes-nuevo", f);
+  }, [cargar]);
+
+  // árbol año -> mes -> cantidad
+  const arbol = useMemo(() => {
+    const a = {};
+    (lista || []).forEach((r) => { const y = a[r.anio] || (a[r.anio] = {}); y[r.mes] = (y[r.mes] || 0) + 1; });
+    return a;
+  }, [lista]);
+  const anios = Object.keys(arbol).map(Number).sort((x, y) => y - x);
+  if (!anios.includes(hoy.getFullYear())) anios.unshift(hoy.getFullYear());
+  const q = busca.trim().toLowerCase();
+  const visibles = (lista || []).filter((r) => (q ? (r.titulo + " " + (r.creado_por || "")).toLowerCase().includes(q) : r.anio === sel.anio && r.mes === sel.mes));
+
+  const traerHtml = async (r) => {
+    const { data, error: e } = await supabase.from("reportes_archivo").select("html").eq("id", r.id).single();
+    if (e || !data) throw new Error(e?.message || "no se encontró el reporte");
+    return data.html;
+  };
+  const nombrePdf = (r) => {
+    const f = new Date(r.creado_en);
+    const d = isNaN(f) ? "" : "_" + f.getFullYear() + String(f.getMonth() + 1).padStart(2, "0") + String(f.getDate()).padStart(2, "0");
+    return nombreArchivoSeguro(r.titulo + d, "pdf");
+  };
+  const descargarPdf = async (r) => {
+    if (trabajando) return;
+    setTrabajando(r.id);
+    try {
+      const html = await traerHtml(r);
+      const b64 = await htmlAPdfBase64(html, { horizontal: r.horizontal, membrete: r.membrete !== false });
+      if (puenteArchivos()) { await guardarArchivoApk(b64, nombrePdf(r), "application/pdf"); return; }
+      const bin = atob(b64), u8 = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([u8], { type: "application/pdf" }));
+      const a = document.createElement("a"); a.href = url; a.download = nombrePdf(r); document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (e) { alert("No se pudo generar el PDF: " + (e?.message || e)); }
+    finally { setTrabajando(null); }
+  };
+  const abrir = async (r) => {
+    const v = abrirImpresion(r.titulo, { horizontal: r.horizontal, membrete: r.membrete !== false, archivar: false });
+    if (!v) return;
+    try { v.escribir(await traerHtml(r)); } catch (e) { v.error("No se pudo abrir el reporte: " + (e?.message || e)); }
+  };
+  const borrar = async (r) => {
+    const ok = confirmar ? await confirmar("¿Borrar el reporte «" + r.titulo + "»? No se puede deshacer.") : window.confirm("¿Borrar el reporte «" + r.titulo + "»?");
+    if (!ok) return;
+    const { error: e } = await supabase.from("reportes_archivo").delete().eq("id", r.id);
+    if (e) { alert(e.message); return; }
+    setLista((l) => (l || []).filter((x) => x.id !== r.id));
+  };
+  const kb = (n) => (!n ? "" : n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
+  const fechaHora = (t) => { const f = new Date(t); return isNaN(f) ? "" : f.toLocaleDateString("es-CR", { day: "2-digit", month: "short" }) + " · " + f.toLocaleTimeString("es-CR", { hour: "numeric", minute: "2-digit" }); };
+  const btn = (fondo, color, borde) => ({ padding: "7px 11px", borderRadius: 8, border: `1px solid ${borde}`, background: fondo, color, fontWeight: 700, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" });
+
+  return (
+    <div style={{ display: "flex", flexDirection: angosta ? "column" : "row", gap: 16, alignItems: "flex-start" }}>
+      <div style={{ width: angosta ? "100%" : 250, flexShrink: 0, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 14, padding: 12, boxSizing: "border-box" }}>
+        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".06em", color: T.inkSoft, padding: "2px 6px 8px" }}>CARPETAS</div>
+        {anios.map((y) => (
+          <div key={y}>
+            <button type="button" onClick={() => setAbiertos((a) => ({ ...a, [y]: !a[y] }))}
+              style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, padding: "7px 6px", border: "none", background: "transparent", cursor: "pointer", fontFamily: "inherit", fontWeight: 800, fontSize: 14, color: T.ink }}>
+              {abiertos[y] ? <ChevronDown size={15} /> : <ChevronRight size={15} />}<FolderOpen size={16} color={T.amber} />{y}
+              <span style={{ marginLeft: "auto", fontSize: 11.5, color: T.inkSoft, fontWeight: 600 }}>{Object.values(arbol[y] || {}).reduce((a, b) => a + b, 0)}</span>
+            </button>
+            {abiertos[y] && MESES_REP.map((m, i) => {
+              const n = (arbol[y] || {})[i + 1] || 0;
+              const activo = !q && sel.anio === y && sel.mes === i + 1;
+              if (!n && !(y === hoy.getFullYear() && i === hoy.getMonth())) return null;
+              return (
+                <button key={i} type="button" onClick={() => { setBusca(""); setSel({ anio: y, mes: i + 1 }); }}
+                  style={{ width: "100%", display: "flex", alignItems: "center", gap: 7, padding: "6px 8px 6px 30px", border: "none", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 13.5,
+                    background: activo ? T.blueSoft : "transparent", color: activo ? T.blue : T.ink, fontWeight: activo ? 800 : 500 }}>
+                  <FolderOpen size={14} color={activo ? T.blue : T.inkSoft} />{String(i + 1).padStart(2, "0")} · {m}
+                  <span style={{ marginLeft: "auto", fontSize: 11.5, color: activo ? T.blue : T.inkSoft }}>{n}</span>
+                </button>);
+            })}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ flex: 1, minWidth: 0, width: angosta ? "100%" : undefined, background: T.panel, border: `1px solid ${T.line}`, borderRadius: 14, padding: angosta ? 12 : 18, boxSizing: "border-box" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: T.ink }}>{q ? "Resultados de la búsqueda" : MESES_REP[sel.mes - 1] + " " + sel.anio}</h3>
+          <span style={{ fontSize: 12.5, color: T.inkSoft }}>{visibles.length} reporte{visibles.length === 1 ? "" : "s"}</span>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, border: `1px solid ${T.line}`, borderRadius: 9, padding: "6px 9px", width: angosta ? "100%" : 260, boxSizing: "border-box" }}>
+            <Search size={14} color={T.inkSoft} />
+            <input type="search" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar en todos los reportes…" autoComplete="off" name="buscar_reportes_ignis"
+              style={{ border: "none", outline: "none", flex: 1, minWidth: 0, fontSize: 13, fontFamily: "inherit", background: "transparent", color: T.ink }} />
+          </div>
+        </div>
+        {error && <div style={{ background: T.amberSoft, color: "#7a5300", borderRadius: 9, padding: "10px 12px", fontSize: 13, marginBottom: 10 }}>{error}</div>}
+        {lista === null ? <div style={{ color: T.inkSoft, fontSize: 13, padding: 20 }}>Cargando…</div>
+          : !visibles.length ? (
+            <div style={{ color: T.inkSoft, fontSize: 13.5, padding: "30px 10px", textAlign: "center" }}>
+              {q ? "Ningún reporte coincide con la búsqueda." : "No hay reportes en esta carpeta. Cada reporte que se abra para imprimir o guardar en PDF, en cualquier parte de la App, se guarda aquí automáticamente."}
+            </div>)
+          : visibles.map((r) => (
+            <div key={r.id} style={{ display: "flex", alignItems: angosta ? "flex-start" : "center", flexDirection: angosta ? "column" : "row", gap: angosta ? 8 : 12, padding: "11px 4px", borderTop: `1px solid ${T.line}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
+                <div style={{ width: 34, height: 40, borderRadius: 5, background: T.redSoft, color: T.red, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9.5, fontWeight: 900, flexShrink: 0 }}>PDF</div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: angosta ? "normal" : "nowrap" }}>{r.titulo}</div>
+                  <div style={{ fontSize: 12, color: T.inkSoft, marginTop: 2 }}>{fechaHora(r.creado_en)}{r.creado_por ? " · " + r.creado_por : ""}{r.tamano ? " · " + kb(r.tamano) : ""}{q ? " · " + MESES_REP[r.mes - 1] + " " + r.anio : ""}</div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                <button type="button" onClick={() => descargarPdf(r)} disabled={!!trabajando} style={{ ...btn(T.steel, "#fff", T.steel), opacity: trabajando && trabajando !== r.id ? 0.5 : 1 }}>
+                  <Download size={13} style={{ verticalAlign: -2, marginRight: 4 }} />{trabajando === r.id ? "Preparando…" : "Descargar PDF"}
+                </button>
+                <button type="button" onClick={() => abrir(r)} style={btn("#fff", T.ink, T.line)}>Ver / imprimir</button>
+                {esAdmin && <button type="button" onClick={() => borrar(r)} title="Borrar" style={btn("#fff", T.red, T.line)}><Trash2 size={13} style={{ verticalAlign: -2 }} /></button>}
+              </div>
+            </div>))}
+      </div>
+    </div>
+  );
+}
+
 const SEG_CAIDO = 150;
 // 11.7: la PANTALLA del panel y la COLA del Centro usan exactamente la misma ventana de eventos de cada sitio
 // (los 120 más nuevos, más las anulaciones/habilitaciones más viejas): lo que sale de la pantalla sale de la cola.
@@ -30908,6 +31087,7 @@ function AppInner() {
 
   // ¿Es el gerente? (solo admin en la web; se pregunta a Supabase, no se guarda en el navegador)
   const [esGerente, setEsGerente] = useState(false);
+  useEffect(() => { usuarioReportes = user ? { name: user.name, email: user.email, categoria: user.categoria } : null; }, [user?.id, user?.name, user?.categoria]);
   useEffect(() => {
     if (!user?.id || user.categoria !== "admin") { setEsGerente(false); return; }
     let vivo = true;
@@ -31040,6 +31220,7 @@ function AppInner() {
         {tab === "facturacion_publica" && <FacturacionPublica />}
         {tab === "monitoreo_notifier" && <MonitoreoNotifier />}
         {tab === "centro_monitoreo" && <MonitoreoNotifier modoCentral />}
+        {tab === "reportes" && <ReportesArchivo />}
         {tab === "agenda" && <AgendaVisitas />}
         {tab === "gastos_tarjeta" && <GastosTarjeta />}
         {tab === "vehiculos" && <Vehiculos />}

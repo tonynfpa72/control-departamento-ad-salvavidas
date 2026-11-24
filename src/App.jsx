@@ -1796,17 +1796,44 @@ function reporte2SetCeldaXML(xml, addr, { texto, numero }) {
 
 // Llena una copia (una semana) de la plantilla real para un OD,
 // editando solo el XML de la hoja, y devuelve el buffer final del .xlsx.
-async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, entradasSemana, lunes, empleadosPorCodigo) {
+// 11.7: junta las solicitudes de UNA semana en una fila por PERSONA, con las horas de cada día en su
+// columna (lunes a domingo), como está hecho el formulario. Varias solicitudes del mismo día se suman.
+function reporte2ConsolidarSemana(entradasSemana, empleadosPorCodigo) {
+  const porPersona = new Map();
+  entradasSemana.forEach((s) => {
+    const cod = s.personal_codigos?.[0];
+    const emp = cod ? empleadosPorCodigo[cod] : null;
+    const clave = cod || String(s.personal || "").trim().toLowerCase() || "sin-nombre-" + s.id;
+    if (!porPersona.has(clave)) porPersona.set(clave, { nombre: emp?.nombre || s.personal || "(sin nombre)", puesto: emp?.puesto || "", inicio: "", fin: "", dias: [0, 0, 0, 0, 0, 0, 0], total: 0, ids: [] });
+    const p = porPersona.get(clave);
+    p.ids.push(s.id);
+    const fechaRef = reporte2FechaDe(s);
+    const h = Number(s.horas) || 0;
+    if (fechaRef) p.dias[(new Date(fechaRef + "T00:00:00").getDay() + 6) % 7] += h;
+    p.total += h;
+    // hora de inicio más temprana y de fin más tarde de la semana
+    if (s.hora_inicio && (!p.inicio || String(s.hora_inicio) < p.inicio)) p.inicio = String(s.hora_inicio);
+    if (s.hora_fin && (!p.fin || String(s.hora_fin) > p.fin)) p.fin = String(s.hora_fin);
+  });
+  return [...porPersona.values()].sort((a, b) => a.nombre.localeCompare(b.nombre, "es", { numeric: true }));
+}
+// Fecha con la que una solicitud cae en su semana: ejecución, si no la de solicitud, si no la de registro.
+function reporte2FechaDe(h) {
+  return h.fecha_ejecucion || h.fecha || (h.created_at ? String(h.created_at).slice(0, 10) : "");
+}
+
+async function reporte2LlenarPlantilla(plantillaBuffer, od, cliente, personas, lunes, totalPersonas) {
   const { default: JSZip } = await import("jszip");
   const zip = await JSZip.loadAsync(plantillaBuffer);
-  const xml = reporte2LlenarHojaXML(await zip.file(REPORTE2_HOJA).async("string"), od, cliente, entradasSemana, lunes, empleadosPorCodigo);
+  const xml = reporte2LlenarHojaXML(await zip.file(REPORTE2_HOJA).async("string"), od, cliente, personas, lunes, totalPersonas);
   zip.file(REPORTE2_HOJA, xml);
   await reporte2ForzarRecalculo(zip);
   return zip.generateAsync({ type: "arraybuffer" });
 }
 
 // Llena el XML de UNA hoja (una semana de un OD) a partir del XML de la plantilla.
-function reporte2LlenarHojaXML(xml, od, cliente, entradasSemana, lunes, empleadosPorCodigo) {
+// «personas» ya viene consolidado (una fila por persona) y en grupos de máximo 8 (las filas de la plantilla).
+function reporte2LlenarHojaXML(xml, od, cliente, personas, lunes, totalPersonas) {
 
   xml = reporte2SetCeldaXML(xml, "E14", { texto: "" });
   xml = reporte2SetCeldaXML(xml, "E15", { numero: reporte2FechaASerial(new Date()) });
@@ -1819,25 +1846,18 @@ function reporte2LlenarHojaXML(xml, od, cliente, entradasSemana, lunes, empleado
     xml = reporte2SetCeldaXML(xml, `${col}25`, { numero: reporte2FechaASerial(d) });
   });
 
-  // La plantilla trae 8 filas de personal (26-33). Si hay más solicitudes
-  // que filas, se toman solo las primeras 8 (limitación conocida).
-  entradasSemana.slice(0, REPORTE2_MAX_FILAS).forEach((s, idx) => {
+  // 11.7: una fila por persona (las 8 filas 26-33 de la plantilla); si hay más de 8 personas,
+  // el generador hace otra hoja de la misma OD y semana con las que siguen. No se pierde ninguna.
+  personas.slice(0, REPORTE2_MAX_FILAS).forEach((p, idx) => {
     const filaActual = 26 + idx;
-    const cod = s.personal_codigos?.[0];
-    const emp = cod ? empleadosPorCodigo[cod] : null;
-    xml = reporte2SetCeldaXML(xml, `C${filaActual}`, { texto: emp?.nombre || s.personal || "" });
-    xml = reporte2SetCeldaXML(xml, `E${filaActual}`, { texto: emp?.puesto || "" });
-    xml = reporte2SetCeldaXML(xml, `F${filaActual}`, { texto: s.hora_inicio || "" });
-    xml = reporte2SetCeldaXML(xml, `G${filaActual}`, { texto: s.hora_fin || "" });
-    const fechaRef = s.fecha_ejecucion || s.fecha;
-    if (fechaRef) {
-      const diaSemana = (new Date(fechaRef + "T00:00:00").getDay() + 6) % 7;
-      xml = reporte2SetCeldaXML(xml, `${REPORTE2_DIAS_COL[diaSemana]}${filaActual}`, { numero: Number(s.horas) || 0 });
-    }
+    xml = reporte2SetCeldaXML(xml, `C${filaActual}`, { texto: p.nombre });
+    xml = reporte2SetCeldaXML(xml, `E${filaActual}`, { texto: p.puesto });
+    xml = reporte2SetCeldaXML(xml, `F${filaActual}`, { texto: p.inicio });
+    xml = reporte2SetCeldaXML(xml, `G${filaActual}`, { texto: p.fin });
+    p.dias.forEach((h, d) => { if (h) xml = reporte2SetCeldaXML(xml, `${REPORTE2_DIAS_COL[d]}${filaActual}`, { numero: Math.round(h * 100) / 100 }); });
   });
 
-  const personasUnicas = new Set(entradasSemana.map((s) => s.personal_codigos?.[0] || s.personal));
-  xml = reporte2SetCeldaXML(xml, "E35", { numero: personasUnicas.size });
+  xml = reporte2SetCeldaXML(xml, "E35", { numero: totalPersonas != null ? totalPersonas : personas.length });
   return xml;
 }
 
@@ -1861,9 +1881,51 @@ async function reporte2ForzarRecalculo(zip) {
 // Arma UN solo .xlsx con una pestaña por hoja (cada pestaña es una copia
 // completa de la plantilla: formato, logo, fórmulas y casillas de verificación).
 // hojas: [{ nombre, xml }] con el XML de la hoja ya llenado.
-async function reporte2CombinarHojas(plantillaBuffer, hojas) {
+// 11.7: arma el XML de la hoja «Resumen». filas = [[celda, …], …]; celda = texto | número | { v, f (fórmula), e (estilo) } | null
+function reporte2HojaResumenXML(filas, est) {
+  const colL = (i) => { let s = ""; i++; while (i) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; };
+  const sAttr = (k) => (est && est[k] != null ? ` s="${est[k]}"` : "");
+  const filasXml = filas.map((fila, r) => {
+    const celdas = (fila || []).map((c, ci) => {
+      if (c == null || c === "") return "";
+      const ref = colL(ci) + (r + 1);
+      const o = typeof c === "object" ? c : { v: c };
+      const estilo = o.e ? sAttr(o.e) : typeof o.v === "number" && !Number.isInteger(o.v) ? sAttr("num") : "";   // conteos sin decimales
+      if (o.f) return `<c r="${ref}"${estilo}><f>${reporte2EscaparXML(o.f)}</f>${typeof o.v === "number" ? `<v>${o.v}</v>` : ""}</c>`;
+      if (typeof o.v === "number") return `<c r="${ref}"${estilo}><v>${Math.round(o.v * 100) / 100}</v></c>`;
+      return `<c r="${ref}"${estilo} t="inlineStr"><is><t xml:space="preserve">${reporte2EscaparXML(String(o.v))}</t></is></c>`;
+    }).join("");
+    return `<row r="${r + 1}">${celdas}</row>`;
+  }).join("");
+  const anchos = [26, 16, 14, 13, 12, 12, 14, 16, 44];
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+    + '<sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15"/>'
+    + "<cols>" + anchos.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join("") + "</cols>"
+    + `<sheetData>${filasXml}</sheetData></worksheet>`;
+}
+
+async function reporte2CombinarHojas(plantillaBuffer, hojas, resumen) {
   const { default: JSZip } = await import("jszip");
   const zip = await JSZip.loadAsync(plantillaBuffer);
+  // 11.7: estilos propios para la hoja «Resumen» (se agregan al final de styles.xml de la plantilla)
+  let estilosResumen = null;
+  if (resumen) {
+    let st = (zip.file("xl/styles.xml") && (await zip.file("xl/styles.xml").async("string"))) || "";
+    const nFonts = (st.match(/<fonts[^>]*count="(\d+)"/) || [])[1], nFills = (st.match(/<fills[^>]*count="(\d+)"/) || [])[1], nXfs = (st.match(/<cellXfs[^>]*count="(\d+)"/) || [])[1];
+    if (st && nFonts && nFills && nXfs) {
+      const f0 = Number(nFonts), fl0 = Number(nFills), x0 = Number(nXfs);
+      st = st.replace(/(<fonts[^>]*count=")\d+(")/, `$1${f0 + 3}$2`).replace("</fonts>",
+        '<font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="15"/><color rgb="FF1F3A5F"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFC00000"/><name val="Calibri"/></font></fonts>');
+      st = st.replace(/(<fills[^>]*count=")\d+(")/, `$1${fl0 + 2}$2`).replace("</fills>",
+        '<fill><patternFill patternType="solid"><fgColor rgb="FFDCE6F1"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFDE9D9"/><bgColor indexed="64"/></patternFill></fill></fills>');
+      const xf = (font, fill, numFmt) => `<xf numFmtId="${numFmt}" fontId="${font}" fillId="${fill}" borderId="0" xfId="0"${font ? ' applyFont="1"' : ""}${fill ? ' applyFill="1"' : ""}${numFmt ? ' applyNumberFormat="1"' : ""}/>`;
+      st = st.replace(/(<cellXfs[^>]*count=")\d+(")/, `$1${x0 + 7}$2`).replace("</cellXfs>",
+        xf(0, 0, 0) + xf(f0 + 1, 0, 0) + xf(f0, fl0, 0) + xf(0, 0, 2) + xf(f0, 0, 2) + xf(f0 + 2, fl0 + 1, 0) + xf(0, 0, 14) + "</cellXfs>");
+      zip.file("xl/styles.xml", st);
+      estilosResumen = { normal: x0, titulo: x0 + 1, encabezado: x0 + 2, num: x0 + 3, numNegrita: x0 + 4, alerta: x0 + 5, fecha: x0 + 6 };
+    }
+  }
   const leer = async (ruta) => (zip.file(ruta) ? zip.file(ruta).async("string") : "");
   const relsHoja = await leer("xl/worksheets/_rels/sheet1.xml.rels");
   const drawing = await leer("xl/drawings/drawing1.xml");
@@ -1923,6 +1985,15 @@ async function reporte2CombinarHojas(plantillaBuffer, hojas) {
     }
     hojasXml += `<sheet name="${esc(nombres[idx])}" sheetId="${100 + k}" r:id="${k === 1 ? "rId1" : "rIdHoja" + k}"/>`;
   });
+  if (resumen) {
+    // 11.7: último libro «Resumen» (hoja simple, sin logo ni casillas)
+    const k = hojas.length + 1;
+    zip.file(`xl/worksheets/sheet${k}.xml`, reporte2HojaResumenXML(resumen, estilosResumen || {}));
+    tipos = tipos.replace("</Types>", `<Override PartName="/xl/worksheets/sheet${k}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`);
+    wbRels = wbRels.replace("</Relationships>", `<Relationship Id="rIdHoja${k}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${k}.xml"/></Relationships>`);
+    hojasXml += `<sheet name="Resumen" sheetId="${100 + k}" r:id="rIdHoja${k}"/>`;
+    nombres.push("Resumen");
+  }
   wbXml = wbXml.replace(/<sheets>[\s\S]*?<\/sheets>/, `<sheets>${hojasXml}</sheets>`);
   zip.file(REPORTE2_WORKBOOK, wbXml);
   zip.file("xl/_rels/workbook.xml.rels", wbRels);
@@ -1930,8 +2001,8 @@ async function reporte2CombinarHojas(plantillaBuffer, hojas) {
   const app = await leer("docProps/app.xml");
   if (app) {
     zip.file("docProps/app.xml", app
-      .replace(/(<vt:lpstr>Hojas de cálculo<\/vt:lpstr><\/vt:variant><vt:variant><vt:i4>)\d+/, `$1${hojas.length}`)
-      .replace(/<TitlesOfParts>[\s\S]*?<\/TitlesOfParts>/, `<TitlesOfParts><vt:vector size="${hojas.length}" baseType="lpstr">${nombres.map((n) => `<vt:lpstr>${reporte2EscaparXML(n)}</vt:lpstr>`).join("")}</vt:vector></TitlesOfParts>`));
+      .replace(/(<vt:lpstr>Hojas de cálculo<\/vt:lpstr><\/vt:variant><vt:variant><vt:i4>)\d+/, `$1${nombres.length}`)
+      .replace(/<TitlesOfParts>[\s\S]*?<\/TitlesOfParts>/, `<TitlesOfParts><vt:vector size="${nombres.length}" baseType="lpstr">${nombres.map((n) => `<vt:lpstr>${reporte2EscaparXML(n)}</vt:lpstr>`).join("")}</vt:vector></TitlesOfParts>`));
   }
   await reporte2ForzarRecalculo(zip);
   return zip.generateAsync({ type: "arraybuffer" });
@@ -1949,6 +2020,112 @@ function reporte2Descargar_disparar(buffer, nombreArchivo) {
   URL.revokeObjectURL(url);
 }
 
+// 11.7: datos del último libro «Resumen»: cuadre, totales, promedios y avisos para encontrar errores rápido.
+function reporte2ArmarResumen({ horas, sinFecha, hojaDe, nombreArea, clientePorOd, empleadosPorCodigo, cantHojas }) {
+  const H = (h) => Number(h.horas) || 0;
+  const nombreDe = (h) => { const c = h.personal_codigos?.[0]; return (c && empleadosPorCodigo[c]?.nombre) || h.personal || "(sin nombre)"; };
+  const claveP = (h) => h.personal_codigos?.[0] || String(h.personal || "").trim().toLowerCase() || "(sin nombre)";
+  const aMin = (t) => { const m = String(t || "").match(/^(\d{1,2}):(\d{2})/); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+  const quincenaTxt = (f) => { const [y, m, d] = f.split("-").map(Number); return `${d <= 15 ? "1-15" : "16-fin"} ${["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "set", "oct", "nov", "dic"][m - 1]} ${y}`; };
+  const total = horas.reduce((t, h) => t + H(h), 0);
+
+  // avisos por solicitud
+  const vistos = new Map(), porPersonaDia = new Map();
+  horas.forEach((h) => {
+    const f = reporte2FechaDe(h);
+    const k = claveP(h) + "|" + f;
+    porPersonaDia.set(k, (porPersonaDia.get(k) || 0) + H(h));
+    const kd = k + "|" + H(h) + "|" + (h.hora_inicio || "") + "|" + (h.od || "");
+    vistos.set(kd, (vistos.get(kd) || 0) + 1);
+  });
+  const avisosDe = (h) => {
+    const a = [], f = reporte2FechaDe(h);
+    if (!f) a.push("SIN FECHA: no está en ninguna hoja");
+    if (!h.od) a.push("Sin OD (va en hoja «Sin OD»)");
+    if (!H(h)) a.push("Horas en 0");
+    const i = aMin(h.hora_inicio), fn = aMin(h.hora_fin);
+    if (i != null && fn != null) {
+      let dur = (fn - i) / 60; if (dur <= 0) dur += 24;
+      if (Math.abs(dur - H(h)) > 0.25) a.push(`Inicio-fin da ${Math.round(dur * 100) / 100} h, pero tiene ${H(h)} h`);
+    }
+    if (H(h) > 12) a.push("Más de 12 h en una solicitud");
+    if ((porPersonaDia.get(claveP(h) + "|" + f) || 0) > 12) a.push("La persona suma más de 12 h ese día");
+    if ((vistos.get(claveP(h) + "|" + f + "|" + H(h) + "|" + (h.hora_inicio || "") + "|" + (h.od || "")) || 0) > 1) a.push("Posible duplicada (misma persona, día, OD y horas)");
+    return a.join(" · ");
+  };
+
+  // por persona
+  const per = new Map();
+  horas.forEach((h) => {
+    const k = claveP(h);
+    if (!per.has(k)) per.set(k, { nombre: nombreDe(h), codigo: h.personal_codigos?.[0] || "", sol: 0, dias: new Set(), horas: 0, maxDia: 0 });
+    const p = per.get(k); p.sol++; p.horas += H(h); const f = reporte2FechaDe(h); if (f) p.dias.add(f);
+  });
+  per.forEach((p, k) => p.dias.forEach((f) => { p.maxDia = Math.max(p.maxDia, porPersonaDia.get(k + "|" + f) || 0); }));
+  const personas = [...per.values()].sort((a, b) => b.horas - a.horas);
+  const promPersona = personas.length ? total / personas.length : 0;
+
+  // por OD y por quincena
+  const porOd = new Map(), porQ = new Map();
+  horas.forEach((h) => {
+    const od = h.od || "Sin OD";
+    if (!porOd.has(od)) porOd.set(od, { sol: 0, pers: new Set(), horas: 0 });
+    const o = porOd.get(od); o.sol++; o.pers.add(claveP(h)); o.horas += H(h);
+    const f = reporte2FechaDe(h), q = f ? quincenaTxt(f) : "Sin fecha", qk = f ? reporte2Quincena(f) : "9999";
+    if (!porQ.has(qk)) porQ.set(qk, { q, sol: 0, horas: 0 });
+    const x = porQ.get(qk); x.sol++; x.horas += H(h);
+  });
+
+  const E = (v, e) => ({ v, e });
+  const filas = [];
+  filas.push([E(`Resumen de horas extra — ${nombreArea}`, "titulo")]);
+  filas.push([`Generado: ${new Date().toLocaleString("es-CR")} · solo solicitudes Aprobadas · ${cantHojas} hoja${cantHojas === 1 ? "" : "s"} de formulario`]);
+  filas.push([]);
+  filas.push([E("CUADRE", "encabezado"), E("", "encabezado")]);
+  const fTot = filas.length + 1;
+  filas.push(["Horas aprobadas (sistema)", E(total, "numNegrita")]);
+  const fRep = filas.length + 1;
+  const enHojas = horas.filter((h) => reporte2FechaDe(h)).reduce((t, h) => t + H(h), 0);
+  filas.push(["Horas en las hojas del reporte", E(enHojas, "numNegrita")]);
+  filas.push(["Diferencia (debe ser 0)", { f: `B${fTot}-B${fRep}`, v: total - enHojas, e: total - enHojas ? "alerta" : "numNegrita" }]);
+  filas.push(["Solicitudes aprobadas", horas.length]);
+  filas.push(["Personas", personas.length]);
+  filas.push(["Promedio de horas por persona", promPersona]);
+  filas.push(["Promedio de horas por solicitud", horas.length ? total / horas.length : 0]);
+  filas.push(["Mayor cantidad en una solicitud", horas.reduce((m, h) => Math.max(m, H(h)), 0)]);
+  const conAviso = horas.filter((h) => avisosDe(h)).length;
+  filas.push(["Solicitudes con aviso (ver Detalle)", E(conAviso, conAviso ? "alerta" : "num")]);
+  if (sinFecha.length) filas.push([E("Sin fecha (fuera del reporte)", "alerta"), E(sinFecha.length + " sol. / " + sinFecha.reduce((t, h) => t + H(h), 0) + " h", "alerta")]);
+  filas.push([]);
+
+  filas.push([E("POR PERSONA", "encabezado"), E("Código", "encabezado"), E("Solicitudes", "encabezado"), E("Días", "encabezado"), E("Horas", "encabezado"), E("Prom./día", "encabezado"), E("Máx. en un día", "encabezado"), E("vs. promedio", "encabezado")]);
+  const ini = filas.length + 1;
+  personas.forEach((p) => {
+    const d = p.dias.size;
+    const marca = promPersona && p.horas > promPersona * 2 ? "Más del doble del promedio" : "";
+    filas.push([p.nombre, p.codigo, p.sol, d, E(p.horas, "num"), d ? p.horas / d : 0, E(p.maxDia, p.maxDia > 12 ? "alerta" : "num"), marca ? E(marca, "alerta") : ""]);
+  });
+  filas.push([E("TOTAL", "encabezado"), E("", "encabezado"), { f: `SUM(C${ini}:C${filas.length})`, v: horas.length }, "", { f: `SUM(E${ini}:E${filas.length})`, v: total, e: "numNegrita" }]);
+  filas.push([]);
+
+  filas.push([E("POR OD", "encabezado"), E("Cliente", "encabezado"), E("Solicitudes", "encabezado"), E("Personas", "encabezado"), E("Horas", "encabezado")]);
+  const iniOd = filas.length + 1;
+  [...porOd.entries()].sort((a, b) => b[1].horas - a[1].horas).forEach(([od, o]) => filas.push([od, clientePorOd[od] || "", o.sol, o.pers.size, E(o.horas, "num")]));
+  filas.push([E("TOTAL", "encabezado"), E("", "encabezado"), "", "", { f: `SUM(E${iniOd}:E${filas.length})`, v: total, e: "numNegrita" }]);
+  filas.push([]);
+
+  filas.push([E("POR QUINCENA", "encabezado"), E("Solicitudes", "encabezado"), E("Horas", "encabezado")]);
+  [...porQ.entries()].sort((a, b) => a[0].localeCompare(b[0])).forEach(([, x]) => filas.push([x.q, x.sol, E(x.horas, "num")]));
+  filas.push([]);
+
+  filas.push([E("DETALLE", "encabezado"), E("Fecha", "encabezado"), E("OD", "encabezado"), E("Inicio", "encabezado"), E("Fin", "encabezado"), E("Horas", "encabezado"), E("Estado", "encabezado"), E("Hoja", "encabezado"), E("Aviso", "encabezado")]);
+  [...horas].sort((a, b) => nombreDe(a).localeCompare(nombreDe(b), "es") || reporte2FechaDe(a).localeCompare(reporte2FechaDe(b))).forEach((h) => {
+    const av = avisosDe(h);
+    filas.push([nombreDe(h), reporte2FechaDe(h) || "—", h.od || "Sin OD", h.hora_inicio || "", h.hora_fin || "", E(H(h), "num"), h.estado || "", hojaDe[h.id] || "—", av ? E(av, "alerta") : ""]);
+  });
+  return filas;
+}
+
 // Junta las solicitudes de horas extra Aprobadas de UN área,
 // agrupadas por OD + quincena (y por semana dentro de la quincena, ya
 // que la plantilla es semanal), y descarga un archivo por cada grupo.
@@ -1964,9 +2141,11 @@ async function reporte2Descargar(area) {
 
   // od -> quincena -> semana(lunes ISO) -> [entradas]
   const grupos = {};
+  const sinFecha = [];
   (horas || []).forEach((h) => {
-    const fechaRef = h.fecha_ejecucion || h.fecha;
-    if (!fechaRef || !h.od) return;
+    const fechaRef = reporte2FechaDe(h);
+    if (!fechaRef) { sinFecha.push(h); return; }   // sin ninguna fecha no se sabe en qué semana va: se avisa
+    h = h.od ? h : { ...h, od: "SIN OD" };            // 11.7: las que no tienen OD también salen, en su propia hoja
     const quincena = reporte2Quincena(fechaRef);
     const lunes = reporte2LunesDeSemana(fechaRef).toISOString().slice(0, 10);
     grupos[h.od] = grupos[h.od] || {};
@@ -2002,17 +2181,39 @@ async function reporte2Descargar(area) {
         for (const lunesISO of semanas) piezas.push({ od, quincena, lunesISO, variasSemanas: semanas.length > 1 });
       }
     }
-    piezas.sort((a, b) => a.quincena.localeCompare(b.quincena) || String(a.od).localeCompare(String(b.od)) || a.lunesISO.localeCompare(b.lunesISO));
-    const hojas = piezas.map(({ od, quincena, lunesISO, variasSemanas }) => {
+    piezas.sort((a, b) => a.quincena.localeCompare(b.quincena) || (a.od === "SIN OD") - (b.od === "SIN OD") || String(a.od).localeCompare(String(b.od)) || a.lunesISO.localeCompare(b.lunesISO));
+    let horasEnReporte = 0;
+    const hojas = [];
+    const hojaDe = {};   // id de solicitud -> pestaña donde quedó
+    piezas.forEach(({ od, quincena, lunesISO, variasSemanas }) => {
       const [, mes, q] = quincena.split("-");
       const mesTxt = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"][Number(mes) - 1];
       const nombre = `${od} ${q === "Q1" ? "1-15" : "16-fin"} ${mesTxt}${variasSemanas ? " sem " + lunesISO.slice(8, 10) + "-" + lunesISO.slice(5, 7) : ""}`;
-      return { nombre, xml: reporte2LlenarHojaXML(hojaBase, od, clientePorOd[od], grupos[od][quincena][lunesISO], new Date(lunesISO + "T00:00:00"), empleadosPorCodigo) };
+      const personas = reporte2ConsolidarSemana(grupos[od][quincena][lunesISO], empleadosPorCodigo);
+      personas.forEach((p) => { horasEnReporte += p.total; });
+      // 11.7: más de 8 personas -> hojas extra «(2)», «(3)»… con las que siguen
+      const partes = Math.max(1, Math.ceil(personas.length / REPORTE2_MAX_FILAS));
+      for (let i = 0; i < partes; i++) {
+        const grupo = personas.slice(i * REPORTE2_MAX_FILAS, (i + 1) * REPORTE2_MAX_FILAS);
+        const nomHoja = partes > 1 ? `${nombre} (${i + 1})` : nombre;
+        grupo.forEach((p) => p.ids.forEach((id) => { hojaDe[id] = nomHoja.replace(/[:\\/?*\[\]]/g, "-").slice(0, 31); }));
+        hojas.push({ nombre: nomHoja,
+          xml: reporte2LlenarHojaXML(hojaBase, od === "SIN OD" ? "Sin OD" : od, clientePorOd[od], grupo, new Date(lunesISO + "T00:00:00"), personas.length) });
+      }
     });
-    const buffer = await reporte2CombinarHojas(plantillaBuffer, hojas);
+    const resumen = reporte2ArmarResumen({ horas: horas || [], sinFecha, hojaDe, nombreArea, clientePorOd, empleadosPorCodigo, cantHojas: hojas.length });
+    const buffer = await reporte2CombinarHojas(plantillaBuffer, hojas, resumen);
     const quincenas = [...new Set(piezas.map((x) => x.quincena))].sort();
     const rango = quincenas.length === 1 ? reporte2NombreQuincena(quincenas[0]) : `${reporte2NombreQuincena(quincenas[0])}_a_${reporte2NombreQuincena(quincenas[quincenas.length - 1])}`;
     reporte2Descargar_disparar(buffer, `SolicitudHoras_${nombreArea}_${rango}.xlsx`);
+    // 11.7: cuadre — el total del Excel debe ser igual a las horas aprobadas
+    const totalAprobadas = (horas || []).reduce((t, h) => t + (Number(h.horas) || 0), 0);
+    const r1 = (n) => Math.round(n * 100) / 100;
+    const sinOd = (horas || []).filter((h) => !h.od && reporte2FechaDe(h)).length;
+    let msg = `Reporte de ${nombreArea}: ${r1(horasEnReporte)} h en ${hojas.length} hoja${hojas.length === 1 ? "" : "s"} + «Resumen».\nHoras aprobadas: ${r1(totalAprobadas)} h.${r1(totalAprobadas) === r1(horasEnReporte) ? " ✓ Cuadra." : ""}`;
+    if (sinOd) msg += `\n\n${sinOd === 1 ? "1 solicitud sin OD va" : sinOd + " solicitudes sin OD van"} en las hojas «Sin OD».`;
+    if (sinFecha.length) msg += `\n\nATENCIÓN: ${sinFecha.length} solicitud${sinFecha.length === 1 ? "" : "es"} (${r1(sinFecha.reduce((t, h) => t + (Number(h.horas) || 0), 0))} h) ${sinFecha.length === 1 ? "no tiene" : "no tienen"} ninguna fecha y no se pudieron ubicar en una semana. Póngales la fecha de ejecución.`;
+    alert(msg);
   } catch (err) {
     alert("No se pudo generar el Reporte: " + (err.message || "error desconocido al armar el Excel."));
   }
